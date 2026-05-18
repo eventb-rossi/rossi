@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rossi",
     "crates/rossi-build",
+    "crates/rossi-lsp",
 ]
 
 [workspace.package]

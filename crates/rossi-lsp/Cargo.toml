@@ -1,0 +1,49 @@
+[package]
+name = "rossi-lsp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Rossi Language Server Protocol implementation for Event-B"
+license.workspace = true
+repository.workspace = true
+keywords = ["lsp", "language-server", "event-b", "formal-methods"]
+categories = ["development-tools"]
+
+[lib]
+name = "rossi_lsp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rossi-language-server"
+path = "src/main.rs"
+
+[dependencies]
+# LSP framework
+tower-lsp.workspace = true
+lsp-types.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Text handling
+ropey.workspace = true
+
+# Concurrency
+dashmap.workspace = true
+parking_lot.workspace = true
+
+# Error handling and logging
+anyhow.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Parser
+rossi.workspace = true
+
+# File system operations
+walkdir.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
