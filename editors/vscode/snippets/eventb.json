@@ -1,0 +1,251 @@
+{
+  "Event-B Context": {
+    "prefix": "context",
+    "body": [
+      "CONTEXT ${1:context_name}",
+      "EXTENDS",
+      "    ${2:parent_context}",
+      "SETS",
+      "    ${3:SET_NAME}",
+      "CONSTANTS",
+      "    ${4:const_name}",
+      "AXIOMS",
+      "    ${5:axm1}: ${6:predicate}",
+      "THEOREMS",
+      "    ${7:thm1}: ${8:predicate}",
+      "END"
+    ],
+    "description": "Create a complete Event-B context"
+  },
+  "Event-B Context (Simple)": {
+    "prefix": "ctx",
+    "body": [
+      "CONTEXT ${1:context_name}",
+      "SETS",
+      "    ${2:SET_NAME}",
+      "CONSTANTS",
+      "    ${3:const_name}",
+      "AXIOMS",
+      "    ${4:axm1}: ${5:predicate}",
+      "END"
+    ],
+    "description": "Create a simple Event-B context"
+  },
+  "Event-B Machine": {
+    "prefix": "machine",
+    "body": [
+      "MACHINE ${1:machine_name}",
+      "REFINES",
+      "    ${2:abstract_machine}",
+      "SEES",
+      "    ${3:context_name}",
+      "VARIABLES",
+      "    ${4:var_name}",
+      "INVARIANTS",
+      "    ${5:inv1}: ${6:predicate}",
+      "VARIANT",
+      "    ${7:expression}",
+      "EVENTS",
+      "    INITIALISATION",
+      "    BEGIN",
+      "        ${8:var_name} := ${9:value}",
+      "    END",
+      "",
+      "    EVENT ${10:event_name}",
+      "    WHERE",
+      "        ${11:grd1}: ${12:guard}",
+      "    THEN",
+      "        ${13:act1}: ${14:action}",
+      "    END",
+      "END"
+    ],
+    "description": "Create a complete Event-B machine"
+  },
+  "Event-B Machine (Simple)": {
+    "prefix": "mch",
+    "body": [
+      "MACHINE ${1:machine_name}",
+      "VARIABLES",
+      "    ${2:var_name}",
+      "INVARIANTS",
+      "    ${3:inv1}: ${4:predicate}",
+      "EVENTS",
+      "    INITIALISATION",
+      "    BEGIN",
+      "        ${5:var_name} := ${6:value}",
+      "    END",
+      "END"
+    ],
+    "description": "Create a simple Event-B machine"
+  },
+  "Event-B Event": {
+    "prefix": "event",
+    "body": [
+      "EVENT ${1:event_name}",
+      "ANY",
+      "    ${2:param}",
+      "WHERE",
+      "    ${3:grd1}: ${4:guard}",
+      "THEN",
+      "    ${5:act1}: ${6:action}",
+      "END"
+    ],
+    "description": "Create an Event-B event with parameters"
+  },
+  "Event-B Event (Simple)": {
+    "prefix": "evt",
+    "body": [
+      "EVENT ${1:event_name}",
+      "WHERE",
+      "    ${2:grd1}: ${3:guard}",
+      "THEN",
+      "    ${4:act1}: ${5:action}",
+      "END"
+    ],
+    "description": "Create a simple Event-B event"
+  },
+  "Event-B Initialisation": {
+    "prefix": "init",
+    "body": [
+      "INITIALISATION",
+      "BEGIN",
+      "    ${1:var} := ${2:value}",
+      "END"
+    ],
+    "description": "Create an initialisation event"
+  },
+  "Axiom": {
+    "prefix": "axm",
+    "body": [
+      "${1:axm1}: ${2:predicate}"
+    ],
+    "description": "Create a labeled axiom"
+  },
+  "Invariant": {
+    "prefix": "inv",
+    "body": [
+      "${1:inv1}: ${2:predicate}"
+    ],
+    "description": "Create a labeled invariant"
+  },
+  "Guard": {
+    "prefix": "grd",
+    "body": [
+      "${1:grd1}: ${2:condition}"
+    ],
+    "description": "Create a labeled guard"
+  },
+  "Action (Assignment)": {
+    "prefix": "act",
+    "body": [
+      "${1:act1}: ${2:var} := ${3:expression}"
+    ],
+    "description": "Create a labeled deterministic assignment"
+  },
+  "Action (Non-deterministic)": {
+    "prefix": "actnd",
+    "body": [
+      "${1:act1}: ${2:var} :∈ ${3:set}"
+    ],
+    "description": "Create a labeled non-deterministic assignment"
+  },
+  "Action (Such That)": {
+    "prefix": "actst",
+    "body": [
+      "${1:act1}: ${2:var} :| ${3:predicate}"
+    ],
+    "description": "Create a labeled assignment with predicate"
+  },
+  "For All (Universal Quantification)": {
+    "prefix": "forall",
+    "body": [
+      "∀${1:x}·(${2:x} ∈ ${3:set} ⇒ ${4:predicate})"
+    ],
+    "description": "Universal quantification (forall)"
+  },
+  "For All (ASCII)": {
+    "prefix": "forallascii",
+    "body": [
+      "!${1:x}.(${2:x} : ${3:set} => ${4:predicate})"
+    ],
+    "description": "Universal quantification (forall) ASCII"
+  },
+  "Exists (Existential Quantification)": {
+    "prefix": "exists",
+    "body": [
+      "∃${1:x}·(${2:x} ∈ ${3:set} ∧ ${4:predicate})"
+    ],
+    "description": "Existential quantification (exists)"
+  },
+  "Exists (ASCII)": {
+    "prefix": "existsascii",
+    "body": [
+      "#${1:x}.(${2:x} : ${3:set} /\\\\ ${4:predicate})"
+    ],
+    "description": "Existential quantification (exists) ASCII"
+  },
+  "Lambda Abstraction": {
+    "prefix": "lambda",
+    "body": [
+      "λ${1:x}·(${2:x} ∈ ${3:domain} | ${4:expression})"
+    ],
+    "description": "Lambda abstraction"
+  },
+  "Set Comprehension": {
+    "prefix": "setcomp",
+    "body": [
+      "{${1:x} · ${2:x} ∈ ${3:set} ∧ ${4:predicate}}"
+    ],
+    "description": "Set comprehension"
+  },
+  "Set Enumeration": {
+    "prefix": "setenum",
+    "body": [
+      "{${1:elem1}, ${2:elem2}}"
+    ],
+    "description": "Set enumeration"
+  },
+  "Convergent Event": {
+    "prefix": "convergent",
+    "body": [
+      "EVENT ${1:event_name}",
+      "STATUS convergent",
+      "WHERE",
+      "    ${2:grd1}: ${3:guard}",
+      "THEN",
+      "    ${4:act1}: ${5:action}",
+      "END"
+    ],
+    "description": "Create a convergent event"
+  },
+  "Anticipated Event": {
+    "prefix": "anticipated",
+    "body": [
+      "EVENT ${1:event_name}",
+      "STATUS anticipated",
+      "WHERE",
+      "    ${2:grd1}: ${3:guard}",
+      "THEN",
+      "    ${4:act1}: ${5:action}",
+      "END"
+    ],
+    "description": "Create an anticipated event"
+  },
+  "Refinement Event": {
+    "prefix": "refines",
+    "body": [
+      "EVENT ${1:concrete_event}",
+      "REFINES ${2:abstract_event}",
+      "ANY",
+      "    ${3:new_param}",
+      "WHERE",
+      "    ${4:grd1}: ${5:guard}",
+      "WITH",
+      "    ${6:abs_param}: ${7:witness}",
+      "THEN",
+      "    ${8:act1}: ${9:action}",
+      "END"
+    ],
+    "description": "Create an event that refines an abstract event"
+  }
+}
