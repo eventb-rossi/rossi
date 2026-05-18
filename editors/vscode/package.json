@@ -1,0 +1,281 @@
+{
+  "name": "rossi-eventb",
+  "displayName": "Rossi Event-B",
+  "description": "Rossi language support for Event-B formal modeling with LSP features",
+  "version": "0.1.0",
+  "publisher": "rossi",
+  "license": "MIT OR Apache-2.0",
+  "icon": "icons/eventb-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eventb-rossi/rossi"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "rossi",
+    "event-b",
+    "formal methods",
+    "formal modeling",
+    "rodin"
+  ],
+  "activationEvents": [
+    "onLanguage:eventb",
+    "onCommand:rossi.importRodinProject",
+    "onCommand:rossi.exportCurrentFileToRodinZip",
+    "onCommand:rossi.exportWorkspaceToRodinZip",
+    "onCommand:rossi.buildCheckedRodinZip",
+    "onCommand:rossi.validateCurrentFile",
+    "onCommand:rossi.validateWorkspace",
+    "onCommand:rossi.convertCurrentFileToUnicode",
+    "onCommand:rossi.convertCurrentFileToAscii",
+    "onCommand:rossi.animateWithProb",
+    "onCommand:rossi.modelCheckWithProb",
+    "onCommand:rossi.checkToolchain"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "eventb",
+        "aliases": [
+          "Event-B",
+          "eventb"
+        ],
+        "extensions": [
+          ".eventb"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/eventb-icon.svg",
+          "dark": "./icons/eventb-icon.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "eventb",
+        "scopeName": "source.eventb",
+        "path": "./syntaxes/eventb.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "eventb",
+        "path": "./snippets/eventb.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "rossi.importRodinProject",
+        "title": "Import Rodin Project",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.exportCurrentFileToRodinZip",
+        "title": "Export Current File to Rodin ZIP",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.exportWorkspaceToRodinZip",
+        "title": "Export Workspace to Rodin ZIP",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.buildCheckedRodinZip",
+        "title": "Build Checked Rodin ZIP",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.validateCurrentFile",
+        "title": "Validate Current File",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.validateWorkspace",
+        "title": "Validate Workspace",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.convertCurrentFileToUnicode",
+        "title": "Convert Current File to Unicode",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.convertCurrentFileToAscii",
+        "title": "Convert Current File to ASCII",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.animateWithProb",
+        "title": "Animate with ProB",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.modelCheckWithProb",
+        "title": "Model Check with ProB",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.checkToolchain",
+        "title": "Check Toolchain",
+        "category": "Rossi"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "rossi.exportCurrentFileToRodinZip",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@1"
+        },
+        {
+          "command": "rossi.validateCurrentFile",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@2"
+        },
+        {
+          "command": "rossi.convertCurrentFileToUnicode",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@3"
+        },
+        {
+          "command": "rossi.convertCurrentFileToAscii",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@4"
+        },
+        {
+          "command": "rossi.animateWithProb",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@5"
+        },
+        {
+          "command": "rossi.modelCheckWithProb",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@6"
+        },
+        {
+          "command": "rossi.buildCheckedRodinZip",
+          "when": "resourceExtname == .eventb || resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
+          "group": "rossi@7"
+        },
+        {
+          "command": "rossi.buildCheckedRodinZip",
+          "when": "explorerResourceIsFolder",
+          "group": "rossi@7"
+        },
+        {
+          "command": "rossi.importRodinProject",
+          "when": "resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
+          "group": "rossi@8"
+        },
+        {
+          "command": "rossi.importRodinProject",
+          "when": "explorerResourceIsFolder",
+          "group": "rossi@8"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Rossi",
+      "properties": {
+        "rossi.tool.path": {
+          "type": "string",
+          "default": "rossi",
+          "description": "Path to the Rossi CLI executable used for import, export, build, validation, and conversion commands."
+        },
+        "rossi.languageServer.path": {
+          "type": "string",
+          "default": "rossi-language-server",
+          "description": "Path to the Event-B language server executable. If not specified, searches in PATH."
+        },
+        "rossi.format.useUnicode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\\, \\/, =>, :) when formatting."
+        },
+        "rossi.format.indentation": {
+          "type": "string",
+          "default": "    ",
+          "description": "Indentation string (spaces or tabs) to use when formatting."
+        },
+        "rossi.format.maxLineLength": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum line length for future formatter wrapping behavior."
+        },
+        "rossi.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable real-time diagnostics for syntax errors."
+        },
+        "rossi.diagnostics.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "description": "Delay in milliseconds before running diagnostics after typing."
+        },
+        "rossi.completion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Event-B code completion."
+        },
+        "rossi.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        },
+        "rossi.prob.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ProB integration features."
+        },
+        "rossi.prob.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the probcli executable. Leave empty to search in PATH."
+        },
+        "rossi.prob.timeout": {
+          "type": "number",
+          "default": 10000,
+          "description": "ProB model checking timeout in milliseconds."
+        },
+        "rossi.prob.animateSteps": {
+          "type": "number",
+          "default": 5,
+          "description": "Number of random animation steps for ProB animation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "@typescript-eslint/parser": "^5.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.19.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  }
+}

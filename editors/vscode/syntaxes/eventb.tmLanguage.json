@@ -1,0 +1,108 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Event-B",
+  "scopeName": "source.eventb",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#constants" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.eventb",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.eventb",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.eventb",
+          "match": "\\b(CONTEXT|MACHINE|END|REFINES|SEES|EXTENDS|SETS|CONSTANTS|AXIOMS|THEOREMS|VARIABLES|INVARIANTS|VARIANT|EVENTS|INITIALISATION|EVENT|ANY|WHERE|WHEN|WITH|WITNESS|THEN|BEGIN)\\b"
+        },
+        {
+          "name": "keyword.other.eventb",
+          "match": "\\b(ordinary|convergent|anticipated|extended)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.eventb",
+          "match": "(∧|∨|¬|⇒|⇔|⊤|⊥|∀|∃|/\\\\|\\\\/|not|=>|<=>)"
+        },
+        {
+          "name": "keyword.operator.set.eventb",
+          "match": "(∈|∉|⊆|⊂|∪|∩|∖|℘|ℙ|\\||:|∅|⦂|{|}|\\.\\.)"
+        },
+        {
+          "name": "keyword.operator.relation.eventb",
+          "match": "(↔|→|⤔|⇸|⤀|↣|↠|⤖|⊗|∥|▷|⩥|◁|⩤|×|dom|ran|∘|;|⊕|⁻¹)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.eventb",
+          "match": "(\\+|−|-|\\*|÷|/|mod|\\^)"
+        },
+        {
+          "name": "keyword.operator.comparison.eventb",
+          "match": "(=|≠|/=|<|>|≤|<=|≥|>=)"
+        },
+        {
+          "name": "keyword.operator.assignment.eventb",
+          "match": "(:=|:\\||:∈|::)"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.eventb",
+          "match": "\\b(TRUE|FALSE|BOOL|ℕ|NAT|NAT1|ℤ|INT|ℕ1)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.eventb",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.eventb",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.eventb",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.eventb",
+          "match": "[a-zA-Z_][a-zA-Z0-9_']*"
+        }
+      ]
+    }
+  }
+}
