@@ -1277,6 +1277,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rossi-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rossi",
+ "rossi-build",
+ "rossi-lsp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
 name = "rossi-lsp"
 version = "0.1.0"
 dependencies = [
