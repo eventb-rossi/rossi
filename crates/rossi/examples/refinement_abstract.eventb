@@ -1,0 +1,28 @@
+MACHINE refinement_abstract
+VARIABLES
+    abstract_state
+INVARIANTS
+    @inv1 abstract_state ∈ ℕ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        abstract_state := 0
+    END
+
+    EVENT increase
+    ANY
+        delta
+    WHERE
+        @grd1 delta ∈ ℕ1
+        @grd2 abstract_state + delta ≤ 100
+    THEN
+        abstract_state := abstract_state + delta
+    END
+
+    EVENT decrease
+    WHERE
+        @grd1 abstract_state > 0
+    THEN
+        abstract_state :| abstract_state' < abstract_state ∧ abstract_state' ∈ ℕ
+    END
+END

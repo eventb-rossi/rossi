@@ -1,0 +1,149 @@
+MACHINE M0
+VARIABLES
+    cars_go
+    peds_go
+INVARIANTS
+    @inv1 cars_go ∈ BOOL
+    @inv2 peds_go ∈ BOOL
+    @inv3 ¬(cars_go = ⊤ ∧ peds_go = ⊤)
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 cars_go := ⊥
+        @act2 peds_go := ⊥
+    END
+
+    EVENT set_peds_go
+    WHERE
+        @grd1 cars_go = ⊥
+    THEN
+        @act1 peds_go := ⊤
+    END
+
+    EVENT set_peds_stop
+    THEN
+        @act1 peds_go := ⊥
+    END
+
+    EVENT set_cars
+    ANY
+        new_value
+    WHERE
+        @grd1 new_value ∈ BOOL
+        @grd2 new_value = ⊤ ⇒ peds_go = ⊥
+    THEN
+        @act1 cars_go := new_value
+    END
+END
+
+
+CONTEXT C1
+SETS
+    COLOURS
+CONSTANTS
+    red
+    yellow
+    green
+AXIOMS
+    @colours_type partition(COLOURS, {red}, {yellow}, {green})
+END
+
+
+MACHINE M1
+REFINES
+    M0
+SEES
+    C1
+VARIABLES
+    peds_colour
+    cars_colours
+INVARIANTS
+    @inv4 peds_colour ∈ COLOURS ∖ {yellow}
+    @inv5 peds_go = ⊤ ⇔ peds_colour = green
+    @inv6 cars_colours ⊆ COLOURS
+    @inv7 cars_go = ⊤ ⇔ green ∈ cars_colours
+    @inv8 cars_colours ≠ {green, red}
+    @inv9 cars_colours ≠ {green, yellow, red}
+    @inv10 cars_colours ≠ {green, yellow}
+    @inv11 cars_colours ≠ ∅
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 peds_colour := red
+        @act2 cars_colours := {red}
+    END
+
+    EVENT set_peds_green
+    REFINES
+        set_peds_go
+    WHERE
+        @grd1 green ∉ cars_colours
+    THEN
+        @act1 peds_colour := green
+    END
+
+    EVENT set_peds_red
+    REFINES
+        set_peds_stop
+    THEN
+        @act1 peds_colour := red
+    END
+
+    EVENT set_cars_colours
+    REFINES
+        set_cars
+    ANY
+        new_value_colours
+    WHERE
+        @grd1 new_value_colours ⊆ COLOURS
+        @grd2 green ∈ new_value_colours ⇒ peds_colour = red
+        @grd3 cars_colours = {yellow} ⇒ new_value_colours = {red}
+        @grd4 cars_colours = {red} ⇒ new_value_colours = {red, yellow}
+        @grd5 cars_colours = {red, yellow} ⇒ new_value_colours = {green}
+        @grd6 cars_colours = {green} ⇒ new_value_colours = {yellow}
+    WITNESS
+        @new_value new_value = ⊤ ⇔ green ∈ new_value_colours
+    THEN
+        @act1 cars_colours := new_value_colours
+    END
+END
+
+
+MACHINE M2
+REFINES
+    M1
+SEES
+    C1
+VARIABLES
+    peds_colour
+    cars_colours
+    button
+INVARIANTS
+    @inv1 button ∈ BOOL
+EVENTS
+    EVENT INITIALISATION extends INITIALISATION
+    THEN
+        @act3 button := ⊥
+    END
+
+    EVENT push_button
+    WHERE
+        @grd1 peds_colour = red
+    THEN
+        @act1 button := ⊤
+    END
+
+    EVENT set_peds_green extends set_peds_green
+    END
+
+    EVENT set_peds_red extends set_peds_red
+    THEN
+        @act2 button := ⊥
+    END
+
+    EVENT set_cars_colours extends set_cars_colours
+    WHERE
+        @grd7 ¬(cars_colours = {red} ∧ button = ⊤)
+    END
+END
+

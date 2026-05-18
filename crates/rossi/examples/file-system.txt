@@ -1,0 +1,151 @@
+context C0
+
+sets
+    Names
+    FilesType
+
+constants
+    Root
+
+axioms
+    @axm1
+        Root ∈ FilesType
+
+end
+
+
+machine M0
+    sees C0
+
+variables
+    Files
+    Folders
+    FileSystem // child -> parent relation that models file system tree
+
+invariants
+    @inv1
+        Files ⊆ FilesType
+    @inv2
+        Folders ⊆ Files
+
+    @inv3
+        Root ∈ Folders
+
+    @inv5
+        FileSystem ∈ Files ∖ {Root} → (Folders ↔ Names)
+
+    @inv6
+        ∀f · f ∈ dom(FileSystem) ⇒ FileSystem(f) ≠ ∅
+    @inv7
+        ∀f · f ∈ Folders ∧ f ≠ Root ⇒ (∃p, n · p ∈ Folders ∧ n ∈ Names ∧ FileSystem(f) = {p ↦ n})
+    @inv8
+        ∀x, y · x ∈ dom(FileSystem) ∧ y ∈ dom(FileSystem) ∧ x ≠ y ⇒ FileSystem(x) ∩ FileSystem(y) = ∅
+
+    @NoCycles
+        ∀C · C ⊆ Folders ∧ C ≠ ∅ ∧ Root ∉ C ⇒ C ∖ {x ↦ y ∣ x ∈ Folders ∖ {Root} ∧ y ∈ dom(FileSystem(x))}[C] ≠ ∅
+
+events
+    event INITIALISATION
+      then
+        @act1 Files ≔ {Root}
+        @act2 Folders ≔ {Root}
+        @act3 FileSystem ≔ ∅
+    end
+
+    event create_file
+      any
+        file
+        parent
+        name
+      where
+        @grd1 file ∈ FilesType ∖ Files
+        @grd2 parent ∈ Folders
+        @grd3 name ∈ Names
+        @grd4 ∀x · x ∈ dom(FileSystem) ⇒ parent ↦ name ∉ FileSystem(x)
+      then
+        @act1 Files ≔ Files ∪ {file}
+        @act2 FileSystem(file) ≔ {parent ↦ name}
+    end
+
+    event create_folder
+      any
+        folder
+        parent
+        name
+      where
+        @grd1 folder ∈ FilesType ∖ Files
+        @grd2 parent ∈ Folders
+        @grd3 name ∈ Names
+        @grd4 ∀x · x ∈ dom(FileSystem) ⇒ parent ↦ name ∉ FileSystem(x)
+      then
+        @act1 Files ≔ Files ∪ {folder}
+        @act2 Folders ≔ Folders ∪ {folder}
+        @act3 FileSystem(folder) ≔ {parent ↦ name}
+    end
+
+    event create_hard_link
+      any
+        file
+        parent
+        name
+      where
+        @grd1 file ∈ Files ∖ Folders
+        @grd2 parent ∈ Folders
+        @grd3 name ∈ Names
+        @grd4 ∀x · x ∈ dom(FileSystem) ⇒ parent ↦ name ∉ FileSystem(x)
+      then
+        @act1 FileSystem(file) ≔ FileSystem(file) ∪ {parent ↦ name}
+    end
+
+    event delete_hard_link
+      any
+        parent
+        name
+        file
+      where
+        @grd1 parent ∈ Folders
+        @grd2 file ∈ Files ∖ Folders
+        @grd3 name ∈ Names
+        @grd4 parent ↦ name ∈ FileSystem(file)
+        @grd5 ∃p, n · p ∈ Folders ∧ p ↦ n ∈ FileSystem(file) ∧ (n ≠ name ∨ p ≠ parent)
+      then
+        @act1 FileSystem(file) ≔ FileSystem(file) ∖ {parent ↦ name}
+    end
+
+    event rename_file
+      any
+        oldName
+        name
+        parent
+        file
+      where
+        @grd1 parent ∈ Folders
+        @grd2 file ∈ dom(FileSystem)
+        @grd3 oldName ∈ Names
+        @grd4 parent ↦ oldName ∈ FileSystem(file)
+        @grd5 name ∈ Names
+        @grd6 ∀x · x ∈ dom(FileSystem) ⇒ parent ↦ name ∉ FileSystem(x)
+      then
+        @act1 FileSystem(file) ≔ (FileSystem(file) ∖ {parent ↦ oldName}) ∪ {parent ↦ name}
+    end
+
+    event delete_file
+      any
+        file
+        parent
+        name
+      where
+        @grd1 file ∈ Files
+        @grd2 file ≠ Root
+        @grd3 parent ∈ Folders
+        @grd4 parent ↦ name ∈ FileSystem(file)
+        @grd5 ∀n · n ≠ name ⇒ parent ↦ n ∉ FileSystem(file)
+        @grd6 ∀x · x ∈ dom(FileSystem) ⇒ file ∉ dom(FileSystem(x))
+        @grd7 ∀x · x ∈ Folders ∧ x ≠ parent ⇒ x ∉ dom(FileSystem(file))
+      then
+        @act1 Files ≔ Files ∖ {file}
+        @act2 Folders ≔ Folders ∖ {file}
+        @act3 FileSystem ≔ {file} ⩤ FileSystem
+    end
+
+end

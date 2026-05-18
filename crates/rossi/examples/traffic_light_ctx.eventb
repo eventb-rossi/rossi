@@ -1,0 +1,10 @@
+CONTEXT traffic_light_ctx
+SETS
+    COLORS, DIRECTIONS
+CONSTANTS
+    opposite, red, yellow, green, north_south, east_west
+AXIOMS
+    @axm1 opposite ∈ DIRECTIONS ⤖ DIRECTIONS
+    @axm2 opposite = {north_south ↦ east_west, east_west ↦ north_south}
+    @axm3 ∀d·d ∈ DIRECTIONS ⇒ opposite(opposite(d)) = d
+END

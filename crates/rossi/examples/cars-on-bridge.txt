@@ -1,0 +1,514 @@
+context C0
+
+constants
+    cars_limit
+
+axioms
+    @axm1
+        cars_limit ∈ ℕ1
+
+end
+
+
+machine M0
+    sees C0
+
+variables
+    cars_number
+
+invariants
+    @inv1
+        cars_number ∈ ℕ
+    @inv2
+        cars_number ≤ cars_limit
+    theorem @inv3
+        cars_number < cars_limit ∨ cars_number > 0
+
+variant
+    cars_number
+
+events
+    event INITIALISATION
+      then
+        @act1 cars_number ≔ 0
+    end
+
+    event ML_out
+      where
+        @grd1 cars_number < cars_limit
+      then
+        @act1 cars_number ≔ cars_number + 1
+    end
+
+    convergent event ML_in
+      where
+        @grd1 cars_number > 0
+      then
+        @act1 cars_number ≔ cars_number − 1
+    end
+
+end
+
+
+machine M1
+    refines M0
+    sees C0
+
+variables
+    cars_number
+    to_il
+    on_il
+    to_ml
+
+invariants
+    @inv1
+        to_il ∈ ℕ
+    @inv2
+        on_il ∈ ℕ
+    @inv3
+        to_ml ∈ ℕ
+    @inv4
+        to_il = 0 ∨ to_ml = 0
+    @inv5
+        to_il + on_il + to_ml = cars_number
+    theorem @inv6
+        (to_il + on_il < cars_limit ∧ to_ml = 0) ∨ to_ml > 0 ∨ to_il > 0 ∨ (on_il > 0 ∧ to_il = 0)
+
+variant
+    2 ∗ to_il + on_il
+
+events
+    event INITIALISATION extends INITIALISATION
+      then
+        @act2 to_il ≔ 0
+        @act3 on_il ≔ 0
+        @act4 to_ml ≔ 0
+    end
+
+    event ML_out extends ML_out
+      where
+        @grd2 to_ml = 0
+        theorem @grd3 to_il + on_il < cars_limit
+      then
+        @act2 to_il ≔ to_il + 1
+    end
+
+    event ML_in extends ML_in
+      where
+        @grd2 to_ml > 0
+      then
+        @act2 to_ml ≔ to_ml − 1
+    end
+
+    convergent event IL_out
+      where
+        @grd1 on_il > 0
+        @grd2 to_il = 0
+      then
+        @act1 on_il ≔ on_il − 1
+        @act2 to_ml ≔ to_ml + 1
+    end
+
+    convergent event IL_in
+      where
+        @grd1 to_il > 0
+      then
+        @act1 to_il ≔ to_il − 1
+        @act2 on_il ≔ on_il + 1
+    end
+
+end
+
+
+context C2
+    extends C0
+
+sets
+    colour
+
+constants
+    red
+    green
+
+axioms
+    @axm1
+        partition(colour, {red}, {green})
+
+end
+
+
+machine M2
+    refines M1
+    sees C2
+
+variables
+    cars_number
+    to_il
+    on_il
+    to_ml
+    ml_tl
+    il_tl
+    ml_pass
+    il_pass
+
+invariants
+    @inv1
+        ml_tl ∈ colour
+    @inv2
+        il_tl ∈ colour
+
+    @inv3
+        ml_tl = green ⇒ to_il + on_il < cars_limit ∧ to_ml = 0
+    @inv4
+        il_tl = green ⇒ on_il > 0 ∧ to_il = 0
+    @inv5
+        ml_tl = red ∨ il_tl = red
+
+    @inv6
+        ml_pass ∈ BOOL
+    @inv7
+        il_pass ∈ BOOL
+    @inv8
+        ml_tl = red ⇒ ml_pass = TRUE
+    @inv9
+        il_tl = red ⇒ il_pass = TRUE
+
+events
+    event INITIALISATION extends INITIALISATION
+      then
+        @act5 ml_tl ≔ red
+        @act6 il_tl ≔ red
+        @act7 ml_pass ≔ TRUE
+        @act8 il_pass ≔ TRUE
+    end
+
+    event ML_out_1 extends ML_out
+      where
+        @grd4 ml_tl = green
+        @grd5 to_il + on_il + 1 ≠ cars_limit
+      then
+        @act3 ml_pass ≔ TRUE
+    end
+
+    event ML_out_2 extends ML_out
+      where
+        @grd4 ml_tl = green
+        @grd5 to_il + on_il + 1 = cars_limit
+        @grd6 ml_pass = TRUE
+      then
+        @act3 ml_tl ≔ red
+    end
+
+    event ML_in extends ML_in
+    end
+
+    event IL_out_1 extends IL_out
+      where
+        @grd3 il_tl = green
+        @grd4 on_il ≠ 1
+      then
+        @act3 il_pass ≔ TRUE
+    end
+
+    event IL_out_2 extends IL_out
+      where
+        @grd3 il_tl=green
+        @grd4 on_il = 1
+      then
+        @act3 il_tl ≔ red
+        @act4 il_pass ≔ TRUE
+    end
+
+    event IL_in extends IL_in
+    end
+
+    event Ml_tl_green
+      where
+        @grd1 to_ml = 0
+        @grd2 to_il + on_il < cars_limit
+        @grd3 ml_tl = red
+        @grd4 il_pass = TRUE
+      then
+        @act1 ml_tl ≔ green
+        @act2 il_tl ≔ red
+        @act3 ml_pass ≔ FALSE
+    end
+
+    event IL_tl_green
+      where
+        @grd1 on_il > 0
+        @grd2 to_il = 0
+        @grd3 il_tl = red
+        @grd4 ml_pass = TRUE
+      then
+        @act1 il_tl ≔ green
+        @act2 ml_tl ≔ red
+        @act3 il_pass ≔ FALSE
+    end
+
+end
+
+
+context C3
+    extends C2
+
+sets
+    SENSOR
+
+constants
+    on
+    off
+
+axioms
+    @axm1
+        SENSOR = {on, off}
+    @axm2
+        on ≠ off
+
+end
+
+
+machine M3
+    refines M2
+    sees C3
+
+variables
+    cars_number
+    to_il
+    on_il
+    to_ml
+    ml_tl
+    il_tl
+    ml_pass
+    il_pass
+    ML_OUT_SR
+    ML_IN_SR
+    IL_OUT_SR
+    IL_IN_SR
+    ml_out_ch
+    ml_in_ch
+    il_out_ch
+    il_in_ch
+    TO_IL
+    ON_IL
+    TO_ML
+
+invariants
+    @inv1
+        ML_OUT_SR ∈ SENSOR
+    @inv2
+        ML_IN_SR ∈ SENSOR
+    @inv3
+        IL_OUT_SR ∈ SENSOR
+    @inv4
+        IL_IN_SR ∈ SENSOR
+
+    @inv5
+        ml_out_ch ∈ BOOL
+    @inv6
+        ml_in_ch ∈ BOOL
+    @inv7
+        il_out_ch ∈ BOOL
+    @inv8
+        il_in_ch ∈ BOOL
+
+    @inv9
+        TO_IL ∈ ℕ
+    @inv10
+        ON_IL ∈ ℕ
+    @inv11
+        TO_ML ∈ ℕ
+
+    @inv12
+        TO_IL + ON_IL + TO_ML ≤ cars_limit
+    @inv13
+        TO_IL = 0 ∨ TO_ML = 0
+
+    @inv14
+        ML_IN_SR = on ⇒ TO_ML > 0
+    @inv15
+        IL_OUT_SR = on ⇒ ON_IL > 0
+    @inv16
+        IL_IN_SR = on ⇒ TO_IL > 0
+
+    @inv17
+        ml_out_ch = TRUE ⇒ ml_tl = green
+    @inv18
+        il_out_ch = TRUE ⇒ il_tl = green
+
+    @inv19
+        ML_OUT_SR = on ⇒ ml_out_ch = FALSE
+    @inv20
+        ML_IN_SR = on ⇒ ml_in_ch = FALSE
+    @inv21
+        IL_OUT_SR = on ⇒ il_out_ch = FALSE
+    @inv22
+        IL_IN_SR = on ⇒ il_in_ch = FALSE
+
+    @inv23
+        ml_out_ch = TRUE ∧ il_in_ch = FALSE ⇒ TO_IL = to_il + 1
+    @inv24
+        ml_out_ch = TRUE ∧ il_in_ch = TRUE ⇒ TO_IL = to_il
+    @inv25
+        ml_out_ch = FALSE ∧ il_in_ch = TRUE ⇒ TO_IL = to_il − 1
+    @inv26
+        ml_out_ch = FALSE ∧ il_in_ch = FALSE ⇒ TO_IL = to_il
+
+    @inv27
+        il_out_ch = TRUE ∧ ml_in_ch = FALSE ⇒ TO_ML = to_ml + 1
+    @inv28
+        il_out_ch = FALSE ∧ ml_in_ch = TRUE ⇒ TO_ML = to_ml − 1
+    @inv29
+        il_out_ch = ml_in_ch ⇒ TO_ML = to_ml
+
+    @inv31
+        il_in_ch = TRUE ∧ il_out_ch = FALSE ⇒ ON_IL = on_il + 1
+    @inv32
+        il_in_ch = FALSE ∧ il_out_ch = TRUE ⇒ ON_IL = on_il − 1
+    @inv30
+        il_in_ch = il_out_ch ⇒ ON_IL = on_il
+
+events
+    event INITIALISATION extends INITIALISATION
+      then
+        @act9 ML_OUT_SR ≔ off
+        @act10 ML_IN_SR ≔ off
+        @act11 IL_OUT_SR ≔ off
+        @act12 IL_IN_SR ≔ off
+        @act13 ml_out_ch ≔ FALSE
+        @act14 il_out_ch ≔ FALSE
+        @act15 ml_in_ch ≔ FALSE
+        @act16 il_in_ch ≔ FALSE
+        @act17 TO_IL ≔ 0
+        @act18 ON_IL ≔ 0
+        @act19 TO_ML ≔ 0
+    end
+
+    event ML_out_1 extends ML_out_1
+      where
+        @grd6 ml_out_ch = TRUE
+      then
+        @act4 ml_out_ch ≔ FALSE
+    end
+
+    event ML_out_2 extends ML_out_2
+      where
+        @grd7 ml_out_ch = TRUE
+      then
+        @act4 ml_out_ch ≔ FALSE
+    end
+
+    event ML_in extends ML_in
+      where
+        @grd3 ml_in_ch = TRUE
+      then
+        @act3 ml_in_ch ≔ FALSE
+    end
+
+    event IL_out_1 extends IL_out_1
+      where
+        @grd5 il_out_ch = TRUE
+      then
+        @act4 il_out_ch ≔ FALSE
+    end
+
+    event IL_out_2 extends IL_out_2
+      where
+        @grd5 il_out_ch = TRUE
+      then
+        @act5 il_out_ch ≔ FALSE
+    end
+
+    event IL_in extends IL_in
+      where
+        @grd2 il_in_ch = TRUE
+      then
+        @act3 il_in_ch ≔ FALSE
+    end
+
+    event Ml_tl_green extends Ml_tl_green
+      where
+        @grd5 il_out_ch = FALSE
+    end
+
+    event IL_tl_green extends IL_tl_green
+      where
+        @grd5 ml_out_ch = FALSE
+    end
+
+    event ML_out_arr
+      where
+        @grd1 ML_OUT_SR = off
+        @grd2 ml_out_ch = FALSE
+      then
+        @act1 ML_OUT_SR ≔ on
+    end
+
+    event ML_out_dep
+      where
+        @grd1 ML_OUT_SR = on
+        @grd2 ml_tl = green
+      then
+        @act1 ML_OUT_SR ≔ off
+        @act2 ml_out_ch ≔ TRUE
+        @act3 TO_IL ≔ TO_IL + 1
+    end
+
+    event IL_in_arr
+      where
+        @grd1 IL_IN_SR = off
+        @grd2 il_in_ch = FALSE
+        @grd3 TO_IL > 0
+      then
+        @act1 IL_IN_SR ≔ on
+    end
+
+    event IL_in_dep
+      where
+        @grd1 IL_IN_SR = on
+      then
+        @act1 IL_IN_SR ≔ off
+        @act2 il_in_ch ≔ TRUE
+        @act3 TO_IL ≔ TO_IL − 1
+        @act4 ON_IL ≔ ON_IL + 1
+    end
+
+    event IL_out_arr
+      where
+        @grd1 IL_OUT_SR = off
+        @grd2 il_out_ch = FALSE
+        @grd3 ON_IL > 0
+      then
+        @act1 IL_OUT_SR ≔ on
+    end
+
+    event IL_out_dep
+      where
+        @grd1 IL_OUT_SR = on
+        @grd2 il_tl = green
+      then
+        @act1 IL_OUT_SR ≔ off
+        @act2 il_out_ch ≔ TRUE
+        @act3 ON_IL ≔ ON_IL − 1
+        @act4 TO_ML ≔ TO_ML + 1
+    end
+
+    event ML_in_arr
+      where
+        @grd1 ML_IN_SR = off
+        @grd2 ml_in_ch = FALSE
+        @grd3 TO_ML > 0
+      then
+        @act1 ML_IN_SR ≔ on
+    end
+
+    event ML_in_dep
+      where
+        @grd1 ML_IN_SR = on
+      then
+        @act1 ML_IN_SR ≔ off
+        @act2 ml_in_ch ≔ TRUE
+        @act3 TO_ML ≔ TO_ML − 1
+    end
+
+end

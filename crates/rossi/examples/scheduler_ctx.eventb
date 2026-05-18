@@ -1,0 +1,11 @@
+CONTEXT scheduler_ctx
+SETS
+    TASKS, PROCESSORS
+CONSTANTS
+    task_priority, processor_speed
+AXIOMS
+    @axm1 task_priority ∈ TASKS → ℕ1
+    @axm2 processor_speed ∈ PROCESSORS → ℕ1
+    @axm3 card(PROCESSORS) > 0
+    @axm4 ∀t1,t2·t1 ∈ TASKS ∧ t2 ∈ TASKS ⇒ (task_priority(t1) = task_priority(t2) ⇒ t1 = t2)
+END

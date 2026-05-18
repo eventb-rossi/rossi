@@ -1,0 +1,28 @@
+MACHINE counter
+SEES
+    counter_ctx
+VARIABLES
+    count
+INVARIANTS
+    @inv1 count >= 0
+    @inv2 count <= max_value
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        count := 0
+    END
+
+    EVENT increment
+    WHERE
+        @grd1 count < max_value
+    THEN
+        count := count + 1
+    END
+
+    EVENT decrement
+    WHERE
+        @grd1 count > 0
+    THEN
+        count := count - 1
+    END
+END

@@ -1,0 +1,9 @@
+CONTEXT counter_ctx
+SETS
+    STATUS
+CONSTANTS
+    max_value
+AXIOMS
+    @axm1 max_value = 100
+    @axm2 max_value > 0
+END

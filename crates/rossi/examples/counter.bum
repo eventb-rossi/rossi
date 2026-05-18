@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+    <org.eventb.core.machine name="counter" comment="Simple counter machine"/>
+    <org.eventb.core.seesContext target="counter_ctx"/>
+    <org.eventb.core.variable identifier="count" comment="Current counter value"/>
+    <org.eventb.core.invariant label="inv1" predicate="count &gt;= 0" comment="Counter is non-negative"/>
+    <org.eventb.core.invariant label="inv2" predicate="count &lt;= max_value" comment="Counter doesn't exceed maximum"/>
+    <org.eventb.core.event name="INITIALISATION" comment="Initialize counter to zero">
+        <org.eventb.core.action label="act1" assignment="count := 0"/>
+    </org.eventb.core.event>
+    <org.eventb.core.event name="increment" comment="Increment the counter">
+        <org.eventb.core.guard label="grd1" predicate="count &lt; max_value"/>
+        <org.eventb.core.action label="act1" assignment="count := count + 1"/>
+    </org.eventb.core.event>
+    <org.eventb.core.event name="decrement" comment="Decrement the counter">
+        <org.eventb.core.guard label="grd1" predicate="count &gt; 0"/>
+        <org.eventb.core.action label="act1" assignment="count := count - 1"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>

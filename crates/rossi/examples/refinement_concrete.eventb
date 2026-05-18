@@ -1,0 +1,50 @@
+MACHINE refinement_concrete
+REFINES
+    refinement_abstract
+VARIABLES
+    concrete_state, step_size
+INVARIANTS
+    @inv1 concrete_state ∈ ℕ
+    @inv2 step_size ∈ ℕ1
+    @inv3 abstract_state = concrete_state
+    @inv4 step_size ≤ 10
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        concrete_state := 0
+        step_size := 1
+    END
+
+    EVENT increase
+    REFINES increase
+    ANY
+        steps
+    WHERE
+        @grd1 steps ∈ ℕ1
+        @grd2 concrete_state + steps ∗ step_size ≤ 100
+    WITH
+        @delta delta = steps ∗ step_size
+    THEN
+        concrete_state := concrete_state + steps ∗ step_size
+    END
+
+    EVENT decrease
+    REFINES decrease
+    WHEN
+        @grd1 concrete_state ≥ step_size
+    WITH
+        @abstract_state' abstract_state' = concrete_state − step_size
+    THEN
+        concrete_state := concrete_state − step_size
+    END
+
+    EVENT change_step_size
+    ANY
+        new_size
+    WHERE
+        @grd1 new_size ∈ ℕ1
+        @grd2 new_size ≤ 10
+    THEN
+        step_size := new_size
+    END
+END

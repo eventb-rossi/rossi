@@ -1,0 +1,12 @@
+CONTEXT bank_account_ctx
+SETS
+    ACCOUNTS
+CONSTANTS
+    min_balance, max_balance
+AXIOMS
+    @axm1 min_balance ∈ ℤ
+    @axm2 max_balance ∈ ℕ
+    @axm3 min_balance = −1000
+    @axm4 max_balance = 1000000
+    @axm5 min_balance < max_balance
+END
