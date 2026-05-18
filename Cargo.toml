@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = []
+members = [
+    "crates/rossi",
+]
 
 [workspace.package]
 version = "0.1.0"

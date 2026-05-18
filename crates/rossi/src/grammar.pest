@@ -1,0 +1,662 @@
+// Event-B Grammar Definition for pest parser
+// This grammar defines the syntax for Event-B formal modeling language
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
+
+// ==========================
+// Basic Tokens
+// ==========================
+
+// Identifiers
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "'")* }
+
+// Typed identifier: x⦂ℤ (bound variable with optional type annotation).
+// The type uses `ident_binder_type` rather than `relation_type_expr` so that
+// `λx⦂T₁ ↦ y⦂T₂ · …` parses with `↦` as the lambda-pattern separator, not
+// as a maplet inside T₁ (the spec uses `↦` only as a value constructor —
+// types use `×` and the relation arrows but never a top-level `↦`).
+typed_identifier = { identifier ~ (op_oftype ~ ident_binder_type)? }
+ident_binder_type = {
+    set_operator_expr ~ ((op_total_surj | op_partial_surj | op_bijection
+                          | op_total_inj | op_partial_inj
+                          | op_total_fn | op_partial_fn
+                          | op_total_surjective_relation | op_surjective_relation
+                          | op_total_relation | op_relation) ~ set_operator_expr)?
+}
+
+// Numbers
+integer = @{ "-"? ~ ASCII_DIGIT+ }
+
+// String Literals (ProB extension)
+string_inner = @{ (!("\"" | "\\") ~ ANY | "\\" ~ ("\"" | "\\"))* }
+string_literal = { "\"" ~ string_inner ~ "\"" }
+
+// ==========================
+// Keywords
+// ==========================
+
+// Context Keywords (case-insensitive)
+// Atomic rules with trailing word-boundary lookahead so keywords don't greedily
+// match identifier prefixes (e.g. `events_of_partition` must parse as one
+// identifier, not `events` + `_of_partition`).
+kw_context = @{ ^"context" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_extends = @{ ^"extends" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_sets = @{ ^"sets" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_constants = @{ ^"constants" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_axioms = @{ ^"axioms" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_end = @{ ^"end" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Machine Keywords (case-insensitive)
+kw_machine = @{ ^"machine" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_refines = @{ ^"refines" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_sees = @{ ^"sees" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_variables = @{ ^"variables" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_invariants = @{ ^"invariants" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_variant = @{ ^"variant" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_events = @{ ^"events" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_initialisation = @{ ^"initialisation" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Event Keywords (case-insensitive)
+kw_event = @{ ^"event" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_any = @{ ^"any" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_where = @{ ^"where" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_when = @{ ^"when" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_with = @{ ^"with" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_then = @{ ^"then" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_begin = @{ ^"begin" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_witness = @{ ^"witness" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_status = @{ ^"status" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_ordinary = @{ ^"ordinary" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_convergent = @{ ^"convergent" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_anticipated = @{ ^"anticipated" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Action Keywords
+kw_skip = @{ ^"skip" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Logic Keywords (case-insensitive, with word boundary guards)
+kw_true = @{ (^"true" ~ !(ASCII_ALPHANUMERIC | "_")) | "⊤" }
+kw_false = @{ (^"false" ~ !(ASCII_ALPHANUMERIC | "_")) | "⊥" }
+kw_theorem = @{ ^"theorem" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Built-in types (atomic rules to prevent implicit whitespace before boundary guard)
+kw_nat1 = @{ ("ℕ1" | ^"nat1") ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_nat = @{ ("ℕ" | ^"nat") ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_int = @{ ("ℤ" | ^"int") ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_bool = @{ ^"bool" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Conditional expression keywords (ProB extension)
+kw_if = @{ ^"if" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_else = @{ ^"else" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// Quantified set operation keywords
+kw_UNION = @{ "⋃" | (^"UNION" ~ !(ASCII_ALPHANUMERIC | "_")) }
+kw_INTER = @{ "⋂" | (^"INTER" ~ !(ASCII_ALPHANUMERIC | "_")) }
+
+// ==========================
+// Operators and Symbols
+// ==========================
+
+// Logical Operators
+op_and = { "∧" | "&" }
+op_or = @{ "∨" | ("or" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_implies = { "⇒" | "=>" }
+op_equivalent = { "⇔" | "<=>" }
+op_not = @{ "¬" | ("not" ~ !(ASCII_ALPHANUMERIC | "_")) }
+
+// Quantifiers
+op_forall = { "∀" | "!" }
+op_exists = { "∃" | "#" }
+
+// Set Operators
+op_in = { "∈" | ":" }
+op_notin = { "∉" | "/:" }
+op_subset = { "⊆" | "<:" }
+op_subset_strict = { "⊂" | "<<:" }
+op_not_subset = { "⊈" | "/<:" }
+op_not_subset_strict = { "⊄" | "/<<:" }
+op_union = { "∪" | "\\/" }
+op_intersection = { "∩" | "/\\" }
+op_difference = { "∖" | "\\" }
+op_cartesian = { "×" | "**" }
+op_powerset = @{ "ℙ" | ("POW" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_powerset1 = @{ "ℙ1" | ("POW1" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_emptyset = { "∅" | "{}" | ",," }
+op_oftype = @{ "⦂" | ("oftype" ~ !(ASCII_ALPHANUMERIC | "_")) }
+
+// Relation Operators
+op_maplet = { "↦" | "|->" }
+op_relation = { "↔" | "<->" }
+op_partial_fn = { "⇸" | "+->" }
+op_total_fn = { "→" | "-->" }
+op_partial_inj = { "⤔" | ">+>" }
+op_total_inj = { "↣" | ">->" }
+op_partial_surj = { "⤀" | "+>>" }
+op_total_surj = { "↠" | "->>" }
+op_bijection = { "⤖" | ">->>" }
+op_domain = @{ "dom" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_range = @{ "ran" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_inverse = { "\u{223C}" }
+op_semicolon = { ";" }
+op_composition = @{ "∘" | ("circ" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_domain_restrict = { "◁" | "<|" }
+op_domain_subtract = { "⩤" | "<<|" }
+op_range_restrict = { "▷" | "|>" }
+op_range_subtract = { "⩥" | "|>>" }
+op_overwrite = { "\u{E103}" | "⊕" | "<+" }
+op_direct_product = { "⊗" | "><" }
+op_parallel_product = { "∥" | "||" }
+
+// Additional relation types (total relation, surjective relation, total surjective relation)
+// PEG ordering: <<->> before <<-> and <->>, all before <->
+op_total_surjective_relation = { "\u{E102}" | "<<->>" }
+op_surjective_relation = { "\u{E101}" | "<->>" }
+op_total_relation = { "\u{E100}" | "<<->" }
+
+// Arithmetic Operators
+op_plus = { "+" }
+op_minus = { "−" | "-" }
+op_multiply = { "∗" | "*" }
+op_divide = { "/" | "÷" }
+op_modulo = @{ "mod" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_exponent = { "^" }
+op_range_op = { ".." | "‥" }
+
+// Comparison Operators
+op_eq = { "=" }
+op_neq = { "≠" | "/=" }
+op_lt = { "<" }
+op_le = { "≤" | "<=" }
+op_gt = { ">" }
+op_ge = { "≥" | ">=" }
+
+// Assignment Operators
+op_becomes_equal = { "≔" | ":=" }
+op_becomes_in = { ":∈" | "::" }
+op_becomes_such = { ":∣" | ":|" }
+
+// Delimiters
+dot = { "." | "·" }
+comma = { "," }
+colon = { ":" }
+semicolon = { ";" }
+lparen = { "(" }
+rparen = { ")" }
+lbrace = { "{" }
+rbrace = { "}" }
+lbracket = { "[" }
+rbracket = { "]" }
+pipe = { "|" | "∣" }
+
+// ==========================
+// Expressions
+// ==========================
+
+// Bool expression: bool(P) — converts a predicate to boolean
+bool_expr = { kw_bool ~ lparen ~ predicate ~ rparen }
+
+// Conditional expression (ProB extension): IF P THEN E1 ELSE E2 END
+// Uses regular predicate/expression inside since the keywords provide
+// unambiguous delimiters (same reasoning as parenthesized expressions).
+if_then_else_expr = {
+    kw_if ~ predicate ~ kw_then ~ expression ~ kw_else ~ expression ~ kw_end
+}
+
+// Primary Expressions
+primary_expr = {
+    kw_true
+  | kw_false
+  | op_emptyset
+  | kw_nat1
+  | kw_nat
+  | kw_int
+  | bool_expr
+  | kw_bool
+  | string_literal
+  | integer
+  | if_then_else_expr
+  | identifier
+  | lparen ~ expression ~ rparen
+  | set_enumeration
+  | set_comprehension
+}
+
+// Set Enumeration: {1, 2, 3}
+set_enumeration = {
+    lbrace ~ (expression ~ (comma ~ expression)*)? ~ rbrace
+}
+
+// Set Comprehension:
+// Extended form:   {x · P | E}  (identifiers, dot, predicate, pipe, expression)
+// Basic form:      {x | P}      (identifiers, pipe, predicate)
+// Expression form: {E | P}      (expression, pipe, predicate) — e.g., {x ↦ y | P}
+// PEG ordering: identifier-based forms before expression form, extended before basic
+set_comprehension = {
+    lbrace ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ expression ~ rbrace
+  | lbrace ~ typed_identifier ~ (comma ~ typed_identifier)* ~ pipe ~ predicate ~ rbrace
+  | lbrace ~ expression ~ pipe ~ predicate ~ rbrace
+}
+
+// Lambda ident-pattern (per kernel_lang.pdf §3.3.6).
+// ⟨ident-pattern⟩ ::= ⟨ident-pattern⟩ { '↦' ⟨ident-pattern⟩ } | '(' ⟨ident-pattern⟩ ')' | ⟨ident⟩ ['⦂' ⟨type⟩]
+// Left-associative maplet chain. Each leaf may carry a `⦂` type annotation,
+// which is what Rodin's bcc emits after type-checking (`λx⦂T · …`).
+ident_pattern = { ident_pattern_atom ~ (op_maplet ~ ident_pattern_atom)* }
+ident_pattern_atom = { lparen ~ ident_pattern ~ rparen | typed_identifier }
+
+// Lambda Expression: λ pattern · P ∣ E
+lambda_expr = {
+    ("λ" | "%") ~ ident_pattern ~ dot ~ predicate ~ pipe ~ expression
+}
+
+// Function/Relation Application, Relational Image, and Function Update
+// f(x)        function application
+// r[S]        relational image
+// f{x ↦ y}   Rodin's compact serialization of f ⊕ {x ↦ y} (functional override).
+//              Lowered by the parser to the same AST as the explicit ⊕ form
+//              so consumers don't need to handle a separate variant.
+// r∼         postfix inverse
+function_application = {
+    primary_expr ~ (lparen ~ expression ~ (comma ~ expression)* ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
+}
+
+// Unary Expressions
+unary_expr = {
+    (op_minus | op_powerset1 | op_powerset | op_domain | op_range) ~ unary_expr
+  | function_application
+}
+
+// Binary Expressions (with precedence, lowest to highest)
+
+// Exponent (non-associative) — highest arithmetic precedence per spec §3.3.6
+exponent_expr = {
+    unary_expr ~ (op_exponent ~ unary_expr)?
+}
+
+// Multiplicative operators (arithmetic only)
+multiplicative_expr = {
+    exponent_expr ~ ((op_multiply | op_divide | op_modulo) ~ exponent_expr)*
+}
+
+// Additive operators (arithmetic only)
+additive_expr = {
+    multiplicative_expr ~ ((op_plus | op_minus) ~ multiplicative_expr)*
+}
+
+// Range/interval operator (non-associative)
+relational_expr = {
+    additive_expr ~ (op_range_op ~ additive_expr)?
+}
+
+// Binary set operators (between maplet and interval in precedence)
+set_operator_expr = {
+    relational_expr ~ ((op_cartesian | op_intersection | op_union | op_difference
+                       | op_overwrite | op_semicolon | op_composition
+                       | op_domain_subtract | op_domain_restrict
+                       | op_range_subtract | op_range_restrict
+                       | op_direct_product | op_parallel_product) ~ relational_expr)*
+}
+
+// Maplet (left-associative; flat-list form folded left at AST build).
+// Spec p.18 / EVENTB_LANGUAGE_REFERENCE.md: `a ↦ b ↦ c = (a ↦ b) ↦ c`.
+maplet_expr = {
+    set_operator_expr ~ (op_maplet ~ set_operator_expr)*
+}
+
+// Relation/function type operators (lowest expression precedence, non-associative)
+// PEG ordering: longer operators before shorter sharing a prefix
+relation_type_expr = {
+    maplet_expr ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
+                   | op_total_fn | op_partial_fn
+                   | op_total_surjective_relation | op_surjective_relation | op_total_relation
+                   | op_relation | op_oftype) ~ maplet_expr)?
+}
+
+// Quantified union: ⋃x·P ∣ E  or  UNION x·P ∣ E
+quantified_union_expr = {
+    kw_UNION ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ expression
+}
+
+// Quantified intersection: ⋂x·P ∣ E  or  INTER x·P ∣ E
+quantified_inter_expr = {
+    kw_INTER ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ expression
+}
+
+// Top-level expression: quantified forms (lambda, union, inter) tried before binary chain
+// because they start with keywords that would otherwise match as identifiers
+expression = {
+    lambda_expr
+  | quantified_union_expr
+  | quantified_inter_expr
+  | relation_type_expr
+}
+
+// ==========================
+// Predicates
+// ==========================
+
+comparison_predicate = {
+    expression ~ (op_eq | op_neq | op_le | op_ge | op_not_subset_strict | op_not_subset | op_subset_strict | op_subset | op_lt | op_gt | op_notin | op_in) ~ expression
+}
+
+// Predicate function application (e.g., finite(S), partition(S, A, B))
+predicate_application = {
+    identifier ~ lparen ~ expression ~ (comma ~ expression)* ~ rparen
+}
+
+atomic_predicate = {
+    comparison_predicate
+  | predicate_application
+  | kw_true
+  | kw_false
+  | lparen ~ predicate ~ rparen
+}
+
+negation_predicate = {
+    op_not ~ negation_predicate
+  | (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate
+  | atomic_predicate
+}
+
+conjunction_predicate = {
+    negation_predicate ~ (op_and ~ negation_predicate)*
+}
+
+disjunction_predicate = {
+    conjunction_predicate ~ (op_or ~ conjunction_predicate)*
+}
+
+implication_predicate = {
+    disjunction_predicate ~ (op_implies ~ disjunction_predicate)*
+}
+
+equivalence_predicate = {
+    implication_predicate ~ (op_equivalent ~ implication_predicate)*
+}
+
+quantified_predicate = {
+    (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate
+  | equivalence_predicate
+}
+
+predicate = {
+    quantified_predicate
+}
+
+// _no_semi predicate variants: used in BecomesSuchThat actions where ";"
+// is the action separator, not forward composition.  Expressions inside
+// parentheses/brackets use regular (semicolon-including) rules because the
+// closing delimiter naturally bounds the expression.
+
+comparison_predicate_no_semi = {
+    action_expression ~ (op_eq | op_neq | op_le | op_ge | op_not_subset_strict | op_not_subset | op_subset_strict | op_subset | op_lt | op_gt | op_notin | op_in) ~ action_expression
+}
+
+atomic_predicate_no_semi = {
+    comparison_predicate_no_semi
+  | predicate_application            // args inside parens — regular expression is fine
+  | kw_true
+  | kw_false
+  | lparen ~ predicate ~ rparen      // inside parens — regular predicate is fine
+}
+
+negation_predicate_no_semi = {
+    op_not ~ negation_predicate_no_semi
+  | (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate_no_semi
+  | atomic_predicate_no_semi
+}
+
+conjunction_predicate_no_semi = {
+    negation_predicate_no_semi ~ (op_and ~ negation_predicate_no_semi)*
+}
+
+disjunction_predicate_no_semi = {
+    conjunction_predicate_no_semi ~ (op_or ~ conjunction_predicate_no_semi)*
+}
+
+implication_predicate_no_semi = {
+    disjunction_predicate_no_semi ~ (op_implies ~ disjunction_predicate_no_semi)*
+}
+
+equivalence_predicate_no_semi = {
+    implication_predicate_no_semi ~ (op_equivalent ~ implication_predicate_no_semi)*
+}
+
+quantified_predicate_no_semi = {
+    (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate_no_semi
+  | equivalence_predicate_no_semi
+}
+
+predicate_no_semi = {
+    quantified_predicate_no_semi
+}
+
+// ==========================
+// Actions (Event Actions)
+// ==========================
+
+// Expression variants that exclude op_semicolon (composition).
+// Used inside actions so that ";" unambiguously separates actions in action_list.
+exponent_expr_no_semi = {
+    unary_expr ~ (op_exponent ~ unary_expr)?
+}
+multiplicative_expr_no_semi = {
+    exponent_expr_no_semi ~ ((op_multiply | op_divide | op_modulo) ~ exponent_expr_no_semi)*
+}
+additive_expr_no_semi = {
+    multiplicative_expr_no_semi ~ ((op_plus | op_minus) ~ multiplicative_expr_no_semi)*
+}
+relational_expr_no_semi = {
+    additive_expr_no_semi ~ (op_range_op ~ additive_expr_no_semi)?
+}
+set_operator_expr_no_semi = {
+    relational_expr_no_semi ~ ((op_cartesian | op_intersection | op_union | op_difference
+                               | op_overwrite | op_composition
+                               | op_domain_subtract | op_domain_restrict
+                               | op_range_subtract | op_range_restrict
+                               | op_direct_product | op_parallel_product) ~ relational_expr_no_semi)*
+}
+maplet_expr_no_semi = {
+    set_operator_expr_no_semi ~ (op_maplet ~ set_operator_expr_no_semi)*
+}
+relation_type_expr_no_semi = {
+    maplet_expr_no_semi ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
+                           | op_total_fn | op_partial_fn
+                           | op_total_surjective_relation | op_surjective_relation | op_total_relation
+                           | op_relation | op_oftype) ~ maplet_expr_no_semi)?
+}
+// No-semi quantified expression variants: body uses action_expression so that ";"
+// is unambiguously the action separator, not forward composition.
+lambda_expr_no_semi = {
+    ("λ" | "%") ~ ident_pattern ~ dot ~ predicate ~ pipe ~ action_expression
+}
+quantified_union_expr_no_semi = {
+    kw_UNION ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ action_expression
+}
+quantified_inter_expr_no_semi = {
+    kw_INTER ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ action_expression
+}
+action_expression = {
+    lambda_expr_no_semi
+  | quantified_union_expr_no_semi
+  | quantified_inter_expr_no_semi
+  | relation_type_expr_no_semi
+}
+
+action = {
+    kw_skip                                                                      // Skip (no-op)
+  | identifier ~ lparen ~ action_expression ~ (comma ~ action_expression)* ~ rparen ~ op_becomes_equal ~ action_expression  // Function override: f(x) ≔ E
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ action_expression ~ (comma ~ action_expression)*  // Deterministic (parallel) assignment
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ action_expression     // Non-deterministic assignment (becomes member of)
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate_no_semi   // Non-deterministic assignment (becomes such that)
+}
+
+labeled_action = {
+    label? ~ action
+}
+
+action_list = {
+    labeled_action+
+}
+
+// ==========================
+// Context
+// ==========================
+
+context_clause_extends = {
+    kw_extends ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ identifier)*
+}
+
+// Set declaration: deferred set (S) or enumerated set (S = {a, b, c})
+set_declaration = {
+    identifier ~ (op_eq ~ lbrace ~ identifier ~ (comma ~ identifier)* ~ rbrace)?
+}
+
+context_clause_sets = {
+    kw_sets ~ set_declaration ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ set_declaration)*
+}
+
+context_clause_constants = {
+    kw_constants ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ identifier)*
+}
+
+// Label: "@" followed by any non-whitespace characters, per the TextEditor EBNF spec:
+// "all characters following '@' belong to the label until the next whitespace character is found."
+// This supports labels with non-identifier chars like SAF5" from Rodin XML &quot; escapes.
+// The optional trailing colon supports eventb-to-txt reference output (e.g. "@inv1:").
+label_text = @{ (!(" " | "\t" | "\n" | "\r") ~ ANY)+ }
+label = ${ "@" ~ label_text }
+
+// Accepts both orderings: "@label theorem pred" and "theorem @label pred"
+// as well as "@label pred", "theorem pred", and bare "pred".
+labeled_predicate = {
+    (kw_theorem ~ label | label ~ kw_theorem?)? ~ predicate
+}
+
+context_clause_axioms = {
+    kw_axioms ~ labeled_predicate ~ (labeled_predicate)*
+}
+
+context_body = {
+    (context_clause_extends | context_clause_sets | context_clause_constants
+     | context_clause_axioms)*
+}
+
+context = {
+    kw_context ~ identifier ~ context_body ~ kw_end
+}
+
+// ==========================
+// Machine
+// ==========================
+
+machine_clause_refines = {
+    kw_refines ~ identifier
+}
+
+machine_clause_sees = {
+    kw_sees ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+}
+
+machine_clause_variables = {
+    kw_variables ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+}
+
+machine_clause_invariants = {
+    kw_invariants ~ labeled_predicate ~ (labeled_predicate)*
+}
+
+machine_clause_variant = {
+    kw_variant ~ expression
+}
+
+// ==========================
+// Events
+// ==========================
+
+event_status = {
+    kw_status ~ (kw_ordinary | kw_convergent | kw_anticipated)
+}
+
+event_refines = {
+    kw_refines ~ identifier
+}
+
+event_any = {
+    kw_any ~ identifier ~ (comma? ~ !kw_where ~ !kw_when ~ !kw_with ~ !kw_witness ~ !kw_then ~ !kw_begin ~ !kw_end ~ identifier)*
+}
+
+event_where = {
+    (kw_where | kw_when) ~ labeled_predicate ~ (labeled_predicate)*
+}
+
+event_with = {
+    kw_with ~ labeled_predicate+
+}
+
+event_witness = {
+    kw_witness ~ labeled_predicate+
+}
+
+event_then = {
+    (kw_then | kw_begin) ~ action_list
+}
+
+event_body = {
+    event_status?
+  ~ event_refines?
+  ~ event_any?
+  ~ event_where?
+  ~ event_with?
+  ~ event_witness?
+  ~ event_then?
+}
+
+// Inline status (before event keyword): "convergent event foo ..."
+event_inline_status = { kw_ordinary | kw_convergent | kw_anticipated }
+
+event = {
+    event_inline_status?
+  ~ kw_event ~ identifier
+  ~ ((kw_extends | kw_refines) ~ identifier)?
+  ~ event_body ~ kw_end
+}
+
+initialisation_event = {
+    kw_event ~ kw_initialisation ~ (kw_extends ~ kw_initialisation)? ~ (kw_then ~ action_list)? ~ kw_end
+}
+
+machine_clause_events = {
+    kw_events ~ (initialisation_event | event)+
+}
+
+machine_body = {
+    (machine_clause_refines | machine_clause_sees | machine_clause_variables
+     | machine_clause_invariants | machine_clause_variant
+     | machine_clause_events)*
+}
+
+machine = {
+    kw_machine ~ identifier ~ machine_body ~ kw_end
+}
+
+// ==========================
+// Full-input wrapper rules (for parse_*_str functions)
+// ==========================
+// These silent rules ensure the entire input is consumed when parsing
+// standalone expressions, predicates, or actions from XML attributes.
+expression_complete = _{ SOI ~ expression ~ EOI }
+predicate_complete = _{ SOI ~ predicate ~ EOI }
+action_complete = _{ SOI ~ action ~ EOI }
+
+// ==========================
+// Root
+// ==========================
+
+component = {
+    SOI ~ (context | machine) ~ EOI
+}
+
+components = {
+    SOI ~ (context | machine)+ ~ EOI
+}

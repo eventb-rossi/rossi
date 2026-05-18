@@ -1,0 +1,54 @@
+MACHINE library
+SEES
+    library_ctx
+VARIABLES
+    available_books, loans
+INVARIANTS
+    @inv1 available_books ⊆ library_collection
+    @inv2 loans ∈ MEMBERS ⇸ ℙ(BOOKS)
+    @inv3 ∀m·m ∈ dom(loans) ⇒ card(loans(m)) ≤ max_loans
+    @inv4 ∀m·m ∈ dom(loans) ⇒ loans(m) ∩ available_books = ∅
+THEOREMS
+    @thm1 finite(available_books)
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        available_books := library_collection
+        loans := ∅
+    END
+
+    EVENT borrow_book
+    ANY
+        member
+        book
+    WHERE
+        @grd1 member ∈ MEMBERS
+        @grd2 book ∈ available_books
+        @grd3 member ∈ dom(loans) ⇒ card(loans(member)) < max_loans
+    THEN
+        available_books := available_books ∖ {book}
+        loans := loans ⊕ {member ↦ (IF member ∈ dom(loans) THEN loans(member) ∪ {book} ELSE {book} END)}
+    END
+
+    EVENT return_book
+    ANY
+        member
+        book
+    WHERE
+        @grd1 member ∈ dom(loans)
+        @grd2 book ∈ loans(member)
+    THEN
+        available_books := available_books ∪ {book}
+        loans(member) := loans(member) ∖ {book}
+    END
+
+    EVENT register_member
+    ANY
+        new_member
+    WHERE
+        @grd1 new_member ∈ MEMBERS
+        @grd2 new_member ∉ dom(loans)
+    THEN
+        loans(new_member) := ∅
+    END
+END

@@ -1,0 +1,1249 @@
+// Copyright (c) 2018 Ilya Shchepetkov <shchepetkov@ispras.ru>
+// Copyright (c) 2018 ISP RAS (http://www.ispras.ru)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+context C1
+
+sets
+    Union // Artificial set of all possible elements of the model
+    Names // Set of all possible names for entities and roles
+    Accesses // Set of all possible accesses
+    AccessRights // Set of all possible access rights (permissions)
+
+constants
+    Root // Linux "/" root directory
+    SRoot // Artificial root process - doesn't exist in the real OS
+    SpecialAdmRoles // Set of special administrative roles
+    EntitiesAR // Role from the SAR set
+    SubjectsAR // -
+    UsersAR // -
+    RolesAR // -
+    ARolesAR // -
+    ReadA // Read access
+    WriteA // Write access
+    Read // Read access right
+    Write // Write access right
+    Execute // Execute access right
+    Own // Own access right
+    CommonRole // Role that is common for all user accounts
+
+axioms
+    @UnionIsFinite
+        finite(Union)
+    @RootType
+        Root ∈ Union
+    @SRootType
+        SRoot ∈ Union
+    @SpecialAdmRolesType
+        SpecialAdmRoles ⊆ Union
+    @SpecialAdmRolesContent
+        partition(SpecialAdmRoles, {EntitiesAR}, {SubjectsAR}, {UsersAR}, {RolesAR}, {ARolesAR})
+    @SpecialAdmRolesAreFinite
+        finite(SpecialAdmRoles)
+    @AccessesPartition
+        partition(Accesses, {ReadA}, {WriteA})
+    @AccessRightsPartition
+        partition(AccessRights, {Read}, {Write}, {Execute}, {Own})
+    @CommonRoleType
+        CommonRole ∈ Union
+    @InductionAxiom
+        ∀s · s ⊆ ℕ ∧ 0 ∈ s ∧ (∀n · n ∈ s ⇒ n + 1 ∈ s) ⇒ ℕ ⊆ s
+
+end
+
+
+machine M1
+    sees C1
+
+variables
+    CurrUnion
+    UserAccs // Set of all current user accounts
+    Subjects // Set of all current subjects (processes)
+    Entities // Set of all current entities (files and file-like objects, directories)
+    Objects // Set of all current objects (files), subset of Entities
+    Containers // Set of all current containers (directories), subset of Entities
+    Roles // Set of all current roles
+    OrdRoles // Set of all current ordinary roles, subset of Roles
+    AdmRoles // Set of all current administrative roles, subset of Roles
+    Direct // Function. For a given entity returns False if it has a mount point (For example, it has a mount point if it is located on the flash drive)
+    EntityMP // Function. For a given entity returns its mount point in the file system
+    EntityNames // Like function Parent below, but returns the name, under which the file is contained in the container, and the parent container itself.
+    Parent // Function. Hierarchy of entities in the file system, for each entity except the root directory function returns its parent container.
+    RoleAdmRights // Function. Current access rights of administrative roles to roles
+    RoleName // Function. Stores role names.
+    RoleRights // Function. Current access rights of roles to entities
+    RParents // Function. Hierarchy of roles, for each role returns the set of its parent roles.
+    Shared // Function. Sets an additional flag to each entity and role.
+    SParent // Function. Same as Parent, but for subjects
+    SubjectAccesses // Function. Current accesses of subjects to entities
+    SubjectAdmAccesses // Function. Current accesses of subjects to roles
+    SubjectOwner // Function. Stores an owner (role) of some subjects
+    SubjectUser // Function. Stores an user account on which behalf the subject (process) is executed
+    UserAdmRole // Function. Stores an individual administrative role of each user account.
+    UserOrdRole // Function. Stores an individual ordinary role of each user account.
+
+invariants
+    @CurrUnionType
+        CurrUnion ⊆ Union
+    @CurrUnionPartition
+        partition(CurrUnion, UserAccs, Subjects, Entities, Roles)
+    @EntitiesPartition
+        partition(Entities, Objects, Containers)
+    @RolesPartition
+        partition(Roles, AdmRoles, OrdRoles)
+
+    @CommonRoleType
+        CommonRole ∈ OrdRoles
+    @DirectType
+        Direct ∈ Entities ∪ Roles → BOOL
+    @EntityMPType
+        EntityMP ∈ Entities → Containers
+    @EntityNamesType
+        EntityNames ∈ Entities ∖ {Root} → (Containers ↔ Names)
+    @ParentType
+        Parent ∈ Containers ∖ {Root} → Containers
+    @RoleAdmRightsType
+        RoleAdmRights ∈ AdmRoles → (Roles ↔ AccessRights)
+    @RoleNameType
+        RoleName ∈ Roles ↣ Names
+    @RoleRightsType
+        RoleRights ∈ Roles → (Entities ↔ AccessRights)
+    @RootType
+        Root ∈ Containers
+    @RParentsType
+        RParents ∈ Roles → ℙ(Roles)
+    @SharedType
+        Shared ∈ Containers ∪ Roles → BOOL
+    @SParentType
+        SParent ∈ Subjects ∖ {SRoot} → Subjects
+    @SpecialAdmRolesTypes
+        SpecialAdmRoles ⊆ AdmRoles
+    @SRootType
+        SRoot ∈ Subjects
+    @SubjectAccessesType
+        SubjectAccesses ∈ Subjects → (Entities ↔ Accesses)
+    @SubjectAdmAccessesType
+        SubjectAdmAccesses ∈ Subjects → (Roles ↔ Accesses)
+    @SubjectOwnerType
+        SubjectOwner ∈ Subjects ⇸ Roles
+    @SubjectUserType
+        SubjectUser ∈ Subjects → UserAccs
+    @UserAdmRoleType
+        UserAdmRole ∈ UserAccs → AdmRoles
+    @UserOrdRoleType
+        UserOrdRole ∈ UserAccs → OrdRoles
+
+    @UserAccsAreNotEmpty
+        UserAccs ≠ ∅
+    @SubjectsAreNotEmpty
+        Subjects ≠ ∅
+
+    @EntityNames1
+        ∀e · e ∈ dom(EntityNames) ⇒ EntityNames(e) ≠ ∅
+    @EntityNames2
+        ∀c · c ∈ Containers ∧ c ≠ Root ⇒ (∃p, n · p ∈ Containers ∧ n ∈ Names ∧ EntityNames(c) = {p ↦ n})
+    @EntityNames3
+        ∀e1, e2 · e1 ∈ dom(EntityNames) ∧ e2 ∈ dom(EntityNames) ∧ e1 ≠ e2 ⇒ EntityNames(e1) ∩ EntityNames(e2) = ∅
+    @EntityNames4
+        ∀c1, c2 · c1 ∈ Containers ∧ c1 ≠ Root ∧ c2 ∈ dom(EntityNames(c1)) ⇒ c2 = Parent(c1)
+    @EntityNames5
+        ∀c1, c2 · c1 ∈ Containers ∧ c1 ≠ Root ∧ c2 = Parent(c1) ⇒ c2 ∈ dom(EntityNames(c1))
+
+    @RParents1
+        ∀r · r ∈ AdmRoles ⇒ RParents(r) ⊆ AdmRoles
+    @RParents2
+        ∀r · r ∈ OrdRoles ⇒ RParents(r) ⊆ OrdRoles
+
+    @NoCyclesForContainers
+        ∀C · C ⊆ Containers ∧ C ≠ ∅ ∧ Root ∉ C ⇒ C ∖ Parent[C] ≠ ∅
+    @NoCyclesForRoles
+        ∀R · R ⊆ Roles ∧ R ≠ ∅ ⇒ (∃r · r ∈ R ∧ (∀p · p ∈ R ⇒ p ∉ RParents(r)))
+    @NoCyclesForSubjects
+        ∀S · S ⊆ dom(SParent) ∧ S ≠ ∅ ⇒ S ∖ SParent[S] ≠ ∅
+
+    @RolesAreShared
+        ∀r · r ∈ Roles ⇒ Shared(r) = TRUE
+
+    @ExecuteToEverything
+        ∀ar, r · ar ∈ AdmRoles ∧ r ∈ Roles ⇒ r ↦ Execute ∈ RoleAdmRights(ar)
+
+    @RolesAR1
+        ∀r · r ∈ OrdRoles ⇒ r ↦ Own ∈ RoleAdmRights(RolesAR)
+    @RolesAR2
+        ∀r, ar · r ∈ OrdRoles ∧ ar ∈ AdmRoles ∧ r ↦ Own ∈ RoleAdmRights(ar) ⇒ ar = RolesAR
+    @ARolesAR1
+        ∀r · r ∈ AdmRoles ⇒ r ↦ Own ∈ RoleAdmRights(ARolesAR)
+    @ARolesAR2
+        ∀r, ar · r ∈ AdmRoles ∧ ar ∈ AdmRoles ∧ r ↦ Own ∈ RoleAdmRights(ar) ⇒ ar = ARolesAR
+
+    @NoMultipleOwners
+        ∀r1, r2, e · r1 ∈ Roles ∧ r2 ∈ Roles ∧ e ↦ Own ∈ RoleRights(r1) ∧ e ↦ Own ∈ RoleRights(r2) ⇒ r1 = r2
+
+    @ReadSpreads
+        ∀ar, r, p · ar ∈ AdmRoles ∧ r ∈ Roles ∧ p ∈ Roles
+            ∧ p ∈ RParents(r) ∧ p ↦ Read ∈ RoleAdmRights(ar)
+                ⇒ r ↦ Read ∈ RoleAdmRights(ar)
+
+    @Direct1
+        ∀e · e ∈ Entities ∧ Direct(e) = TRUE ⇒ EntityMP(e) = Root
+    @Direct2
+        ∀e · e ∈ Entities ∧ Direct(e) = FALSE ⇒ Direct(EntityMP(e)) = TRUE
+    @Direct3
+        ∀c · c ∈ Containers ∧ Direct(c) = FALSE ⇒ c ∉ ran(EntityMP)
+    @Direct4
+        ∀e, p · e ∈ dom(EntityNames) ∧ p ∈ dom(EntityNames(e)) ∧ Direct(p) = FALSE ⇒ Direct(e) = FALSE
+    @Direct5
+        ∀e, mp · e ∈ dom(EntityNames) ∧ mp ∈ dom(EntityNames(e)) ∧ Direct(mp) = TRUE ∧ Direct(e) = FALSE
+            ⇒ (∀child · child ∈ dom(EntityNames) ∧ mp ∈ dom(EntityNames(child)) ⇒ Direct(child) = FALSE)
+    @Direct6
+        ∀e, p · e ∈ dom(EntityNames) ∧ p ∈ dom(EntityNames(e)) ∧ Direct(e) = FALSE
+            ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {p} = E ∪ {Root} ∧ EntityMP(e) ∈ E ∪ {Root})
+    @Direct7
+        Direct(Root) = TRUE
+    @Direct8
+        ∀e, a, r · e ∈ Entities ∧ Direct(e) = FALSE ∧ r ∈ Roles ∧ a ∈ AccessRights ∧ e ↦ a ∈ RoleRights(r)
+            ⇒ EntityMP(e) ↦ a ∈ RoleRights(r)
+    @Direct9
+        ∀e, a, r · e ∈ Entities ∧ Direct(e) = FALSE ∧ r ∈ Roles ∧ a ∈ AccessRights ∧ EntityMP(e) ↦ a ∈ RoleRights(r)
+            ⇒ e ↦ a ∈ RoleRights(r)
+    @Direct10
+        ∀e, p · e ∈ dom(EntityNames) ∧ p ∈ dom(EntityNames(e)) ∧ Direct(e) = FALSE ∧ Direct(p) = FALSE
+            ⇒ EntityMP(e) = EntityMP(p)
+    @Direct11
+        ∀e, p · e ∈ dom(EntityNames) ∧ p ∈ dom(EntityNames(e)) ∧ Direct(e) = FALSE ∧ Direct(p) = TRUE
+            ⇒ EntityMP(e) = p
+    @Direct12
+        ∀r · r ∈ Roles ⇒ Direct(r) = TRUE
+
+    @UserAdmRole1
+        ∀u · u ∈ UserAccs ⇒ RParents(UserAdmRole(u)) = ∅
+    @UserAdmRole2
+        ∀u, r · u ∈ UserAccs ∧ r ∈ Roles ⇒ UserAdmRole(u) ∉ RParents(r)
+    @UserAdmRole3
+        ∀u1, u2 · u1 ∈ UserAccs ∧ u2 ∈ UserAccs ∧ u1 ≠ u2 ⇒ UserAdmRole(u1) ≠ UserAdmRole(u2)
+    @UserAdmRole4
+        ∀u · u ∈ UserAccs ⇒ UserAdmRole(u) ∉ SpecialAdmRoles
+    @UserAdmRole5
+        ∀u · u ∈ UserAccs ⇒ UserAdmRole(u) ↦ Read ∈ RoleAdmRights(UserAdmRole(u))
+    @UserAdmRole6
+        ∀u · u ∈ UserAccs ⇒ UserAdmRole(u) ↦ Write ∈ RoleAdmRights(UserAdmRole(u))
+
+    @UserOrdRole1
+        ∀u · u ∈ UserAccs ⇒ RParents(UserOrdRole(u)) = ∅
+    @UserOrdRole2
+        ∀u, r · u ∈ UserAccs ∧ r ∈ Roles ⇒ UserOrdRole(u) ∉ RParents(r)
+    @UserOrdRole3
+        ∀u1, u2 · u1 ∈ UserAccs ∧ u2 ∈ UserAccs ∧ u1 ≠ u2 ⇒ UserOrdRole(u1) ≠ UserOrdRole(u2)
+    @UserOrdRole4
+        ∀u · u ∈ UserAccs ⇒ UserOrdRole(u) ↦ Read ∈ RoleAdmRights(UserAdmRole(u))
+    @UserOrdRole5
+        ∀u · u ∈ UserAccs ⇒ UserOrdRole(u) ↦ Write ∈ RoleAdmRights(UserAdmRole(u))
+
+    @CommonRole1
+        RParents(CommonRole) = ∅
+    @CommonRole2
+        ∀r · r ∈ Roles ⇒ CommonRole ∉ RParents(r)
+    @CommonRole3
+        ∀u · u ∈ UserAccs ⇒ CommonRole ≠ UserOrdRole(u)
+    @CommonRole4
+        ∀u · u ∈ UserAccs ⇒ CommonRole ↦ Read ∈ RoleAdmRights(UserAdmRole(u))
+    @CommonRole5
+        ∀u · u ∈ UserAccs ⇒ CommonRole ↦ Write ∈ RoleAdmRights(UserAdmRole(u))
+
+events
+    event INITIALISATION
+      then
+        @act1 CurrUnion ≔ ∅
+        @act2 UserAccs ≔ ∅
+        @act3 Subjects ≔ ∅
+        @act4 Entities ≔ ∅
+        @act5 Objects ≔ ∅
+        @act6 Containers ≔ ∅
+        @act7 Roles ≔ ∅
+        @act8 OrdRoles ≔ ∅
+        @act9 AdmRoles ≔ ∅
+        @act10 Direct ≔ ∅
+        @act11 EntityMP ≔ ∅
+        @act12 EntityNames ≔ ∅
+        @act13 Parent ≔ ∅
+        @act14 RoleAdmRights ≔ ∅
+        @act15 RoleName ≔ ∅
+        @act16 RoleRights ≔ ∅
+        @act17 RParents ≔ ∅
+        @act18 Shared ≔ ∅
+        @act19 SParent ≔ ∅
+        @act20 SubjectAccesses ≔ ∅
+        @act21 SubjectAdmAccesses ≔ ∅
+        @act22 SubjectOwner ≔ ∅
+        @act23 SubjectUser ≔ ∅
+        @act24 UserAdmRole ≔ ∅
+        @act25 UserOrdRole ≔ ∅
+    end
+
+    event create_user
+      any
+        user
+        subject
+        userOrdRole
+        userAdmRole
+        roles
+        roleAdmRights
+        roleName
+        roleRights
+        rParents
+      where
+        @grd1 user ∈ Union ∖ CurrUnion
+        @grd2 subject ∈ Subjects
+        @grd3 UsersAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd4 RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd5 RolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd6 ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 ARolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd8 userOrdRole ∈ (Union ∖ CurrUnion) ∖ {user}
+        @grd9 userAdmRole ∈ (Union ∖ CurrUnion) ∖ {user}
+        @grd10 partition(roles, {userOrdRole}, {userAdmRole})
+        @grd11 roleAdmRights ∈ AdmRoles ∪ {userAdmRole} → (Roles ∪ roles ↔ AccessRights)
+        @grd12 ∀r1, ar, r2 · r1 ∈ Roles ∧ r2 ∈ AdmRoles ∧ ar ∈ AccessRights ∧ r1 ↦ ar ∈ RoleAdmRights(r2)
+                   ⇒ r1 ↦ ar ∈ roleAdmRights(r2)
+        @grd13 ∀r1, ar, r2 · r1 ∈ Roles ∧ r2 ∈ AdmRoles ∧ ar ∈ AccessRights ∧ r1 ↦ ar ∈ roleAdmRights(r2)
+                   ⇒ r1 ↦ ar ∈ RoleAdmRights(r2)
+        @grd14 userAdmRole ↦ Own ∈ roleAdmRights(ARolesAR)
+        @grd15 userAdmRole ↦ Own ∉ roleAdmRights(RolesAR)
+        @grd16 userOrdRole ↦ Own ∈ roleAdmRights(RolesAR)
+        @grd17 userOrdRole ↦ Own ∉ roleAdmRights(ARolesAR)
+        @grd18 ∀ar, r · ar ∈ AdmRoles ∖ {RolesAR, ARolesAR} ∧ r ∈ roles
+                   ⇒ r ↦ Own ∉ roleAdmRights(ar)
+        @grd19 ∀r · r ∈ Roles ∪ roles ⇒ r ↦ Own ∉ roleAdmRights(userAdmRole)
+        @grd20 ∀r · r ∈ Roles ∪ roles ⇒ r ↦ Execute ∈ roleAdmRights(userAdmRole)
+        @grd21 ∀r, ar · r ∈ roles ∧ ar ∈ AdmRoles ⇒ r ↦ Execute ∈ roleAdmRights(ar)
+        @grd22 ∀r · r ∈ Roles ∧ r ≠ CommonRole ⇒ r ↦ Read ∉ roleAdmRights(userAdmRole)
+        @grd23 ∀r · r ∈ Roles ∧ r ≠ CommonRole ⇒ r ↦ Write ∉ roleAdmRights(userAdmRole)
+        @grd24 ∀r, ar · r ∈ roles ∧ ar ∈ AdmRoles ⇒ r ↦ Read ∉ roleAdmRights(ar)
+        @grd25 ∀r, ar · r ∈ roles ∧ ar ∈ AdmRoles ⇒ r ↦ Write ∉ roleAdmRights(ar)
+        @grd26 userOrdRole ↦ Read ∈ roleAdmRights(userAdmRole)
+        @grd27 userAdmRole ↦ Read ∈ roleAdmRights(userAdmRole)
+        @grd28 CommonRole ↦ Read ∈ roleAdmRights(userAdmRole)
+        @grd29 userOrdRole ↦ Write ∈ roleAdmRights(userAdmRole)
+        @grd30 userAdmRole ↦ Write ∈ roleAdmRights(userAdmRole)
+        @grd31 CommonRole ↦ Write ∈ roleAdmRights(userAdmRole)
+        @grd32 roleName ∈ roles → Names
+        @grd33 roleName(userOrdRole) ≠ roleName(userAdmRole)
+        @grd34 ∀r1, r2 · r1 ∈ roles ∧ r2 ∈ Roles ⇒ roleName(r1) ≠ RoleName(r2)
+        @grd35 roleRights ∈ roles → (Entities ↔ AccessRights)
+        @grd36 ∀r · r ∈ roles ⇒ roleRights(r) = ∅
+        @grd37 rParents ∈ roles → ℙ(roles)
+        @grd38 ∀r · r ∈ roles ⇒ rParents(r) = ∅
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {user} ∪ roles
+        @act2 UserAccs ≔ UserAccs ∪ {user}
+        @act3 Roles ≔ Roles ∪ roles
+        @act4 OrdRoles ≔ OrdRoles ∪ {userOrdRole}
+        @act5 AdmRoles ≔ AdmRoles ∪ {userAdmRole}
+        @act6 UserOrdRole(user) ≔ userOrdRole
+        @act7 UserAdmRole(user) ≔ userAdmRole
+        @act8 RoleAdmRights ≔ roleAdmRights
+        @act9 RoleRights ≔ RoleRights ∪ roleRights
+        @act10 Direct ≔ Direct ∪ {x ↦ y ∣ x ∈ roles ∧ y = TRUE}
+        @act11 Shared ≔ Shared ∪ {x ↦ y ∣ x ∈ roles ∧ y = TRUE}
+        @act12 RoleName ≔ RoleName ∪ roleName
+        @act13 RParents ≔ RParents ∪ rParents
+    end
+
+    event get_user_attr
+      any
+        subject
+        user
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 user ∈ UserAccs
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+    end
+
+    event delete_user
+      any
+        user
+        subject
+        roles
+        subjectAdmAccesses
+        rParents
+        roleAdmRights
+      where
+        @grd1 user ∈ UserAccs
+        @grd2 subject ∈ Subjects
+        @grd3 ∀s · s ∈ Subjects ⇒ SubjectUser(s) ≠ user
+        @grd4 UsersAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd5 RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd6 ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 roles = {UserAdmRole(user), UserOrdRole(user)}
+        @grd8 subjectAdmAccesses ∈ Subjects → (Roles ∖ roles ↔ Accesses)
+        @grd9 ∀s · s ∈ Subjects ⇒ subjectAdmAccesses(s) = roles ⩤ SubjectAdmAccesses(s)
+        @grd10 rParents ∈ Roles ∖ roles → ℙ(Roles ∖ roles)
+        @grd11 ∀r · r ∈ Roles ∧ r ∉ roles ⇒ rParents(r) = RParents(r) ∖ roles
+        @grd12 roleAdmRights ∈ AdmRoles ∖ roles → (Roles ∖ roles ↔ AccessRights)
+        @grd13 ∀r · r ∈ AdmRoles ∧ r ∉ roles ⇒ roleAdmRights(r) = roles ⩤ RoleAdmRights(r)
+      then
+        @act1 CurrUnion ≔ (CurrUnion ∖ {user}) ∖ roles
+        @act2 UserAccs ≔ UserAccs ∖ {user}
+        @act3 Roles ≔ Roles ∖ roles
+        @act4 AdmRoles ≔ AdmRoles ∖ {UserAdmRole(user)}
+        @act5 OrdRoles ≔ OrdRoles ∖ {UserOrdRole(user)}
+        @act6 UserAdmRole ≔ {user} ⩤ UserAdmRole
+        @act7 UserOrdRole ≔ {user} ⩤ UserOrdRole
+        @act8 RoleRights ≔ roles ⩤ RoleRights
+        @act9 RoleName ≔ roles ⩤ RoleName
+        @act10 SubjectOwner ≔ SubjectOwner ⩥ roles
+        @act11 Shared ≔ roles ⩤ Shared
+        @act12 SubjectAdmAccesses ≔ subjectAdmAccesses
+        @act13 RParents ≔ rParents
+        @act14 RoleAdmRights ≔ roleAdmRights
+        @act15 Direct ≔ roles ⩤ Direct
+        @act16 SubjectUser ≔ SubjectUser ⩥ {user}
+    end
+
+    event create_object
+      any
+        subject
+        object
+        parent
+        name
+        role
+        dLabel
+        mountPoint
+        roleRights
+        depth
+      where
+        @grd1 object ∈ Union ∖ CurrUnion
+        @grd2 subject ∈ Subjects
+        @grd3 parent ∈ Containers
+        @grd4 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd5 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd6 name ∈ Names
+        @grd7 ∀e · e ∈ dom(EntityNames) ⇒ parent ↦ name ∉ EntityNames(e)
+        @grd8 role = UserOrdRole(SubjectUser(subject))
+        @grd9 role ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd10 mountPoint ∈ Containers
+        @grd11 dLabel ∈ BOOL
+        @grd12 ∀e · e ∈ dom(EntityNames) ∧ parent ∈ dom(EntityNames(e)) ⇒ Direct(e) = dLabel
+        @grd13 dLabel = TRUE ⇒ Direct(parent) = TRUE
+        @grd14 dLabel = TRUE ⇒ mountPoint = Root
+        @grd15 dLabel = FALSE ∧ Direct(parent) = FALSE ⇒ mountPoint = EntityMP(parent)
+        @grd16 dLabel = FALSE ∧ Direct(parent) = TRUE ⇒ mountPoint = parent
+        @grd17 roleRights ∈ Roles → (Entities ∪ {object} ↔ AccessRights)
+        @grd18 ∀e, a, r · e ∈ Entities ∧ a ∈ AccessRights ∧ r ∈ Roles ⇒ (e ↦ a ∈ roleRights(r) ⇔ e ↦ a ∈ RoleRights(r))
+        @grd19 dLabel = TRUE ⇒ object ↦ Own ∈ roleRights(role)
+        @grd20 dLabel = TRUE ⇒ (∀a, r · a ∈ AccessRights ∧ r ∈ Roles ∧ object ↦ a ∈ roleRights(r) ⇒ a = Own ∧ r = role)
+        @grd21 dLabel = FALSE ⇒ (∀a, r · a ∈ AccessRights ∧ r ∈ Roles ⇒ (mountPoint ↦ a ∈ RoleRights(r) ⇔ object ↦ a ∈ roleRights(r)))
+        @grd22 depth ∈ ℕ → ℙ(Containers)
+        @grd23 ∀c · c ∈ Containers ⇒ (∃i · i ∈ ℕ ∧ c ∈ depth(i))
+        @grd24 depth(0) = {Root}
+        @grd25 ∀i · i ∈ ℕ ∧ i ≠ 0 ⇒ (∀c · c ∈ depth(i) ⇒ c ≠ Root)
+        @grd26 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃p · p ∈ depth(i) ∧ p = Parent(c)))
+        theorem @grd27 ∀i · i ∈ ℕ ∧ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+                           ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+        theorem @grd28 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {object}
+        @act2 Entities ≔ Entities ∪ {object}
+        @act3 Objects ≔ Objects ∪ {object}
+        @act4 EntityNames(object) ≔ {parent ↦ name}
+        @act5 RoleRights ≔ roleRights
+        @act6 Direct(object) ≔ dLabel
+        @act7 EntityMP(object) ≔ mountPoint
+    end
+
+    event create_container
+      any
+        subject
+        container
+        parent
+        name
+        role
+        dLabel
+        mountPoint
+        roleRights
+        depth
+      where
+        @grd1 container ∈ Union ∖ CurrUnion
+        @grd2 subject ∈ Subjects
+        @grd3 parent ∈ Containers
+        @grd4 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd5 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd6 name ∈ Names
+        @grd7 ∀e · e ∈ dom(EntityNames) ⇒ parent ↦ name ∉ EntityNames(e)
+        @grd8 role = UserOrdRole(SubjectUser(subject))
+        @grd9 role ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd10 mountPoint ∈ Containers
+        @grd11 dLabel ∈ BOOL
+        @grd12 ∀e · e ∈ dom(EntityNames) ∧ parent ∈ dom(EntityNames(e)) ⇒ Direct(e) = dLabel
+        @grd13 dLabel = TRUE ⇒ Direct(parent) = TRUE
+        @grd14 dLabel = TRUE ⇒ mountPoint = Root
+        @grd15 dLabel = FALSE ∧ Direct(parent) = FALSE ⇒ mountPoint = EntityMP(parent)
+        @grd16 dLabel = FALSE ∧ Direct(parent) = TRUE ⇒ mountPoint = parent
+        @grd17 roleRights ∈ Roles → (Entities ∪ {container} ↔ AccessRights)
+        @grd18 ∀e, a, r · e ∈ Entities ∧ a ∈ AccessRights ∧ r ∈ Roles ⇒ (e ↦ a ∈ roleRights(r) ⇔ e ↦ a ∈ RoleRights(r))
+        @grd19 dLabel = TRUE ⇒ container ↦ Own ∈ roleRights(role)
+        @grd20 dLabel = TRUE ⇒ (∀a, r · a ∈ AccessRights ∧ r ∈ Roles ∧ container ↦ a ∈ roleRights(r) ⇒ a = Own ∧ r = role)
+        @grd21 dLabel = FALSE ⇒ (∀a, r · a ∈ AccessRights ∧ r ∈ Roles ⇒ (mountPoint ↦ a ∈ RoleRights(r) ⇔ container ↦ a ∈ roleRights(r)))
+        @grd22 depth ∈ ℕ → ℙ(Containers)
+        @grd23 ∀c · c ∈ Containers ⇒ (∃i · i ∈ ℕ ∧ c ∈ depth(i))
+        @grd24 depth(0) = {Root}
+        @grd25 ∀i · i ∈ ℕ ∧ i ≠ 0 ⇒ (∀c · c ∈ depth(i) ⇒ c ≠ Root)
+        @grd26 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃p · p ∈ depth(i) ∧ p = Parent(c)))
+        theorem @grd27 ∀i · i ∈ ℕ ∧ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+                           ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+        theorem @grd28 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {container}
+        @act2 Entities ≔ Entities ∪ {container}
+        @act3 Containers ≔ Containers ∪ {container}
+        @act4 Shared(container) ≔ FALSE
+        @act5 Parent(container) ≔ parent
+        @act6 EntityNames(container) ≔ {parent ↦ name}
+        @act7 RoleRights ≔ roleRights
+        @act8 Direct(container) ≔ dLabel
+        @act9 EntityMP(container) ≔ mountPoint
+    end
+
+    event set_entity_labels
+      any
+        roleRights
+      where
+        @grd1 roleRights ∈ Roles → (Entities ↔ AccessRights)
+        @grd2 ∀r1, r2, e · r1 ∈ Roles ∧ r2 ∈ Roles ∧ e ↦ Own ∈ roleRights(r1) ∧ e ↦ Own ∈ roleRights(r2) ⇒ r1=r2
+        @grd3 ∀e, a, r · e ∈ Entities ∧ Direct(e) = FALSE ∧ r ∈ Roles ∧ a ∈ AccessRights ∧ e ↦ a ∈ roleRights(r)
+                  ⇒ EntityMP(e) ↦ a ∈ roleRights(r)
+        @grd4 ∀e, a, r · e ∈ Entities ∧ Direct(e) = FALSE ∧ r ∈ Roles ∧ a ∈ AccessRights ∧ EntityMP(e) ↦ a ∈ roleRights(r)
+                  ⇒ e ↦ a ∈ roleRights(r)
+      then
+        @act1 RoleRights ≔ roleRights
+    end
+
+    event set_entity_owner
+      any
+        subject
+        owner
+        oldOwner
+        entity
+        roleRights
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 owner ∈ Roles
+        @grd4 oldOwner ∈ Roles
+        @grd5 owner ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd6 EntitiesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 (oldOwner ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ oldOwner ↦ WriteA ∈ SubjectAdmAccesses(subject)
+                  ∧ entity ↦ Own ∈ RoleRights(oldOwner))
+              ∨ (∀r · r ∈ Roles ⇒ entity ↦ Own ∉ RoleRights(r))
+        @grd8 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd9 roleRights ∈ Roles → (Entities ↔ AccessRights)
+        @grd10 ∀r · r ∈ Roles ∧ r ≠ oldOwner ∧ r ≠ owner ⇒ RoleRights(r) = roleRights(r)
+        @grd11 RoleRights(owner) ⊆ roleRights(owner)
+        @grd12 roleRights(oldOwner) ⊆ RoleRights(oldOwner)
+        @grd13 ∀r, e, ar · r ∈ Roles ∧ e ∈ Entities ⇒ (e ↦ ar ∈ roleRights(r) ∧ e ↦ ar ∉ RoleRights(r) ⇔ r = owner ∧ ar = Own)
+        @grd14 ∀r, e, ar · r ∈ Roles ∧ e ∈ Entities ⇒ (e ↦ ar ∉ roleRights(r) ∧ e ↦ ar ∈ RoleRights(r) ⇔ r = owner ∧ ar = Own)
+        @grd15 Direct(entity) = TRUE
+        @grd16 ∀e · e ∈ Entities ∧ e ↦ Own ∈ roleRights(owner) ∧ e ↦ Own ∉ RoleRights(owner) ⇒ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity))
+        @grd17 ∀e · e ∈ Entities ∧ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity)) ⇒ e ↦ Own ∈ roleRights(owner) ∧ e ↦ Own ∉ RoleRights(owner)
+        @grd18 ∀e · e ∈ Entities ∧ e ↦ Own ∉ roleRights(oldOwner) ∧ e ↦ Own ∈ RoleRights(oldOwner) ⇒ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity))
+        @grd19 ∀e · e ∈ Entities ∧ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity)) ⇒ e ↦ Own ∉ roleRights(oldOwner) ∧ e ↦ Own ∈ RoleRights(oldOwner)
+      then
+        @act1 RoleRights ≔ roleRights
+    end
+
+    event create_hard_link
+      any
+        subject
+        object
+        parent
+        name
+        depth
+      where
+        @grd1 object ∈ Objects
+        @grd2 subject ∈ Subjects
+        @grd3 parent ∈ Containers
+        @grd4 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ c∈dom(EntityNames(object)) ∧ Parent[E] ∪ {c} = E ∪ {Root}
+                  ∧ (∀o · o ∈ E ∪ {object} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd5 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd6 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd7 name ∈ Names
+        @grd8 ∀e · e ∈ dom(EntityNames) ⇒ parent ↦ name ∉ EntityNames(e)
+        @grd9 ∀e · e ∈ dom(EntityNames) ∧ parent ∈ dom(EntityNames(e)) ⇒ Direct(e) = Direct(object)
+        @grd10 Direct(object) = TRUE ⇒ Direct(parent) = TRUE
+        @grd11 Direct(object) = FALSE ∧ Direct(parent) = TRUE ⇒ EntityMP(object) = parent
+        @grd12 Direct(object) = FALSE ∧ Direct(parent) = TRUE ⇒ (∀e · e ∈ dom(EntityNames) ∧ parent ∈ dom(EntityNames(e)) ⇒ Direct(e) = FALSE)
+        @grd13 Direct(object) = FALSE ∧ Direct(parent) = FALSE ⇒ EntityMP(object) = EntityMP(parent)
+        @grd14 depth ∈ ℕ → ℙ(Containers)
+        @grd15 ∀c · c ∈ Containers ⇒ (∃i · i ∈ ℕ ∧ c ∈ depth(i))
+        @grd16 depth(0) = {Root}
+        @grd17 ∀i · i ∈ ℕ ∧ i ≠ 0 ⇒ (∀c · c ∈ depth(i) ⇒ c ≠ Root)
+        @grd18 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃p · p ∈ depth(i) ∧ p = Parent(c)))
+        theorem @grd19 ∀i · i ∈ ℕ ∧ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+                           ⇒ (∀c · c ∈ depth(i + 1) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+        theorem @grd20 ∀i · i ∈ ℕ ⇒ (∀c · c ∈ depth(i) ⇒ (∃E · E ⊆ Containers ∧ Root ∉ E ∧ Parent[E] ∪ {c} = E ∪ {Root}))
+      then
+        @act1 EntityNames(object) ≔ EntityNames(object) ∪ {parent ↦ name}
+    end
+
+    event delete_hard_link
+      any
+        subject
+        parent
+        name
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 parent ∈ Containers
+        @grd3 object ∈ Objects
+        @grd4 name ∈ Names
+        @grd5 parent ↦ name ∈ EntityNames(object)
+        @grd6 ∃p, n · p ∈ Containers ∧ p ↦ n ∈ EntityNames(object) ∧ (n ≠ name ∨ p ≠ parent)
+        @grd7 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd8 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd9 Shared(parent) = TRUE ⇒ (∃r · r ∈ Roles ∧ object ↦ Own ∈ RoleRights(r) ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject))
+      then
+        @act1 EntityNames(object) ≔ EntityNames(object) ∖ {parent ↦ name}
+    end
+
+    event rename_entity
+      any
+        subject
+        oldName
+        name
+        parent
+        entity
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 parent ∈ Containers
+        @grd3 entity ∈ dom(EntityNames)
+        @grd4 oldName ∈ Names
+        @grd5 parent ↦ oldName ∈ EntityNames(entity)
+        @grd6 name ∈ Names
+        @grd7 ∀e · e ∈ dom(EntityNames) ⇒ parent ↦ name ∉ EntityNames(e)
+        @grd8 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd9 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd10 Shared(parent) = TRUE ⇒ (∃r · r ∈ Roles ∧ entity ↦ Own ∈ RoleRights(r) ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject))
+      then
+        @act1 EntityNames(entity) ≔ (EntityNames(entity) ∖ {parent ↦ oldName}) ∪ {parent ↦ name}
+    end
+
+    event set_container_attr
+      any
+        subject
+        container
+        shared
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 container ∈ Containers
+        @grd3 shared ∈ BOOL
+        @grd4 (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ container ↦ Own ∈ RoleRights(r))
+                  ∨ EntitiesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd5 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((container ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(container)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ container = Root))
+                  ∧ (∀o · o ∈ E ∪ {container} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+      then
+        @act1 Shared(container) ≔ shared
+    end
+
+    event read_container
+      any
+        subject
+        container
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 container ∈ Containers
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd5 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ container ↦ Read ∈ RoleRights(r)
+        @grd6 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ container ↦ Execute ∈ RoleRights(r)
+        @grd7 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((container ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(container)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ container = Root))
+                  ∧ (∀o · o ∈ E ∪ {container} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+    end
+
+    event get_entity_attr
+      any
+        subject
+        entity
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd5 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+    end
+
+    event delete_entity
+      any
+        subject
+        entity
+        parent
+        name
+        roleRights
+        subjectAccesses
+      where
+        @grd1 entity ∈ Entities
+        @grd2 entity ≠ Root
+        @grd3 subject ∈ Subjects
+        @grd4 parent ∈ Containers
+        @grd5 parent ↦ name ∈ EntityNames(entity)
+        @grd6 ∀n · n ≠ name ⇒ parent ↦ n ∉ EntityNames(entity)
+        @grd7 ∀e · e ∈ dom(EntityNames) ⇒ entity ∉ dom(EntityNames(e))
+        @grd8 ∀c · c ∈ Containers ∧ c ≠ parent ⇒ c ∉ dom(EntityNames(entity))
+        @grd9 parent ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd10 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ parent ↦ Execute ∈ RoleRights(r)
+        @grd11 Shared(parent) = TRUE ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ entity ↦ Own ∈ RoleRights(r))
+        theorem @grd12 ∀e · e ∈ Entities ∧ entity ∈ Containers ⇒ EntityMP(e) ≠ entity
+        @grd13 roleRights ∈ Roles → (Entities ↔ AccessRights)
+        @grd14 ∀r · r ∈ Roles ⇒ roleRights(r) = {entity} ⩤ RoleRights(r)
+        @grd15 subjectAccesses ∈ Subjects → (Entities ↔ Accesses)
+        @grd16 ∀s · s ∈ Subjects ⇒ subjectAccesses(s) = {entity} ⩤ SubjectAccesses(s)
+      then
+        @act1 Entities ≔ Entities ∖ {entity}
+        @act2 Objects ≔ Objects ∖ {entity}
+        @act3 Containers ≔ Containers ∖ {entity}
+        @act4 Shared ≔ {entity} ⩤ Shared
+        @act5 Parent ≔ {entity} ⩤ Parent
+        @act6 EntityNames ≔ {entity} ⩤ EntityNames
+        @act7 RoleRights ≔ roleRights
+        @act8 SubjectAccesses ≔ subjectAccesses
+        @act9 Direct ≔ {entity} ⩤ Direct
+        @act10 CurrUnion ≔ CurrUnion ∖ {entity}
+        @act11 EntityMP ≔ {entity} ⩤ EntityMP
+    end
+
+    event create_first_subject
+      any
+        subject
+        newSubject
+        user
+        object
+        admAccesses
+      where
+        @grd1 newSubject ∈ Union ∖ CurrUnion
+        @grd2 subject ∈ Subjects
+        @grd3 user ∈ UserAccs
+        @grd4 object ∈ Objects
+        @grd5 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ object ↦ Execute ∈ RoleRights(r)
+        @grd6 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ c ∈ dom(EntityNames(object)) ∧ Parent[E] ∪ {c} = E ∪ {Root}
+                  ∧ (∀o · o ∈ E ∪ {object} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd7 admAccesses ∈ Roles ↔ Accesses
+        @grd8 UserAdmRole(user) ↦ ReadA ∈ admAccesses
+        @grd9 UserOrdRole(user) ↦ ReadA ∈ admAccesses
+        @grd10 UserOrdRole(user) ↦ WriteA ∈ admAccesses
+        @grd11 CommonRole ↦ ReadA ∈ admAccesses
+        @grd12 CommonRole ↦ WriteA ∈ admAccesses
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {newSubject}
+        @act2 Subjects ≔ Subjects ∪ {newSubject}
+        @act3 SubjectUser(newSubject) ≔ user
+        @act4 SubjectAccesses(newSubject) ≔ ∅
+        @act5 SubjectAdmAccesses(newSubject) ≔ admAccesses
+        @act6 SubjectOwner(newSubject) ≔ UserOrdRole(user)
+        @act7 SParent(newSubject) ≔ SRoot
+    end
+
+    event create_subject
+      any
+        subject
+        newSubject
+        user
+        object
+        admAccesses
+      where
+        @grd1 newSubject ∈ Union ∖ CurrUnion
+        @grd2 subject ∈ Subjects
+        @grd3 user ∈ UserAccs
+        @grd4 user = SubjectUser(subject)
+        @grd5 object ∈ Objects
+        @grd6 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ object ↦ Execute ∈ RoleRights(r)
+        @grd7 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ c ∈ dom(EntityNames(object)) ∧ Parent[E] ∪ {c} = E ∪ {Root}
+                  ∧ (∀o · o ∈ E ∪ {object} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd8 admAccesses ∈ Roles ↔ Accesses
+        @grd9 UserAdmRole(user) ↦ ReadA ∈ admAccesses
+        @grd10 UserOrdRole(user) ↦ ReadA ∈ admAccesses
+        @grd11 UserOrdRole(user) ↦ WriteA ∈ admAccesses
+        @grd12 CommonRole ↦ ReadA ∈ admAccesses
+        @grd13 CommonRole ↦ WriteA ∈ admAccesses
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {newSubject}
+        @act2 Subjects ≔ Subjects ∪ {newSubject}
+        @act3 SubjectUser(newSubject) ≔ user
+        @act4 SubjectAccesses(newSubject) ≔ ∅
+        @act5 SubjectAdmAccesses(newSubject) ≔ admAccesses
+        @act6 SubjectOwner(newSubject) ≔ UserOrdRole(user)
+        @act7 SParent(newSubject) ≔ subject
+    end
+
+    event set_subject_owner
+      any
+        subject
+        oldOwner
+        owner
+        chSubject
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 chSubject ∈ Subjects
+        @grd3 oldOwner ∈ Roles
+        @grd4 owner ∈ Roles
+        @grd5 owner ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd6 SubjectsAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 chSubject ∈ dom(SubjectOwner) ⇒ SubjectOwner(chSubject) = oldOwner
+        @grd8 chSubject ∈ dom(SubjectOwner) ⇒ oldOwner ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd9 chSubject ∈ dom(SubjectOwner) ⇒ oldOwner ↦ WriteA ∈ SubjectAdmAccesses(subject)
+      then
+        @act1 SubjectOwner(chSubject) ≔ owner
+    end
+
+    event get_subject_attr
+      any
+        subject
+        chSubject
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 chSubject ∈ Subjects
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+    end
+
+    event access_read_entity
+      any
+        subject
+        entity
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ entity ↦ Read ∈ RoleRights(r)
+        @grd4 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+      then
+        @act1 SubjectAccesses(subject) ≔ SubjectAccesses(subject) ∪ {entity ↦ ReadA}
+    end
+
+    event access_read_role
+      any
+        subject
+        role
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∃r · r ∈ AdmRoles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ role ↦ Read ∈ RoleAdmRights(r)
+      then
+        @act1 SubjectAdmAccesses(subject) ≔ SubjectAdmAccesses(subject) ∪ {role ↦ ReadA}
+    end
+
+    event access_write_entity
+      any
+        subject
+        entity
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ entity ↦ Write∈RoleRights(r)
+        @grd4 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+      then
+        @act1 SubjectAccesses(subject) ≔ SubjectAccesses(subject) ∪ {entity ↦ WriteA}
+    end
+
+    event access_write_role
+      any
+        subject
+        role
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∃r · r ∈ AdmRoles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ role ↦ Write ∈ RoleAdmRights(r)
+      then
+        @act1 SubjectAdmAccesses(subject) ≔ SubjectAdmAccesses(subject) ∪ {role ↦ WriteA}
+    end
+
+    event delete_access_entity
+      any
+        subject
+        entity
+        access
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 entity ↦ access ∈ SubjectAccesses(subject)
+      then
+        @act1 SubjectAccesses(subject) ≔ SubjectAccesses(subject) ∖ {entity ↦ access}
+    end
+
+    event delete_access_role
+      any
+        subject
+        role
+        access
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 role ↦ access ∈ SubjectAdmAccesses(subject)
+      then
+        @act1 SubjectAdmAccesses(subject) ≔ SubjectAdmAccesses(subject) ∖ {role ↦ access}
+    end
+
+    event delete_subject
+      any
+        subject
+        delSubject
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 delSubject ∈ Subjects
+        @grd3 delSubject ≠ SRoot
+        @grd4 ∀s · s ∈ dom(SParent) ⇒ SParent(s) ≠ delSubject
+        @grd5 delSubject ∈ dom(SubjectOwner)
+        @grd6 SubjectOwner(delSubject) ↦ ReadA ∈ SubjectAdmAccesses(subject)
+      then
+        @act1 CurrUnion ≔ CurrUnion ∖ {delSubject}
+        @act2 Subjects ≔ Subjects ∖ {delSubject}
+        @act3 SubjectUser ≔ {delSubject} ⩤ SubjectUser
+        @act4 SubjectAccesses ≔ {delSubject} ⩤ SubjectAccesses
+        @act5 SubjectOwner ≔ {delSubject} ⩤ SubjectOwner
+        @act6 SubjectAdmAccesses ≔ {delSubject} ⩤ SubjectAdmAccesses
+        @act7 SParent ≔ {delSubject} ⩤ SParent
+    end
+
+    event create_role
+      any
+        subject
+        role
+        parent
+        name
+        admRoles
+        ordRoles
+        roleAdmRights
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Union ∖ CurrUnion
+        @grd3 parent ∈ Roles
+        @grd4 ∀u · u ∈ UserAccs ⇒ parent ≠ UserAdmRole(u)
+        @grd5 ∀u · u ∈ UserAccs ⇒ parent ≠ UserOrdRole(u)
+        @grd6 parent ≠ CommonRole
+        @grd7 parent ∉ SpecialAdmRoles
+        @grd8 parent ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd9 parent ∈ OrdRoles ⇒ RolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd10 parent ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd11 parent ∈ AdmRoles ⇒ ARolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd12 parent ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd13 name ∈ Names
+        @grd14 ∀r · r ∈ Roles ⇒ name ≠ RoleName(r)
+        @grd15 admRoles ∈ ℙ(Union ∖ CurrUnion)
+        @grd16 ordRoles ∈ ℙ(Union ∖ CurrUnion)
+        @grd17 parent ∈ AdmRoles ⇒ ordRoles = ∅
+        @grd18 parent ∈ AdmRoles ⇒ admRoles = {role}
+        @grd19 parent ∈ OrdRoles ⇒ ordRoles = {role}
+        @grd20 parent ∈ OrdRoles ⇒ admRoles = ∅
+        @grd21 roleAdmRights ∈ AdmRoles ∪ admRoles→(Roles ∪ {role} ↔ AccessRights)
+        @grd22 ∀r1, ar, r2 · r1 ∈ Roles ∧ r2 ∈ AdmRoles ∧ ar ∈ AccessRights ∧ r1 ↦ ar ∈ RoleAdmRights(r2)
+                   ⇒ r1 ↦ ar ∈ roleAdmRights(r2)
+        @grd23 ∀r1, ar, r2 · r1 ∈ Roles ∧ r2 ∈ AdmRoles ∧ ar ∈ AccessRights ∧ r1 ↦ ar ∈ roleAdmRights(r2)
+                   ⇒ r1 ↦ ar ∈ RoleAdmRights(r2)
+        theorem @grd24 parent ∈ AdmRoles ⇒ role ∈ dom(roleAdmRights)
+        theorem @grd25 role ∈ dom(roleAdmRights) ⇒ parent ∈ AdmRoles
+        @grd26 parent ∈ OrdRoles ⇒ role ↦ Own ∈ roleAdmRights(RolesAR)
+        @grd27 parent ∈ OrdRoles ⇒ role ↦ Own ∉ roleAdmRights(ARolesAR)
+        @grd28 parent ∈ AdmRoles ⇒ role ↦ Own ∈ roleAdmRights(ARolesAR)
+        @grd29 parent ∈ AdmRoles ⇒ role ↦ Own ∉ roleAdmRights(RolesAR)
+        @grd30 parent ∈ AdmRoles ⇒ (∀r · r ∈ Roles ∪ {role} ⇒ r ↦ Execute ∈ roleAdmRights(role))
+        @grd31 parent ∈ AdmRoles ⇒ (∀ar · ar ∈ AccessRights ∧ ar ≠ Execute ⇒ ar ∉ ran(roleAdmRights(role)))
+        @grd32 ∀r · r ∈ AdmRoles ⇒ role ↦ Execute ∈ roleAdmRights(r)
+        @grd33 ∀r · r ∈ AdmRoles ∧ r ≠ RolesAR ∧ r ≠ ARolesAR ⇒ role ↦ Own ∉ roleAdmRights(r)
+        @grd34 ∀r · r ∈ AdmRoles ⇒ role ↦ Write ∉ roleAdmRights(r)
+        @grd35 ∀r · r ∈ AdmRoles ⇒ (parent ↦ Read ∈ RoleAdmRights(r) ⇔ role ↦ Read ∈ roleAdmRights(r))
+      then
+        @act1 CurrUnion ≔ CurrUnion ∪ {role}
+        @act2 Roles ≔ Roles ∪ {role}
+        @act3 AdmRoles ≔ AdmRoles ∪ admRoles
+        @act4 OrdRoles ≔ OrdRoles ∪ ordRoles
+        @act5 RoleAdmRights ≔ roleAdmRights
+        @act6 RParents(role) ≔ {parent}
+        @act7 RoleRights(role) ≔ ∅
+        @act8 RoleName(role) ≔ name
+        @act9 Shared(role) ≔ TRUE
+        @act10 Direct(role) ≔ TRUE
+    end
+
+    event create_hard_link_role
+      any
+        subject
+        role
+        parent
+        roleAdmRights
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∀u · u ∈ UserAccs ⇒ role ≠ UserAdmRole(u)
+        @grd4 ∀u · u ∈ UserAccs ⇒ role ≠ UserOrdRole(u)
+        @grd5 role ≠ CommonRole
+        @grd6 role ∉ SpecialAdmRoles
+        @grd7 parent ∈ Roles
+        @grd8 ∀u · u ∈ UserAccs ⇒ parent ≠ UserAdmRole(u)
+        @grd9 ∀u · u ∈ UserAccs ⇒ parent ≠ UserOrdRole(u)
+        @grd10 parent ≠ CommonRole
+        @grd11 parent ≠ role
+        @grd12 ∀R · R ⊆ Roles ∧ role ∈ R ∧ (∀r · r ∈ R ∧ role ≠ r ⇒ (∃p · p ∈ R ∧ p ∈ RParents(r))) ⇒ parent ∉ R
+        @grd13 parent ∈ AdmRoles ⇔ role ∈ AdmRoles
+        @grd14 parent ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd15 parent ∈ OrdRoles ⇒ RolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd16 parent ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd17 parent ∈ AdmRoles ⇒ ARolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd18 parent ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd19 roleAdmRights ∈ AdmRoles → (Roles ↔ AccessRights)
+        @grd20 ∀r · r ∈ AdmRoles ⇒ RoleAdmRights(r) ⊆ roleAdmRights(r)
+        @grd21 ∀r · r ∈ AdmRoles ∧ parent ↦ Read ∈ RoleAdmRights(r) ⇒ role ↦ Read ∈ roleAdmRights(r)
+        @grd22 ∀ar, r , p · r ∈ Roles ∧ ar ∈ AdmRoles ∧ p ↦ Read ∈ roleAdmRights(ar)
+                   ∧ p ∈ RParents(r) ∧ p ↦ Read ∉ RoleAdmRights(ar)
+                       ⇒ r ↦ Read ∈ roleAdmRights(ar)
+        @grd23 ∀ar · ar ∈ AdmRoles ∧ parent ↦ Read ∉ RoleAdmRights(ar)
+                   ⇒ roleAdmRights(ar) = RoleAdmRights(ar)
+        @grd24 ∀r, accessRight, ar · ar ∈ AdmRoles ∧ accessRight ∈ AccessRights
+                   ∧ r ↦ accessRight ∈ roleAdmRights(ar) ∧ r ↦ accessRight ∉ RoleAdmRights(ar)
+                       ⇒ accessRight = Read
+      then
+        @act1 RParents(role) ≔ RParents(role) ∪ {parent}
+        @act2 RoleAdmRights ≔ roleAdmRights
+    end
+
+    event delete_hard_link_role
+      any
+        subject
+        role
+        parent
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∀u · u ∈ UserAccs ⇒ role ≠ UserAdmRole(u)
+        @grd4 ∀u · u ∈ UserAccs ⇒ role ≠ UserOrdRole(u)
+        @grd5 role ≠ CommonRole
+        @grd6 role ∉ SpecialAdmRoles
+        @grd7 parent ∈ Roles
+        @grd8 parent ∈ RParents(role)
+        @grd9 ∃p · p ∈ Roles ∧ p ≠ parent ∧ p ∈ RParents(role)
+        @grd10 parent ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd11 parent ∈ OrdRoles ⇒ RolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd12 parent ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd13 parent ∈ AdmRoles ⇒ ARolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd14 parent ↦ WriteA ∈ SubjectAdmAccesses(subject)
+      then
+        @act1 RParents(role) ≔ RParents(role) ∖ {parent}
+    end
+
+    event rename_role
+      any
+        subject
+        role
+        name
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∀u · u ∈ UserAccs ⇒ role ≠ UserAdmRole(u)
+        @grd4 ∀u · u ∈ UserAccs ⇒ role ≠ UserOrdRole(u)
+        @grd5 role ≠ CommonRole
+        @grd6 role ∉ SpecialAdmRoles
+        @grd7 name ∈ Names
+        @grd8 ∀r · r ∈ Roles ⇒ name ≠ RoleName(r)
+        @grd9 role ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd10 role ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd11 ∀p · p ∈ Roles ∧ p ∈ RParents(role) ⇒ p ↦ WriteA ∈ SubjectAdmAccesses(subject)
+      then
+        @act1 RoleName(role) ≔ name
+    end
+
+    event read_container_role
+      any
+        subject
+        container
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 container ∈ Roles
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+        @grd5 ∃r · r ∈ AdmRoles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ container ↦ Read ∈ RoleAdmRights(r)
+    end
+
+    event get_role_attr
+      any
+        subject
+        role
+        object
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 object ∈ Objects
+        @grd4 object ↦ WriteA ∈ SubjectAccesses(subject)
+    end
+
+    event grant_rights
+      any
+        subject
+        role
+        entity
+        accessRights
+        changedEntities
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 role ∈ Roles
+        @grd4 accessRights ⊆ AccessRights
+        @grd5 Own ∉ accessRights
+        @grd6 role ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd7 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ entity ↦ Own ∈ RoleRights(r)
+        @grd8 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd9 Direct(entity) = TRUE
+        @grd10 changedEntities ⊆ Entities
+        @grd11 entity ∈ changedEntities
+        @grd12 ∀e · e ∈ changedEntities ∧ e ≠ entity ⇒ EntityMP(e) = entity ∧ Direct(e) = FALSE
+        @grd13 ∀e · e ∈ Entities ∧ e ≠ entity ∧ EntityMP(e) = entity ∧ Direct(e) = FALSE ⇒ e ∈ changedEntities
+      then
+        @act1 RoleRights(role) ≔ RoleRights(role) ∪ {x ↦ y ∣ x ∈ changedEntities ∧ y ∈ accessRights}
+    end
+
+    event remove_rights
+      any
+        subject
+        role
+        entity
+        accessRights
+        rights
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 entity ∈ Entities
+        @grd3 role ∈ Roles
+        @grd4 accessRights ⊆ AccessRights
+        @grd5 Own ∉ accessRights
+        @grd6 role ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd7 ∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ entity ↦ Own ∈ RoleRights(r)
+        @grd8 ∃E, c · E ⊆ Containers ∧ Root ∉ E ∧ ((entity ∈ dom(EntityNames) ∧ c ∈ dom(EntityNames(entity)) ∧ Parent[E] ∪ {c} = E ∪ {Root}) ∨ (E = ∅ ∧ entity = Root))
+                  ∧ (∀o · o ∈ E ∪ {entity} ∪ {Root} ⇒ (∃r · r ∈ Roles ∧ r ↦ ReadA ∈ SubjectAdmAccesses(subject) ∧ o ↦ Execute ∈ RoleRights(r)))
+        @grd9 Direct(entity) = TRUE
+        @grd10 rights ⊆ RoleRights(role)
+        @grd11 ∀e, ar · e ∈ Entities ∧ ar ∈ accessRights ∧ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity))
+                   ⇒ e ↦ ar ∈ rights
+        @grd12 ∀e, ar · e ↦ ar ∈ rights ⇒ ar ∈ accessRights ∧ (e = entity ∨ (Direct(e) = FALSE ∧ EntityMP(e) = entity))
+      then
+        @act1 RoleRights(role) ≔ RoleRights(role) ∖ rights
+    end
+
+    event grant_admin_rights
+      any
+        subject
+        admRole
+        role
+        accessRights
+        admRights
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 admRole ∈ AdmRoles
+        @grd4 accessRights ⊆ {Read, Write}
+        @grd5 admRole ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd6 role ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 role ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd8 admRights ∈ Roles ↔ accessRights
+        @grd9 ∀ar · ar ∈ accessRights ⇒ role ↦ ar ∈ admRights
+        @grd10 Read ∉ accessRights ⇒ dom(admRights) = {role}
+        @grd11 ∀r, ar · r ∈ Roles ∧ r ≠ role ∧ ar ∈ AccessRights ∧ ar ≠ Read ⇒ r ↦ ar ∉ admRights
+        @grd12 ∀r, p · r ∈ Roles ∧ p ∈ RParents(r) ∧ p ↦ Read ∈ admRights ⇒ r ↦ Read ∈ admRights
+      then
+        @act1 RoleAdmRights(admRole) ≔ RoleAdmRights(admRole) ∪ admRights
+    end
+
+    event remove_admin_rights
+      any
+        subject
+        admRole
+        role
+        accessRights
+        admRights
+        depth
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 admRole ∈ AdmRoles
+        @grd4 accessRights ⊆ {Read, Write}
+        @grd5 admRole ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd6 role ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd7 role ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd8 ∀u · u ∈ UserAccs ∧ admRole = UserAdmRole(u) ⇒ role ≠ UserAdmRole(u)
+        @grd9 ∀u · u ∈ UserAccs ∧ admRole = UserAdmRole(u) ⇒ role ≠ UserOrdRole(u)
+        @grd10 ∀u · u ∈ UserAccs ∧ admRole = UserAdmRole(u) ⇒ role ≠ CommonRole
+        @grd11 admRights ⊆ RoleAdmRights(admRole)
+        @grd12 ∀ar · ar ∈ accessRights ⇒ role ↦ ar ∈ admRights
+        @grd13 ∀ar · ar ∉ accessRights ⇒ role ↦ ar ∉ admRights
+        @grd14 Read ∉ accessRights ⇒ (∀r · r ∈ Roles ∧ r ≠ role ⇒ r ∉ dom(admRights))
+        @grd15 ∀r, ar · r ∈ Roles ∧ r ≠ role ∧ ar ∈ AccessRights ∧ ar ≠ Read ⇒ r ↦ ar ∉ admRights
+        @grd16 ∀r, p · r ∈ Roles ∧ p ∈ RParents(r) ∧ r ↦ Read ∈ admRights ⇒ p ↦ Read ∈ admRights
+        @grd17 depth ∈ ℕ → ℙ(dom(admRights))
+        @grd18 ∀r · r ∈ dom(admRights) ⇒ (∃i · i ∈ ℕ ∧ r ∈ depth(i))
+        @grd19 depth(0) = {role}
+        @grd20 ∀i·i∈ℕ ⇒ (∀r·r∈depth(i+1) ⇒ (∃p·p∈depth(i) ∧ p∈RParents(r)))
+        theorem @grd21 ∀i·i∈ℕ ∧ (∀r·r∈depth(i) ⇒ (∀u·u∈UserAccs ∧ admRole=UserAdmRole(u) ⇒ r≠UserAdmRole(u) ∧ r≠UserOrdRole(u) ∧ r≠CommonRole))
+                           ⇒ (∀r·r∈depth(i+1) ⇒ (∀u·u∈UserAccs ∧ admRole=UserAdmRole(u) ⇒ r≠UserAdmRole(u) ∧ r≠UserOrdRole(u) ∧ r≠CommonRole))
+        theorem @grd22 ∀i·i∈ℕ ⇒ (∀r·r∈depth(i) ⇒ (∀u·u∈UserAccs ∧ admRole=UserAdmRole(u) ⇒ r≠UserAdmRole(u) ∧ r≠UserOrdRole(u) ∧ r≠CommonRole))
+      then
+        @act1 RoleAdmRights(admRole) ≔ RoleAdmRights(admRole) ∖ admRights
+    end
+
+    event delete_role
+      any
+        subject
+        role
+        parent
+        roleAdmRights
+        subjectAdmAccesses
+      where
+        @grd1 subject ∈ Subjects
+        @grd2 role ∈ Roles
+        @grd3 ∀u · u ∈ UserAccs ⇒ role ≠ UserAdmRole(u)
+        @grd4 ∀u · u ∈ UserAccs ⇒ role ≠ UserOrdRole(u)
+        @grd5 role ≠ CommonRole
+        @grd6 role ∉ SpecialAdmRoles
+        @grd7 parent ∈ Roles
+        @grd8 parent ∈ RParents(role)
+        @grd9 ∀r · r ∈ Roles ⇒ role ∉ RParents(r)
+        @grd10 ∀r · r ∈ Roles ∧ r ≠ parent ⇒ r ∉ RParents(role)
+        @grd11 parent ∈ OrdRoles ⇒ RolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd12 parent ∈ OrdRoles ⇒ RolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd13 parent ∈ AdmRoles ⇒ ARolesAR ↦ ReadA ∈ SubjectAdmAccesses(subject)
+        @grd14 parent ∈ AdmRoles ⇒ ARolesAR ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd15 parent ↦ WriteA ∈ SubjectAdmAccesses(subject)
+        @grd16 roleAdmRights ∈ AdmRoles ∖ {role} → (Roles ∖ {role} ↔ AccessRights)
+        @grd17 ∀r · r ∈ AdmRoles ∧ r ≠ role ⇒ roleAdmRights(r) = {role} ⩤ RoleAdmRights(r)
+        @grd18 subjectAdmAccesses ∈ Subjects → (Roles ∖ {role} ↔ Accesses)
+        @grd19 ∀s · s ∈ Subjects ⇒ subjectAdmAccesses(s) = {role} ⩤ SubjectAdmAccesses(s)
+      then
+        @act1 CurrUnion ≔ CurrUnion ∖ {role}
+        @act2 Roles ≔ Roles ∖ {role}
+        @act3 OrdRoles ≔ OrdRoles ∖ {role}
+        @act4 AdmRoles ≔ AdmRoles ∖ {role}
+        @act5 RoleAdmRights ≔ roleAdmRights
+        @act6 RParents ≔ {role} ⩤ RParents
+        @act7 RoleRights ≔ {role} ⩤ RoleRights
+        @act8 RoleName ≔ {role} ⩤ RoleName
+        @act9 SubjectAdmAccesses ≔ subjectAdmAccesses
+        @act10 SubjectOwner ≔ SubjectOwner ⩥ {role}
+        @act11 Shared ≔ {role} ⩤ Shared
+        @act12 Direct ≔ {role} ⩤ Direct
+    end
+
+end

@@ -1,0 +1,14 @@
+CONTEXT library_ctx
+SETS
+    BOOKS, MEMBERS
+CONSTANTS
+    max_loans, library_collection
+AXIOMS
+    @axm1 max_loans ∈ ℕ1
+    @axm2 max_loans = 5
+    @axm3 library_collection ⊆ BOOKS
+    @axm4 finite(library_collection)
+    @axm5 card(library_collection) > 0
+THEOREMS
+    @thm1 max_loans > 0
+END

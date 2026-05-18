@@ -1,0 +1,58 @@
+MACHINE scheduler
+SEES
+    scheduler_ctx
+VARIABLES
+    waiting_tasks, running_tasks, completed_tasks
+INVARIANTS
+    @inv1 waiting_tasks ⊆ TASKS
+    @inv2 running_tasks ∈ PROCESSORS ⇸ TASKS
+    @inv3 completed_tasks ⊆ TASKS
+    @inv4 waiting_tasks ∩ ran(running_tasks) = ∅
+    @inv5 waiting_tasks ∩ completed_tasks = ∅
+    @inv6 ran(running_tasks) ∩ completed_tasks = ∅
+    @inv7 card(dom(running_tasks)) ≤ card(PROCESSORS)
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        waiting_tasks := TASKS
+        running_tasks := ∅
+        completed_tasks := ∅
+    END
+
+    EVENT schedule_task
+    ANY
+        processor
+        task
+    WHERE
+        @grd1 processor ∈ PROCESSORS
+        @grd2 processor ∉ dom(running_tasks)
+        @grd3 task ∈ waiting_tasks
+        @grd4 ∀t·t ∈ waiting_tasks ⇒ task_priority(task) ≥ task_priority(t)
+    THEN
+        waiting_tasks := waiting_tasks ∖ {task}
+        running_tasks(processor) := task
+    END
+
+    EVENT complete_task
+    ANY
+        processor
+    WHERE
+        @grd1 processor ∈ dom(running_tasks)
+    THEN
+        completed_tasks := completed_tasks ∪ {running_tasks(processor)}
+        running_tasks := {processor} ⩤ running_tasks
+    END
+
+    EVENT preempt_task
+    ANY
+        processor
+        new_task
+    WHERE
+        @grd1 processor ∈ dom(running_tasks)
+        @grd2 new_task ∈ waiting_tasks
+        @grd3 task_priority(new_task) > task_priority(running_tasks(processor))
+    THEN
+        waiting_tasks := (waiting_tasks ∖ {new_task}) ∪ {running_tasks(processor)}
+        running_tasks(processor) := new_task
+    END
+END

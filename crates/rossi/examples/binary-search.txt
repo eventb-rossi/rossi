@@ -1,0 +1,177 @@
+context C0
+
+constants
+    n
+    f
+    v
+
+axioms
+    @axm1
+        n ∈ ℕ
+    @axm2
+        f ∈ (0 ‥ n − 1) → ℤ
+    @axm3
+        v ∈ ran(f)
+    @axm4
+        ∀x, y · x ∈ dom(f) ∧ y ∈ dom(f) ∧ x ≤ y ⇒ f(x) ≤ f(y)
+
+end
+
+
+machine M0
+    sees C0
+
+variables
+    r
+
+invariants
+    @inv1
+        r ∈  dom(f)
+
+events
+    event INITIALISATION
+      then
+        @act1 r ≔ 0
+    end
+
+    event found
+      any
+        e
+      where
+        @grd1 e ∈ dom(f)
+        @grd2 f(e) = v
+      then
+        @act1 r ≔ e
+    end
+
+end
+
+
+machine M1
+    refines M0
+    sees C0
+
+variables
+    r
+    k
+
+invariants
+    @inv1
+        k ∈ dom(f)
+
+events
+    event INITIALISATION extends INITIALISATION
+      then
+        @act2 k :∈ dom(f)
+    end
+
+    event found refines found
+      where
+        @grd1 f(k) = v
+      with
+        @e e = k
+      then
+        @act1 r ≔ k
+    end
+
+    anticipated event search
+      where
+        @grd1 f(k) ≠ v
+      then
+        @act1 k :∈ dom(f)
+    end
+
+end
+
+
+machine M2
+    refines M1
+    sees C0
+
+variables
+    r
+    k
+    i
+    j
+
+invariants
+    @inv1
+        i ∈ dom(f)
+    @inv2
+        j ∈ dom(f)
+    @inv3
+        k ∈ i ‥ j
+    @inv4
+        v ∈ f[i ‥ j]
+
+variant
+    j − i
+
+events
+    event INITIALISATION extends INITIALISATION
+      then
+        @act3 i ≔ 0
+        @act4 j ≔ n − 1
+    end
+
+    event found extends found
+    end
+
+    convergent event search_inc refines search
+      where
+        @grd1 f(k) < v
+      then
+        @act1 k :∈ k + 1 ‥ j
+        @act2 i ≔ k + 1
+    end
+
+    convergent event search_dec refines search
+      where
+        @grd1 f(k) > v
+      then
+        @act1 k :∈ i ‥ k − 1
+        @act2 j ≔ k − 1
+    end
+
+end
+
+
+machine M3
+    refines M2
+    sees C0
+
+variables
+    r
+    k
+    i
+    j
+
+events
+    event INITIALISATION
+      then
+        @act1 r ≔ 0
+        @act2 k ≔ (n − 1) ÷ 2
+        @act3 i ≔ 0
+        @act4 j ≔ n − 1
+    end
+
+    event found extends found
+    end
+
+    event search_inc refines search_inc
+      where
+        @grd1 f(k) < v
+      then
+        @act1 k ≔ (k + 1 + j) ÷ 2
+        @act2 i ≔ k + 1
+    end
+
+    event search_dec refines search_dec
+      where
+        @grd1 f(k) > v
+      then
+        @act1 k ≔ (i + k − 1) ÷ 2
+        @act2 j ≔ k − 1
+    end
+
+end

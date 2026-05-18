@@ -1,0 +1,17 @@
+CONTEXT sets_and_relations_ctx
+SETS
+    PERSONS, COMPANIES
+CONSTANTS
+    adults, minors, employees, min_age, max_age
+AXIOMS
+    @axm1 min_age = 0
+    @axm2 max_age = 150
+    @axm3 adults = {p · p ∈ PERSONS ∧ p ∈ PERSONS | p}
+    @axm4 minors ⊆ PERSONS
+    @axm5 adults ∪ minors = PERSONS
+    @axm6 adults ∩ minors = ∅
+    @axm7 employees ∈ PERSONS ↔ COMPANIES
+    @axm8 ∀p·p ∈ dom(employees) ⇒ p ∈ adults
+THEOREMS
+    @thm1 partition(PERSONS, adults, minors)
+END

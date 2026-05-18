@@ -1,0 +1,82 @@
+MACHINE bank_account
+SEES
+    bank_account_ctx
+VARIABLES
+    balances, active_accounts
+INVARIANTS
+    @inv1 balances ∈ ACCOUNTS → ℤ
+    @inv2 active_accounts ⊆ ACCOUNTS
+    @inv3 ∀a·a ∈ active_accounts ⇒ balances(a) ≥ min_balance
+    @inv4 ∀a·a ∈ active_accounts ⇒ balances(a) ≤ max_balance
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        balances :∈ ACCOUNTS → ℤ
+        active_accounts := ∅
+    END
+
+    EVENT open_account
+    ANY
+        account
+        initial_deposit
+    WHERE
+        @grd1 account ∈ ACCOUNTS
+        @grd2 account ∉ active_accounts
+        @grd3 initial_deposit ∈ ℕ
+        @grd4 initial_deposit ≤ max_balance
+    THEN
+        balances(account) := initial_deposit
+        active_accounts := active_accounts ∪ {account}
+    END
+
+    EVENT deposit
+    ANY
+        account
+        amount
+    WHERE
+        @grd1 account ∈ active_accounts
+        @grd2 amount ∈ ℕ1
+        @grd3 balances(account) + amount ≤ max_balance
+    THEN
+        balances(account) := balances(account) + amount
+    END
+
+    EVENT withdraw
+    ANY
+        account
+        amount
+    WHERE
+        @grd1 account ∈ active_accounts
+        @grd2 amount ∈ ℕ1
+        @grd3 balances(account) − amount ≥ min_balance
+    THEN
+        balances(account) := balances(account) − amount
+    END
+
+    EVENT transfer
+    ANY
+        from_account
+        to_account
+        amount
+    WHERE
+        @grd1 from_account ∈ active_accounts
+        @grd2 to_account ∈ active_accounts
+        @grd3 from_account ≠ to_account
+        @grd4 amount ∈ ℕ1
+        @grd5 balances(from_account) − amount ≥ min_balance
+        @grd6 balances(to_account) + amount ≤ max_balance
+    THEN
+        balances(from_account) := balances(from_account) − amount
+        balances(to_account) := balances(to_account) + amount
+    END
+
+    EVENT close_account
+    ANY
+        account
+    WHERE
+        @grd1 account ∈ active_accounts
+        @grd2 balances(account) = 0
+    THEN
+        active_accounts := active_accounts ∖ {account}
+    END
+END

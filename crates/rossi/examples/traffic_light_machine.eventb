@@ -1,0 +1,63 @@
+MACHINE traffic_light
+SEES
+    traffic_light_ctx
+VARIABLES
+    lights, timer
+INVARIANTS
+    @inv1 lights ∈ DIRECTIONS → COLORS
+    @inv2 timer ∈ ℕ
+    @inv3 ∀d1,d2·d1 ∈ DIRECTIONS ∧ d2 ∈ DIRECTIONS ∧ d1 ≠ d2 ⇒ (lights(d1) = green ⇒ lights(d2) ≠ green)
+VARIANT
+    timer
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        lights := {north_south ↦ red, east_west ↦ red}
+        timer := 0
+    END
+
+    EVENT tick
+    STATUS convergent
+    WHERE
+        @grd1 timer > 0
+    THEN
+        timer := timer − 1
+    END
+
+    EVENT change_to_yellow
+    ANY
+        direction
+    WHERE
+        @grd1 direction ∈ DIRECTIONS
+        @grd2 lights(direction) = green
+        @grd3 timer = 0
+    THEN
+        lights(direction) := yellow
+        timer := 3
+    END
+
+    EVENT change_to_red
+    ANY
+        direction
+    WHERE
+        @grd1 direction ∈ DIRECTIONS
+        @grd2 lights(direction) = yellow
+        @grd3 timer = 0
+    THEN
+        lights(direction) := red
+        timer := 2
+    END
+
+    EVENT change_to_green
+    ANY
+        direction
+    WHERE
+        @grd1 direction ∈ DIRECTIONS
+        @grd2 lights(direction) = red
+        @grd3 lights(opposite(direction)) = red
+        @grd4 timer = 0
+    THEN
+        lights(direction) := green
+        timer := 10
+    END
+END

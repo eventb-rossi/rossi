@@ -1,0 +1,46 @@
+MACHINE simple_machine
+SEES
+    simple_sets_ctx
+VARIABLES
+    active_persons, stored_items
+INVARIANTS
+    @inv1 active_persons <: PERSONS
+    @inv2 stored_items <: ITEMS
+    @inv3 card(active_persons) <= person_limit
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        active_persons := {}
+        stored_items := {}
+    END
+
+    EVENT add_person
+    ANY
+        person
+    WHERE
+        @grd1 person : PERSONS
+        @grd2 person /: active_persons
+        @grd3 card(active_persons) < person_limit
+    THEN
+        active_persons := active_persons \/ {person}
+    END
+
+    EVENT add_item
+    ANY
+        item
+    WHERE
+        @grd1 item : ITEMS
+        @grd2 item /: stored_items
+    THEN
+        stored_items := stored_items \/ {item}
+    END
+
+    EVENT remove_person
+    ANY
+        person
+    WHERE
+        @grd1 person : active_persons
+    THEN
+        active_persons := active_persons \ {person}
+    END
+END

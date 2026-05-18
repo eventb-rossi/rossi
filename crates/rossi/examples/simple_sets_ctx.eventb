@@ -1,0 +1,13 @@
+CONTEXT simple_sets_ctx
+SETS
+    PERSONS, ITEMS
+CONSTANTS
+    all_persons, all_items, person_limit
+AXIOMS
+    @axm1 all_persons <: PERSONS
+    @axm2 all_items <: ITEMS
+    @axm3 person_limit = 100
+    @axm4 person_limit > 0
+THEOREMS
+    @thm1 all_persons ∪ all_items = {}
+END
