@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = []
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Rossi Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eventb-rossi/rossi"
+
+[workspace.dependencies]
+# Parser dependencies
+pest = "2.7"
+pest_derive = "2.7"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+quick-xml = "0.36"
+zip = "8.1"
+
+# LSP dependencies
+tower-lsp = "0.20"
+lsp-types = "0.94"  # Must match tower-lsp's version
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+ropey = "1.6"
+dashmap = "6"
+parking_lot = "0.12"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2"
+
+# Dev dependencies
+indoc = "2.0"
+test-case = "3.3"
+proptest = "1.6"
+
+# Workspace crates
+rossi = { version = "0.1.0", path = "crates/rossi" }
+rossi-build = { version = "0.1.0", path = "crates/rossi-build" }
+rossi-lsp = { version = "0.1.0", path = "crates/rossi-lsp" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
