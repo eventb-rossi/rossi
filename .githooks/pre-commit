@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Only run if Rust-relevant files are staged
+staged_rs=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(rs|pest|toml)$' || true)
+if [ -z "$staged_rs" ]; then
+    exit 0
+fi
+
+echo "Pre-commit: checking Rust code..."
+
+# 1. Auto-format and re-stage modified files
+echo "  Running cargo fmt..."
+cargo fmt
+for file in $staged_rs; do
+    if [ -f "$file" ] && ! git diff --quiet -- "$file" 2>/dev/null; then
+        git add "$file"
+    fi
+done
+
+# 2. Lint
+echo "  Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Test
+echo "  Running cargo test..."
+cargo test --quiet
