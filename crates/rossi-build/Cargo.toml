@@ -1,0 +1,26 @@
+[package]
+name = "rossi-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Static checker / builder for Event-B models in Rossi. Reads .buc/.bum and emits Rodin-compatible .bcc/.bcm."
+keywords = ["event-b", "rodin", "static-checker", "formal-methods"]
+categories = ["development-tools", "parser-implementations"]
+
+[dependencies]
+rossi.workspace = true
+thiserror.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+walkdir.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+indoc.workspace = true
+proptest.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "rossi/serde"]
