@@ -9,12 +9,14 @@
 //!
 //! Two flavours of traversal share the same AST walker:
 //!
-//! 1. **Find-first** — [`free_identifier_in_predicate`] / [`_expression`] /
-//!    [`_action_rhs`], plus [`first_forbidden_identifier_in_predicate`] /
-//!    [`_action_rhs`]. Short-circuits on the first hit. Used by the SC
-//!    pipeline.
+//! 1. **Find-first** — [`free_identifier_in_predicate`] /
+//!    [`free_identifier_in_expression`] / [`free_identifier_in_action_rhs`],
+//!    plus [`first_forbidden_identifier_in_predicate`] /
+//!    [`first_forbidden_identifier_in_action_rhs`]. Short-circuits on the
+//!    first hit. Used by the SC pipeline.
 //! 2. **Collect-all** — [`collect_referenced_in_predicate`] /
-//!    [`_expression`] / [`_action_rhs`]. Walks the whole tree and inserts
+//!    [`collect_referenced_in_expression`] /
+//!    [`collect_referenced_in_action_rhs`]. Walks the whole tree and inserts
 //!    every free identifier into a [`BTreeSet`]. Used by the lint module.
 //!
 //! Both flavours implement the [`Visitor`] trait. The walker threads a

@@ -887,7 +887,7 @@ pub fn infer_constant_from_predicate(
     .or_else(|| infer_from_function_argument(env, predicate, constant_name))
 }
 
-/// Last-resort typing: scan `pred` for a [`FunctionApplication`] whose
+/// Last-resort typing: scan `pred` for an [`Expression::FunctionApplication`] whose
 /// function has a known relation type and one of whose arguments is
 /// `constant_name`. Lift the constant's type from the function's
 /// domain. Covers parameters that only appear as keys to known
