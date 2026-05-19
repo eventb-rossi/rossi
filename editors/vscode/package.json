@@ -219,7 +219,7 @@
         "rossi.diagnostics.debounceMs": {
           "type": "number",
           "default": 500,
-          "description": "Delay in milliseconds before running diagnostics after typing."
+          "description": "Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing."
         },
         "rossi.completion.enabled": {
           "type": "boolean",

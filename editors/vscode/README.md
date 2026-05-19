@@ -53,11 +53,11 @@ The Rossi Language Server must be installed and accessible in your PATH. Rodin i
 From the project root:
 
 ```bash
-cargo build --release --bin rossi-language-server
-# Binary available at: target/release/rossi-language-server
+cargo build --release --bin rossi-language-server --bin rossi
+# Binaries available at: target/release/rossi-language-server and target/release/rossi
 ```
 
-Add the binary to your PATH or specify the full path in settings.
+Add both binaries to your PATH or specify their full paths in settings.
 
 ## Extension Settings
 
@@ -67,8 +67,15 @@ This extension contributes the following settings:
 - `rossi.tool.path`: Path to the Rossi CLI executable used for import, export, build, validation, and conversion commands (default: `rossi`)
 - `rossi.format.useUnicode`: Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\, \/, =>, :) when formatting (default: `true`)
 - `rossi.format.indentation`: Indentation string (spaces or tabs) to use when formatting (default: `"    "` - 4 spaces)
+- `rossi.format.maxLineLength`: Maximum line length for future formatter wrapping behavior (default: `100`)
 - `rossi.diagnostics.enabled`: Enable real-time diagnostics for syntax errors (default: `true`)
+- `rossi.diagnostics.debounceMs`: Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing (default: `500`)
+- `rossi.completion.enabled`: Enable Event-B code completion (default: `true`)
 - `rossi.trace.server`: Traces communication between VS Code and the language server (default: `"off"`)
+- `rossi.prob.enabled`: Enable ProB integration features (default: `true`)
+- `rossi.prob.path`: Path to `probcli`; empty searches in PATH (default: `""`)
+- `rossi.prob.timeout`: ProB model checking timeout in milliseconds (default: `10000`)
+- `rossi.prob.animateSteps`: Number of random animation steps for ProB animation (default: `5`)
 
 ### Example Configuration
 
@@ -80,7 +87,14 @@ Add to your `.vscode/settings.json`:
   "rossi.tool.path": "/path/to/rossi",
   "rossi.format.useUnicode": true,
   "rossi.format.indentation": "    ",
+  "rossi.format.maxLineLength": 100,
   "rossi.diagnostics.enabled": true,
+  "rossi.diagnostics.debounceMs": 500,
+  "rossi.completion.enabled": true,
+  "rossi.prob.enabled": true,
+  "rossi.prob.path": "",
+  "rossi.prob.timeout": 10000,
+  "rossi.prob.animateSteps": 5,
   "editor.formatOnSave": true
 }
 ```

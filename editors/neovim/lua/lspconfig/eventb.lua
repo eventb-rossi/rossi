@@ -24,14 +24,14 @@ return {
 
     -- Server settings
     settings = {
-      eventb = {
+      rossi = {
         -- Formatting configuration
         format = {
           -- Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\, \/, =>, :)
           useUnicode = true,
           -- Indentation string (spaces or tabs)
           indentation = "    ",
-          -- Maximum line length for formatting (optional)
+          -- Parsed for future wrapping; not applied yet
           maxLineLength = 100,
         },
 
@@ -39,7 +39,7 @@ return {
         diagnostics = {
           -- Enable/disable diagnostics
           enabled = true,
-          -- Debounce delay in milliseconds
+          -- Parsed for future debouncing; diagnostics are immediate
           debounceMs = 500,
         },
 
@@ -103,7 +103,7 @@ Or with custom settings:
 ```lua
 require('lspconfig').eventb.setup{
   settings = {
-    eventb = {
+    rossi = {
       format = {
         useUnicode = true,
         indentation = "    ",

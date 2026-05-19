@@ -4,21 +4,24 @@ Quick guide to installing and using the Rossi Event-B extension for VS Code.
 
 ## Quick Install
 
-### Step 1: Install the LSP Server
+### Step 1: Install the LSP Server and CLI
 
-The extension requires the Rossi Language Server. Install it using one of these methods:
+The extension requires the Rossi Language Server for editor features and the
+`rossi` CLI for Rodin import/export/build/validation commands. Install them
+using one of these methods:
 
 **Option A: From Source (Recommended)**
 ```bash
 git clone https://github.com/eventb-rossi/rossi.git
 cd rossi
-cargo build --release --bin rossi-language-server
+cargo build --release --bin rossi-language-server --bin rossi
 ```
 
-Then copy the binary to a directory in your PATH:
+Then copy the binaries to a directory in your PATH:
 ```bash
 # Linux/macOS
 sudo cp target/release/rossi-language-server /usr/local/bin/
+sudo cp target/release/rossi /usr/local/bin/
 
 # Or add to PATH in your shell config (~/.bashrc, ~/.zshrc):
 export PATH="$PATH:/path/to/rossi/target/release"
@@ -60,17 +63,18 @@ code --install-extension rossi-eventb-0.1.0.vsix
 
 ### Basic Setup
 
-No configuration needed if `rossi-language-server` is in your PATH.
+No configuration needed if `rossi-language-server` and `rossi` are in your PATH.
 
-### Custom LSP Server Path
+### Custom Tool Paths
 
-If the server is not in PATH, configure it:
+If either binary is not in PATH, configure it:
 
 1. Open Settings (Ctrl+,)
 2. Search for "rossi"
-3. Set "Event-B: Language Server Path" to the full path:
+3. Set "Event-B: Language Server Path" and "Rossi: Tool Path" to the full paths:
    ```
    /path/to/rossi-language-server
+   /path/to/rossi
    ```
 
 Or edit `settings.json` directly:
@@ -89,7 +93,14 @@ Or edit `settings.json` directly:
   "rossi.tool.path": "rossi",
   "rossi.format.useUnicode": true,
   "rossi.format.indentation": "    ",
+  "rossi.format.maxLineLength": 100,
   "rossi.diagnostics.enabled": true,
+  "rossi.diagnostics.debounceMs": 500,
+  "rossi.completion.enabled": true,
+  "rossi.prob.enabled": true,
+  "rossi.prob.path": "",
+  "rossi.prob.timeout": 10000,
+  "rossi.prob.animateSteps": 5,
   "editor.formatOnSave": true,
   "editor.quickSuggestions": {
     "other": true,
@@ -132,7 +143,6 @@ Type a prefix and press Tab:
 ### Formatting
 
 - Format Document: Shift+Alt+F
-- Format Selection: Ctrl+K Ctrl+F
 - Toggle Unicode/ASCII: Change `rossi.format.useUnicode` setting
 - Convert current file: Command Palette > `Rossi: Convert Current File to Unicode` or `Rossi: Convert Current File to ASCII`
 
@@ -254,7 +264,7 @@ Solution: Check server is built correctly, try rebuilding.
 ### Getting Help
 
 1. Check the [README](README.md)
-2. Check [DEVELOPMENT](DEVELOPMENT.md) for advanced setup
+2. Run `Rossi: Check Toolchain` from the Command Palette
 3. [GitHub Issues](https://github.com/eventb-rossi/rossi/issues)
 4. [GitHub Discussions](https://github.com/eventb-rossi/rossi/discussions)
 
