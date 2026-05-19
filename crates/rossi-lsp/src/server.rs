@@ -350,10 +350,6 @@ impl LanguageServer for RossiLanguageServer {
         self.workspace_symbol_provider
             .update_symbols(uri.to_string(), &text);
 
-        // Update semantic tokens cache
-        self.semantic_tokens_provider
-            .update_component(uri.to_string(), &text);
-
         // Parse and publish diagnostics
         self.analyze_and_publish_diagnostics(uri, text, Some(version))
             .await;
@@ -382,10 +378,6 @@ impl LanguageServer for RossiLanguageServer {
             // Update workspace symbols
             self.workspace_symbol_provider
                 .update_symbols(uri.to_string(), &text);
-
-            // Update semantic tokens cache
-            self.semantic_tokens_provider
-                .update_component(uri.to_string(), &text);
 
             self.analyze_and_publish_diagnostics(uri, text, Some(version))
                 .await;
@@ -713,10 +705,6 @@ impl LanguageServer for RossiLanguageServer {
                 return Ok(None);
             }
         };
-
-        // Update component cache for this document
-        self.semantic_tokens_provider
-            .update_component(uri.to_string(), &text);
 
         // Get semantic tokens
         let response = self

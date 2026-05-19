@@ -17,7 +17,6 @@ path = "src/main.rs"
 rossi.workspace = true
 rossi-build.workspace = true
 rossi-lsp.workspace = true
-anyhow.workspace = true
 clap.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true

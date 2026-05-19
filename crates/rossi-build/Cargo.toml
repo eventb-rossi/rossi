@@ -18,7 +18,6 @@ walkdir.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-indoc.workspace = true
 proptest.workspace = true
 
 [features]

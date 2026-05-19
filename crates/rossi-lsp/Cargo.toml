@@ -35,7 +35,6 @@ parking_lot.workspace = true
 # Error handling and logging
 anyhow.workspace = true
 clap.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -44,6 +43,3 @@ rossi.workspace = true
 
 # File system operations
 walkdir.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }

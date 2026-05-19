@@ -1266,7 +1266,6 @@ dependencies = [
 name = "rossi-build"
 version = "0.1.0"
 dependencies = [
- "indoc",
  "proptest",
  "quick-xml",
  "rossi",
@@ -1280,7 +1279,6 @@ dependencies = [
 name = "rossi-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "rossi",
  "rossi-build",
@@ -1305,7 +1303,6 @@ dependencies = [
  "rossi",
  "serde",
  "serde_json",
- "thiserror",
  "tokio",
  "tower-lsp",
  "tracing",
