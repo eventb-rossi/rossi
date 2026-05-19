@@ -265,7 +265,7 @@ vim.api.nvim_create_autocmd('FileType', {
       cmd = {'rossi-language-server'},
       root_dir = vim.fs.dirname(vim.fs.find({'.git', 'eventb.toml'}, { upward = true })[1]),
       settings = {
-        eventb = {
+        rossi = {
           format = {
             useUnicode = true,
             indentation = "    ",
@@ -306,15 +306,15 @@ local lspconfig = require('lspconfig')
 lspconfig.eventb.setup{
   -- Settings
   settings = {
-    eventb = {
+    rossi = {
       format = {
         useUnicode = true,
         indentation = "    ",
-        maxLineLength = 100,
+        maxLineLength = 100, -- Parsed for future wrapping; not applied yet
       },
       diagnostics = {
         enabled = true,
-        debounceMs = 500,
+        debounceMs = 500, -- Parsed for future debouncing; diagnostics are immediate
       },
     },
   },

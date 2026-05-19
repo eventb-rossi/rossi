@@ -139,11 +139,11 @@ All settings can be customized via Emacs customization interface (`M-x customize
 ;; Formatting options
 (setq lsp-rossi-format-use-unicode t)        ; Use Unicode (∧, ∨, ⇒) or ASCII (/\, \/, =>)
 (setq lsp-rossi-format-indentation "    ")   ; Indentation string (spaces or tabs)
-(setq lsp-rossi-format-max-line-length 100)  ; Maximum line length
+(setq lsp-rossi-format-max-line-length 100)  ; Parsed for future wrapping; not applied yet
 
 ;; Diagnostics options
 (setq lsp-rossi-diagnostics-enabled t)       ; Enable/disable diagnostics
-(setq lsp-rossi-diagnostics-debounce-ms 500) ; Debounce delay in milliseconds
+(setq lsp-rossi-diagnostics-debounce-ms 500) ; Parsed for future debouncing; diagnostics are immediate
 
 ;; Completion options
 (setq lsp-rossi-completion-enabled t)        ; Enable/disable completion
@@ -156,8 +156,9 @@ If the server is not in your PATH:
 ```elisp
 (setq rossi-language-server-command "/path/to/rossi-language-server")
 
-;; Or with arguments:
-(setq rossi-language-server-command '("/path/to/rossi-language-server" "--log-level" "debug"))
+;; Or with debug logging:
+(setq rossi-language-server-command
+      '("sh" "-c" "RUST_LOG=debug exec /path/to/rossi-language-server"))
 ```
 
 ### Keybindings

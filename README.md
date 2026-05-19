@@ -272,17 +272,15 @@ pub struct Context {
     pub sets: Vec<SetDeclaration>,
     pub constants: Vec<NamedElement>,
     pub axioms: Vec<LabeledPredicate>,
-    pub theorems: Vec<LabeledPredicate>,
     // ... source location and metadata fields
 }
 
 pub struct Machine {
     pub name: String,
-    pub refines: Vec<String>,
+    pub refines: Option<String>,
     pub sees: Vec<String>,
     pub variables: Vec<NamedElement>,
     pub invariants: Vec<LabeledPredicate>,
-    pub theorems: Vec<LabeledPredicate>,
     pub variant: Option<Expression>,
     pub initialisation: Option<InitialisationEvent>,
     pub events: Vec<Event>,
@@ -292,6 +290,8 @@ pub struct Machine {
 
 `SetDeclaration` supports both deferred (carrier) sets and enumerated sets.
 `NamedElement` carries a name and an optional comment (from Rodin XML).
+Theorem predicates are stored in `axioms` or `invariants` with
+`is_theorem = true`.
 
 ## CLI Tool
 
@@ -300,7 +300,7 @@ the `rossi-build` static checker, and the language server:
 
 | Subcommand | Purpose |
 |------------|---------|
-| `validate` | Parse one or more `.eventb` files or Rodin `.zip` archives and report syntax errors. |
+| `validate` | Validate `.eventb` files, Rodin `.zip` archives, or unzipped Rodin project directories. |
 | `print`    | Convert between `.eventb` text and Rodin `.zip` archives. |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
 | `lsp`      | Run the Rossi language server over stdio (equivalent to the `rossi-language-server` binary). |
@@ -317,25 +317,32 @@ The binary will be available at `target/release/rossi`.
 
 ```bash
 # Validate a single file
-rossi validate examples/counter.eventb
+rossi validate crates/rossi/examples/counter.eventb
 
 # Validate multiple files
-rossi validate examples/*.eventb
+rossi validate crates/rossi/examples/*.eventb
 
 # JSON output for tooling integration
-rossi validate --format json examples/counter.eventb
+rossi validate --format json crates/rossi/examples/counter.eventb
+
+# SARIF output for IDEs and code-scanning tools
+rossi validate --format sarif crates/rossi/examples/base-model.zip
 
 # Quiet mode (only show errors)
-rossi validate --quiet examples/*.eventb
+rossi validate --quiet crates/rossi/examples/*.eventb
 
 # Continue past failures
-rossi validate --continue-on-error examples/*.eventb
+rossi validate --continue-on-error crates/rossi/examples/*.eventb
+
+# Skip semantic checks for .zip inputs, or skip advisory lints
+rossi validate --no-semantic crates/rossi/examples/base-model.zip
+rossi validate --no-lints crates/rossi/examples/base-model.zip
 ```
 
 **Text output:**
 ```
-✓ examples/counter.eventb - Valid Context 'counter_ctx'
-✓ examples/counter_machine.eventb - Valid Machine 'counter'
+✓ crates/rossi/examples/counter.eventb - Valid Context 'counter_ctx'
+✓ crates/rossi/examples/counter_machine.eventb - Valid Machine 'counter'
 
 ==================================================
 Summary:
@@ -349,13 +356,19 @@ Summary:
 ```json
 [
   {
-    "file": "examples/counter.eventb",
+    "file": "crates/rossi/examples/counter.eventb",
     "success": true,
     "component_type": "Context",
     "component_name": "counter_ctx"
   }
 ]
 ```
+
+For `.eventb` files, `validate` parses the text and reports component results.
+For `.zip` archives, it also runs rossi-build semantic checks and advisory
+lints unless `--no-semantic` is set; `--no-lints` keeps semantic checks but
+drops advisory lint rows. Directory inputs are treated as unzipped Rodin
+projects and require semantic checks, so `--no-semantic` is rejected for them.
 
 ### Print (text ⇄ Rodin ZIP)
 

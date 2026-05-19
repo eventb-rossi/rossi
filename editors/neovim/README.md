@@ -139,15 +139,15 @@ require('lspconfig').eventb.setup{
 ```lua
 require('lspconfig').eventb.setup{
   settings = {
-    eventb = {
+    rossi = {
       format = {
         useUnicode = true,      -- Use Unicode operators
         indentation = "    ",   -- 4 spaces
-        maxLineLength = 100,
+        maxLineLength = 100,    -- Parsed for future wrapping; not applied yet
       },
       diagnostics = {
         enabled = true,
-        debounceMs = 500,
+        debounceMs = 500, -- Parsed for future debouncing; diagnostics are immediate
       },
       completion = {
         enabled = true,
@@ -176,18 +176,18 @@ EOF
 
 ```lua
 settings = {
-  eventb = {
+  rossi = {
     -- Formatting options
     format = {
       useUnicode = true,        -- Use Unicode (∧, ∨, ⇒) or ASCII (/\, \/, =>)
       indentation = "    ",     -- Indentation string (spaces or tabs)
-      maxLineLength = 100,      -- Maximum line length
+      maxLineLength = 100,      -- Parsed for future wrapping; not applied yet
     },
 
     -- Diagnostics options
     diagnostics = {
       enabled = true,           -- Enable/disable diagnostics
-      debounceMs = 500,         -- Debounce delay in milliseconds
+      debounceMs = 500,         -- Parsed for future debouncing; diagnostics are immediate
     },
 
     -- Completion options
@@ -319,7 +319,7 @@ return {
     config = function()
       require('lspconfig').eventb.setup{
         settings = {
-          eventb = {
+          rossi = {
             format = {
               useUnicode = true,
               indentation = "    ",

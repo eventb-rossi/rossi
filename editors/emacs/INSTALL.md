@@ -328,9 +328,9 @@ If `rossi-language-server` is not in your PATH:
 ```elisp
 (setq rossi-language-server-command "~/.cargo/bin/rossi-language-server")
 
-;; Or with custom arguments:
+;; Or with debug logging:
 (setq rossi-language-server-command
-      '("~/.cargo/bin/rossi-language-server" "--log-level" "debug"))
+      '("sh" "-c" "RUST_LOG=debug exec ~/.cargo/bin/rossi-language-server"))
 ```
 
 ### Additional Keybindings

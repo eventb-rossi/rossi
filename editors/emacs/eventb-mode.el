@@ -259,7 +259,7 @@ Can be a string (command name) or a list (command with arguments)."
   :group 'eventb)
 
 (defcustom lsp-rossi-format-max-line-length 100
-  "Maximum line length for Event-B formatting."
+  "Reserved for future formatter wrapping; currently parsed but not applied."
   :type 'integer
   :group 'eventb)
 
@@ -269,7 +269,7 @@ Can be a string (command name) or a list (command with arguments)."
   :group 'eventb)
 
 (defcustom lsp-rossi-diagnostics-debounce-ms 500
-  "Debounce delay in milliseconds for Event-B diagnostics."
+  "Reserved for future diagnostic debouncing; diagnostics currently run immediately."
   :type 'integer
   :group 'eventb)
 
