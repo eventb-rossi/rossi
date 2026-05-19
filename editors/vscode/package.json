@@ -273,7 +273,7 @@
     "@typescript-eslint/parser": "^5.0.0",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
-    "@vscode/vsce": "^2.19.0"
+    "@vscode/vsce": "^3.9.1"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
