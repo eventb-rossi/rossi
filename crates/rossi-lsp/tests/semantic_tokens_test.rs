@@ -33,7 +33,6 @@ END
         text_document: TextDocumentIdentifier { uri },
     };
 
-    provider.update_component(params.text_document.uri.to_string(), text);
     let result = provider.semantic_tokens(&params, text);
 
     assert!(result.is_some(), "Should return semantic tokens");

@@ -9,15 +9,10 @@ use lsp_types::{
     SemanticTokensParams, SemanticTokensResult,
 };
 use rossi::ast::{Component, Context, Event, LabeledAction, LabeledPredicate, Machine, Predicate};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 /// Semantic tokens provider
-pub struct SemanticTokensProvider {
-    /// Cache of parsed components by URI
-    component_cache: Arc<Mutex<HashMap<String, Component>>>,
-}
+pub struct SemanticTokensProvider;
 
 impl Default for SemanticTokensProvider {
     fn default() -> Self {
@@ -28,17 +23,7 @@ impl Default for SemanticTokensProvider {
 impl SemanticTokensProvider {
     /// Create a new semantic tokens provider
     pub fn new() -> Self {
-        Self {
-            component_cache: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    /// Update the cached component for a document
-    pub fn update_component(&self, uri: String, text: &str) {
-        if let Ok(component) = rossi::parse(text) {
-            let mut cache = self.component_cache.lock().unwrap();
-            cache.insert(uri, component);
-        }
+        Self
     }
 
     /// Get semantic tokens legend (token types and modifiers)

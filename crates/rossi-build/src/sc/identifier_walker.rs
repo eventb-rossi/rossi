@@ -60,7 +60,6 @@ pub fn free_identifier_in_predicate(pred: &Predicate, env: &TypeEnv) -> Option<S
 }
 
 /// Locate the first free identifier in `expr`.
-#[allow(dead_code)] // first user is the machine checker (M1).
 pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option<String> {
     let mut v = FreeFinder { env, found: None };
     let _ = walk_expr(expr, &mut Vec::new(), &mut v);

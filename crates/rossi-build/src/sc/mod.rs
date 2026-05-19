@@ -66,7 +66,6 @@ impl CheckedContext {
     pub fn ancestors(&self) -> &[String] {
         &self.record.ancestors
     }
-    #[allow(dead_code)] // used by machine SC (M1+)
     pub fn env(&self) -> &TypeEnv {
         &self.record.env
     }
