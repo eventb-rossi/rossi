@@ -15,6 +15,7 @@
 
 use std::rc::Rc;
 
+use quick_xml::XmlVersion;
 use quick_xml::events::BytesStart;
 
 /// Rodin's XML attribute namespace prefix. Stripped or prefixed when
@@ -35,7 +36,9 @@ pub(crate) fn read_attr<E>(
     for a in e.attributes() {
         let a = a.map_err(|e| err(e.to_string()))?;
         if a.key.as_ref() == key || a.key.as_ref() == prefixed.as_slice() {
-            let v = a.unescape_value().map_err(|e| err(e.to_string()))?;
+            let v = a
+                .normalized_value(XmlVersion::Implicit1_0)
+                .map_err(|e| err(e.to_string()))?;
             return Ok(Some(v.into_owned()));
         }
     }

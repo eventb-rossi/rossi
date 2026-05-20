@@ -29,8 +29,8 @@ use crate::ast::{
 use crate::error::{ParseError, ParseResult, Result};
 use crate::pretty::PrettyPrinter;
 use crate::{Component, parser};
-use quick_xml::Reader;
 use quick_xml::events::Event as XmlEvent;
+use quick_xml::{Reader, XmlVersion};
 use std::io::Read as IoRead;
 
 /// Decode XML entities in a string
@@ -61,7 +61,7 @@ fn get_xml_attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Result<Option<
         let attr = attr.map_err(|e| ParseError::InvalidXml(e.to_string()))?;
         if attr.key.as_ref() == key || attr.key.as_ref() == prefixed_key.as_slice() {
             let value = attr
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|e| ParseError::InvalidXml(e.to_string()))?;
             return Ok(Some(value.into_owned()));
         }
@@ -227,7 +227,7 @@ fn parse_xml_labeled_predicate(
         let key = std::str::from_utf8(attr.key.as_ref())
             .map_err(|e| ParseError::InvalidXml(e.to_string()))?;
         let value = attr
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|e| ParseError::InvalidXml(e.to_string()))?;
 
         let key = key.strip_prefix("org.eventb.core.").unwrap_or(key);
