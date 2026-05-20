@@ -1,6 +1,6 @@
 //! Tests for semantic tokens provider
 
-use lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
+use rossi_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
 use rossi_lsp::semantic_tokens::SemanticTokensProvider;
 
 #[test]
@@ -37,7 +37,7 @@ END
 
     assert!(result.is_some(), "Should return semantic tokens");
 
-    if let Some(lsp_types::SemanticTokensResult::Tokens(tokens)) = result {
+    if let Some(rossi_lsp::lsp_types::SemanticTokensResult::Tokens(tokens)) = result {
         assert!(!tokens.data.is_empty(), "Should have semantic tokens");
         assert!(
             tokens.data.len() >= 5,

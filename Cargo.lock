@@ -1297,7 +1297,6 @@ dependencies = [
  "anyhow",
  "clap",
  "dashmap 6.2.1",
- "lsp-types",
  "parking_lot",
  "ropey",
  "rossi",

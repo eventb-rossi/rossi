@@ -3,9 +3,9 @@
 //! These tests verify that the cross-reference manager correctly tracks
 //! dependencies between Event-B files and that workspace-wide operations work.
 
-use lsp_types::*;
 use rossi_lsp::cross_references::{ComponentKind, CrossReferenceManager, ReferenceKind};
 use rossi_lsp::document::DocumentManager;
+use rossi_lsp::lsp_types::*;
 use rossi_lsp::references::ReferenceProvider;
 use rossi_lsp::rename::RenameProvider;
 use std::sync::Arc;

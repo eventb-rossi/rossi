@@ -8,8 +8,10 @@
 //! - Parameters (in ANY clause)
 //! - Cross-file references (SEES, REFINES, EXTENDS)
 
+use crate::lsp_types::{
+    GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Range, Url,
+};
 use dashmap::DashMap;
-use lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Range, Url};
 use rossi::{Component, parse};
 use std::collections::HashSet;
 use std::sync::Arc;

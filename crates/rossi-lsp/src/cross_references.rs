@@ -4,8 +4,8 @@
 //! tracking SEES, REFINES, and EXTENDS relationships to enable cross-file
 //! navigation, renaming, and reference finding.
 
+use crate::lsp_types::Url;
 use dashmap::DashMap;
-use lsp_types::Url;
 use parking_lot::RwLock;
 use rossi::{Component, parse};
 use std::collections::{HashMap, HashSet, VecDeque};

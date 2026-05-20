@@ -1,10 +1,10 @@
 //! Integration tests for code actions
 
-use lsp_types::{
+use rossi_lsp::code_actions::CodeActionProvider;
+use rossi_lsp::lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position, Range,
     TextDocumentIdentifier, Url, WorkDoneProgressParams,
 };
-use rossi_lsp::code_actions::CodeActionProvider;
 
 fn create_test_params(uri: &str, range: Range) -> CodeActionParams {
     CodeActionParams {
@@ -515,7 +515,7 @@ fn test_new_operator_mappings() {
 
 #[test]
 fn test_diagnostic_based_action() {
-    use lsp_types::{Diagnostic, DiagnosticSeverity};
+    use rossi_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
     let provider = CodeActionProvider::new();
     let text = "MACHINE test\nVARIABLES x";

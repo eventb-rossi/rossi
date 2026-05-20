@@ -4,7 +4,7 @@
 //! is under the cursor?". Keep that logic in one place so the three variants
 //! can't drift apart.
 
-use lsp_types::Position;
+use crate::lsp_types::Position;
 
 /// Return the word (identifier) that contains `position`.
 ///

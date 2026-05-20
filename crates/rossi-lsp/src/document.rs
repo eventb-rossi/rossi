@@ -3,8 +3,8 @@
 //! This module handles in-memory storage of open documents, text synchronization,
 //! and provides efficient text editing operations.
 
+use crate::lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
 use dashmap::DashMap;
-use lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
 use ropey::Rope;
 use std::time::Instant;
 

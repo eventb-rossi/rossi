@@ -2,7 +2,7 @@
 //!
 //! This module provides document formatting using the Event-B pretty printer.
 
-use lsp_types::{Position, Range, TextEdit};
+use crate::lsp_types::{Position, Range, TextEdit};
 use parking_lot::RwLock;
 use std::sync::Arc;
 

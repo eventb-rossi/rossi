@@ -4,8 +4,8 @@
 //! It maintains an index of all symbols (variables, constants, sets, events) and supports
 //! fuzzy search for quick navigation.
 
+use crate::lsp_types::*;
 use dashmap::DashMap;
-use lsp_types::*;
 use rossi::ast::*;
 use std::sync::Arc;
 use tracing::debug;

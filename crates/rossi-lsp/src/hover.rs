@@ -6,8 +6,8 @@
 //! - Identifiers (variables, constants, sets, parameters)
 //! - Built-in types and constants
 
+use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use dashmap::DashMap;
-use lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use rossi::{Component, Expression, LabeledPredicate, Predicate, PrettyPrinter, parse};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1002,7 +1002,7 @@ const OPERATOR_DOCS: &[DocEntry] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{Position, Url};
+    use crate::lsp_types::{Position, Url};
 
     #[test]
     fn test_hover_provider_creation() {
@@ -1400,8 +1400,8 @@ END
         // Hover on max_value should show axiom constraints
         let hover = provider.hover(
             &HoverParams {
-                text_document_position_params: lsp_types::TextDocumentPositionParams {
-                    text_document: lsp_types::TextDocumentIdentifier {
+                text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                    text_document: crate::lsp_types::TextDocumentIdentifier {
                         uri: Url::parse(&uri).unwrap(),
                     },
                     position: Position::new(3, 4), // "max_value" line
@@ -1486,8 +1486,8 @@ END
         // abstract_state starts at char 10
         let hover = provider.hover(
             &HoverParams {
-                text_document_position_params: lsp_types::TextDocumentPositionParams {
-                    text_document: lsp_types::TextDocumentIdentifier { uri: url },
+                text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                    text_document: crate::lsp_types::TextDocumentIdentifier { uri: url },
                     position: Position::new(7, 10),
                 },
                 work_done_progress_params: Default::default(),

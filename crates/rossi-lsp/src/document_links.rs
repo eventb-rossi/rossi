@@ -5,7 +5,7 @@
 //! - REFINES references (concrete machine → abstract machine)
 //! - EXTENDS references (context → parent context)
 
-use lsp_types::{DocumentLink, DocumentLinkParams, Range, Url};
+use crate::lsp_types::{DocumentLink, DocumentLinkParams, Range, Url};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -73,8 +73,8 @@ impl DocumentLinkProvider {
             if let Some(target_uri) = cross_ref_manager.find_component_uri(&token.name) {
                 if let Ok(url) = Url::parse(&target_uri) {
                     let range = Range::new(
-                        lsp_types::Position::new(token.line as u32, token.start as u32),
-                        lsp_types::Position::new(token.line as u32, token.end as u32),
+                        crate::lsp_types::Position::new(token.line as u32, token.start as u32),
+                        crate::lsp_types::Position::new(token.line as u32, token.end as u32),
                     );
 
                     links.push(DocumentLink {
@@ -257,7 +257,7 @@ mod tests {
 
     fn make_params(filename: &str) -> DocumentLinkParams {
         DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse(&format!("file:///{filename}")).unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -319,7 +319,7 @@ END
         provider_with_manager.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///test_mch.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -363,8 +363,8 @@ END
             links[0].target.as_ref().unwrap().as_str(),
             "file:///test_ctx.eventb"
         );
-        assert_eq!(links[0].range.start, lsp_types::Position::new(2, 4));
-        assert_eq!(links[0].range.end, lsp_types::Position::new(2, 12));
+        assert_eq!(links[0].range.start, crate::lsp_types::Position::new(2, 4));
+        assert_eq!(links[0].range.end, crate::lsp_types::Position::new(2, 12));
     }
 
     #[test]
@@ -478,7 +478,7 @@ END
         provider.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///concrete_mch.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -524,7 +524,7 @@ END
         provider.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///derived_ctx.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -566,7 +566,7 @@ END
         provider.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///test_mch.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -605,7 +605,7 @@ END
         provider_with_manager.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///simple_ctx.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),
@@ -634,7 +634,7 @@ END
         provider.set_cross_reference_manager(cross_ref_manager);
 
         let params = DocumentLinkParams {
-            text_document: lsp_types::TextDocumentIdentifier {
+            text_document: crate::lsp_types::TextDocumentIdentifier {
                 uri: Url::parse("file:///test_mch.eventb").unwrap(),
             },
             work_done_progress_params: Default::default(),

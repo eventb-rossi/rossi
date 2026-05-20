@@ -16,7 +16,7 @@
 //! - Code lenses for "Run ProB" and "Animate" actions
 //! - Integrating ProB feedback into diagnostics
 
-use lsp_types::{CodeLens, Command, Position, Range, Url};
+use crate::lsp_types::{CodeLens, Command, Position, Range, Url};
 use parking_lot::RwLock;
 use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
@@ -390,7 +390,7 @@ impl ProBProvider {
         &self,
         result: &ProBResult,
         source: &str,
-    ) -> Vec<lsp_types::Diagnostic> {
+    ) -> Vec<crate::lsp_types::Diagnostic> {
         let mut diagnostics = Vec::new();
 
         for (idx, counterexample) in result.counterexamples.iter().enumerate() {
@@ -406,13 +406,16 @@ impl ProBProvider {
                 }
             };
 
-            diagnostics.push(lsp_types::Diagnostic {
+            diagnostics.push(crate::lsp_types::Diagnostic {
                 range: Range {
                     start: Position { line, character: 0 },
                     end: Position { line, character: 0 },
                 },
-                severity: Some(lsp_types::DiagnosticSeverity::ERROR),
-                code: Some(lsp_types::NumberOrString::String(format!("prob-{}", idx))),
+                severity: Some(crate::lsp_types::DiagnosticSeverity::ERROR),
+                code: Some(crate::lsp_types::NumberOrString::String(format!(
+                    "prob-{}",
+                    idx
+                ))),
                 code_description: None,
                 source: Some("ProB".to_string()),
                 message: counterexample.description.clone(),

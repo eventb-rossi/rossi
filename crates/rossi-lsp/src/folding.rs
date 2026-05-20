@@ -7,7 +7,7 @@
 //! - INITIALISATION...END blocks
 //! - Clause sections (SETS, CONSTANTS, VARIABLES, INVARIANTS, AXIOMS, etc.)
 
-use lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams};
+use crate::lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams};
 
 /// Provides folding ranges for Event-B documents
 pub struct FoldingRangeProvider;
