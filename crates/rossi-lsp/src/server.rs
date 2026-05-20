@@ -1,6 +1,6 @@
 //! LSP Server implementation
 
-use lsp_types::*;
+use crate::lsp_types::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_lsp::jsonrpc::Result;

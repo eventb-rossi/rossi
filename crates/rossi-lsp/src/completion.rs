@@ -6,11 +6,11 @@
 //! - Identifiers (variables, constants, sets, parameters)
 //! - Snippets (common patterns like events, axioms)
 
-use dashmap::DashMap;
-use lsp_types::{
+use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Documentation,
     InsertTextFormat, MarkupContent, MarkupKind, Position,
 };
+use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::{Component, parse};
 use std::collections::HashSet;
@@ -921,7 +921,7 @@ mod tests {
 
     #[test]
     fn test_completion_refined_variables() {
-        use lsp_types::Url;
+        use crate::lsp_types::Url;
 
         let abstract_source = "MACHINE abstract_mch\nVARIABLES\n    abstract_state\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        abstract_state := 0\n    END\nEND";
         let concrete_source = "MACHINE concrete_mch\nREFINES\n    abstract_mch\nVARIABLES\n    concrete_state\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        concrete_state := 0\n    END\nEND";

@@ -4,7 +4,7 @@
 //! Semantic tokens provide more accurate syntax highlighting by analyzing the AST
 //! rather than relying solely on TextMate grammars.
 
-use lsp_types::{
+use crate::lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SemanticTokensParams, SemanticTokensResult,
 };

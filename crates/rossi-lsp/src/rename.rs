@@ -4,7 +4,7 @@
 //! sets, events) safely by updating all references throughout the document and
 //! across the workspace.
 
-use lsp_types::*;
+use crate::lsp_types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;

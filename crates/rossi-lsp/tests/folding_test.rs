@@ -1,7 +1,7 @@
 //! Integration tests for folding ranges
 
-use lsp_types::{FoldingRangeParams, TextDocumentIdentifier, Url};
 use rossi_lsp::folding::FoldingRangeProvider;
+use rossi_lsp::lsp_types::{FoldingRangeParams, TextDocumentIdentifier, Url};
 
 fn create_test_params(uri: &str) -> FoldingRangeParams {
     FoldingRangeParams {

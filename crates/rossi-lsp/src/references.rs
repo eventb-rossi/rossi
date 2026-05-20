@@ -4,7 +4,7 @@
 //! (variables, constants, sets, events, parameters) throughout the document
 //! and across the workspace.
 
-use lsp_types::*;
+use crate::lsp_types::*;
 use rossi::{Component, parse};
 use std::collections::HashSet;
 use std::sync::Arc;

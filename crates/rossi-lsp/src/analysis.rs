@@ -3,7 +3,7 @@
 //! This module analyzes Event-B components and extracts symbols for navigation
 //! and other LSP features.
 
-use lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
+use crate::lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
 use rossi::ast::Span;
 use rossi::{Component, Context, Event, EventStatus, Machine};
 
@@ -330,8 +330,8 @@ fn create_symbol(name: String, kind: SymbolKind, detail: &str, range: Range) -> 
 /// Used as fallback when span information is not available
 fn default_range() -> Range {
     Range {
-        start: lsp_types::Position::new(0, 0),
-        end: lsp_types::Position::new(0, 0),
+        start: crate::lsp_types::Position::new(0, 0),
+        end: crate::lsp_types::Position::new(0, 0),
     }
 }
 

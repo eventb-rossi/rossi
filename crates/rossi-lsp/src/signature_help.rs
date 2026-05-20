@@ -6,7 +6,7 @@
 //! - Lambda functions: λx,y·E
 //! - Set comprehension: {x·P | E}
 
-use lsp_types::{
+use crate::lsp_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureHelpParams,
     SignatureInformation,
 };
@@ -68,9 +68,9 @@ impl SignatureHelpProvider {
         Some(SignatureHelp {
             signatures: vec![SignatureInformation {
                 label: context.signature.label.clone(),
-                documentation: Some(lsp_types::Documentation::MarkupContent(
-                    lsp_types::MarkupContent {
-                        kind: lsp_types::MarkupKind::Markdown,
+                documentation: Some(crate::lsp_types::Documentation::MarkupContent(
+                    crate::lsp_types::MarkupContent {
+                        kind: crate::lsp_types::MarkupKind::Markdown,
                         value: context.signature.documentation.clone(),
                     },
                 )),
@@ -81,9 +81,9 @@ impl SignatureHelpProvider {
                         .iter()
                         .map(|p| ParameterInformation {
                             label: ParameterLabel::Simple(p.label.clone()),
-                            documentation: Some(lsp_types::Documentation::MarkupContent(
-                                lsp_types::MarkupContent {
-                                    kind: lsp_types::MarkupKind::Markdown,
+                            documentation: Some(crate::lsp_types::Documentation::MarkupContent(
+                                crate::lsp_types::MarkupContent {
+                                    kind: crate::lsp_types::MarkupKind::Markdown,
                                     value: p.documentation.clone(),
                                 },
                             )),
@@ -443,13 +443,13 @@ mod tests {
 
     fn make_params(position: Position) -> SignatureHelpParams {
         SignatureHelpParams {
-            text_document_position_params: lsp_types::TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier {
-                    uri: lsp_types::Url::parse("file:///test.eventb").unwrap(),
+            text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                text_document: crate::lsp_types::TextDocumentIdentifier {
+                    uri: crate::lsp_types::Url::parse("file:///test.eventb").unwrap(),
                 },
                 position,
             },
-            work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+            work_done_progress_params: crate::lsp_types::WorkDoneProgressParams::default(),
             context: None,
         }
     }

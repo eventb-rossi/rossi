@@ -6,7 +6,7 @@
 //! - Sort clauses alphabetically
 //! - And more refactorings
 
-use lsp_types::{
+use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, TextEdit, Url, WorkspaceEdit,
 };
@@ -490,7 +490,7 @@ impl CodeActionProvider {
             edit: None, // Would need to implement full text editing logic
             command: None,
             is_preferred: Some(false),
-            disabled: Some(lsp_types::CodeActionDisabled {
+            disabled: Some(crate::lsp_types::CodeActionDisabled {
                 reason: "Not yet implemented - requires multi-location editing".to_string(),
             }),
             data: None,
@@ -540,7 +540,7 @@ impl CodeActionProvider {
     fn create_add_missing_end_action(
         &self,
         uri: &Url,
-        diagnostic: &lsp_types::Diagnostic,
+        diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
         let lines: Vec<&str> = text.lines().collect();
@@ -846,7 +846,7 @@ impl CodeActionProvider {
                 edit: None,
                 command: None,
                 is_preferred: Some(false),
-                disabled: Some(lsp_types::CodeActionDisabled {
+                disabled: Some(crate::lsp_types::CodeActionDisabled {
                     reason: "Use the LSP rename feature instead (F2)".to_string(),
                 }),
                 data: None,
