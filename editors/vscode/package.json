@@ -270,7 +270,7 @@
     "@types/node": "^25.9.0",
     "@types/vscode": "^1.75.0",
     "@typescript-eslint/eslint-plugin": "^5.0.0",
-    "@typescript-eslint/parser": "^5.0.0",
+    "@typescript-eslint/parser": "^8.59.4",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
     "@vscode/vsce": "^3.9.1"
