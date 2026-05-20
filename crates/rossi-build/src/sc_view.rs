@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use rossi::ast::expression::{BinaryOp, BuiltinFunction};
 use rossi::{Action, Expression, Predicate, parse_action_str, parse_predicate_str};
@@ -373,7 +374,7 @@ fn plain_attr(e: &BytesStart, key: &[u8]) -> Result<Option<String>> {
         let a = a.map_err(|e| ProjectError::XmlAttribute(e.to_string()))?;
         if a.key.as_ref() == key {
             let v = a
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|e| ProjectError::XmlAttribute(e.to_string()))?;
             return Ok(Some(v.into_owned()));
         }
