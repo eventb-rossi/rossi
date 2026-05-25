@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "development-tools"]
 [[bin]]
 name = "rossi"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 rossi.workspace = true
