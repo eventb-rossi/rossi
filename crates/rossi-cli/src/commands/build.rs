@@ -1,14 +1,9 @@
 //! `rossi-build` — static-check Rodin Event-B projects and emit `.bcc` / `.bcm`.
 //!
-//! Two modes:
-//!
-//! * `build <input> [-o <out>]` — process one project (a `.zip` archive or a
-//!   directory of `.buc` / `.bum` files). Writes either a repackaged `.zip`
-//!   (when `<out>` ends in `.zip`) or loose files into a directory.
-//! * `regen-corpus <models-dir> -o <out-dir>` — bulk: walk every `.zip` in
-//!   `<models-dir>`, regenerate, and dump a TSV summary on stdout.
+//! Process one project (a `.zip` archive or a directory of `.buc` / `.bum`
+//! files). Writes either a repackaged `.zip` (when `<out>` ends in `.zip`) or
+//! loose files into a directory.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -32,35 +27,12 @@ pub struct BuildArgs {
     pub output: Option<PathBuf>,
 }
 
-#[derive(Args)]
-pub struct RegenCorpusArgs {
-    /// Directory containing `.zip` archives.
-    pub models_dir: PathBuf,
-    /// Output directory for regenerated archives (created if missing).
-    #[arg(short, long)]
-    pub output: PathBuf,
-}
-
 pub fn run_build_command(args: BuildArgs) -> ExitCode {
     match run_build(&args.input, args.output.as_deref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("rossi build: {e}");
             ExitCode::from(1)
-        }
-    }
-}
-
-pub fn run_regen_corpus_command(args: RegenCorpusArgs) -> ExitCode {
-    match run_regen_corpus(&args.models_dir, &args.output) {
-        Ok(0) => ExitCode::SUCCESS,
-        Ok(failed) => {
-            eprintln!("rossi regen-corpus: {failed} archive(s) failed");
-            ExitCode::from(1)
-        }
-        Err(e) => {
-            eprintln!("rossi regen-corpus: {e}");
-            ExitCode::from(2)
         }
     }
 }
@@ -100,52 +72,6 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
         errors
     );
     Ok(())
-}
-
-fn run_regen_corpus(
-    models_dir: &Path,
-    out_dir: &Path,
-) -> Result<usize, Box<dyn std::error::Error>> {
-    if !models_dir.is_dir() {
-        return Err(format!("not a directory: {}", models_dir.display()).into());
-    }
-    std::fs::create_dir_all(out_dir)?;
-
-    let mut zips: Vec<PathBuf> = std::fs::read_dir(models_dir)?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("zip"))
-        .collect();
-    zips.sort();
-
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    writeln!(out, "model\tfiles\terrors\tstatus")?;
-
-    let mut failed = 0usize;
-    for zip in &zips {
-        let model = zip.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
-        let out_zip = out_dir.join(format!("{model}.zip"));
-        match build_one(zip).and_then(|o| {
-            write_zip(zip, &out_zip, &o)?;
-            Ok(o)
-        }) {
-            Ok(o) => {
-                let errs = o
-                    .result
-                    .diagnostics
-                    .iter()
-                    .filter(|d| d.severity == Severity::Error)
-                    .count();
-                writeln!(out, "{model}\t{}\t{errs}\tok", o.result.files.len())?;
-            }
-            Err(e) => {
-                failed += 1;
-                writeln!(out, "{model}\t0\t0\tfail: {e}")?;
-            }
-        }
-    }
-    Ok(failed)
 }
 
 struct BuildOutcome {
