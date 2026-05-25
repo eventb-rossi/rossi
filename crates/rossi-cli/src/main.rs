@@ -32,9 +32,6 @@ enum Command {
     /// Static-check a Rodin project and emit `.bcc` / `.bcm` output.
     #[command(about = "Static-check a Rodin project and emit .bcc/.bcm output")]
     Build(commands::build::BuildArgs),
-    /// Regenerate every Rodin ZIP archive in a corpus directory.
-    #[command(about = "Regenerate every Rodin ZIP archive in a corpus directory")]
-    RegenCorpus(commands::build::RegenCorpusArgs),
     /// Run the Rossi language server over stdio.
     #[command(about = "Run the Rossi language server over stdio")]
     Lsp,
@@ -52,7 +49,6 @@ async fn main() -> ExitCode {
             }
         },
         Command::Build(args) => commands::build::run_build_command(args),
-        Command::RegenCorpus(args) => commands::build::run_regen_corpus_command(args),
         Command::Lsp => match rossi_lsp::run_stdio().await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
