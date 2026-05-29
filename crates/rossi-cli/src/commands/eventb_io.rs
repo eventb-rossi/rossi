@@ -6,7 +6,7 @@
 //! and parse them. The shared logic lives here so each command can stay focused
 //! on its own direction.
 
-use rossi::NamedComponent;
+use rossi::{NamedComponent, component_filename, parse_components};
 use rossi_build::ProjectComponent;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,18 @@ pub(crate) fn ensure_input(p: &Path, want: InputFamily) -> CmdResult<()> {
         ),
     }
     .into())
+}
+
+/// Parse Event-B text into named components, tagging parse errors with `label`.
+pub(crate) fn parse_text_components(label: &str, source: &str) -> CmdResult<Vec<NamedComponent>> {
+    let parsed = parse_components(source).map_err(|e| format!("Failed to parse {label}: {e}"))?;
+    Ok(parsed
+        .into_iter()
+        .map(|component| NamedComponent {
+            filename: component_filename(&component),
+            component,
+        })
+        .collect())
 }
 
 /// Parse a single `.buc`/`.bum` Rodin XML file into a named component.

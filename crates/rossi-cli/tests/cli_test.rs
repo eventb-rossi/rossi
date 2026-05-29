@@ -805,15 +805,103 @@ fn fmt_normalizes_rodin_zip() {
 }
 
 fn dir_has_rodin_file(dir: &std::path::Path) -> bool {
+    dir_has_ext(dir, &["buc", "bum"])
+}
+
+/// Recursively check whether `dir` contains a file whose extension matches one
+/// of `exts` (case-insensitive).
+fn dir_has_ext(dir: &std::path::Path, exts: &[&str]) -> bool {
     std::fs::read_dir(dir).unwrap().flatten().any(|e| {
         let p = e.path();
         if p.is_dir() {
-            return dir_has_rodin_file(&p);
+            return dir_has_ext(&p, exts);
         }
         p.extension()
             .and_then(|x| x.to_str())
-            .is_some_and(|x| x.eq_ignore_ascii_case("buc") || x.eq_ignore_ascii_case("bum"))
+            .is_some_and(|x| exts.iter().any(|want| x.eq_ignore_ascii_case(want)))
     })
+}
+
+#[test]
+fn build_eventb_file_packs_sources_and_checked() {
+    let tmp = tempdir_unique("rossi-cli-build-eventb");
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            "../rossi/examples/counter.eventb",
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "build from text should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out_zip.exists());
+
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    // The output must carry both the component source and our checked file,
+    // just like the old export-then-build round-trip did.
+    assert!(
+        dir_has_ext(&extracted, &["buc", "bum"]),
+        "expected the component source (.buc/.bum) in the built zip"
+    );
+    assert!(
+        dir_has_ext(&extracted, &["bcc", "bcm"]),
+        "expected the checked output (.bcc/.bcm) in the built zip"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn build_eventb_directory() {
+    let tmp = tempdir_unique("rossi-cli-build-dir");
+    let src = tmp.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("c.eventb"), ASCII_CONTEXT).unwrap();
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "build from a text directory should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    assert!(
+        dir_has_ext(&extracted, &["bcc", "bcm"]),
+        "expected the checked output (.bcc/.bcm) in the built zip"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
