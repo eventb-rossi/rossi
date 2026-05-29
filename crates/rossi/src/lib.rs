@@ -58,7 +58,8 @@ pub use parser::{
     parse_with_recovery,
 };
 pub use pretty::{
-    PrettyPrinter, components_to_string, components_to_string_ascii, to_string, to_string_ascii,
+    PrettyPrinter, components_to_string, components_to_string_ascii, format_str, to_string,
+    to_string_ascii,
 };
 pub use xml::{
     NamedComponent, component_filename, parse_xml, parse_zip, parse_zip_file,

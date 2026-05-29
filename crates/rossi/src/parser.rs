@@ -261,7 +261,7 @@ pub fn parse(input: &str) -> Result<Component, ParseError> {
 /// Parse one or more Event-B components (Contexts and/or Machines) from source text.
 ///
 /// This is the multi-component counterpart of [`parse`]. Files produced by
-/// `rossi print --merge` or the reference `eventb-to-txt` tool may contain
+/// `rossi import --merge` or the reference `eventb-to-txt` tool may contain
 /// several `CONTEXT` and `MACHINE` blocks concatenated in a single file.
 ///
 /// Returns `Ok(Vec<Component>)` with one entry per parsed component.

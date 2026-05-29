@@ -4,7 +4,10 @@ use clap::{Parser, Subcommand};
 
 mod commands {
     pub mod build;
-    pub mod print;
+    pub mod eventb_io;
+    pub mod export;
+    pub mod fmt;
+    pub mod import;
     pub mod sarif;
     pub mod validate;
 }
@@ -26,9 +29,15 @@ enum Command {
     /// Validate Event-B text files or Rodin ZIP archives.
     #[command(about = "Validate Event-B model files")]
     Validate(commands::validate::ValidateArgs),
-    /// Convert between Rodin ZIP archives and Event-B text files.
-    #[command(about = "Convert between Rodin ZIP archives and Event-B text files")]
-    Print(commands::print::PrintArgs),
+    /// Import Rodin archives (.zip/.buc/.bum/dir) into Event-B text.
+    #[command(about = "Import Rodin archives into Event-B text")]
+    Import(commands::import::ImportArgs),
+    /// Export Event-B text (.eventb/.txt/dir) into a Rodin .zip archive.
+    #[command(about = "Export Event-B text into a Rodin .zip archive")]
+    Export(commands::export::ExportArgs),
+    /// Reformat Event-B text/archives in place (operator convention, indentation).
+    #[command(about = "Reformat Event-B text/archives in place")]
+    Fmt(commands::fmt::FmtArgs),
     /// Static-check a Rodin project and emit `.bcc` / `.bcm` output.
     #[command(about = "Static-check a Rodin project and emit .bcc/.bcm output")]
     Build(commands::build::BuildArgs),
@@ -41,13 +50,9 @@ enum Command {
 async fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Validate(args) => commands::validate::run(args),
-        Command::Print(args) => match commands::print::run(args) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("rossi print: {e}");
-                ExitCode::from(1)
-            }
-        },
+        Command::Import(args) => commands::import::run(args),
+        Command::Export(args) => commands::export::run(args),
+        Command::Fmt(args) => commands::fmt::run(args),
         Command::Build(args) => commands::build::run_build_command(args),
         Command::Lsp => match rossi_lsp::run_stdio().await {
             Ok(()) => ExitCode::SUCCESS,

@@ -460,8 +460,8 @@ fn validate_directory_with_no_semantic_is_rejected() {
 }
 
 #[test]
-fn print_rodin_buc_file_to_eventb() {
-    let tmp = tempdir_unique("rossi-cli-print-buc");
+fn import_rodin_buc_file_to_eventb() {
+    let tmp = tempdir_unique("rossi-cli-import-buc");
     let out_dir = tmp.join("out");
 
     let output = Command::new("cargo")
@@ -470,7 +470,7 @@ fn print_rodin_buc_file_to_eventb() {
             "-p",
             "rossi-cli",
             "--",
-            "print",
+            "import",
             "../rossi/examples/counter_ctx.buc",
             "-o",
             out_dir.to_str().unwrap(),
@@ -480,7 +480,7 @@ fn print_rodin_buc_file_to_eventb() {
 
     assert!(
         output.status.success(),
-        "print .buc should exit 0; stderr={}",
+        "import .buc should exit 0; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let text = std::fs::read_to_string(out_dir.join("counter_ctx.eventb")).unwrap();
@@ -490,8 +490,8 @@ fn print_rodin_buc_file_to_eventb() {
 }
 
 #[test]
-fn print_rodin_bum_file_to_eventb() {
-    let tmp = tempdir_unique("rossi-cli-print-bum");
+fn import_rodin_bum_file_to_eventb() {
+    let tmp = tempdir_unique("rossi-cli-import-bum");
     let out_dir = tmp.join("out");
 
     let output = Command::new("cargo")
@@ -500,7 +500,7 @@ fn print_rodin_bum_file_to_eventb() {
             "-p",
             "rossi-cli",
             "--",
-            "print",
+            "import",
             "../rossi/examples/counter.bum",
             "-o",
             out_dir.to_str().unwrap(),
@@ -510,7 +510,7 @@ fn print_rodin_bum_file_to_eventb() {
 
     assert!(
         output.status.success(),
-        "print .bum should exit 0; stderr={}",
+        "import .bum should exit 0; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     let text = std::fs::read_to_string(out_dir.join("counter.eventb")).unwrap();
@@ -520,8 +520,8 @@ fn print_rodin_bum_file_to_eventb() {
 }
 
 #[test]
-fn print_rodin_directory_to_eventb_files() {
-    let tmp = tempdir_unique("rossi-cli-print-rodin-dir");
+fn import_rodin_directory_to_eventb_files() {
+    let tmp = tempdir_unique("rossi-cli-import-rodin-dir");
     let rodin_dir = tmp.join("rodin");
     let out_dir = tmp.join("out");
     std::fs::create_dir_all(&rodin_dir).unwrap();
@@ -542,7 +542,7 @@ fn print_rodin_directory_to_eventb_files() {
             "-p",
             "rossi-cli",
             "--",
-            "print",
+            "import",
             rodin_dir.to_str().unwrap(),
             "-o",
             out_dir.to_str().unwrap(),
@@ -552,13 +552,268 @@ fn print_rodin_directory_to_eventb_files() {
 
     assert!(
         output.status.success(),
-        "print Rodin dir should exit 0; stderr={}",
+        "import Rodin dir should exit 0; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(out_dir.join("counter_ctx.eventb").exists());
     assert!(out_dir.join("counter.eventb").exists());
 
     std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn export_eventb_file_to_zip() {
+    let tmp = tempdir_unique("rossi-cli-export-eventb");
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "export",
+            "../rossi/examples/counter.eventb",
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "export should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out_zip.exists());
+
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    let has_rodin = std::fs::read_dir(&extracted).unwrap().flatten().any(|e| {
+        e.path()
+            .extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| x.eq_ignore_ascii_case("buc") || x.eq_ignore_ascii_case("bum"))
+    });
+    assert!(has_rodin, "expected a .buc/.bum entry in the exported zip");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+const ASCII_CONTEXT: &str = "CONTEXT c\nCONSTANTS\n    x\nAXIOMS\n    @axm1 x : NAT\nEND\n";
+
+#[test]
+fn fmt_ascii_text_to_unicode_stdout() {
+    let tmp = tempdir_unique("rossi-cli-fmt-ascii");
+    let file = tmp.join("c.eventb");
+    std::fs::write(&file, ASCII_CONTEXT).unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "fmt should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('∈'), "expected Unicode ∈ in: {stdout}");
+    assert!(stdout.contains('ℕ'), "expected Unicode ℕ in: {stdout}");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn fmt_indent_option_changes_indentation() {
+    let tmp = tempdir_unique("rossi-cli-fmt-indent");
+    let file = tmp.join("c.eventb");
+    std::fs::write(&file, ASCII_CONTEXT).unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "--indent",
+            "  ",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "fmt --indent stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\n  @axm1"),
+        "expected 2-space indentation in: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn fmt_check_then_in_place() {
+    let tmp = tempdir_unique("rossi-cli-fmt-check");
+    let file = tmp.join("c.eventb");
+    std::fs::write(&file, ASCII_CONTEXT).unwrap();
+
+    // --check on an ASCII file (canonical form is Unicode) flags it and exits non-zero.
+    let checked = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "--check",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        !checked.status.success(),
+        "fmt --check should flag an unformatted file"
+    );
+    let check_out = String::from_utf8_lossy(&checked.stdout);
+    assert!(
+        check_out.contains("c.eventb"),
+        "expected the path in --check output: {check_out}"
+    );
+
+    // -i rewrites the file in place to Unicode.
+    let fixed = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "-i",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        fixed.status.success(),
+        "fmt -i stderr={}",
+        String::from_utf8_lossy(&fixed.stderr)
+    );
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains('∈'),
+        "the in-place file should now use Unicode: {text}"
+    );
+
+    // --check now passes (exit 0).
+    let recheck = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "--check",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        recheck.status.success(),
+        "fmt --check should pass after formatting; stderr={}",
+        String::from_utf8_lossy(&recheck.stderr)
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn fmt_ascii_on_rodin_zip_is_rejected() {
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "--ascii",
+            "../rossi/examples/traffic-light.zip",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        !output.status.success(),
+        "fmt --ascii on a Rodin zip should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unicode"),
+        "expected a Unicode-required error: {stderr}"
+    );
+}
+
+#[test]
+fn fmt_normalizes_rodin_zip() {
+    let tmp = tempdir_unique("rossi-cli-fmt-zip");
+    let out_zip = tmp.join("norm.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            "../rossi/examples/traffic-light.zip",
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "fmt zip stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out_zip.exists());
+
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    assert!(
+        dir_has_rodin_file(&extracted),
+        "expected .buc/.bum entries in the normalized zip"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+fn dir_has_rodin_file(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).unwrap().flatten().any(|e| {
+        let p = e.path();
+        if p.is_dir() {
+            return dir_has_rodin_file(&p);
+        }
+        p.extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| x.eq_ignore_ascii_case("buc") || x.eq_ignore_ascii_case("bum"))
+    })
 }
 
 #[test]

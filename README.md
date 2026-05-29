@@ -301,7 +301,9 @@ the `rossi-build` static checker, and the language server:
 | Subcommand | Purpose |
 |------------|---------|
 | `validate` | Validate `.eventb` files, Rodin `.zip` archives, or unzipped Rodin project directories. |
-| `print`    | Convert between `.eventb` text and Rodin `.zip` archives. |
+| `import`   | Import Rodin `.zip`/`.buc`/`.bum`/dir into `.eventb` text. |
+| `export`   | Export `.eventb`/`.txt`/dir into a Rodin `.zip` archive. |
+| `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
 | `lsp`      | Run the Rossi language server over stdio (equivalent to the `rossi-language-server` binary). |
 
@@ -370,18 +372,54 @@ lints unless `--no-semantic` is set; `--no-lints` keeps semantic checks but
 drops advisory lint rows. Directory inputs are treated as unzipped Rodin
 projects and require semantic checks, so `--no-semantic` is rejected for them.
 
-### Print (text ⇄ Rodin ZIP)
+### Import (Rodin → Event-B text)
 
 ```bash
-# Convert a Rodin .zip archive into .eventb text files
-rossi print project.zip --output ./project
+# Convert a Rodin .zip archive into .eventb text files (one per component)
+rossi import project.zip --output ./project
 
-# Pack a directory of .eventb files into a Rodin .zip
-rossi print ./project --output project.zip
+# Use ASCII operators (and a custom indent) in the emitted text
+rossi import project.zip --output ./project --ascii --indent="  "
 
-# Use ASCII operators when emitting text from a Rodin archive
-rossi print project.zip --output ./project --ascii
+# Merge all components into a single file, optionally specifying order
+rossi import project.zip --output project.eventb --merge=M0,C0
 ```
+
+### Export (Event-B text → Rodin ZIP)
+
+```bash
+# Pack a directory of .eventb files into a Rodin .zip archive
+rossi export ./project --output project.zip
+```
+
+The archive always uses Unicode operators, which is what Rodin expects, so
+`export` has no operator-convention option — use `rossi fmt` to change the
+convention of text files.
+
+### Format (`fmt`)
+
+`fmt` reformats Event-B *without* crossing the Rodin↔text boundary: it
+normalizes the operator convention (`--ascii`/`--unicode`, default Unicode) and
+indentation (`--indent`).
+
+```bash
+# Convert ASCII-operator text to Unicode (default), printing to stdout
+rossi fmt model.eventb
+
+# Reformat files in place; pick the operator convention explicitly
+rossi fmt -i ./project --ascii
+rossi fmt -i model.eventb --indent="  "
+
+# CI gate: exit non-zero if anything is not already formatted
+rossi fmt --check ./project
+
+# Normalize a Rodin archive to canonical Unicode XML (other entries preserved)
+rossi fmt project.zip -o normalized.zip
+```
+
+Editors using the language server format on save with the same engine; `rossi
+fmt` is its command-line and CI counterpart. (Rodin archives must stay Unicode,
+so `--ascii` is rejected for `.zip`/`.buc`/`.bum` inputs.)
 
 ### Build (static check + Rodin checked XML)
 

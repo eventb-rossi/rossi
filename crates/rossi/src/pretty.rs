@@ -1093,3 +1093,18 @@ pub fn components_to_string(components: &[Component]) -> String {
 pub fn components_to_string_ascii(components: &[Component]) -> String {
     PrettyPrinter::ascii().print_components(components)
 }
+
+/// Parse Event-B text (one or more components) and re-emit it formatted with
+/// `printer`.
+///
+/// This is the shared parse-then-print entry point: `rossi fmt` and the language
+/// server both format through it, and `rossi import` prints through the same
+/// [`PrettyPrinter`], so command-line and editor formatting always agree.
+///
+/// # Errors
+///
+/// Returns a [`ParseError`](crate::ParseError) if `src` is not valid Event-B.
+pub fn format_str(src: &str, printer: &PrettyPrinter) -> Result<String, crate::error::ParseError> {
+    let components = crate::parser::parse_components(src)?;
+    Ok(printer.print_components(&components))
+}
