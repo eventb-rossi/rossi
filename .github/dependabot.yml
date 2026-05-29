@@ -14,3 +14,8 @@ updates:
     directory: "/editors/vscode"
     schedule:
       interval: "weekly"
+    ignore:
+      # @types/vscode must match engines.vscode (the minimum supported VS Code
+      # version), not track latest, or `vsce package` fails. Bump it manually
+      # alongside engines.vscode when raising the minimum.
+      - dependency-name: "@types/vscode"
