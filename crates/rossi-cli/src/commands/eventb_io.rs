@@ -29,6 +29,26 @@ pub(crate) fn is_zip_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("zip")
 }
 
+/// Whether a path argument denotes standard input (the `-` convention).
+pub(crate) fn is_stdin(p: &Path) -> bool {
+    p.as_os_str() == "-"
+}
+
+/// Read all of standard input into a string (for the `-` input convention).
+pub(crate) fn read_stdin_to_string() -> CmdResult<String> {
+    Ok(std::io::read_to_string(std::io::stdin())?)
+}
+
+/// Enforce the `-` (stdin) convention: `-` may only appear as the sole input.
+/// Returns whether that lone input is stdin (i.e. the command should read it).
+pub(crate) fn stdin_is_sole_input(inputs: &[PathBuf]) -> CmdResult<bool> {
+    let has_stdin = inputs.iter().any(|p| is_stdin(p));
+    if has_stdin && inputs.len() > 1 {
+        return Err("'-' (stdin) must be the only input".into());
+    }
+    Ok(has_stdin)
+}
+
 /// Which family of inputs a command reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputFamily {
