@@ -15,7 +15,6 @@ import {
 } from 'vscode';
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
-import * as os from 'os';
 import * as path from 'path';
 
 interface RossiRunResult {
@@ -142,24 +141,16 @@ export class RossiCommandController {
 
         const kind = await classifyInput(input);
 
+        // `build` now reads .eventb/.txt files and directories of them directly,
+        // so the old export → temp .zip → build round-trip is gone.
         if (kind === 'eventbFile' || kind === 'eventbDirectory') {
             await this.saveOpenEventBDocumentsUnder(input);
-            await withTempDir(async (tmp) => {
-                const tempZip = path.join(tmp, 'source.zip');
-                await this.runRossi(['export', input, '-o', tempZip], {
-                    title: 'Preparing Rodin source ZIP',
-                });
-                await this.runBuildAndReport(tempZip, outZip);
-            });
-            return;
         }
 
-        if (kind === 'rodinXmlFile') {
-            await this.runBuildAndReport(path.dirname(input), outZip);
-            return;
-        }
-
-        await this.runBuildAndReport(input, outZip);
+        // A single .buc/.bum belongs to a Rodin project on disk; build the whole
+        // project directory so sibling components resolve.
+        const buildInput = kind === 'rodinXmlFile' ? path.dirname(input) : input;
+        await this.runBuildAndReport(buildInput, outZip);
     }
 
     async validateCurrentFile(uri?: Uri): Promise<void> {
@@ -670,15 +661,6 @@ async function collectEventBTextFiles(dir: string): Promise<string[]> {
     }
     files.sort();
     return files;
-}
-
-async function withTempDir<T>(callback: (dir: string) => Promise<T>): Promise<T> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rossi-vscode-'));
-    try {
-        return await callback(dir);
-    } finally {
-        await fs.rm(dir, { recursive: true, force: true });
-    }
 }
 
 function validationDiagnosticPath(row: ValidationResult, cwd: string): string {

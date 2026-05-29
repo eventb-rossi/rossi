@@ -15,9 +15,14 @@ use rossi_build::project::{
 use rossi_build::repack::repackage_zip_bytes;
 use rossi_build::{BuildResult, Project, Severity, build};
 
+use rossi::{NamedComponent, to_zip};
+
+use super::eventb_io::{self, InputKind};
+
 #[derive(Args)]
 pub struct BuildArgs {
-    /// Input `.zip` or directory.
+    /// Input to check: a Rodin `.zip`, a directory (a Rodin project, or a
+    /// folder of `.eventb`/`.txt`), or an Event-B text / `.buc` / `.bum` file.
     pub input: PathBuf,
     /// Output path. If it ends in `.zip`, writes a repackaged archive
     /// (sources + our generated `.bcc`/`.bcm`, proof artifacts dropped).
@@ -82,40 +87,111 @@ struct BuildOutcome {
 
 fn build_one(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
     if input.is_dir() {
-        let project = Project::from_directory(input)?;
-        let result = build(&project);
-        Ok(BuildOutcome {
-            result,
-            archive_bytes: None,
-        })
-    } else {
-        let bytes = std::fs::read(input)?;
-        // Use Rodin's project name when the archive carries one.
-        let name = infer_project_name_from_archive_bytes(&bytes).unwrap_or_else(|| {
-            input
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("project")
-                .to_string()
-        });
-        let project = Project::from_zip_bytes(&name, &bytes)?;
-        let result = build(&project);
-        // Sanity check: also confirm the inferred name against our own
-        // generated bcc/bcm (so users see a hint if names diverge).
-        if let Some(f) = result.files.first()
-            && let Some(rodin) = infer_project_name_from_checked_xml(&f.contents)
-            && rodin != name
-        {
-            eprintln!(
-                "rossi build: warning: emitted project name {name:?} differs from \
-                 internal handle {rodin:?}"
-            );
+        // A Rodin project directory always carries `.buc`/`.bum` component
+        // files; prefer that path so a real project is never misread as a
+        // loose folder of Event-B text.
+        if !eventb_io::collect_rodin_xml_files(&[input.to_path_buf()])?.is_empty() {
+            let project = Project::from_directory(input)?;
+            let result = build(&project);
+            return Ok(BuildOutcome {
+                result,
+                archive_bytes: None,
+            });
         }
-        Ok(BuildOutcome {
-            result,
-            archive_bytes: Some(bytes),
-        })
+        let text_files = eventb_io::collect_eventb_files(&[input.to_path_buf()])?;
+        if text_files.is_empty() {
+            return Err(format!("no Event-B files found in {}", input.display()).into());
+        }
+        return build_from_text_files(&dir_project_name(input), &text_files);
     }
+
+    match eventb_io::classify_file(input)? {
+        InputKind::Text => build_from_text_files(&file_project_name(input), &[input.to_path_buf()]),
+        InputKind::RodinXml => build_from_components(
+            &file_project_name(input),
+            vec![eventb_io::parse_rodin_xml_file(input)?],
+        ),
+        InputKind::RodinZip => build_from_zip(input),
+    }
+}
+
+/// Build a project from `.eventb`/`.txt` files: parse each, then hand the
+/// components to [`build_from_components`].
+fn build_from_text_files(
+    name: &str,
+    files: &[PathBuf],
+) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
+    let mut components = Vec::new();
+    for path in files {
+        let source = std::fs::read_to_string(path)?;
+        components.extend(eventb_io::parse_text_components(
+            &path.display().to_string(),
+            &source,
+        )?);
+    }
+    build_from_components(name, components)
+}
+
+/// Build a project from parsed components. Serialise them to a Rodin source
+/// archive first, then reuse the `.zip` pipeline so the output carries both the
+/// sources and our generated `.bcc`/`.bcm` (matching the old export+build path).
+fn build_from_components(
+    name: &str,
+    components: Vec<NamedComponent>,
+) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
+    if components.is_empty() {
+        return Err("no Event-B components to build".into());
+    }
+    let bytes = to_zip(&components)?;
+    let project = Project::from_zip_bytes(name, &bytes)?;
+    let result = build(&project);
+    Ok(BuildOutcome {
+        result,
+        archive_bytes: Some(bytes),
+    })
+}
+
+/// Build a project from a Rodin `.zip` archive on disk.
+fn build_from_zip(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(input)?;
+    // Use Rodin's project name when the archive carries one.
+    let name =
+        infer_project_name_from_archive_bytes(&bytes).unwrap_or_else(|| file_project_name(input));
+    let project = Project::from_zip_bytes(&name, &bytes)?;
+    let result = build(&project);
+    // Sanity check: also confirm the inferred name against our own
+    // generated bcc/bcm (so users see a hint if names diverge).
+    if let Some(f) = result.files.first()
+        && let Some(rodin) = infer_project_name_from_checked_xml(&f.contents)
+        && rodin != name
+    {
+        eprintln!(
+            "rossi build: warning: emitted project name {name:?} differs from \
+             internal handle {rodin:?}"
+        );
+    }
+    Ok(BuildOutcome {
+        result,
+        archive_bytes: Some(bytes),
+    })
+}
+
+/// Project name for a single-file input (its file stem).
+fn file_project_name(input: &Path) -> String {
+    input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_string()
+}
+
+/// Project name for a directory input (its final path component).
+fn dir_project_name(input: &Path) -> String {
+    input
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_string()
 }
 
 fn write_output(
