@@ -51,33 +51,17 @@ impl FormattingProvider {
 
     /// Format a document
     pub fn format(&self, text: &str) -> Result<Vec<TextEdit>, String> {
-        use rossi::{PrettyPrinter, parse, to_string, to_string_ascii};
+        use rossi::{PrettyPrinter, format_str};
 
-        // Parse the document
-        let component = parse(text).map_err(|e| format!("Parse error: {}", e))?;
-
-        // Get configuration
         let config = self.get_config();
 
-        // Format using pretty printer
-        let formatted = if config.use_unicode {
-            // Use custom indentation if specified
-            if config.indentation != "    " {
-                let printer = PrettyPrinter::new().with_indent(config.indentation);
-                printer.print_component(&component)
-            } else {
-                to_string(&component)
-            }
-        } else {
-            // ASCII mode with custom indentation
-            if config.indentation != "    " {
-                let mut printer = PrettyPrinter::ascii();
-                printer.indent = config.indentation;
-                printer.print_component(&component)
-            } else {
-                to_string_ascii(&component)
-            }
+        // Delegate to the shared formatting core so editor and `rossi fmt`
+        // formatting never diverge.
+        let printer = PrettyPrinter {
+            use_unicode: config.use_unicode,
+            indent: config.indentation,
         };
+        let formatted = format_str(text, &printer).map_err(|e| format!("Parse error: {}", e))?;
 
         // Create a text edit that replaces the entire document
         // Use a large end position to ensure we replace everything

@@ -81,7 +81,7 @@ export class RossiCommandController {
         }
 
         await this.runAndReport(
-            ['print', input, '-o', outDir],
+            ['import', input, '-o', outDir],
             { title: 'Importing Rodin project' },
             `Imported Rodin project to ${outDir}`
         );
@@ -102,7 +102,7 @@ export class RossiCommandController {
         }
 
         await this.runAndReport(
-            ['print', input, '-o', outZip],
+            ['export', input, '-o', outZip],
             { title: 'Exporting Rodin ZIP' },
             `Exported Rodin ZIP to ${outZip}`
         );
@@ -114,19 +114,16 @@ export class RossiCommandController {
             return;
         }
         await this.saveOpenEventBDocumentsUnder(folder);
-        const eventBFiles = await collectEventBFiles(folder);
-        if (eventBFiles.length === 0) {
-            window.showErrorMessage(`Workspace contains no .eventb files: ${folder}`);
-            return;
-        }
 
         const outZip = await this.pickZipOutput(folder, '.zip');
         if (!outZip) {
             return;
         }
 
+        // `rossi export` walks the directory itself, so hand it the folder
+        // directly instead of enumerating .eventb files here.
         await this.runAndReport(
-            ['print', ...eventBFiles, '-o', outZip],
+            ['export', folder, '-o', outZip],
             { title: 'Exporting workspace to Rodin ZIP' },
             `Exported workspace to ${outZip}`
         );
@@ -149,7 +146,7 @@ export class RossiCommandController {
             await this.saveOpenEventBDocumentsUnder(input);
             await withTempDir(async (tmp) => {
                 const tempZip = path.join(tmp, 'source.zip');
-                await this.runRossi(['print', input, '-o', tempZip], {
+                await this.runRossi(['export', input, '-o', tempZip], {
                     title: 'Preparing Rodin source ZIP',
                 });
                 await this.runBuildAndReport(tempZip, outZip);
@@ -206,8 +203,14 @@ export class RossiCommandController {
             const version = await this.runRossi(['--version'], {
                 title: 'Checking Rossi tool',
             });
-            await this.runRossi(['print', '--help'], {
-                title: 'Checking Rossi print command',
+            await this.runRossi(['import', '--help'], {
+                title: 'Checking Rossi import command',
+            });
+            await this.runRossi(['export', '--help'], {
+                title: 'Checking Rossi export command',
+            });
+            await this.runRossi(['fmt', '--help'], {
+                title: 'Checking Rossi fmt command',
             });
             await this.runRossi(['build', '--help'], {
                 title: 'Checking Rossi build command',
@@ -266,23 +269,16 @@ export class RossiCommandController {
         await this.saveDocumentIfOpen(input);
 
         try {
-            await withTempDir(async (tmp) => {
-                const tempZip = path.join(tmp, 'source.zip');
-                const converted = path.join(tmp, 'converted.eventb');
-                await this.runRossi(['print', input, '-o', tempZip], {
-                    title: 'Preparing Event-B conversion',
-                    cwd: path.dirname(input),
-                });
-                const args = ascii
-                    ? ['print', tempZip, '--ascii', '--merge=', '-o', converted]
-                    : ['print', tempZip, '--merge=', '-o', converted];
-                await this.runRossi(args, {
+            // `fmt` reformats in place across the same representation, so it
+            // converts the operator convention directly — no Rodin round-trip.
+            const result = await this.runRossi(
+                ['fmt', input, ascii ? '--ascii' : '--unicode'],
+                {
                     title: ascii ? 'Converting to ASCII' : 'Converting to Unicode',
                     cwd: path.dirname(input),
-                });
-                const text = await fs.readFile(converted, 'utf8');
-                await this.replaceDocumentText(input, text);
-            });
+                }
+            );
+            await this.replaceDocumentText(input, result.stdout);
             window.showInformationMessage(`Converted ${path.basename(input)} to ${ascii ? 'ASCII' : 'Unicode'}.`);
         } catch (error) {
             this.showCommandError(error);
@@ -670,21 +666,6 @@ async function collectEventBTextFiles(dir: string): Promise<string[]> {
             if (ext === '.eventb' || ext === '.txt') {
                 files.push(entryPath);
             }
-        }
-    }
-    files.sort();
-    return files;
-}
-
-async function collectEventBFiles(dir: string): Promise<string[]> {
-    const files: string[] = [];
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-        const entryPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            files.push(...await collectEventBFiles(entryPath));
-        } else if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.eventb') {
-            files.push(entryPath);
         }
     }
     files.sort();
