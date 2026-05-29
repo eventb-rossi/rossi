@@ -7,12 +7,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::commands::eventb_io;
 use crate::commands::sarif;
 
 #[derive(Args)]
 pub struct ValidateArgs {
     /// Event-B files (`.eventb`), Rodin ZIP archives (`.zip`), or
-    /// unzipped Rodin project directories.
+    /// unzipped Rodin project directories. `-` reads Event-B text from stdin
+    /// (see `--stdin-filename`).
     #[arg(required = true, value_name = "FILE")]
     files: Vec<PathBuf>,
 
@@ -36,6 +38,10 @@ pub struct ValidateArgs {
     /// variable, dead constant, incomplete INIT, duplicate component).
     #[arg(long)]
     no_lints: bool,
+
+    /// Reported file name for `-` (stdin) input (default: `<stdin>`).
+    #[arg(long, value_name = "PATH")]
+    stdin_filename: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -86,6 +92,11 @@ fn ser_rule_id<S: Serializer>(value: &Option<RuleId>, s: S) -> Result<S::Ok, S::
 }
 
 pub fn run(cli: ValidateArgs) -> ExitCode {
+    if let Err(e) = eventb_io::stdin_is_sole_input(&cli.files) {
+        eprintln!("rossi validate: {e}");
+        return ExitCode::from(2);
+    }
+
     let mut results = Vec::new();
     let mut all_success = true;
     let aggregating_format = matches!(cli.format, OutputFormat::Json | OutputFormat::Sarif);
@@ -129,6 +140,10 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
 }
 
 fn validate_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
+    if eventb_io::is_stdin(file) {
+        return validate_stdin(cli);
+    }
+
     if !file.exists() {
         return vec![error_result(
             file,
@@ -163,15 +178,33 @@ fn validate_text_file(file: &Path) -> Vec<ValidationResult> {
             )];
         }
     };
+    validate_text_source(file, &source)
+}
 
-    match parse_components(&source) {
+/// Validate Event-B `-` (stdin) text, reported under `--stdin-filename`.
+fn validate_stdin(cli: &ValidateArgs) -> Vec<ValidationResult> {
+    let display = Path::new(cli.stdin_filename.as_deref().unwrap_or("<stdin>"));
+    match eventb_io::read_stdin_to_string() {
+        Ok(source) => validate_text_source(display, &source),
+        Err(e) => vec![error_result(
+            display,
+            None,
+            format!("Failed to read standard input: {e}"),
+            None,
+        )],
+    }
+}
+
+/// Validate Event-B text from any source, reporting rows under `display`.
+fn validate_text_source(display: &Path, source: &str) -> Vec<ValidationResult> {
+    match parse_components(source) {
         Ok(components) => components
             .iter()
-            .map(|c| success_result(file, None, c))
+            .map(|c| success_result(display, None, c))
             .collect(),
         // Loose `.eventb` text → Camille / formula parse failure (EB005).
         Err(e) => vec![error_result(
-            file,
+            display,
             None,
             format!("{e}"),
             Some(RuleId::FormulaParseError),

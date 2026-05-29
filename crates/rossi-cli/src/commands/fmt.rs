@@ -24,7 +24,8 @@ use super::eventb_io::{self, CmdResult, InputKind};
 
 #[derive(Args)]
 pub struct FmtArgs {
-    /// Files (.eventb/.txt or Rodin .zip/.buc/.bum) or directories to format
+    /// Files (.eventb/.txt or Rodin .zip/.buc/.bum) or directories to format;
+    /// `-` reads Event-B text from stdin and writes the result to stdout
     #[arg(required = true, value_name = "INPUT")]
     inputs: Vec<PathBuf>,
 
@@ -97,6 +98,12 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
         use_unicode: !cli.ascii,
         indent: cli.indent.clone().unwrap_or_else(|| "    ".to_string()),
     };
+
+    // `-` reads one Event-B text stream from stdin (the lone input). It has no
+    // on-disk file to rewrite or compare against, so only stdout / -o apply.
+    if eventb_io::stdin_is_sole_input(&cli.inputs)? {
+        return fmt_stdin(cli, &printer, &mode);
+    }
 
     // Expand inputs into a flat worklist of (file, kind).
     let mut items: Vec<(PathBuf, InputKind)> = Vec::new();
@@ -186,6 +193,28 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
 
     if matches!(mode, Mode::Check) && any_unformatted {
         return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Format a single Event-B text stream read from stdin (the `-` input).
+fn fmt_stdin(cli: &FmtArgs, printer: &PrettyPrinter, mode: &Mode) -> CmdResult<ExitCode> {
+    match mode {
+        Mode::InPlace => return Err("cannot format standard input in place; drop -i".into()),
+        Mode::Check => return Err("--check needs a file path, not standard input".into()),
+        Mode::Stdout | Mode::Output(_) => {}
+    }
+    let src = eventb_io::read_stdin_to_string()?;
+    let body = format_str(&src, printer).map_err(|e| format!("Failed to parse <stdin>: {e}"))?;
+    let formatted = format!("{body}\n");
+    match mode {
+        Mode::Output(out) => {
+            Formatted::Text(formatted).write_to(out)?;
+            if cli.verbose {
+                eprintln!("wrote {}", out.display());
+            }
+        }
+        _ => print!("{formatted}"),
     }
     Ok(ExitCode::SUCCESS)
 }

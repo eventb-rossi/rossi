@@ -6,7 +6,7 @@
 //! so there is no operator-convention option here — see `rossi fmt` for that.
 
 use clap::Args;
-use rossi::{NamedComponent, component_filename, parse_components, write_zip_file};
+use rossi::write_zip_file;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -15,7 +15,8 @@ use super::eventb_io::{self, CmdResult, InputFamily};
 
 #[derive(Args)]
 pub struct ExportArgs {
-    /// Event-B text inputs (.eventb, .txt) or directories containing them
+    /// Event-B text inputs (.eventb, .txt) or directories containing them;
+    /// `-` reads Event-B text from stdin
     #[arg(required = true, value_name = "INPUT")]
     inputs: Vec<PathBuf>,
 
@@ -39,33 +40,32 @@ pub fn run(cli: ExportArgs) -> ExitCode {
 }
 
 fn run_inner(cli: &ExportArgs) -> CmdResult<()> {
-    for input in &cli.inputs {
-        eventb_io::ensure_input(input, InputFamily::Text)?;
-    }
-
-    let eventb_files = eventb_io::collect_eventb_files(&cli.inputs)?;
-
-    if eventb_files.is_empty() {
-        return Err("No .eventb or .txt files found in inputs".into());
-    }
-
-    let mut components = Vec::new();
-
-    for path in &eventb_files {
-        if cli.verbose {
-            eprintln!("Parsing: {}", path.display());
+    let components = if eventb_io::stdin_is_sole_input(&cli.inputs)? {
+        let source = eventb_io::read_stdin_to_string()?;
+        eventb_io::parse_text_components("<stdin>", &source)?
+    } else {
+        for input in &cli.inputs {
+            eventb_io::ensure_input(input, InputFamily::Text)?;
         }
-        let source = fs::read_to_string(path)?;
-        let parsed = parse_components(&source)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
-        for component in parsed {
-            let filename = component_filename(&component);
-            components.push(NamedComponent {
-                filename,
-                component,
-            });
+
+        let eventb_files = eventb_io::collect_eventb_files(&cli.inputs)?;
+        if eventb_files.is_empty() {
+            return Err("No .eventb or .txt files found in inputs".into());
         }
-    }
+
+        let mut components = Vec::new();
+        for path in &eventb_files {
+            if cli.verbose {
+                eprintln!("Parsing: {}", path.display());
+            }
+            let source = fs::read_to_string(path)?;
+            components.extend(eventb_io::parse_text_components(
+                &path.display().to_string(),
+                &source,
+            )?);
+        }
+        components
+    };
 
     if let Some(parent) = cli.output.parent()
         && !parent.as_os_str().is_empty()

@@ -1049,3 +1049,93 @@ fn first_subdir_with_rodin_files(root: &std::path::Path) -> PathBuf {
         }
     }
 }
+
+/// Run the CLI with `stdin_data` piped to its standard input.
+fn run_cli_with_stdin(args: &[&str], stdin_data: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("cargo")
+        .args(["run", "-p", "rossi-cli", "--"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rossi-cli");
+    child
+        .stdin
+        .as_mut()
+        .expect("child stdin")
+        .write_all(stdin_data.as_bytes())
+        .expect("write stdin");
+    // `wait_with_output` closes stdin (signalling EOF) before collecting output.
+    child.wait_with_output().expect("wait for rossi-cli")
+}
+
+#[test]
+fn fmt_stdin_text_to_unicode() {
+    let output = run_cli_with_stdin(&["fmt", "-"], ASCII_CONTEXT);
+    assert!(
+        output.status.success(),
+        "fmt - should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains('∈'), "expected Unicode ∈ in: {stdout}");
+    assert!(stdout.contains('ℕ'), "expected Unicode ℕ in: {stdout}");
+}
+
+#[test]
+fn validate_stdin_uses_stdin_filename() {
+    let output = run_cli_with_stdin(
+        &[
+            "validate",
+            "--format",
+            "json",
+            "--stdin-filename",
+            "foo.eventb",
+            "-",
+        ],
+        ASCII_CONTEXT,
+    );
+    assert!(
+        output.status.success(),
+        "validate - should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"file\": \"foo.eventb\""),
+        "expected the stdin filename in JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"success\": true"),
+        "expected a successful parse: {stdout}"
+    );
+}
+
+#[test]
+fn export_stdin_to_zip() {
+    let tmp = tempdir_unique("rossi-cli-export-stdin");
+    let out_zip = tmp.join("out.zip");
+
+    let output = run_cli_with_stdin(
+        &["export", "-", "-o", out_zip.to_str().unwrap()],
+        ASCII_CONTEXT,
+    );
+    assert!(
+        output.status.success(),
+        "export - should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    assert!(
+        dir_has_rodin_file(&extracted),
+        "expected a .buc/.bum entry in the exported zip"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}

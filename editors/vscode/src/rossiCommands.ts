@@ -27,6 +27,8 @@ interface RossiRunOptions {
     title: string;
     cwd?: string;
     allowNonZeroExit?: boolean;
+    /** Text piped to the child's standard input (for `-` / stdin inputs). */
+    stdin?: string;
 }
 
 interface ValidationResult {
@@ -93,16 +95,17 @@ export class RossiCommandController {
             return;
         }
 
-        await this.saveDocumentIfOpen(input);
-
         const outZip = await this.pickZipOutput(input, '.zip');
         if (!outZip) {
             return;
         }
 
+        // Pipe the in-editor buffer via stdin so unsaved edits export without
+        // forcing a save to disk.
+        const buffer = await this.readEventBBuffer(input);
         await this.runAndReport(
-            ['export', input, '-o', outZip],
-            { title: 'Exporting Rodin ZIP' },
+            ['export', '-', '-o', outZip],
+            { title: 'Exporting Rodin ZIP', stdin: buffer },
             `Exported Rodin ZIP to ${outZip}`
         );
     }
@@ -160,8 +163,11 @@ export class RossiCommandController {
             return;
         }
 
-        await this.saveDocumentIfOpen(input);
-        await this.validateInput(input);
+        // Validate the in-editor buffer via stdin so unsaved edits are checked
+        // without forcing a save to disk; `--stdin-filename` maps the
+        // diagnostics back to the document.
+        const buffer = await this.readEventBBuffer(input);
+        await this.runValidate(['--stdin-filename', input, '-'], path.dirname(input), buffer);
     }
 
     async validateWorkspace(): Promise<void> {
@@ -225,15 +231,21 @@ export class RossiCommandController {
             this.showCommandError(error);
             return;
         }
+        await this.runValidate(target.inputs, target.cwd);
+    }
 
+    // Run `rossi validate --format json` over `inputs`, optionally feeding a
+    // buffer via stdin, and surface the diagnostics.
+    private async runValidate(inputs: string[], cwd: string, stdin?: string): Promise<void> {
         let result: RossiRunResult;
         try {
             result = await this.runRossi(
-                ['validate', '--format', 'json', '--continue-on-error', ...target.inputs],
+                ['validate', '--format', 'json', '--continue-on-error', ...inputs],
                 {
                     title: 'Validating Event-B model',
-                    cwd: target.cwd,
+                    cwd,
                     allowNonZeroExit: true,
+                    stdin,
                 }
             );
         } catch (error) {
@@ -241,7 +253,7 @@ export class RossiCommandController {
             return;
         }
 
-        this.applyValidationDiagnostics(result.stdout, target.cwd);
+        this.applyValidationDiagnostics(result.stdout, cwd);
 
         if (result.exitCode === 0) {
             window.showInformationMessage('Rossi validation completed.');
@@ -257,16 +269,18 @@ export class RossiCommandController {
             return;
         }
 
-        await this.saveDocumentIfOpen(input);
-
         try {
-            // `fmt` reformats in place across the same representation, so it
-            // converts the operator convention directly — no Rodin round-trip.
+            // `fmt` reformats across the same representation, converting the
+            // operator convention directly — no Rodin round-trip. Feed the
+            // in-editor buffer via stdin and write the result back, so unsaved
+            // edits convert without forcing a save to disk.
+            const buffer = await this.readEventBBuffer(input);
             const result = await this.runRossi(
-                ['fmt', input, ascii ? '--ascii' : '--unicode'],
+                ['fmt', '-', ascii ? '--ascii' : '--unicode'],
                 {
                     title: ascii ? 'Converting to ASCII' : 'Converting to Unicode',
                     cwd: path.dirname(input),
+                    stdin: buffer,
                 }
             );
             await this.replaceDocumentText(input, result.stdout);
@@ -375,7 +389,8 @@ export class RossiCommandController {
                 title: options.title,
                 cancellable: true,
             },
-            (_progress, token) => this.spawnRossi(toolPath, args, cwd, options.allowNonZeroExit ?? false, token)
+            (_progress, token) =>
+                this.spawnRossi(toolPath, args, cwd, options.allowNonZeroExit ?? false, token, options.stdin)
         );
     }
 
@@ -384,7 +399,8 @@ export class RossiCommandController {
         args: string[],
         cwd: string | undefined,
         allowNonZeroExit: boolean,
-        token: CancellationToken
+        token: CancellationToken,
+        stdin?: string
     ): Promise<RossiRunResult> {
         return new Promise((resolve, reject) => {
             const child = spawn(toolPath, args, { cwd, shell: false });
@@ -434,6 +450,12 @@ export class RossiCommandController {
                 }
                 resolve({ stdout, stderr, exitCode: code });
             });
+
+            // Feed the buffer when piping a `-` input, otherwise close stdin so
+            // the child never blocks waiting on input. Ignore EPIPE: if the
+            // child exits before reading, its exit code/stderr is the real error.
+            child.stdin.on('error', () => undefined);
+            child.stdin.end(stdin ?? '');
         });
     }
 
@@ -524,6 +546,12 @@ export class RossiCommandController {
         if (document?.isDirty) {
             await document.save();
         }
+    }
+
+    /** The in-editor text for `filePath` if it is open, else the file on disk. */
+    private async readEventBBuffer(filePath: string): Promise<string> {
+        const open = workspace.textDocuments.find((item) => item.uri.fsPath === filePath);
+        return open ? open.getText() : fs.readFile(filePath, 'utf8');
     }
 
     private async saveOpenEventBDocumentsUnder(root: string): Promise<void> {
