@@ -43,8 +43,9 @@
 
 use crate::ast::context::SetDeclaration;
 use crate::ast::expression::{BinaryOp, IdentPattern, UnaryOp};
-use crate::ast::predicate::{ComparisonOp, LogicalOp, Quantifier};
+use crate::ast::predicate::{ComparisonOp, LogicalOp};
 use crate::ast::*;
+use crate::operators::{self, OperatorId};
 use std::fmt::Write;
 
 /// Configuration for the pretty printer
@@ -371,10 +372,10 @@ impl PrettyPrinter {
             // as identifiers regardless of Unicode mode.
             Expression::True => "TRUE".to_string(),
             Expression::False => "FALSE".to_string(),
-            Expression::EmptySet => self.sym("∅", "{}").to_string(),
-            Expression::Naturals => self.sym("ℕ", "NAT").to_string(),
-            Expression::Naturals1 => self.sym("ℕ1", "NAT1").to_string(),
-            Expression::Integers => self.sym("ℤ", "INT").to_string(),
+            Expression::EmptySet => self.op(OperatorId::EmptySet).to_string(),
+            Expression::Naturals => self.op(OperatorId::Naturals).to_string(),
+            Expression::Naturals1 => self.op(OperatorId::Naturals1).to_string(),
+            Expression::Integers => self.op(OperatorId::Integers).to_string(),
             Expression::BoolType => "BOOL".to_string(),
 
             Expression::SetEnumeration(elements) => {
@@ -391,8 +392,8 @@ impl PrettyPrinter {
                 let ids_str = self.format_typed_identifiers(identifiers);
                 if let Some(expr) = expression {
                     // Extended form: {x · P | E}
-                    let mid = self.sym("·", ".");
-                    let bar = self.sym("∣", "|");
+                    let mid = self.op(OperatorId::Dot);
+                    let bar = self.op(OperatorId::Bar);
                     format!(
                         "{{{}{}{}{}{}}}",
                         ids_str,
@@ -403,7 +404,7 @@ impl PrettyPrinter {
                     )
                 } else {
                     // Basic form: {x | P}
-                    let bar = self.sym("∣", "|");
+                    let bar = self.op(OperatorId::Bar);
                     format!("{{{}{}{}}}", ids_str, bar, self.print_predicate(predicate))
                 }
             }
@@ -412,7 +413,7 @@ impl PrettyPrinter {
                 member_expression,
                 predicate,
             } => {
-                let bar = self.sym("∣", "|");
+                let bar = self.op(OperatorId::Bar);
                 format!(
                     "{{{}{}{}}}",
                     self.print_expression(member_expression),
@@ -438,7 +439,7 @@ impl PrettyPrinter {
                 predicate,
                 expression,
             } => {
-                let op = self.sym("⋃", "UNION");
+                let op = self.op(OperatorId::QuantifiedUnion);
                 self.format_quantified_expr(op, identifiers, predicate, expression)
             }
 
@@ -447,7 +448,7 @@ impl PrettyPrinter {
                 predicate,
                 expression,
             } => {
-                let op = self.sym("⋂", "INTER");
+                let op = self.op(OperatorId::QuantifiedIntersection);
                 self.format_quantified_expr(op, identifiers, predicate, expression)
             }
 
@@ -456,9 +457,9 @@ impl PrettyPrinter {
                 predicate,
                 expression,
             } => {
-                let lambda = self.sym("λ", "%");
-                let mid = self.sym("·", ".");
-                let bar = self.sym("∣", "|");
+                let lambda = self.op(OperatorId::Lambda);
+                let mid = self.op(OperatorId::Dot);
+                let bar = self.op(OperatorId::Bar);
                 format!(
                     "{} {}{}{}{}{}",
                     lambda,
@@ -557,7 +558,7 @@ impl PrettyPrinter {
             .iter()
             .map(|id| {
                 if let Some(ref type_expr) = id.type_expr {
-                    let oftype = self.sym("⦂", " oftype ");
+                    let oftype = self.oftype_annotation();
                     format!("{}{}{}", id.name, oftype, self.print_expression(type_expr))
                 } else {
                     id.name.clone()
@@ -575,8 +576,8 @@ impl PrettyPrinter {
         predicate: &Predicate,
         expression: &Expression,
     ) -> String {
-        let mid = self.sym("·", ".");
-        let bar = self.sym("∣", "|");
+        let mid = self.op(OperatorId::Dot);
+        let bar = self.op(OperatorId::Bar);
         let ids_str = self.format_typed_identifiers(identifiers);
         format!(
             "{} {}{}{}{}{}",
@@ -594,13 +595,13 @@ impl PrettyPrinter {
         match pattern {
             IdentPattern::Identifier(t) => match &t.type_expr {
                 Some(ty) => {
-                    let oftype = self.sym("⦂", " oftype ");
+                    let oftype = self.oftype_annotation();
                     format!("{}{}{}", t.name, oftype, self.print_expression(ty))
                 }
                 None => t.name.clone(),
             },
             IdentPattern::Maplet(left, right) => {
-                let maplet = self.sym("↦", "|->");
+                let maplet = self.op(OperatorId::Maplet);
                 let left_str = self.print_ident_pattern(left);
                 // Right child needs parens only if it's a Maplet (since maplet is left-assoc)
                 let right_str = match right.as_ref() {
@@ -768,57 +769,29 @@ impl PrettyPrinter {
         if self.use_unicode { unicode } else { ascii }
     }
 
+    /// Pick an operator spelling from the shared Event-B table.
+    #[inline]
+    fn op(&self, id: OperatorId) -> &'static str {
+        operators::spell(id, self.use_unicode)
+    }
+
+    #[inline]
+    fn oftype_annotation(&self) -> &'static str {
+        if self.use_unicode {
+            self.op(OperatorId::OfType)
+        } else {
+            " oftype "
+        }
+    }
+
     /// Convert a binary operator to text
     fn print_binary_op(&self, op: BinaryOp) -> &'static str {
-        let (u, a) = match op {
-            BinaryOp::Add => ("+", "+"),
-            BinaryOp::Subtract => ("\u{2212}", "-"), // − MINUS SIGN
-            BinaryOp::Multiply => ("\u{2217}", "*"), // ∗ ASTERISK OPERATOR
-            BinaryOp::Divide => ("\u{00F7}", "/"),   // ÷ DIVISION SIGN
-            BinaryOp::Modulo => ("mod", "mod"),
-            BinaryOp::Exponent => ("^", "^"),
-            BinaryOp::Range => ("\u{2025}", ".."), // ‥ TWO DOT LEADER
-            BinaryOp::Union => ("∪", "\\/"),
-            BinaryOp::Intersection => ("∩", "/\\"),
-            BinaryOp::Difference => ("∖", "\\"),
-            BinaryOp::CartesianProduct => ("×", "**"),
-            BinaryOp::Relation => ("↔", "<->"),
-            BinaryOp::TotalRelation => ("\u{E100}", "<<->"),
-            BinaryOp::SurjectiveRelation => ("\u{E101}", "<->>"),
-            BinaryOp::TotalSurjectiveRelation => ("\u{E102}", "<<->>"),
-            BinaryOp::TotalFunction => ("→", "-->"),
-            BinaryOp::PartialFunction => ("⇸", "+->"),
-            BinaryOp::TotalInjection => ("↣", ">->"),
-            BinaryOp::PartialInjection => ("⤔", ">+>"),
-            BinaryOp::TotalSurjection => ("↠", "->>"),
-            BinaryOp::PartialSurjection => ("⤀", "+>>"),
-            BinaryOp::Bijection => ("⤖", ">->>"),
-            BinaryOp::Composition => ("∘", "circ"),
-            BinaryOp::Semicolon => (";", ";"),
-            BinaryOp::DomainRestriction => ("◁", "<|"),
-            BinaryOp::DomainSubtraction => ("⩤", "<<|"),
-            BinaryOp::RangeRestriction => ("▷", "|>"),
-            BinaryOp::RangeSubtraction => ("⩥", "|>>"),
-            BinaryOp::Overwrite => ("\u{E103}", "<+"),
-            BinaryOp::DirectProduct => ("⊗", "><"),
-            BinaryOp::ParallelProduct => ("∥", "||"),
-            BinaryOp::Maplet => ("↦", "|->"),
-            BinaryOp::OfType => ("⦂", "oftype"),
-        };
-        self.sym(u, a)
+        self.op(operators::binary_op_id(op))
     }
 
     /// Convert a unary operator to text
     fn print_unary_op(&self, op: UnaryOp) -> &'static str {
-        let (u, a) = match op {
-            UnaryOp::Minus => ("\u{2212}", "-"), // − MINUS SIGN
-            UnaryOp::PowerSet => ("ℙ", "POW"),
-            UnaryOp::PowerSet1 => ("ℙ1", "POW1"),
-            UnaryOp::Domain => ("dom", "dom"),
-            UnaryOp::Range => ("ran", "ran"),
-            UnaryOp::Inverse => ("\u{223C}", "~"),
-        };
-        self.sym(u, a)
+        self.op(operators::unary_op_id(op))
     }
 
     /// Convert a Predicate to text
@@ -835,7 +808,7 @@ impl PrettyPrinter {
             }
 
             Predicate::Not(p) => {
-                let not = self.sym("¬", "not");
+                let not = self.op(OperatorId::Not);
                 format!("{}({})", not, self.print_predicate(p))
             }
 
@@ -851,11 +824,8 @@ impl PrettyPrinter {
                 identifiers,
                 predicate,
             } => {
-                let quant_str = match quantifier {
-                    Quantifier::ForAll => self.sym("∀", "!"),
-                    Quantifier::Exists => self.sym("∃", "#"),
-                };
-                let mid = self.sym("·", ".");
+                let quant_str = self.op(operators::quantifier_id(*quantifier));
+                let mid = self.op(OperatorId::Dot);
                 let ids_str = self.format_typed_identifiers(identifiers);
                 format!(
                     "{}{}{}{}",
@@ -998,37 +968,17 @@ impl PrettyPrinter {
 
     /// Convert a comparison operator to text
     fn print_comparison_op(&self, op: ComparisonOp) -> &'static str {
-        let (u, a) = match op {
-            ComparisonOp::Equal => ("=", "="),
-            ComparisonOp::NotEqual => ("≠", "/="),
-            ComparisonOp::LessThan => ("<", "<"),
-            ComparisonOp::LessEqual => ("≤", "<="),
-            ComparisonOp::GreaterThan => (">", ">"),
-            ComparisonOp::GreaterEqual => ("≥", ">="),
-            ComparisonOp::In => ("∈", ":"),
-            ComparisonOp::NotIn => ("∉", "/:"),
-            ComparisonOp::Subset => ("⊆", "<:"),
-            ComparisonOp::SubsetStrict => ("⊂", "<<:"),
-            ComparisonOp::NotSubset => ("⊈", "/<:"),
-            ComparisonOp::NotSubsetStrict => ("⊄", "/<<:"),
-        };
-        self.sym(u, a)
+        self.op(operators::comparison_op_id(op))
     }
 
     /// Convert a logical operator to text
     fn print_logical_op(&self, op: LogicalOp) -> &'static str {
-        let (u, a) = match op {
-            LogicalOp::And => ("∧", "&"),
-            LogicalOp::Or => ("∨", "or"),
-            LogicalOp::Implies => ("⇒", "=>"),
-            LogicalOp::Equivalent => ("⇔", "<=>"),
-        };
-        self.sym(u, a)
+        self.op(operators::logical_op_id(op))
     }
 
     /// Convert an Action to text
     pub fn print_action(&self, action: &Action) -> String {
-        let assign = self.sym("\u{2254}", ":="); // ≔ COLON EQUALS
+        let assign = self.op(OperatorId::Assignment);
         match action {
             Action::Skip => "skip".to_string(),
             Action::Assignment {
@@ -1044,7 +994,7 @@ impl PrettyPrinter {
             }
             Action::BecomesIn { variables, set } => {
                 let vars = variables.join(", ");
-                let op = self.sym(":∈", "::");
+                let op = self.op(OperatorId::BecomesIn);
                 format!("{} {} {}", vars, op, self.print_expression(set))
             }
             Action::BecomesSuchThat {
@@ -1052,7 +1002,7 @@ impl PrettyPrinter {
                 predicate,
             } => {
                 let vars = variables.join(", ");
-                let op = self.sym(":∣", ":|");
+                let op = self.op(OperatorId::BecomesSuchThat);
                 format!("{} {} {}", vars, op, self.print_predicate(predicate))
             }
             Action::FunctionOverride {
