@@ -10,135 +10,8 @@ use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, TextEdit, Url, WorkspaceEdit,
 };
+use rossi::operators;
 use std::collections::HashMap;
-
-const TOTAL_RELATION: &str = "\u{E100}";
-const SURJECTIVE_RELATION: &str = "\u{E101}";
-const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
-const RELATIONAL_OVERRIDE: &str = "\u{E103}";
-
-/// Mapping of Unicode operators to ASCII equivalents
-const UNICODE_TO_ASCII: &[(&str, &str)] = &[
-    // Logical operators
-    ("∧", "&"),
-    ("∨", "or"),
-    ("¬", "not"),
-    ("⇒", "=>"),
-    ("⇔", "<=>"),
-    // Quantifiers
-    ("∀", "!"),
-    ("∃", "#"),
-    // Set operators
-    ("∈", ":"),
-    ("∉", "/:"),
-    ("⊆", "<:"),
-    ("⊂", "<<:"),
-    ("⊈", "/<:"),
-    ("⊄", "/<<:"),
-    ("∪", "\\/"),
-    ("∩", "/\\"),
-    ("∖", "\\"),
-    ("∅", "{}"),
-    ("×", "**"),
-    ("ℙ", "POW"),
-    ("ℙ1", "POW1"),
-    // Arithmetic / comparison
-    ("‥", ".."),
-    ("−", "-"),
-    ("∗", "*"),
-    ("≤", "<="),
-    ("≥", ">="),
-    ("≠", "/="),
-    ("÷", "/"),
-    // Special sets
-    ("ℕ", "NAT"),
-    ("ℕ1", "NAT1"),
-    ("ℤ", "INT"),
-    // Function/relation types (longest ASCII first for PEG ordering)
-    ("⤖", ">->>"),
-    ("⤀", "+>>"),
-    ("↠", "->>"),
-    ("⤔", ">+>"),
-    ("↣", ">->"),
-    ("⇸", "+->"),
-    ("→", "-->"),
-    (TOTAL_SURJECTIVE_RELATION, "<<->>"),
-    (SURJECTIVE_RELATION, "<->>"),
-    (TOTAL_RELATION, "<<->"),
-    ("↔", "<->"),
-    ("⦂", "oftype"),
-    // Relation operators
-    ("↦", "|->"),
-    ("⩤", "<<|"),
-    ("⩥", "|>>"),
-    ("◁", "<|"),
-    ("▷", "|>"),
-    ("∘", "circ"),
-    (RELATIONAL_OVERRIDE, "<+"),
-    ("⊗", "><"),
-    ("∥", "||"),
-    ("∼", "~"),
-    // Generalized operators
-    ("⋃", "UNION"),
-    ("⋂", "INTER"),
-    // Delimiters
-    ("·", "."),
-    ("λ", "%"),
-    ("≔", ":="),
-    (":∈", "::"),
-    (":∣", ":|"),
-    ("∣", "|"),
-];
-
-/// Mapping of ASCII operators to Unicode equivalents (reverse of above)
-/// Note: When there are duplicates, we prefer the first occurrence
-fn get_ascii_to_unicode() -> HashMap<&'static str, &'static str> {
-    let mut map = HashMap::new();
-    for (unicode, ascii) in UNICODE_TO_ASCII {
-        // Only insert if not already present (prefer first occurrence)
-        map.entry(*ascii).or_insert(*unicode);
-    }
-    map
-}
-
-/// Check if an operator is purely alphabetic (needs word-boundary matching)
-fn is_alphabetic_op(op: &str) -> bool {
-    op.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// Check if a byte position in text is at a word boundary (not adjacent to identifier chars)
-fn is_word_boundary(text: &str, byte_pos: usize) -> bool {
-    if byte_pos > 0
-        && let Some(ch) = text.as_bytes().get(byte_pos - 1)
-        && (ch.is_ascii_alphanumeric() || *ch == b'_')
-    {
-        return false;
-    }
-    true
-}
-
-/// Check if end of a match is at a word boundary
-fn is_word_boundary_end(text: &str, byte_pos: usize) -> bool {
-    if let Some(ch) = text.as_bytes().get(byte_pos)
-        && (ch.is_ascii_alphanumeric() || *ch == b'_')
-    {
-        return false;
-    }
-    true
-}
-
-/// Check if `text` contains `word` as a whole word (not inside an identifier)
-fn contains_whole_word(text: &str, word: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = text[start..].find(word) {
-        let abs_pos = start + pos;
-        if is_word_boundary(text, abs_pos) && is_word_boundary_end(text, abs_pos + word.len()) {
-            return true;
-        }
-        start = abs_pos + word.len();
-    }
-    false
-}
 
 /// Convert a character (code-point) offset to a byte offset within a line.
 /// Returns `None` if the character offset is out of range.
@@ -156,16 +29,11 @@ fn char_offset_to_byte(line: &str, char_offset: usize) -> Option<usize> {
 }
 
 /// Provides code actions and refactorings
-pub struct CodeActionProvider {
-    /// Cache for ASCII to Unicode mapping
-    ascii_to_unicode: HashMap<&'static str, &'static str>,
-}
+pub struct CodeActionProvider;
 
 impl CodeActionProvider {
     pub fn new() -> Self {
-        Self {
-            ascii_to_unicode: get_ascii_to_unicode(),
-        }
+        Self
     }
 
     /// Provide code actions for a given document position/range
@@ -259,72 +127,22 @@ impl CodeActionProvider {
 
     /// Check if text contains ASCII operators
     fn has_ascii_operators(&self, text: &str) -> bool {
-        self.ascii_to_unicode.keys().any(|op| {
-            if is_alphabetic_op(op) {
-                contains_whole_word(text, op)
-            } else {
-                text.contains(*op)
-            }
-        })
+        operators::has_ascii_operators(text)
     }
 
     /// Check if text contains Unicode operators
     fn has_unicode_operators(&self, text: &str) -> bool {
-        UNICODE_TO_ASCII.iter().any(|(op, _)| text.contains(op))
+        operators::has_unicode_operators(text)
     }
 
     /// Convert ASCII operators to Unicode in the given text
     pub fn convert_to_unicode(&self, text: &str) -> String {
-        // Sort by length (longest first) to handle multi-character operators correctly
-        let mut ops: Vec<_> = self.ascii_to_unicode.iter().collect();
-        ops.sort_by_key(|(ascii, _)| std::cmp::Reverse(ascii.len()));
-
-        let mut result = String::with_capacity(text.len());
-        let mut byte_pos = 0;
-        while byte_pos < text.len() {
-            let rest = &text[byte_pos..];
-            let mut matched = None;
-
-            for (ascii, unicode) in &ops {
-                let ascii = **ascii;
-                let unicode = **unicode;
-                if rest.starts_with(ascii)
-                    && (!is_alphabetic_op(ascii)
-                        || (is_word_boundary(text, byte_pos)
-                            && is_word_boundary_end(text, byte_pos + ascii.len())))
-                {
-                    matched = Some((ascii, unicode));
-                    break;
-                }
-            }
-
-            if let Some((ascii, unicode)) = matched {
-                result.push_str(unicode);
-                byte_pos += ascii.len();
-            } else if let Some(ch) = rest.chars().next() {
-                result.push(ch);
-                byte_pos += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-
-        result
+        operators::convert_to_unicode(text)
     }
 
     /// Convert Unicode operators to ASCII in the given text
     pub fn convert_to_ascii(&self, text: &str) -> String {
-        let mut result = text.to_string();
-
-        // Sort by length (longest first) to handle multi-character operators correctly
-        let mut ops: Vec<_> = UNICODE_TO_ASCII.iter().collect();
-        ops.sort_by_key(|(unicode, _)| std::cmp::Reverse(unicode.len()));
-
-        for (unicode, ascii) in ops {
-            result = result.replace(unicode, ascii);
-        }
-
-        result
+        operators::convert_to_ascii(text)
     }
 
     /// Create action to convert entire document to Unicode

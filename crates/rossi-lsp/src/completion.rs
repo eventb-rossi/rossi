@@ -12,17 +12,12 @@ use crate::lsp_types::{
 };
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use rossi::{Component, parse};
+use rossi::{Component, operators, parse};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-
-const TOTAL_RELATION: &str = "\u{E100}";
-const SURJECTIVE_RELATION: &str = "\u{E101}";
-const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
-const RELATIONAL_OVERRIDE: &str = "\u{E103}";
 
 /// Configuration for completion behavior
 #[derive(Debug, Clone)]
@@ -330,209 +325,20 @@ impl CompletionProvider {
         config: &CompletionConfig,
         _word: &str,
     ) -> Vec<CompletionItem> {
-        let mut items = Vec::new();
-
-        if config.use_unicode {
-            // Logical operators
-            items.push(create_operator_item("∧", "&", "Logical and"));
-            items.push(create_operator_item("∨", "or", "Logical or"));
-            items.push(create_operator_item("¬", "not", "Logical negation"));
-            items.push(create_operator_item("⇒", "=>", "Logical implication"));
-            items.push(create_operator_item("⇔", "<=>", "Logical equivalence"));
-            items.push(create_operator_item(
-                "∀",
-                "!",
-                "Universal quantifier (forall)",
-            ));
-            items.push(create_operator_item(
-                "∃",
-                "#",
-                "Existential quantifier (exists)",
-            ));
-
-            // Set operators
-            items.push(create_operator_item("∈", ":", "Set membership (in)"));
-            items.push(create_operator_item("∉", "/:", "Not in set"));
-            items.push(create_operator_item("⊆", "<:", "Subset or equal"));
-            items.push(create_operator_item("⊂", "<<:", "Strict subset"));
-            items.push(create_operator_item("⊈", "/<:", "Not subset or equal"));
-            items.push(create_operator_item("⊄", "/<<:", "Not strict subset"));
-            items.push(create_operator_item("∪", "\\/", "Set union"));
-            items.push(create_operator_item("∩", "/\\", "Set intersection"));
-            items.push(create_operator_item("∖", "\\", "Set difference"));
-            items.push(create_operator_item("ℙ", "POW", "Power set"));
-            items.push(create_operator_item("∅", "{}", "Empty set"));
-
-            // Relation operators
-            items.push(create_operator_item("↔", "<->", "Relation"));
-            items.push(create_operator_item(
-                TOTAL_RELATION,
-                "<<->",
-                "Total relation",
-            ));
-            items.push(create_operator_item(
-                SURJECTIVE_RELATION,
-                "<->>",
-                "Surjective relation",
-            ));
-            items.push(create_operator_item(
-                TOTAL_SURJECTIVE_RELATION,
-                "<<->>",
-                "Total surjective relation",
-            ));
-            items.push(create_operator_item("→", "-->", "Total function"));
-            items.push(create_operator_item("⇸", "+->", "Partial function"));
-            items.push(create_operator_item("↣", ">->", "Total injection"));
-            items.push(create_operator_item("⤔", ">+>", "Partial injection"));
-            items.push(create_operator_item("↠", "->>", "Total surjection"));
-            items.push(create_operator_item("⤀", "+>>", "Partial surjection"));
-            items.push(create_operator_item("⤖", ">->>", "Bijection"));
-            items.push(create_operator_item("↦", "|->", "Maplet (ordered pair)"));
-            items.push(create_operator_item("◁", "<|", "Domain restriction"));
-            items.push(create_operator_item("⩤", "<<|", "Domain subtraction"));
-            items.push(create_operator_item("▷", "|>", "Range restriction"));
-            items.push(create_operator_item("⩥", "|>>", "Range subtraction"));
-            items.push(create_operator_item(";", "", "Forward composition"));
-            items.push(create_operator_item("∘", "circ", "Backward composition"));
-            items.push(create_operator_item(
-                RELATIONAL_OVERRIDE,
-                "<+",
-                "Relational override",
-            ));
-            items.push(create_operator_item("⊗", "><", "Direct product"));
-            items.push(create_operator_item("∥", "||", "Parallel product"));
-            items.push(create_operator_item("×", "**", "Cartesian product"));
-            items.push(create_operator_item("∼", "~", "Relational inverse"));
-            items.push(create_operator_item("⦂", "oftype", "Type constraint"));
-            items.push(create_operator_item("λ", "%", "Lambda abstraction"));
-            items.push(create_operator_item("⋃", "UNION", "Generalized union"));
-            items.push(create_operator_item(
-                "⋂",
-                "INTER",
-                "Generalized intersection",
-            ));
-            items.push(create_operator_item("ℙ1", "POW1", "Non-empty power set"));
-            items.push(create_operator_item("‥", "..", "Integer range"));
-            items.push(create_operator_item("+", "", "Addition"));
-            items.push(create_operator_item("−", "-", "Subtraction"));
-            items.push(create_operator_item("∗", "*", "Multiplication"));
-            items.push(create_operator_item("÷", "/", "Division"));
-            items.push(create_operator_item("mod", "", "Modulo"));
-            items.push(create_operator_item("^", "", "Exponentiation"));
-        } else {
-            // ASCII operators
-            items.push(create_operator_item("&", "∧", "Logical and"));
-            items.push(create_operator_item("or", "∨", "Logical or"));
-            items.push(create_operator_item("not", "¬", "Logical negation"));
-            items.push(create_operator_item("=>", "⇒", "Logical implication"));
-            items.push(create_operator_item("<=>", "⇔", "Logical equivalence"));
-            items.push(create_operator_item(
-                "!",
-                "∀",
-                "Universal quantifier (forall)",
-            ));
-            items.push(create_operator_item(
-                "#",
-                "∃",
-                "Existential quantifier (exists)",
-            ));
-
-            items.push(create_operator_item(":", "∈", "Set membership (in)"));
-            items.push(create_operator_item("/:", "∉", "Not in set"));
-            items.push(create_operator_item("<:", "⊆", "Subset or equal"));
-            items.push(create_operator_item("<<:", "⊂", "Strict subset"));
-            items.push(create_operator_item("/<:", "⊈", "Not subset or equal"));
-            items.push(create_operator_item("/<<:", "⊄", "Not strict subset"));
-            items.push(create_operator_item("\\/", "∪", "Set union"));
-            items.push(create_operator_item("/\\", "∩", "Set intersection"));
-            items.push(create_operator_item("\\", "∖", "Set difference"));
-            items.push(create_operator_item("POW", "ℙ", "Power set"));
-            items.push(create_operator_item("{}", "∅", "Empty set"));
-
-            items.push(create_operator_item("<->", "↔", "Relation"));
-            items.push(create_operator_item(
-                "<<->",
-                TOTAL_RELATION,
-                "Total relation",
-            ));
-            items.push(create_operator_item(
-                "<->>",
-                SURJECTIVE_RELATION,
-                "Surjective relation",
-            ));
-            items.push(create_operator_item(
-                "<<->>",
-                TOTAL_SURJECTIVE_RELATION,
-                "Total surjective relation",
-            ));
-            items.push(create_operator_item("-->", "→", "Total function"));
-            items.push(create_operator_item("+->", "⇸", "Partial function"));
-            items.push(create_operator_item(">->", "↣", "Total injection"));
-            items.push(create_operator_item(">+>", "⤔", "Partial injection"));
-            items.push(create_operator_item("->>", "↠", "Total surjection"));
-            items.push(create_operator_item("+>>", "⤀", "Partial surjection"));
-            items.push(create_operator_item(">->>", "⤖", "Bijection"));
-            items.push(create_operator_item("|->", "↦", "Maplet (ordered pair)"));
-            items.push(create_operator_item("<|", "◁", "Domain restriction"));
-            items.push(create_operator_item("<<|", "⩤", "Domain subtraction"));
-            items.push(create_operator_item("|>", "▷", "Range restriction"));
-            items.push(create_operator_item("|>>", "⩥", "Range subtraction"));
-            items.push(create_operator_item(";", "", "Forward composition"));
-            items.push(create_operator_item("circ", "∘", "Backward composition"));
-            items.push(create_operator_item(
-                "<+",
-                RELATIONAL_OVERRIDE,
-                "Relational override",
-            ));
-            items.push(create_operator_item("><", "⊗", "Direct product"));
-            items.push(create_operator_item("||", "∥", "Parallel product"));
-            items.push(create_operator_item("**", "×", "Cartesian product"));
-            items.push(create_operator_item("~", "∼", "Relational inverse"));
-            items.push(create_operator_item("oftype", "⦂", "Type constraint"));
-            items.push(create_operator_item("%", "λ", "Lambda abstraction"));
-            items.push(create_operator_item("UNION", "⋃", "Generalized union"));
-            items.push(create_operator_item(
-                "INTER",
-                "⋂",
-                "Generalized intersection",
-            ));
-            items.push(create_operator_item("POW1", "ℙ1", "Non-empty power set"));
-            items.push(create_operator_item("..", "..", "Integer range"));
-            items.push(create_operator_item("+", "", "Addition"));
-            items.push(create_operator_item("-", "−", "Subtraction"));
-            items.push(create_operator_item("*", "∗", "Multiplication"));
-            items.push(create_operator_item("/", "÷", "Division"));
-            items.push(create_operator_item("mod", "", "Modulo"));
-            items.push(create_operator_item("^", "", "Exponentiation"));
-        }
-
-        if config.use_unicode {
-            items.push(create_operator_item("≔", ":=", "Deterministic assignment"));
-            items.push(create_operator_item(
-                ":∣",
-                ":|",
-                "Non-deterministic assignment (such that)",
-            ));
-            items.push(create_operator_item(
-                ":∈",
-                "::",
-                "Non-deterministic assignment (member of)",
-            ));
-        } else {
-            items.push(create_operator_item(":=", "≔", "Deterministic assignment"));
-            items.push(create_operator_item(
-                ":|",
-                ":∣",
-                "Non-deterministic assignment (such that)",
-            ));
-            items.push(create_operator_item(
-                "::",
-                ":∈",
-                "Non-deterministic assignment (member of)",
-            ));
-        }
-
-        items
+        operators::OPERATOR_SPELLINGS
+            .iter()
+            .filter(|entry| entry.completion)
+            .map(|entry| {
+                let label = entry.text(config.use_unicode);
+                let alternative = entry.text(!config.use_unicode);
+                let alternative = if alternative == label {
+                    ""
+                } else {
+                    alternative
+                };
+                create_operator_item(label, alternative, entry.description)
+            })
+            .collect()
     }
 
     /// Get identifier completions from the current context
@@ -919,8 +725,16 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "⇒"));
         assert!(items.iter().any(|item| item.label == "∈"));
         assert!(items.iter().any(|item| item.label == "⊈"));
-        assert!(items.iter().any(|item| item.label == TOTAL_RELATION));
-        assert!(items.iter().any(|item| item.label == RELATIONAL_OVERRIDE));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == operators::TOTAL_RELATION)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == operators::RELATIONAL_OVERRIDE)
+        );
         assert!(items.iter().any(|item| item.label == "‥"));
         assert!(items.iter().any(|item| item.label == "−"));
         assert!(items.iter().any(|item| item.label == ":∣"));
