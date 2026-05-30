@@ -763,9 +763,9 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Set difference**\n\nA ∖ B contains elements in A but not in B.\n\n```eventb\nA ∖ B\nA \\ B  // ASCII alternative\n```",
     ),
     (
-        &["℘", "POW"],
-        "℘ (Power Set)",
-        "**Power set**\n\n℘(S) is the set of all subsets of S.\n\n```eventb\n℘(S)\nPOW(S)  // ASCII alternative\n```",
+        &["ℙ", "POW"],
+        "ℙ (Power Set)",
+        "**Power set**\n\nℙ(S) is the set of all subsets of S.\n\n```eventb\nℙ(S)\nPOW(S)  // ASCII alternative\n```",
     ),
     (
         &["∅", "{}"],
@@ -1197,7 +1197,8 @@ mod tests {
             // Relation operators
             "↦", "|->", "◁", "<|", "⩤", "<<|", "▷", "|>", "⩥", "|>>", "∘", "circ", ";", "⊕", "<+",
             "⊗", "><", "∥", "||", "×", "**", "∼", "~", "⦂", "oftype", // Misc
-            "..", "λ", "%", "⋃", "UNION", "⋂", "INTER", "ℙ1", "POW1", // Assignment
+            "..", "λ", "%", "⋃", "UNION", "⋂", "INTER", "ℙ", "POW", "ℙ1",
+            "POW1", // Assignment
             ":=",
         ];
 
