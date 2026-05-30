@@ -28,6 +28,8 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("∉", "/:"),
     ("⊆", "<:"),
     ("⊂", "<<:"),
+    ("⊈", "/<:"),
+    ("⊄", "/<<:"),
     ("∪", "\\/"),
     ("∩", "/\\"),
     ("∖", "\\"),
@@ -963,6 +965,8 @@ mod tests {
         assert_eq!(provider.convert_to_ascii("f ∘ g"), "f circ g");
         assert_eq!(provider.convert_to_ascii("⊆"), "<:");
         assert_eq!(provider.convert_to_ascii("⊂"), "<<:");
+        assert_eq!(provider.convert_to_ascii("⊈"), "/<:");
+        assert_eq!(provider.convert_to_ascii("⊄"), "/<<:");
         assert_eq!(provider.convert_to_ascii("◁"), "<|");
         assert_eq!(provider.convert_to_ascii("▷"), "|>");
         assert_eq!(provider.convert_to_ascii("⤔"), ">+>");

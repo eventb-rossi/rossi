@@ -748,6 +748,16 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Strict subset**\n\nA ⊂ B means A ⊆ B and A ≠ B.\n\n```eventb\nA ⊂ B\nA <<: B  // ASCII alternative\n```",
     ),
     (
+        &["⊈", "/<:"],
+        "⊈ (Not Subset)",
+        "**Not subset or equal**\n\nA ⊈ B means at least one element of A is not in B.\n\n```eventb\nA ⊈ B\nA /<: B  // ASCII alternative\n```",
+    ),
+    (
+        &["⊄", "/<<:"],
+        "⊄ (Not Strict Subset)",
+        "**Not strict subset**\n\nA ⊄ B means A is not a strict subset of B.\n\n```eventb\nA ⊄ B\nA /<<: B  // ASCII alternative\n```",
+    ),
+    (
         &["∪", "\\/"],
         "∪ (Set Union)",
         "**Set union**\n\nA ∪ B contains all elements in A or B.\n\n```eventb\nA ∪ B\nA \\/ B  // ASCII alternative\n```",
@@ -1192,7 +1202,8 @@ mod tests {
         let operators = vec![
             // Logical
             "∧", "&", "∨", "or", "¬", "not", "⇒", "=>", // Set
-            "∈", ":", "⊆", "<:", "∪", "\\/", "∩", "/\\", // Function types
+            "∈", ":", "⊆", "<:", "⊈", "/<:", "⊂", "<<:", "⊄", "/<<:", "∪", "\\/", "∩",
+            "/\\", // Function types
             "→", "-->", "⇸", "+->", "↣", ">->", "⤔", ">+>", "↠", "->>", "⤀", "+>>", "⤖", ">->>",
             // Relation operators
             "↦", "|->", "◁", "<|", "⩤", "<<|", "▷", "|>", "⩥", "|>>", "∘", "circ", ";", "⊕", "<+",
