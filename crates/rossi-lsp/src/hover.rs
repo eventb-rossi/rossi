@@ -950,14 +950,14 @@ const OPERATOR_DOCS: &[DocEntry] = &[
     ),
     // Assignment operators
     (
-        &[":="],
+        &["≔", ":="],
         "Deterministic Assignment",
-        "**Deterministic assignment**\n\nAssigns a specific value to a variable.\n\n```eventb\ncount := count + 1\n```",
+        "**Deterministic assignment**\n\nAssigns a specific value to a variable.\n\n```eventb\ncount ≔ count + 1\ncount := count + 1  // ASCII alternative\n```",
     ),
     (
-        &[":|"],
+        &[":∣", ":|"],
         "Non-deterministic Assignment",
-        "**Non-deterministic assignment (such that)**\n\nAssigns any value satisfying a predicate.\n\n```eventb\ncount :| count' ∈ ℕ ∧ count' > 0\n```",
+        "**Non-deterministic assignment (such that)**\n\nAssigns any value satisfying a predicate.\n\n```eventb\ncount :∣ count' ∈ ℕ ∧ count' > 0\ncount :| count' : NAT & count' > 0  // ASCII alternative\n```",
     ),
     (
         &[":∈", "::"],
@@ -1309,7 +1309,12 @@ mod tests {
             "POW",
             "ℙ1",
             "POW1", // Assignment
+            "≔",
             ":=",
+            ":∣",
+            ":|",
+            ":∈",
+            "::",
         ];
 
         for op in operators {

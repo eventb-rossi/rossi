@@ -506,18 +506,31 @@ impl CompletionProvider {
             items.push(create_operator_item("^", "", "Exponentiation"));
         }
 
-        // Assignment operators (always available)
-        items.push(create_operator_item(":=", "", "Deterministic assignment"));
-        items.push(create_operator_item(
-            ":|",
-            "",
-            "Non-deterministic assignment (such that)",
-        ));
-        items.push(create_operator_item(
-            ":∈",
-            "::",
-            "Non-deterministic assignment (member of)",
-        ));
+        if config.use_unicode {
+            items.push(create_operator_item("≔", ":=", "Deterministic assignment"));
+            items.push(create_operator_item(
+                ":∣",
+                ":|",
+                "Non-deterministic assignment (such that)",
+            ));
+            items.push(create_operator_item(
+                ":∈",
+                "::",
+                "Non-deterministic assignment (member of)",
+            ));
+        } else {
+            items.push(create_operator_item(":=", "≔", "Deterministic assignment"));
+            items.push(create_operator_item(
+                ":|",
+                ":∣",
+                "Non-deterministic assignment (such that)",
+            ));
+            items.push(create_operator_item(
+                "::",
+                ":∈",
+                "Non-deterministic assignment (member of)",
+            ));
+        }
 
         items
     }
@@ -910,6 +923,7 @@ mod tests {
         assert!(items.iter().any(|item| item.label == RELATIONAL_OVERRIDE));
         assert!(items.iter().any(|item| item.label == "‥"));
         assert!(items.iter().any(|item| item.label == "−"));
+        assert!(items.iter().any(|item| item.label == ":∣"));
         assert!(items.iter().any(|item| item.label == "ℙ"));
         assert!(!items.iter().any(|item| item.label == "℘"));
     }
@@ -929,6 +943,7 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "or"));
         assert!(items.iter().any(|item| item.label == "=>"));
         assert!(items.iter().any(|item| item.label == ":"));
+        assert!(items.iter().any(|item| item.label == "::"));
     }
 
     #[test]
