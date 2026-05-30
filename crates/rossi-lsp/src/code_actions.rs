@@ -63,7 +63,7 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("∘", "circ"),
     ("⊗", "><"),
     ("∥", "||"),
-    ("⁻¹", "~"),
+    ("∼", "~"),
     // Generalized operators
     ("⋃", "UNION"),
     ("⋂", "INTER"),
@@ -938,6 +938,7 @@ mod tests {
         assert_eq!(provider.convert_to_unicode("x & y"), "x ∧ y");
         assert_eq!(provider.convert_to_unicode("x => y"), "x ⇒ y");
         assert_eq!(provider.convert_to_unicode("x : NAT"), "x ∈ ℕ");
+        assert_eq!(provider.convert_to_unicode("r~"), "r∼");
         assert_eq!(
             provider.convert_to_unicode("x & y => z or w"),
             "x ∧ y ⇒ z ∨ w"
@@ -969,7 +970,7 @@ mod tests {
         assert_eq!(provider.convert_to_ascii("⤖"), ">->>");
         assert_eq!(provider.convert_to_ascii("⦂"), "oftype");
         assert_eq!(provider.convert_to_ascii("∅"), "{}");
-        assert_eq!(provider.convert_to_ascii("r⁻¹"), "r~");
+        assert_eq!(provider.convert_to_ascii("r∼"), "r~");
         assert_eq!(provider.convert_to_ascii("⋃"), "UNION");
         assert_eq!(provider.convert_to_ascii("⋂"), "INTER");
         assert_eq!(provider.convert_to_ascii("·"), ".");

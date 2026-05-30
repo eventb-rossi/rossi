@@ -26,6 +26,39 @@ fn test_cli_version() {
 }
 
 #[test]
+fn test_fmt_stdin_inverse_operator_conversion() {
+    // ASCII `~` is accepted on input; `fmt` emits Unicode ∼ (U+223C) and
+    // `fmt --ascii` emits `~` (U+007E).
+    let source = "CONTEXT test\nCONSTANTS\n    f, r\nAXIOMS\n    @axm1 r = f~\nEND\n";
+
+    let output = run_cli_with_stdin(&["fmt", "-"], source);
+    assert!(
+        output.status.success(),
+        "fmt - should accept ASCII ~ inverse"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("f\u{223C}"),
+        "Unicode fmt should emit ∼, got: {stdout}"
+    );
+
+    let output = run_cli_with_stdin(&["fmt", "--ascii", "-"], source);
+    assert!(
+        output.status.success(),
+        "fmt --ascii should accept ASCII ~ inverse"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("f~"),
+        "ASCII fmt should emit ~, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains('\u{223C}'),
+        "ASCII fmt output must not contain U+223C"
+    );
+}
+
+#[test]
 fn test_cli_valid_context() {
     let output = Command::new("cargo")
         .args([

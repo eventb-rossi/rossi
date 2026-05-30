@@ -884,9 +884,9 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Parallel product**\n\nApplies two relations in parallel on pairs.\n\n```eventb\nr ∥ s\nr || s  // ASCII alternative\n```",
     ),
     (
-        &["⁻¹", "~"],
-        "⁻¹ (Inverse)",
-        "**Relational inverse**\n\nr⁻¹ reverses all pairs in the relation.\n\n```eventb\nr⁻¹\nr~  // ASCII alternative\n```",
+        &["∼", "~"],
+        "∼ (Inverse)",
+        "**Relational inverse**\n\nr∼ reverses all pairs in the relation.\n\n```eventb\nr∼\nr~  // ASCII alternative\n```",
     ),
     (
         &["⦂", "oftype"],
@@ -1196,7 +1196,7 @@ mod tests {
             "→", "-->", "⇸", "+->", "↣", ">->", "⤔", ">+>", "↠", "->>", "⤀", "+>>", "⤖", ">->>",
             // Relation operators
             "↦", "|->", "◁", "<|", "⩤", "<<|", "▷", "|>", "⩥", "|>>", "∘", "circ", ";", "⊕", "<+",
-            "⊗", "><", "∥", "||", "×", "**", "⁻¹", "~", "⦂", "oftype", // Misc
+            "⊗", "><", "∥", "||", "×", "**", "∼", "~", "⦂", "oftype", // Misc
             "..", "λ", "%", "⋃", "UNION", "⋂", "INTER", "ℙ1", "POW1", // Assignment
             ":=",
         ];

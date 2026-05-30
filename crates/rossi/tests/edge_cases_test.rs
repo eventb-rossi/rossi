@@ -188,6 +188,20 @@ fn test_inverse_function_application() {
     );
 }
 
+#[test]
+fn test_inverse_tilde_ascii() {
+    // Postfix ASCII ~ (U+007E) must parse identically to the Unicode ∼ form.
+    let source = common::axiom_context("f, r", "r = f~");
+    let rhs = common::parse_axiom_rhs(&source);
+    match &rhs {
+        Expression::Unary { op, operand } => {
+            assert_eq!(*op, UnaryOp::Inverse);
+            assert!(matches!(operand.as_ref(), Expression::Identifier(n) if n == "f"));
+        }
+        other => panic!("Expected Unary Inverse, got {:?}", other),
+    }
+}
+
 // ============================================================================
 // HIGH priority: BinaryOp::Semicolon (forward composition)
 // ============================================================================
