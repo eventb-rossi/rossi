@@ -85,6 +85,8 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("·", "."),
     ("λ", "%"),
     ("≔", ":="),
+    (":∈", "::"),
+    (":∣", ":|"),
     ("∣", "|"),
 ];
 
@@ -136,24 +138,6 @@ fn contains_whole_word(text: &str, word: &str) -> bool {
         start = abs_pos + word.len();
     }
     false
-}
-
-/// Replace `word` with `replacement` only at whole-word boundaries
-fn replace_whole_word(text: &str, word: &str, replacement: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut start = 0;
-    while let Some(pos) = text[start..].find(word) {
-        let abs_pos = start + pos;
-        if is_word_boundary(text, abs_pos) && is_word_boundary_end(text, abs_pos + word.len()) {
-            result.push_str(&text[start..abs_pos]);
-            result.push_str(replacement);
-        } else {
-            result.push_str(&text[start..abs_pos + word.len()]);
-        }
-        start = abs_pos + word.len();
-    }
-    result.push_str(&text[start..]);
-    result
 }
 
 /// Convert a character (code-point) offset to a byte offset within a line.
@@ -291,17 +275,37 @@ impl CodeActionProvider {
 
     /// Convert ASCII operators to Unicode in the given text
     pub fn convert_to_unicode(&self, text: &str) -> String {
-        let mut result = text.to_string();
-
         // Sort by length (longest first) to handle multi-character operators correctly
         let mut ops: Vec<_> = self.ascii_to_unicode.iter().collect();
         ops.sort_by_key(|(ascii, _)| std::cmp::Reverse(ascii.len()));
 
-        for (ascii, unicode) in ops {
-            if is_alphabetic_op(ascii) {
-                result = replace_whole_word(&result, ascii, unicode);
+        let mut result = String::with_capacity(text.len());
+        let mut byte_pos = 0;
+        while byte_pos < text.len() {
+            let rest = &text[byte_pos..];
+            let mut matched = None;
+
+            for (ascii, unicode) in &ops {
+                let ascii = **ascii;
+                let unicode = **unicode;
+                if rest.starts_with(ascii)
+                    && (!is_alphabetic_op(ascii)
+                        || (is_word_boundary(text, byte_pos)
+                            && is_word_boundary_end(text, byte_pos + ascii.len())))
+                {
+                    matched = Some((ascii, unicode));
+                    break;
+                }
+            }
+
+            if let Some((ascii, unicode)) = matched {
+                result.push_str(unicode);
+                byte_pos += ascii.len();
+            } else if let Some(ch) = rest.chars().next() {
+                result.push(ch);
+                byte_pos += ch.len_utf8();
             } else {
-                result = result.replace(*ascii, unicode);
+                break;
             }
         }
 
@@ -952,6 +956,8 @@ mod tests {
         assert_eq!(provider.convert_to_unicode("x & y"), "x ∧ y");
         assert_eq!(provider.convert_to_unicode("x => y"), "x ⇒ y");
         assert_eq!(provider.convert_to_unicode("x : NAT"), "x ∈ ℕ");
+        assert_eq!(provider.convert_to_unicode("x :: S"), "x :∈ S");
+        assert_eq!(provider.convert_to_unicode("x :| x' : NAT"), "x :∣ x' ∈ ℕ");
         assert_eq!(provider.convert_to_unicode("r~"), "r∼");
         assert_eq!(
             provider.convert_to_unicode("x & y => z or w"),
@@ -998,6 +1004,8 @@ mod tests {
         assert_eq!(provider.convert_to_ascii("⋂"), "INTER");
         assert_eq!(provider.convert_to_ascii("·"), ".");
         assert_eq!(provider.convert_to_ascii("λ"), "%");
+        assert_eq!(provider.convert_to_ascii("x :∈ S"), "x :: S");
+        assert_eq!(provider.convert_to_ascii("x :∣ x' ∈ ℕ"), "x :| x' : NAT");
     }
 
     #[test]
