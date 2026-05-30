@@ -3,16 +3,16 @@
 //! (`success` / `invariant_violation` / `load_error` / `deadlock` / `timeout`)
 //! against the reference `animate_results.tsv`.
 //!
-//! `#[ignore]` by default: the corpus, animate jar, and JDK live outside the
+//! `#[ignore]` by default: the corpus and animate executable live outside the
 //! repo. Run locally:
 //!
 //!   cargo test -p rossi-build --test animate_corpus -- --ignored --nocapture
 //!
 //! Environment overrides:
 //!   EVENTB_CORPUS_DIR   — external Event-B model corpus directory
-//!   EVENTB_ANIMATE_JAR  — path to the animate CLI jar
+//!   EVENTB_ANIMATE      — eventb-animate executable (default: eventb-animate)
 //!   EVENTB_ANIMATE_TIMEOUT_SECS — default 120
-//! Relative paths are resolved from the workspace root.
+//! Relative executable paths are resolved from the workspace root.
 //!
 //! Per-model metadata comes from the corpus itself: column 4 of
 //! `animate_results.tsv` names the machine each reference outcome was
@@ -48,8 +48,12 @@ fn animate_regenerated_corpus_matches_reference() {
         eprintln!("EVENTB_CORPUS_DIR is not set or is not a directory — nothing to do");
         return;
     };
-    let Some(jar) = locate_jar() else {
-        eprintln!("EVENTB_ANIMATE_JAR is not set or is not a file — nothing to do");
+    let Some(animate) = locate_animate() else {
+        let configured =
+            std::env::var("EVENTB_ANIMATE").unwrap_or_else(|_| "eventb-animate".into());
+        eprintln!(
+            "EVENTB_ANIMATE command `{configured}` was not found or is not executable — nothing to do"
+        );
         return;
     };
     let reference_tsv = corpus.join("animate_results.tsv");
@@ -97,7 +101,7 @@ fn animate_regenerated_corpus_matches_reference() {
         let regen_zip = regen_dir.join(format!("{model}.zip"));
         let outcome = match regen_one(zip, &regen_zip) {
             Ok(()) => animate_one(
-                &jar,
+                &animate,
                 &regen_zip,
                 machines.get(model.as_str()).map(String::as_str),
                 timeout,
@@ -189,8 +193,46 @@ fn locate_corpus() -> Option<PathBuf> {
     env_path("EVENTB_CORPUS_DIR").filter(|p| p.is_dir())
 }
 
-fn locate_jar() -> Option<PathBuf> {
-    env_path("EVENTB_ANIMATE_JAR").filter(|p| p.is_file())
+fn locate_animate() -> Option<PathBuf> {
+    let configured = std::env::var("EVENTB_ANIMATE").unwrap_or_else(|_| "eventb-animate".into());
+    resolve_program(&configured)
+}
+
+fn resolve_program(program: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(program);
+    if path.is_absolute() || program.contains('/') || program.contains('\\') {
+        let resolved = if path.is_absolute() {
+            path
+        } else {
+            workspace_root().join(path)
+        };
+        return is_executable_file(&resolved).then_some(resolved);
+    }
+
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(program))
+            .find(|candidate| is_executable_file(candidate))
+    })
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn env_path(var: &str) -> Option<PathBuf> {
@@ -279,13 +321,9 @@ fn regen_one(zip: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn animate_one(jar: &Path, zip: &Path, machine: Option<&str>, timeout: Duration) -> Outcome {
-    let mut cmd = Command::new("java");
-    cmd.arg("-jar")
-        .arg(jar)
-        .arg("--steps")
-        .arg("10")
-        .arg("--invariants");
+fn animate_one(animate: &Path, zip: &Path, machine: Option<&str>, timeout: Duration) -> Outcome {
+    let mut cmd = Command::new(animate);
+    cmd.arg("--steps").arg("10").arg("--invariants");
     if let Some(m) = machine {
         cmd.arg("--machine").arg(m);
     }
