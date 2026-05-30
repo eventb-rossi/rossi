@@ -816,7 +816,7 @@ impl PrettyPrinter {
             UnaryOp::PowerSet1 => ("ℙ1", "POW1"),
             UnaryOp::Domain => ("dom", "dom"),
             UnaryOp::Range => ("ran", "ran"),
-            UnaryOp::Inverse => ("\u{223C}", "\u{223C}"),
+            UnaryOp::Inverse => ("\u{223C}", "~"),
         };
         self.sym(u, a)
     }

@@ -21,6 +21,30 @@ END
 }
 
 #[test]
+fn test_pretty_print_inverse_operator() {
+    // ASCII `~` input round-trips: Unicode mode emits ∼ (U+223C), ASCII mode
+    // emits ~ (U+007E).
+    let source = common::axiom_context("f, r", "r = f~");
+    let component = parse(&source).expect("Failed to parse ASCII ~ inverse");
+
+    let unicode = to_string(&component);
+    assert!(
+        unicode.contains("f\u{223C}"),
+        "Unicode output should use ∼, got: {unicode}"
+    );
+
+    let ascii = to_string_ascii(&component);
+    assert!(
+        ascii.contains("f~"),
+        "ASCII output should use ~, got: {ascii}"
+    );
+    assert!(
+        !ascii.contains('\u{223C}'),
+        "ASCII output must not contain U+223C"
+    );
+}
+
+#[test]
 fn test_pretty_print_context_with_all_clauses() {
     let source = r#"CONTEXT test_ctx
 EXTENDS base_ctx

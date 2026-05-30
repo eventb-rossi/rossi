@@ -377,7 +377,7 @@ impl CompletionProvider {
             items.push(create_operator_item("⊗", "><", "Direct product"));
             items.push(create_operator_item("∥", "||", "Parallel product"));
             items.push(create_operator_item("×", "**", "Cartesian product"));
-            items.push(create_operator_item("⁻¹", "~", "Relational inverse"));
+            items.push(create_operator_item("∼", "~", "Relational inverse"));
             items.push(create_operator_item("⦂", "oftype", "Type constraint"));
             items.push(create_operator_item("λ", "%", "Lambda abstraction"));
             items.push(create_operator_item("⋃", "UNION", "Generalized union"));
@@ -435,7 +435,7 @@ impl CompletionProvider {
             items.push(create_operator_item("><", "⊗", "Direct product"));
             items.push(create_operator_item("||", "∥", "Parallel product"));
             items.push(create_operator_item("**", "×", "Cartesian product"));
-            items.push(create_operator_item("~", "⁻¹", "Relational inverse"));
+            items.push(create_operator_item("~", "∼", "Relational inverse"));
             items.push(create_operator_item("oftype", "⦂", "Type constraint"));
             items.push(create_operator_item("%", "λ", "Lambda abstraction"));
             items.push(create_operator_item("UNION", "⋃", "Generalized union"));

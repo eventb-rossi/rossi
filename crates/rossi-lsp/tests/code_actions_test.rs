@@ -501,9 +501,9 @@ fn test_new_operator_mappings() {
     assert_eq!(provider.convert_to_ascii("S ◁ r"), "S <| r");
     assert_eq!(provider.convert_to_ascii("r ▷ S"), "r |> S");
 
-    // New operators: ∅, ⁻¹, ⋃, ⋂, ·, λ
+    // New operators: ∅, ∼, ⋃, ⋂, ·, λ
     assert_eq!(provider.convert_to_ascii("∅"), "{}");
-    assert_eq!(provider.convert_to_ascii("r⁻¹"), "r~");
+    assert_eq!(provider.convert_to_ascii("r∼"), "r~");
     assert_eq!(provider.convert_to_ascii("⋃"), "UNION");
     assert_eq!(provider.convert_to_ascii("⋂"), "INTER");
     assert_eq!(provider.convert_to_ascii("·"), ".");
