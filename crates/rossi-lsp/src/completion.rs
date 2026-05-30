@@ -19,6 +19,10 @@ use std::sync::Arc;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 
+const TOTAL_RELATION: &str = "\u{E100}";
+const SURJECTIVE_RELATION: &str = "\u{E101}";
+const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+
 /// Configuration for completion behavior
 #[derive(Debug, Clone)]
 pub struct CompletionConfig {
@@ -360,6 +364,21 @@ impl CompletionProvider {
 
             // Relation operators
             items.push(create_operator_item("↔", "<->", "Relation"));
+            items.push(create_operator_item(
+                TOTAL_RELATION,
+                "<<->",
+                "Total relation",
+            ));
+            items.push(create_operator_item(
+                SURJECTIVE_RELATION,
+                "<->>",
+                "Surjective relation",
+            ));
+            items.push(create_operator_item(
+                TOTAL_SURJECTIVE_RELATION,
+                "<<->>",
+                "Total surjective relation",
+            ));
             items.push(create_operator_item("→", "-->", "Total function"));
             items.push(create_operator_item("⇸", "+->", "Partial function"));
             items.push(create_operator_item("↣", ">->", "Total injection"));
@@ -420,6 +439,21 @@ impl CompletionProvider {
             items.push(create_operator_item("{}", "∅", "Empty set"));
 
             items.push(create_operator_item("<->", "↔", "Relation"));
+            items.push(create_operator_item(
+                "<<->",
+                TOTAL_RELATION,
+                "Total relation",
+            ));
+            items.push(create_operator_item(
+                "<->>",
+                SURJECTIVE_RELATION,
+                "Surjective relation",
+            ));
+            items.push(create_operator_item(
+                "<<->>",
+                TOTAL_SURJECTIVE_RELATION,
+                "Total surjective relation",
+            ));
             items.push(create_operator_item("-->", "→", "Total function"));
             items.push(create_operator_item("+->", "⇸", "Partial function"));
             items.push(create_operator_item(">->", "↣", "Total injection"));
@@ -851,6 +885,7 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "⇒"));
         assert!(items.iter().any(|item| item.label == "∈"));
         assert!(items.iter().any(|item| item.label == "⊈"));
+        assert!(items.iter().any(|item| item.label == TOTAL_RELATION));
         assert!(items.iter().any(|item| item.label == "ℙ"));
         assert!(!items.iter().any(|item| item.label == "℘"));
     }
