@@ -350,6 +350,8 @@ impl CompletionProvider {
             items.push(create_operator_item("∉", "/:", "Not in set"));
             items.push(create_operator_item("⊆", "<:", "Subset or equal"));
             items.push(create_operator_item("⊂", "<<:", "Strict subset"));
+            items.push(create_operator_item("⊈", "/<:", "Not subset or equal"));
+            items.push(create_operator_item("⊄", "/<<:", "Not strict subset"));
             items.push(create_operator_item("∪", "\\/", "Set union"));
             items.push(create_operator_item("∩", "/\\", "Set intersection"));
             items.push(create_operator_item("∖", "\\", "Set difference"));
@@ -409,6 +411,8 @@ impl CompletionProvider {
             items.push(create_operator_item("/:", "∉", "Not in set"));
             items.push(create_operator_item("<:", "⊆", "Subset or equal"));
             items.push(create_operator_item("<<:", "⊂", "Strict subset"));
+            items.push(create_operator_item("/<:", "⊈", "Not subset or equal"));
+            items.push(create_operator_item("/<<:", "⊄", "Not strict subset"));
             items.push(create_operator_item("\\/", "∪", "Set union"));
             items.push(create_operator_item("/\\", "∩", "Set intersection"));
             items.push(create_operator_item("\\", "∖", "Set difference"));
@@ -846,6 +850,7 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "∨"));
         assert!(items.iter().any(|item| item.label == "⇒"));
         assert!(items.iter().any(|item| item.label == "∈"));
+        assert!(items.iter().any(|item| item.label == "⊈"));
         assert!(items.iter().any(|item| item.label == "ℙ"));
         assert!(!items.iter().any(|item| item.label == "℘"));
     }
