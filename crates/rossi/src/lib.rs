@@ -42,6 +42,7 @@
 
 pub mod ast;
 pub mod error;
+pub mod operators;
 pub mod parser;
 pub mod pretty;
 pub mod xml;
