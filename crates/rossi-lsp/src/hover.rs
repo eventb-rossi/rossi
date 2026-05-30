@@ -8,17 +8,16 @@
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use dashmap::DashMap;
-use rossi::{Component, Expression, LabeledPredicate, Predicate, PrettyPrinter, parse};
+use rossi::{
+    Component, Expression, LabeledPredicate, Predicate, PrettyPrinter,
+    operators::{self, OperatorId},
+    parse,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-
-const TOTAL_RELATION: &str = "\u{E100}";
-const SURJECTIVE_RELATION: &str = "\u{E101}";
-const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
-const RELATIONAL_OVERRIDE: &str = "\u{E103}";
 
 /// Context information extracted from a parsed component
 #[derive(Debug, Clone)]
@@ -220,7 +219,9 @@ impl HoverProvider {
 
     /// Get hover information for operators
     fn hover_operator(&self, word: &str) -> Option<Hover> {
-        lookup_doc(OPERATOR_DOCS, word).map(|(t, d)| create_hover(t, d))
+        lookup_operator_doc(word)
+            .or_else(|| lookup_doc(BUILTIN_OPERATOR_DOCS, word))
+            .map(|(t, d)| create_hover(t, d))
     }
 
     /// Get hover information for identifiers
@@ -549,15 +550,21 @@ fn create_hover(title: &str, description: &str) -> Hover {
 use crate::identifier_utils::get_word_at_position;
 
 /// Documentation entry: `(keys, title, markdown description)`.
-///
-/// Multiple keys (e.g., Unicode + ASCII spellings of the same operator) share
-/// one entry — hover lookup is a linear scan over the table.
 type DocEntry = (&'static [&'static str], &'static str, &'static str);
+type OperatorDocEntry = (OperatorId, &'static str, &'static str);
 
 fn lookup_doc(table: &[DocEntry], word: &str) -> Option<(&'static str, &'static str)> {
     table
         .iter()
         .find(|(keys, _, _)| keys.contains(&word))
+        .map(|(_, title, desc)| (*title, *desc))
+}
+
+fn lookup_operator_doc(word: &str) -> Option<(&'static str, &'static str)> {
+    let spelling = operators::lookup_token(word)?;
+    OPERATOR_DOCS
+        .iter()
+        .find(|(id, _, _)| *id == spelling.id)
         .map(|(_, title, desc)| (*title, *desc))
 }
 
@@ -694,334 +701,336 @@ const KEYWORD_DOCS: &[DocEntry] = &[
     ),
 ];
 
-const OPERATOR_DOCS: &[DocEntry] = &[
+const OPERATOR_DOCS: &[OperatorDocEntry] = &[
     // Logical operators
     (
-        &["∧", "&"],
+        OperatorId::And,
         "∧ (Logical AND)",
         "**Logical conjunction**\n\nReturns true if both operands are true.\n\n```eventb\nP ∧ Q\nP & Q  // ASCII alternative\n```",
     ),
     (
-        &["∨", "or"],
+        OperatorId::Or,
         "∨ (Logical OR)",
         "**Logical disjunction**\n\nReturns true if at least one operand is true.\n\n```eventb\nP ∨ Q\nP or Q  // ASCII alternative\n```",
     ),
     (
-        &["¬", "not"],
+        OperatorId::Not,
         "¬ (Logical NOT)",
         "**Logical negation**\n\nReturns the opposite truth value.\n\n```eventb\n¬P\nnot P  // ASCII alternative\n```",
     ),
     (
-        &["⇒", "=>"],
+        OperatorId::Implies,
         "⇒ (Implication)",
         "**Logical implication**\n\nP ⇒ Q means \"if P then Q\".\n\n```eventb\nx > 0 ⇒ x ≠ 0\nx > 0 => x /= 0  // ASCII alternative\n```",
     ),
     (
-        &["⇔", "<=>"],
+        OperatorId::Equivalent,
         "⇔ (Equivalence)",
         "**Logical equivalence**\n\nP ⇔ Q means \"P if and only if Q\".\n\n```eventb\nx = 0 ⇔ ¬(x > 0)\nx = 0 <=> not(x > 0)  // ASCII alternative\n```",
     ),
     (
-        &["∀", "!"],
+        OperatorId::ForAll,
         "∀ (Universal Quantifier)",
         "**Universal quantification (for all)**\n\n```eventb\n∀ x · x ∈ S ⇒ P(x)\n! x . (x : S => P(x))  // ASCII alternative\n```\n\nReads as \"for all x such that x is in S, P(x) holds\".",
     ),
     (
-        &["∃", "#"],
+        OperatorId::Exists,
         "∃ (Existential Quantifier)",
         "**Existential quantification (exists)**\n\n```eventb\n∃ x · x ∈ S ∧ P(x)\n# x . (x : S & P(x))  // ASCII alternative\n```\n\nReads as \"there exists an x in S such that P(x) holds\".",
     ),
     // Set operators
     (
-        &["∈", ":"],
+        OperatorId::In,
         "∈ (Set Membership)",
         "**Set membership**\n\nChecks if an element belongs to a set.\n\n```eventb\nx ∈ ℕ\nx : NAT  // ASCII alternative\n```",
     ),
     (
-        &["∉", "/:"],
+        OperatorId::NotIn,
         "∉ (Not Member)",
         "**Not a member of set**\n\nChecks if an element does not belong to a set.\n\n```eventb\nx ∉ S\nx /: S  // ASCII alternative\n```",
     ),
     (
-        &["⊆", "<:"],
+        OperatorId::Subset,
         "⊆ (Subset)",
         "**Subset or equal**\n\nA ⊆ B means all elements of A are in B.\n\n```eventb\nA ⊆ B\nA <: B  // ASCII alternative\n```",
     ),
     (
-        &["⊂", "<<:"],
+        OperatorId::SubsetStrict,
         "⊂ (Strict Subset)",
         "**Strict subset**\n\nA ⊂ B means A ⊆ B and A ≠ B.\n\n```eventb\nA ⊂ B\nA <<: B  // ASCII alternative\n```",
     ),
     (
-        &["⊈", "/<:"],
+        OperatorId::NotSubset,
         "⊈ (Not Subset)",
         "**Not subset or equal**\n\nA ⊈ B means at least one element of A is not in B.\n\n```eventb\nA ⊈ B\nA /<: B  // ASCII alternative\n```",
     ),
     (
-        &["⊄", "/<<:"],
+        OperatorId::NotSubsetStrict,
         "⊄ (Not Strict Subset)",
         "**Not strict subset**\n\nA ⊄ B means A is not a strict subset of B.\n\n```eventb\nA ⊄ B\nA /<<: B  // ASCII alternative\n```",
     ),
     (
-        &["∪", "\\/"],
+        OperatorId::Union,
         "∪ (Set Union)",
         "**Set union**\n\nA ∪ B contains all elements in A or B.\n\n```eventb\nA ∪ B\nA \\/ B  // ASCII alternative\n```",
     ),
     (
-        &["∩", "/\\"],
+        OperatorId::Intersection,
         "∩ (Set Intersection)",
         "**Set intersection**\n\nA ∩ B contains elements in both A and B.\n\n```eventb\nA ∩ B\nA /\\ B  // ASCII alternative\n```",
     ),
     (
-        &["∖", "\\"],
+        OperatorId::Difference,
         "∖ (Set Difference)",
         "**Set difference**\n\nA ∖ B contains elements in A but not in B.\n\n```eventb\nA ∖ B\nA \\ B  // ASCII alternative\n```",
     ),
     (
-        &["ℙ", "POW"],
+        OperatorId::PowerSet,
         "ℙ (Power Set)",
         "**Power set**\n\nℙ(S) is the set of all subsets of S.\n\n```eventb\nℙ(S)\nPOW(S)  // ASCII alternative\n```",
     ),
     (
-        &["∅", "{}"],
+        OperatorId::EmptySet,
         "∅ (Empty Set)",
         "**Empty set**\n\nThe set containing no elements.\n\n```eventb\n∅\n{}  // ASCII alternative\n```",
     ),
-    (
-        &["card"],
-        "card (Cardinality)",
-        "**Set cardinality**\n\nReturns the number of elements in a finite set.\n\n```eventb\ncard(S)\n```",
-    ),
     // Relation operators
     (
-        &["↔", "<->"],
+        OperatorId::Relation,
         "↔ (Relation)",
         "**Relation**\n\nA ↔ B is the set of all relations between A and B, i.e. ℙ(A × B).\n\n```eventb\nA ↔ B\nA <-> B  // ASCII alternative\n```",
     ),
     (
-        &[TOTAL_RELATION, "<<->"],
+        OperatorId::TotalRelation,
         "U+E100 (Total Relation)",
         "**Total relation**\n\nA total relation relates every element of the source set.\n\n```eventb\nA \u{E100} B\nA <<-> B  // ASCII alternative\n```",
     ),
     (
-        &[SURJECTIVE_RELATION, "<->>"],
+        OperatorId::SurjectiveRelation,
         "U+E101 (Surjective Relation)",
         "**Surjective relation**\n\nA surjective relation covers every element of the target set.\n\n```eventb\nA \u{E101} B\nA <->> B  // ASCII alternative\n```",
     ),
     (
-        &[TOTAL_SURJECTIVE_RELATION, "<<->>"],
+        OperatorId::TotalSurjectiveRelation,
         "U+E102 (Total Surjective Relation)",
         "**Total surjective relation**\n\nA relation that is both total on the source set and surjective onto the target set.\n\n```eventb\nA \u{E102} B\nA <<->> B  // ASCII alternative\n```",
     ),
     (
-        &["→", "-->"],
+        OperatorId::TotalFunction,
         "→ (Total Function)",
         "**Total function**\n\nA → B is a function defined for all elements of A.\n\n```eventb\nf ∈ A → B\nf : A --> B  // ASCII alternative\n```",
     ),
     (
-        &["⇸", "+->"],
+        OperatorId::PartialFunction,
         "⇸ (Partial Function)",
         "**Partial function**\n\nA ⇸ B is a function that may not be defined for all elements of A.\n\n```eventb\nf ∈ A ⇸ B\nf : A +-> B  // ASCII alternative\n```",
     ),
     (
-        &["↦", "|->"],
+        OperatorId::Maplet,
         "↦ (Maplet)",
         "**Maplet (ordered pair)**\n\nCreates an ordered pair for relations.\n\n```eventb\nx ↦ y\nx |-> y  // ASCII alternative\n```",
     ),
     (
-        &["∘", "circ"],
+        OperatorId::Composition,
         "∘ (Backward Composition)",
         "**Backward composition**\n\nf ∘ g applies g first, then f.\n\n```eventb\nf ∘ g\nf circ g  // ASCII alternative\n```",
     ),
     (
-        &[";"],
+        OperatorId::Semicolon,
         "; (Forward Composition)",
         "**Forward composition**\n\nf ; g applies f first, then g.\n\n```eventb\nf ; g\n```",
     ),
     (
-        &["×", "**"],
+        OperatorId::CartesianProduct,
         "× (Cartesian Product)",
         "**Cartesian product**\n\nA × B is the set of all pairs (a, b).\n\n```eventb\nA × B\nA ** B  // ASCII alternative\n```",
     ),
     (
-        &["↣", ">->"],
+        OperatorId::TotalInjection,
         "↣ (Total Injection)",
         "**Total injection**\n\nA ↣ B is a total function that is injective.\n\n```eventb\nf ∈ A ↣ B\nf : A >-> B  // ASCII alternative\n```",
     ),
     (
-        &["⤔", ">+>"],
+        OperatorId::PartialInjection,
         "⤔ (Partial Injection)",
         "**Partial injection**\n\nA ⤔ B is a partial function that is injective.\n\n```eventb\nf ∈ A ⤔ B\nf : A >+> B  // ASCII alternative\n```",
     ),
     (
-        &["↠", "->>"],
+        OperatorId::TotalSurjection,
         "↠ (Total Surjection)",
         "**Total surjection**\n\nA ↠ B is a total function that is surjective.\n\n```eventb\nf ∈ A ↠ B\nf : A ->> B  // ASCII alternative\n```",
     ),
     (
-        &["⤀", "+>>"],
+        OperatorId::PartialSurjection,
         "⤀ (Partial Surjection)",
         "**Partial surjection**\n\nA ⤀ B is a partial function that is surjective.\n\n```eventb\nf ∈ A ⤀ B\nf : A +>> B  // ASCII alternative\n```",
     ),
     (
-        &["⤖", ">->>"],
+        OperatorId::Bijection,
         "⤖ (Bijection)",
         "**Bijection (total bijective function)**\n\nA ⤖ B is both injective and surjective.\n\n```eventb\nf ∈ A ⤖ B\nf : A >->> B  // ASCII alternative\n```",
     ),
     (
-        &["dom"],
+        OperatorId::Domain,
         "dom (Domain)",
         "**Domain of a relation**\n\nReturns the set of first elements.\n\n```eventb\ndom(r)\n```",
     ),
     (
-        &["ran"],
+        OperatorId::RangeOfRelation,
         "ran (Range)",
         "**Range of a relation**\n\nReturns the set of second elements.\n\n```eventb\nran(r)\n```",
     ),
     (
-        &["◁", "<|"],
+        OperatorId::DomainRestriction,
         "◁ (Domain Restriction)",
         "**Domain restriction**\n\nS ◁ r restricts r to pairs whose first element is in S.\n\n```eventb\nS ◁ r\nS <| r  // ASCII alternative\n```",
     ),
     (
-        &["⩤", "<<|"],
+        OperatorId::DomainSubtraction,
         "⩤ (Domain Subtraction)",
         "**Domain subtraction**\n\nS ⩤ r removes pairs whose first element is in S.\n\n```eventb\nS ⩤ r\nS <<| r  // ASCII alternative\n```",
     ),
     (
-        &["▷", "|>"],
+        OperatorId::RangeRestriction,
         "▷ (Range Restriction)",
         "**Range restriction**\n\nr ▷ S restricts r to pairs whose second element is in S.\n\n```eventb\nr ▷ S\nr |> S  // ASCII alternative\n```",
     ),
     (
-        &["⩥", "|>>"],
+        OperatorId::RangeSubtraction,
         "⩥ (Range Subtraction)",
         "**Range subtraction**\n\nr ⩥ S removes pairs whose second element is in S.\n\n```eventb\nr ⩥ S\nr |>> S  // ASCII alternative\n```",
     ),
     (
-        &[RELATIONAL_OVERRIDE, "<+"],
+        OperatorId::Overwrite,
         "U+E103 (Relational Override)",
         "**Relational override**\n\nr \u{E103} s overrides r with s where they overlap.\n\n```eventb\nr \u{E103} s\nr <+ s  // ASCII alternative\n```",
     ),
     (
-        &["⊗", "><"],
+        OperatorId::DirectProduct,
         "⊗ (Direct Product)",
         "**Direct product**\n\nCombines two relations into pairs of their images.\n\n```eventb\nr ⊗ s\nr >< s  // ASCII alternative\n```",
     ),
     (
-        &["∥", "||"],
+        OperatorId::ParallelProduct,
         "∥ (Parallel Product)",
         "**Parallel product**\n\nApplies two relations in parallel on pairs.\n\n```eventb\nr ∥ s\nr || s  // ASCII alternative\n```",
     ),
     (
-        &["∼", "~"],
+        OperatorId::Inverse,
         "∼ (Inverse)",
         "**Relational inverse**\n\nr∼ reverses all pairs in the relation.\n\n```eventb\nr∼\nr~  // ASCII alternative\n```",
     ),
     (
-        &["⦂", "oftype"],
+        OperatorId::OfType,
         "⦂ (Type Constraint)",
         "**Type constraint (oftype)**\n\nAnnotates an expression with its type.\n\n```eventb\nE ⦂ T\nE oftype T  // ASCII alternative\n```",
     ),
     (
-        &["‥", ".."],
+        OperatorId::Range,
         "‥ (Integer Range)",
         "**Integer range**\n\na‥b is the set of integers from a to b inclusive.\n\n```eventb\n1‥10\n1..10  // ASCII alternative\n```",
     ),
     (
-        &["λ", "%"],
+        OperatorId::Lambda,
         "λ (Lambda)",
         "**Lambda abstraction**\n\nDefines a function by an expression.\n\n```eventb\nλ x · x ∈ S ∣ E\n% x . (x : S | E)  // ASCII alternative\n```",
     ),
     (
-        &["⋃", "UNION"],
+        OperatorId::QuantifiedUnion,
         "⋃ (Generalized Union)",
         "**Generalized union**\n\n⋃ x · P ∣ E takes the union over all values satisfying P.\n\n```eventb\n⋃ x · x ∈ S ∣ f(x)\nUNION x . (x : S | f(x))  // ASCII alternative\n```",
     ),
     (
-        &["⋂", "INTER"],
+        OperatorId::QuantifiedIntersection,
         "⋂ (Generalized Intersection)",
         "**Generalized intersection**\n\n⋂ x · P ∣ E takes the intersection over all values satisfying P.\n\n```eventb\n⋂ x · x ∈ S ∣ f(x)\nINTER x . (x : S | f(x))  // ASCII alternative\n```",
     ),
     (
-        &["ℙ1", "POW1"],
+        OperatorId::PowerSet1,
         "ℙ1 (Non-empty Power Set)",
         "**Non-empty power set**\n\nℙ1(S) is the set of all non-empty subsets of S.\n\n```eventb\nℙ1(S)\nPOW1(S)  // ASCII alternative\n```",
     ),
     // Assignment operators
     (
-        &["≔", ":="],
+        OperatorId::Assignment,
         "Deterministic Assignment",
         "**Deterministic assignment**\n\nAssigns a specific value to a variable.\n\n```eventb\ncount ≔ count + 1\ncount := count + 1  // ASCII alternative\n```",
     ),
     (
-        &[":∣", ":|"],
+        OperatorId::BecomesSuchThat,
         "Non-deterministic Assignment",
         "**Non-deterministic assignment (such that)**\n\nAssigns any value satisfying a predicate.\n\n```eventb\ncount :∣ count' ∈ ℕ ∧ count' > 0\ncount :| count' : NAT & count' > 0  // ASCII alternative\n```",
     ),
     (
-        &[":∈", "::"],
+        OperatorId::BecomesIn,
         "Non-deterministic Member Assignment",
         "**Non-deterministic assignment (member of)**\n\nAssigns any value from a set.\n\n```eventb\ncount :∈ ℕ\ncount :: NAT  // ASCII alternative\n```",
     ),
     // Comparison operators
     (
-        &["="],
+        OperatorId::Equal,
         "Equality",
         "**Equality**\n\nChecks if two values are equal.\n\n```eventb\nx = 5\n```",
     ),
     (
-        &["≠", "/="],
+        OperatorId::NotEqual,
         "Not Equal",
         "**Not equal**\n\nChecks if two values are different.\n\n```eventb\nx ≠ 0\nx /= 0  // ASCII alternative\n```",
     ),
     (
-        &["<"],
+        OperatorId::LessThan,
         "Less Than",
         "**Less than**\n\n```eventb\nx < 10\n```",
     ),
     (
-        &[">"],
+        OperatorId::GreaterThan,
         "Greater Than",
         "**Greater than**\n\n```eventb\nx > 0\n```",
     ),
     (
-        &["≤", "<="],
+        OperatorId::LessEqual,
         "Less Than or Equal",
         "**Less than or equal**\n\n```eventb\nx ≤ 100\nx <= 100  // ASCII alternative\n```",
     ),
     (
-        &["≥", ">="],
+        OperatorId::GreaterEqual,
         "Greater Than or Equal",
         "**Greater than or equal**\n\n```eventb\nx ≥ 0\nx >= 0  // ASCII alternative\n```",
     ),
     // Arithmetic operators
-    (&["+"], "Addition", "**Addition**\n\n```eventb\nx + y\n```"),
     (
-        &["−", "-"],
+        OperatorId::Add,
+        "Addition",
+        "**Addition**\n\n```eventb\nx + y\n```",
+    ),
+    (
+        OperatorId::Subtract,
         "Subtraction",
         "**Subtraction**\n\n```eventb\nx − y\nx - y\n```",
     ),
     (
-        &["∗", "*"],
+        OperatorId::Multiply,
         "Multiplication",
         "**Multiplication**\n\n```eventb\nx ∗ y\nx * y  // ASCII alternative\n```",
     ),
     (
-        &["÷", "/"],
+        OperatorId::Divide,
         "Division",
         "**Division**\n\n```eventb\nx ÷ y\nx / y  // ASCII alternative\n```",
     ),
     (
-        &["mod"],
+        OperatorId::Modulo,
         "Modulo",
         "**Modulo (remainder)**\n\nReturns the remainder after division.\n\n```eventb\nx mod y\n```",
     ),
     (
-        &["^"],
+        OperatorId::Exponent,
         "Exponentiation",
         "**Exponentiation (power)**\n\n```eventb\nx ^ n\n```",
     ),
+];
+
+const BUILTIN_OPERATOR_DOCS: &[DocEntry] = &[
     (
         &["min"],
         "Minimum",
@@ -1031,6 +1040,11 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         &["max"],
         "Maximum",
         "**Maximum of a set**\n\nReturns the largest element.\n\n```eventb\nmax(S)\n```",
+    ),
+    (
+        &["card"],
+        "card (Cardinality)",
+        "**Set cardinality**\n\nReturns the number of elements in a finite set.\n\n```eventb\ncard(S)\n```",
     ),
 ];
 
@@ -1224,102 +1238,12 @@ mod tests {
     fn test_hover_all_operators() {
         let provider = HoverProvider::new();
 
-        let operators = vec![
-            // Logical
-            "∧",
-            "&",
-            "∨",
-            "or",
-            "¬",
-            "not",
-            "⇒",
-            "=>", // Set
-            "∈",
-            ":",
-            "⊆",
-            "<:",
-            "⊈",
-            "/<:",
-            "⊂",
-            "<<:",
-            "⊄",
-            "/<<:",
-            "∪",
-            "\\/",
-            "∩",
-            "/\\", // Function types
-            "↔",
-            "<->",
-            TOTAL_RELATION,
-            "<<->",
-            SURJECTIVE_RELATION,
-            "<->>",
-            TOTAL_SURJECTIVE_RELATION,
-            "<<->>",
-            "→",
-            "-->",
-            "⇸",
-            "+->",
-            "↣",
-            ">->",
-            "⤔",
-            ">+>",
-            "↠",
-            "->>",
-            "⤀",
-            "+>>",
-            "⤖",
-            ">->>",
-            // Relation operators
-            "↦",
-            "|->",
-            "◁",
-            "<|",
-            "⩤",
-            "<<|",
-            "▷",
-            "|>",
-            "⩥",
-            "|>>",
-            "∘",
-            "circ",
-            ";",
-            RELATIONAL_OVERRIDE,
-            "<+",
-            "⊗",
-            "><",
-            "∥",
-            "||",
-            "×",
-            "**",
-            "∼",
-            "~",
-            "⦂",
-            "oftype", // Misc
-            "‥",
-            "..",
-            "∗",
-            "λ",
-            "%",
-            "⋃",
-            "UNION",
-            "⋂",
-            "INTER",
-            "ℙ",
-            "POW",
-            "ℙ1",
-            "POW1", // Assignment
-            "≔",
-            ":=",
-            ":∣",
-            ":|",
-            ":∈",
-            "::",
-        ];
-
-        for op in operators {
-            let hover = provider.hover_operator(op);
-            assert!(hover.is_some(), "Missing hover for operator: {}", op);
+        for (id, _, _) in OPERATOR_DOCS {
+            let spelling = operators::spelling(*id);
+            for op in [spelling.unicode, spelling.ascii] {
+                let hover = provider.hover_operator(op);
+                assert!(hover.is_some(), "Missing hover for operator: {}", op);
+            }
         }
     }
 
