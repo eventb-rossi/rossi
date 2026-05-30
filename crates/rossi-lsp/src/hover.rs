@@ -15,6 +15,10 @@ use std::sync::Arc;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 
+const TOTAL_RELATION: &str = "\u{E100}";
+const SURJECTIVE_RELATION: &str = "\u{E101}";
+const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+
 /// Context information extracted from a parsed component
 #[derive(Debug, Clone)]
 struct HoverContext {
@@ -794,6 +798,21 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Relation**\n\nA ↔ B is the set of all relations between A and B, i.e. ℙ(A × B).\n\n```eventb\nA ↔ B\nA <-> B  // ASCII alternative\n```",
     ),
     (
+        &[TOTAL_RELATION, "<<->"],
+        "U+E100 (Total Relation)",
+        "**Total relation**\n\nA total relation relates every element of the source set.\n\n```eventb\nA \u{E100} B\nA <<-> B  // ASCII alternative\n```",
+    ),
+    (
+        &[SURJECTIVE_RELATION, "<->>"],
+        "U+E101 (Surjective Relation)",
+        "**Surjective relation**\n\nA surjective relation covers every element of the target set.\n\n```eventb\nA \u{E101} B\nA <->> B  // ASCII alternative\n```",
+    ),
+    (
+        &[TOTAL_SURJECTIVE_RELATION, "<<->>"],
+        "U+E102 (Total Surjective Relation)",
+        "**Total surjective relation**\n\nA relation that is both total on the source set and surjective onto the target set.\n\n```eventb\nA \u{E102} B\nA <<->> B  // ASCII alternative\n```",
+    ),
+    (
         &["→", "-->"],
         "→ (Total Function)",
         "**Total function**\n\nA → B is a function defined for all elements of A.\n\n```eventb\nf ∈ A → B\nf : A --> B  // ASCII alternative\n```",
@@ -1201,14 +1220,86 @@ mod tests {
 
         let operators = vec![
             // Logical
-            "∧", "&", "∨", "or", "¬", "not", "⇒", "=>", // Set
-            "∈", ":", "⊆", "<:", "⊈", "/<:", "⊂", "<<:", "⊄", "/<<:", "∪", "\\/", "∩",
+            "∧",
+            "&",
+            "∨",
+            "or",
+            "¬",
+            "not",
+            "⇒",
+            "=>", // Set
+            "∈",
+            ":",
+            "⊆",
+            "<:",
+            "⊈",
+            "/<:",
+            "⊂",
+            "<<:",
+            "⊄",
+            "/<<:",
+            "∪",
+            "\\/",
+            "∩",
             "/\\", // Function types
-            "→", "-->", "⇸", "+->", "↣", ">->", "⤔", ">+>", "↠", "->>", "⤀", "+>>", "⤖", ">->>",
+            "↔",
+            "<->",
+            TOTAL_RELATION,
+            "<<->",
+            SURJECTIVE_RELATION,
+            "<->>",
+            TOTAL_SURJECTIVE_RELATION,
+            "<<->>",
+            "→",
+            "-->",
+            "⇸",
+            "+->",
+            "↣",
+            ">->",
+            "⤔",
+            ">+>",
+            "↠",
+            "->>",
+            "⤀",
+            "+>>",
+            "⤖",
+            ">->>",
             // Relation operators
-            "↦", "|->", "◁", "<|", "⩤", "<<|", "▷", "|>", "⩥", "|>>", "∘", "circ", ";", "⊕", "<+",
-            "⊗", "><", "∥", "||", "×", "**", "∼", "~", "⦂", "oftype", // Misc
-            "..", "λ", "%", "⋃", "UNION", "⋂", "INTER", "ℙ", "POW", "ℙ1",
+            "↦",
+            "|->",
+            "◁",
+            "<|",
+            "⩤",
+            "<<|",
+            "▷",
+            "|>",
+            "⩥",
+            "|>>",
+            "∘",
+            "circ",
+            ";",
+            "⊕",
+            "<+",
+            "⊗",
+            "><",
+            "∥",
+            "||",
+            "×",
+            "**",
+            "∼",
+            "~",
+            "⦂",
+            "oftype", // Misc
+            "..",
+            "λ",
+            "%",
+            "⋃",
+            "UNION",
+            "⋂",
+            "INTER",
+            "ℙ",
+            "POW",
+            "ℙ1",
             "POW1", // Assignment
             ":=",
         ];

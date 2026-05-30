@@ -12,6 +12,10 @@ use crate::lsp_types::{
 };
 use std::collections::HashMap;
 
+const TOTAL_RELATION: &str = "\u{E100}";
+const SURJECTIVE_RELATION: &str = "\u{E101}";
+const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+
 /// Mapping of Unicode operators to ASCII equivalents
 const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     // Logical operators
@@ -54,6 +58,9 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("↣", ">->"),
     ("⇸", "+->"),
     ("→", "-->"),
+    (TOTAL_SURJECTIVE_RELATION, "<<->>"),
+    (SURJECTIVE_RELATION, "<->>"),
+    (TOTAL_RELATION, "<<->"),
     ("↔", "<->"),
     ("⦂", "oftype"),
     // Relation operators
@@ -961,6 +968,9 @@ mod tests {
         assert_eq!(provider.convert_to_ascii("¬ P"), "not P");
         assert_eq!(provider.convert_to_ascii("S × T"), "S ** T");
         assert_eq!(provider.convert_to_ascii("f → g"), "f --> g");
+        assert_eq!(provider.convert_to_ascii("\u{E100}"), "<<->");
+        assert_eq!(provider.convert_to_ascii("\u{E101}"), "<->>");
+        assert_eq!(provider.convert_to_ascii("\u{E102}"), "<<->>");
         assert_eq!(provider.convert_to_ascii("f ↠ g"), "f ->> g");
         assert_eq!(provider.convert_to_ascii("f ∘ g"), "f circ g");
         assert_eq!(provider.convert_to_ascii("⊆"), "<:");
