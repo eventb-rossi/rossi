@@ -412,7 +412,13 @@ impl CompletionProvider {
                 "Generalized intersection",
             ));
             items.push(create_operator_item("ℙ1", "POW1", "Non-empty power set"));
-            items.push(create_operator_item("..", "..", "Integer range"));
+            items.push(create_operator_item("‥", "..", "Integer range"));
+            items.push(create_operator_item("+", "", "Addition"));
+            items.push(create_operator_item("−", "-", "Subtraction"));
+            items.push(create_operator_item("∗", "*", "Multiplication"));
+            items.push(create_operator_item("÷", "/", "Division"));
+            items.push(create_operator_item("mod", "", "Modulo"));
+            items.push(create_operator_item("^", "", "Exponentiation"));
         } else {
             // ASCII operators
             items.push(create_operator_item("&", "∧", "Logical and"));
@@ -492,6 +498,12 @@ impl CompletionProvider {
             ));
             items.push(create_operator_item("POW1", "ℙ1", "Non-empty power set"));
             items.push(create_operator_item("..", "..", "Integer range"));
+            items.push(create_operator_item("+", "", "Addition"));
+            items.push(create_operator_item("-", "−", "Subtraction"));
+            items.push(create_operator_item("*", "∗", "Multiplication"));
+            items.push(create_operator_item("/", "÷", "Division"));
+            items.push(create_operator_item("mod", "", "Modulo"));
+            items.push(create_operator_item("^", "", "Exponentiation"));
         }
 
         // Assignment operators (always available)
@@ -896,6 +908,8 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "⊈"));
         assert!(items.iter().any(|item| item.label == TOTAL_RELATION));
         assert!(items.iter().any(|item| item.label == RELATIONAL_OVERRIDE));
+        assert!(items.iter().any(|item| item.label == "‥"));
+        assert!(items.iter().any(|item| item.label == "−"));
         assert!(items.iter().any(|item| item.label == "ℙ"));
         assert!(!items.iter().any(|item| item.label == "℘"));
     }

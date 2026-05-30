@@ -43,6 +43,9 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("ℙ", "POW"),
     ("ℙ1", "POW1"),
     // Arithmetic / comparison
+    ("‥", ".."),
+    ("−", "-"),
+    ("∗", "*"),
     ("≤", "<="),
     ("≥", ">="),
     ("≠", "/="),
@@ -969,6 +972,9 @@ mod tests {
         // New mappings
         assert_eq!(provider.convert_to_ascii("¬ P"), "not P");
         assert_eq!(provider.convert_to_ascii("S × T"), "S ** T");
+        assert_eq!(provider.convert_to_ascii("1 ‥ 10"), "1 .. 10");
+        assert_eq!(provider.convert_to_ascii("x − y"), "x - y");
+        assert_eq!(provider.convert_to_ascii("x ∗ y"), "x * y");
         assert_eq!(provider.convert_to_ascii("f → g"), "f --> g");
         assert_eq!(provider.convert_to_ascii("\u{E100}"), "<<->");
         assert_eq!(provider.convert_to_ascii("\u{E101}"), "<->>");

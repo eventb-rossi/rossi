@@ -924,9 +924,9 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Type constraint (oftype)**\n\nAnnotates an expression with its type.\n\n```eventb\nE ⦂ T\nE oftype T  // ASCII alternative\n```",
     ),
     (
-        &[".."],
-        ".. (Integer Range)",
-        "**Integer range**\n\na..b is the set of integers from a to b inclusive.\n\n```eventb\n1..10\n```",
+        &["‥", ".."],
+        "‥ (Integer Range)",
+        "**Integer range**\n\na‥b is the set of integers from a to b inclusive.\n\n```eventb\n1‥10\n1..10  // ASCII alternative\n```",
     ),
     (
         &["λ", "%"],
@@ -1001,6 +1001,11 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         &["−", "-"],
         "Subtraction",
         "**Subtraction**\n\n```eventb\nx − y\nx - y\n```",
+    ),
+    (
+        &["∗", "*"],
+        "Multiplication",
+        "**Multiplication**\n\n```eventb\nx ∗ y\nx * y  // ASCII alternative\n```",
     ),
     (
         &["÷", "/"],
@@ -1291,7 +1296,9 @@ mod tests {
             "~",
             "⦂",
             "oftype", // Misc
+            "‥",
             "..",
+            "∗",
             "λ",
             "%",
             "⋃",
