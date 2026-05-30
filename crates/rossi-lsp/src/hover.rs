@@ -18,6 +18,7 @@ use crate::document::DocumentManager;
 const TOTAL_RELATION: &str = "\u{E100}";
 const SURJECTIVE_RELATION: &str = "\u{E101}";
 const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+const RELATIONAL_OVERRIDE: &str = "\u{E103}";
 
 /// Context information extracted from a parsed component
 #[derive(Debug, Clone)]
@@ -898,9 +899,9 @@ const OPERATOR_DOCS: &[DocEntry] = &[
         "**Range subtraction**\n\nr ⩥ S removes pairs whose second element is in S.\n\n```eventb\nr ⩥ S\nr |>> S  // ASCII alternative\n```",
     ),
     (
-        &["⊕", "<+"],
-        "⊕ (Relational Override)",
-        "**Relational override**\n\nr ⊕ s overrides r with s where they overlap.\n\n```eventb\nr ⊕ s\nr <+ s  // ASCII alternative\n```",
+        &[RELATIONAL_OVERRIDE, "<+"],
+        "U+E103 (Relational Override)",
+        "**Relational override**\n\nr \u{E103} s overrides r with s where they overlap.\n\n```eventb\nr \u{E103} s\nr <+ s  // ASCII alternative\n```",
     ),
     (
         &["⊗", "><"],
@@ -1278,7 +1279,7 @@ mod tests {
             "∘",
             "circ",
             ";",
-            "⊕",
+            RELATIONAL_OVERRIDE,
             "<+",
             "⊗",
             "><",

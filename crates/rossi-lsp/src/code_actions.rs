@@ -15,6 +15,7 @@ use std::collections::HashMap;
 const TOTAL_RELATION: &str = "\u{E100}";
 const SURJECTIVE_RELATION: &str = "\u{E101}";
 const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+const RELATIONAL_OVERRIDE: &str = "\u{E103}";
 
 /// Mapping of Unicode operators to ASCII equivalents
 const UNICODE_TO_ASCII: &[(&str, &str)] = &[
@@ -70,6 +71,7 @@ const UNICODE_TO_ASCII: &[(&str, &str)] = &[
     ("◁", "<|"),
     ("▷", "|>"),
     ("∘", "circ"),
+    (RELATIONAL_OVERRIDE, "<+"),
     ("⊗", "><"),
     ("∥", "||"),
     ("∼", "~"),
@@ -979,6 +981,7 @@ mod tests {
         assert_eq!(provider.convert_to_ascii("⊄"), "/<<:");
         assert_eq!(provider.convert_to_ascii("◁"), "<|");
         assert_eq!(provider.convert_to_ascii("▷"), "|>");
+        assert_eq!(provider.convert_to_ascii("\u{E103}"), "<+");
         assert_eq!(provider.convert_to_ascii("⤔"), ">+>");
         assert_eq!(provider.convert_to_ascii("⤀"), "+>>");
         assert_eq!(provider.convert_to_ascii("⤖"), ">->>");

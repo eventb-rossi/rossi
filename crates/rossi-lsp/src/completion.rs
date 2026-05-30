@@ -22,6 +22,7 @@ use crate::document::DocumentManager;
 const TOTAL_RELATION: &str = "\u{E100}";
 const SURJECTIVE_RELATION: &str = "\u{E101}";
 const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
+const RELATIONAL_OVERRIDE: &str = "\u{E103}";
 
 /// Configuration for completion behavior
 #[derive(Debug, Clone)]
@@ -393,7 +394,11 @@ impl CompletionProvider {
             items.push(create_operator_item("⩥", "|>>", "Range subtraction"));
             items.push(create_operator_item(";", "", "Forward composition"));
             items.push(create_operator_item("∘", "circ", "Backward composition"));
-            items.push(create_operator_item("⊕", "<+", "Relational override"));
+            items.push(create_operator_item(
+                RELATIONAL_OVERRIDE,
+                "<+",
+                "Relational override",
+            ));
             items.push(create_operator_item("⊗", "><", "Direct product"));
             items.push(create_operator_item("∥", "||", "Parallel product"));
             items.push(create_operator_item("×", "**", "Cartesian product"));
@@ -468,7 +473,11 @@ impl CompletionProvider {
             items.push(create_operator_item("|>>", "⩥", "Range subtraction"));
             items.push(create_operator_item(";", "", "Forward composition"));
             items.push(create_operator_item("circ", "∘", "Backward composition"));
-            items.push(create_operator_item("<+", "⊕", "Relational override"));
+            items.push(create_operator_item(
+                "<+",
+                RELATIONAL_OVERRIDE,
+                "Relational override",
+            ));
             items.push(create_operator_item("><", "⊗", "Direct product"));
             items.push(create_operator_item("||", "∥", "Parallel product"));
             items.push(create_operator_item("**", "×", "Cartesian product"));
@@ -886,6 +895,7 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "∈"));
         assert!(items.iter().any(|item| item.label == "⊈"));
         assert!(items.iter().any(|item| item.label == TOTAL_RELATION));
+        assert!(items.iter().any(|item| item.label == RELATIONAL_OVERRIDE));
         assert!(items.iter().any(|item| item.label == "ℙ"));
         assert!(!items.iter().any(|item| item.label == "℘"));
     }
