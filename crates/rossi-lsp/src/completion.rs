@@ -353,8 +353,7 @@ impl CompletionProvider {
             items.push(create_operator_item("∪", "\\/", "Set union"));
             items.push(create_operator_item("∩", "/\\", "Set intersection"));
             items.push(create_operator_item("∖", "\\", "Set difference"));
-            items.push(create_operator_item("℘", "POW", "Power set"));
-            items.push(create_operator_item("ℙ", "POW", "Power set (alternative)"));
+            items.push(create_operator_item("ℙ", "POW", "Power set"));
             items.push(create_operator_item("∅", "{}", "Empty set"));
 
             // Relation operators
@@ -413,7 +412,7 @@ impl CompletionProvider {
             items.push(create_operator_item("\\/", "∪", "Set union"));
             items.push(create_operator_item("/\\", "∩", "Set intersection"));
             items.push(create_operator_item("\\", "∖", "Set difference"));
-            items.push(create_operator_item("POW", "℘", "Power set"));
+            items.push(create_operator_item("POW", "ℙ", "Power set"));
             items.push(create_operator_item("{}", "∅", "Empty set"));
 
             items.push(create_operator_item("<->", "↔", "Relation"));
@@ -847,6 +846,8 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "∨"));
         assert!(items.iter().any(|item| item.label == "⇒"));
         assert!(items.iter().any(|item| item.label == "∈"));
+        assert!(items.iter().any(|item| item.label == "ℙ"));
+        assert!(!items.iter().any(|item| item.label == "℘"));
     }
 
     #[test]
