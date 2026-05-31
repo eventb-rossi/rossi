@@ -938,6 +938,83 @@ fn build_eventb_directory() {
 }
 
 #[test]
+fn export_eventb_to_rodin_zip_includes_project_descriptor() {
+    let tmp = tempdir_unique("rossi-cli-export-project-zip");
+    let out_zip = tmp.join("counter project.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "export",
+            "../rossi/examples/counter.eventb",
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "export .eventb should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let file = std::fs::File::open(&out_zip).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let project_xml = {
+        let mut project = archive.by_name(".project").unwrap();
+        let mut project_xml = String::new();
+        project.read_to_string(&mut project_xml).unwrap();
+        project_xml
+    };
+    // Descriptor *content* (nature, builder, XML escaping) is covered by the
+    // rossi lib tests; here we only check the CLI wiring: a .project named
+    // after the output stem, plus the component, both landed in the zip.
+    assert!(project_xml.contains("<name>counter project</name>"));
+    archive.by_name("counter_ctx.buc").unwrap();
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn export_eventb_to_rodin_directory_includes_project_descriptor() {
+    let tmp = tempdir_unique("rossi-cli-export-project-dir");
+    let out_dir = tmp.join("counter project");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "export",
+            "../rossi/examples/counter.eventb",
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "export .eventb to directory should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Descriptor *content* is covered by the rossi lib tests; here we only check
+    // the CLI wiring: a .project named after the output stem, plus the
+    // component, both landed in the directory.
+    let project_xml = std::fs::read_to_string(out_dir.join(".project")).unwrap();
+    assert!(project_xml.contains("<name>counter project</name>"));
+    assert!(out_dir.join("counter_ctx.buc").exists());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_zip_wrong_root_reports_eb002() {
     // A .buc whose root is neither contextFile nor machineFile passes
     // parse_zip_file_with_recovery silently (the per-extension parser is

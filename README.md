@@ -385,16 +385,22 @@ rossi import project.zip --output ./project --ascii --indent="  "
 rossi import project.zip --output project.eventb --merge=M0,C0
 ```
 
-### Export (Event-B text → Rodin ZIP)
+### Export (Event-B text → Rodin project)
 
 ```bash
 # Pack a directory of .eventb files into a Rodin .zip archive
 rossi export ./project --output project.zip
+
+# Or emit a loose Rodin project directory
+rossi export ./project --output ./rodin-project
 ```
 
-The archive always uses Unicode operators, which is what Rodin expects, so
-`export` has no operator-convention option — use `rossi fmt` to change the
-convention of text files.
+`export` writes a complete Rodin project: a `.project` descriptor (named after
+the output path) plus each component's native XML. Use a `.zip` output path for
+an importable archive, or a directory output path for loose project files. The
+archive always uses Unicode operators, which is what Rodin expects, so `export`
+has no operator-convention option — use `rossi fmt` to change the convention of
+text files.
 
 ### Format (`fmt`)
 
