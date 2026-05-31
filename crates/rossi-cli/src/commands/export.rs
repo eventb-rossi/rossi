@@ -1,14 +1,17 @@
-//! `rossi export` — convert Event-B text into a Rodin `.zip` archive.
+//! `rossi export` — convert Event-B text into a Rodin project.
 //!
-//! Reads Event-B text (`.eventb`/`.txt` files or directories of them) and
-//! packs the parsed components into a single Rodin-compatible `.zip`. The
-//! archive's XML always uses Unicode operators, which is what Rodin expects,
-//! so there is no operator-convention option here — see `rossi fmt` for that.
+//! Reads Event-B text (`.eventb`/`.txt` files or directories of them) and packs
+//! the parsed components into a complete Rodin project: a `.project` descriptor
+//! (named after the output path) plus each component's native Rodin XML. The
+//! output is written as a `.zip` archive when the output path ends in `.zip`,
+//! and as a loose project directory otherwise. The archive's XML always uses
+//! Unicode operators, which is what Rodin expects, so there is no
+//! operator-convention option here — see `rossi fmt` for that.
 
 use clap::Args;
-use rossi::write_zip_file;
+use rossi::{write_project_directory, write_project_zip_file};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::eventb_io::{self, CmdResult, InputFamily};
@@ -20,7 +23,7 @@ pub struct ExportArgs {
     #[arg(required = true, value_name = "INPUT")]
     inputs: Vec<PathBuf>,
 
-    /// Output Rodin .zip archive
+    /// Output Rodin project: a .zip archive (path ends in .zip) or a directory
     #[arg(short, long, required = true, value_name = "OUTPUT")]
     output: PathBuf,
 
@@ -67,12 +70,17 @@ fn run_inner(cli: &ExportArgs) -> CmdResult<()> {
         components
     };
 
-    if let Some(parent) = cli.output.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
+    let project_name = project_name_from_output(&cli.output);
+    if is_zip_output(&cli.output) {
+        if let Some(parent) = cli.output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        write_project_zip_file(&cli.output, &components, project_name)?;
+    } else {
+        write_project_directory(&cli.output, &components, project_name)?;
     }
-    write_zip_file(&cli.output, &components)?;
 
     if cli.verbose {
         eprintln!(
@@ -83,4 +91,21 @@ fn run_inner(cli: &ExportArgs) -> CmdResult<()> {
     }
 
     Ok(())
+}
+
+/// Whether the output path denotes a `.zip` archive (vs. a project directory).
+fn is_zip_output(output: &Path) -> bool {
+    output
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(eventb_io::is_zip_ext)
+}
+
+/// The Rodin project name to embed, taken from the output path's file stem.
+/// A missing or blank stem is normalized to a default by the project writer.
+fn project_name_from_output(output: &Path) -> &str {
+    output
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
 }
