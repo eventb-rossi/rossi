@@ -28,6 +28,18 @@ fn char_offset_to_byte(line: &str, char_offset: usize) -> Option<usize> {
         })
 }
 
+/// LSP end position of `text` (last line index, byte length of the last line),
+/// computed in a single pass over the lines.
+fn document_end_position(text: &str) -> Position {
+    let mut line_count: u32 = 0;
+    let mut last_line_length: u32 = 0;
+    for line in text.lines() {
+        line_count += 1;
+        last_line_length = line.len() as u32;
+    }
+    Position::new(line_count.saturating_sub(1), last_line_length)
+}
+
 /// Provides code actions and refactorings
 pub struct CodeActionProvider;
 
@@ -152,16 +164,13 @@ impl CodeActionProvider {
             return None;
         }
 
-        let line_count = text.lines().count() as u32;
-        let last_line_length = text.lines().last().map(|l| l.len()).unwrap_or(0) as u32;
-
         let mut changes = HashMap::new();
         changes.insert(
             uri.clone(),
             vec![TextEdit {
                 range: Range {
                     start: Position::new(0, 0),
-                    end: Position::new(line_count.saturating_sub(1), last_line_length),
+                    end: document_end_position(text),
                 },
                 new_text: converted,
             }],
@@ -190,16 +199,13 @@ impl CodeActionProvider {
             return None;
         }
 
-        let line_count = text.lines().count() as u32;
-        let last_line_length = text.lines().last().map(|l| l.len()).unwrap_or(0) as u32;
-
         let mut changes = HashMap::new();
         changes.insert(
             uri.clone(),
             vec![TextEdit {
                 range: Range {
                     start: Position::new(0, 0),
-                    end: Position::new(line_count.saturating_sub(1), last_line_length),
+                    end: document_end_position(text),
                 },
                 new_text: converted,
             }],
