@@ -719,20 +719,41 @@ pub fn lookup_token(token: &str) -> Option<&'static OperatorSpelling> {
         .find(|entry| entry.unicode == token || entry.ascii == token)
 }
 
-pub fn convert_to_unicode(text: &str) -> String {
-    let mut entries: Vec<_> = OPERATOR_SPELLINGS
-        .iter()
-        .filter(|entry| entry.ascii != entry.unicode)
-        .collect();
-    entries.sort_by_key(|entry| std::cmp::Reverse(entry.ascii.len()));
+/// Operators whose ASCII and Unicode spellings differ, in declaration order.
+static DIFFERING_SPELLINGS: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
+    std::sync::LazyLock::new(|| {
+        OPERATOR_SPELLINGS
+            .iter()
+            .filter(|entry| entry.ascii != entry.unicode)
+            .collect()
+    });
 
+/// Differing operators sorted by descending ASCII length so longer spellings
+/// match before their prefixes during ASCII → Unicode conversion.
+static ASCII_TO_UNICODE: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
+    std::sync::LazyLock::new(|| {
+        let mut entries = DIFFERING_SPELLINGS.clone();
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ascii.len()));
+        entries
+    });
+
+/// Differing operators sorted by descending Unicode length so longer spellings
+/// replace before their prefixes during Unicode → ASCII conversion.
+static UNICODE_TO_ASCII: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
+    std::sync::LazyLock::new(|| {
+        let mut entries = DIFFERING_SPELLINGS.clone();
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.unicode.len()));
+        entries
+    });
+
+pub fn convert_to_unicode(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut byte_pos = 0;
     while byte_pos < text.len() {
         let rest = &text[byte_pos..];
         let mut matched = None;
 
-        for entry in &entries {
+        for entry in ASCII_TO_UNICODE.iter() {
             if rest.starts_with(entry.ascii)
                 && (!is_alphabetic_op(entry.ascii)
                     || (is_word_boundary(text, byte_pos)
@@ -759,13 +780,7 @@ pub fn convert_to_unicode(text: &str) -> String {
 
 pub fn convert_to_ascii(text: &str) -> String {
     let mut result = text.to_string();
-    let mut entries: Vec<_> = OPERATOR_SPELLINGS
-        .iter()
-        .filter(|entry| entry.ascii != entry.unicode)
-        .collect();
-    entries.sort_by_key(|entry| std::cmp::Reverse(entry.unicode.len()));
-
-    for entry in entries {
+    for entry in UNICODE_TO_ASCII.iter() {
         result = result.replace(entry.unicode, entry.ascii);
     }
 
@@ -773,22 +788,18 @@ pub fn convert_to_ascii(text: &str) -> String {
 }
 
 pub fn has_ascii_operators(text: &str) -> bool {
-    OPERATOR_SPELLINGS
-        .iter()
-        .filter(|entry| entry.ascii != entry.unicode)
-        .any(|entry| {
-            if is_alphabetic_op(entry.ascii) {
-                contains_whole_word(text, entry.ascii)
-            } else {
-                text.contains(entry.ascii)
-            }
-        })
+    DIFFERING_SPELLINGS.iter().any(|entry| {
+        if is_alphabetic_op(entry.ascii) {
+            contains_whole_word(text, entry.ascii)
+        } else {
+            text.contains(entry.ascii)
+        }
+    })
 }
 
 pub fn has_unicode_operators(text: &str) -> bool {
-    OPERATOR_SPELLINGS
+    DIFFERING_SPELLINGS
         .iter()
-        .filter(|entry| entry.ascii != entry.unicode)
         .any(|entry| text.contains(entry.unicode))
 }
 
