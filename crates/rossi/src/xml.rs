@@ -1200,6 +1200,23 @@ pub fn component_filename(component: &Component) -> String {
 /// assert_eq!(parsed.len(), 1);
 /// ```
 pub fn to_zip(components: &[NamedComponent]) -> Result<Vec<u8>> {
+    write_components_zip(components, None)
+}
+
+/// Creates a Rodin project zip archive in memory from named components.
+///
+/// The archive contains a root `.project` descriptor plus each component
+/// serialized to its native Rodin XML format.
+pub fn to_project_zip(components: &[NamedComponent], project_name: &str) -> Result<Vec<u8>> {
+    write_components_zip(components, Some(project_name))
+}
+
+/// Serializes named components into an in-memory zip archive, optionally
+/// prefixed with a Rodin `.project` descriptor when `project_name` is given.
+fn write_components_zip(
+    components: &[NamedComponent],
+    project_name: Option<&str>,
+) -> Result<Vec<u8>> {
     use std::io::Write;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
@@ -1209,6 +1226,13 @@ pub fn to_zip(components: &[NamedComponent]) -> Result<Vec<u8>> {
         let mut writer = ZipWriter::new(std::io::Cursor::new(&mut buf));
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        if let Some(project_name) = project_name {
+            writer
+                .start_file(".project", options)
+                .map_err(|e| ParseError::IoError(format!("Failed to write zip entry: {}", e)))?;
+            writer.write_all(rodin_project_file_xml(project_name).as_bytes())?;
+        }
 
         for named in components {
             let xml = to_xml(&named.component);
@@ -1246,6 +1270,65 @@ pub fn write_zip_file<P: AsRef<std::path::Path>>(
     let data = to_zip(components)?;
     std::fs::write(path, data)?;
     Ok(())
+}
+
+/// Creates a Rodin project zip archive from named components and writes it to a file.
+pub fn write_project_zip_file<P: AsRef<std::path::Path>>(
+    path: P,
+    components: &[NamedComponent],
+    project_name: &str,
+) -> Result<()> {
+    let data = to_project_zip(components, project_name)?;
+    std::fs::write(path, data)?;
+    Ok(())
+}
+
+/// Creates a Rodin project directory from named components.
+pub fn write_project_directory<P: AsRef<std::path::Path>>(
+    path: P,
+    components: &[NamedComponent],
+    project_name: &str,
+) -> Result<()> {
+    let path = path.as_ref();
+    std::fs::create_dir_all(path)?;
+    std::fs::write(path.join(".project"), rodin_project_file_xml(project_name))?;
+
+    for named in components {
+        let file_path = path.join(&named.filename);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(file_path, to_xml(&named.component))?;
+    }
+
+    Ok(())
+}
+
+fn rodin_project_file_xml(project_name: &str) -> String {
+    let project_name = if project_name.trim().is_empty() {
+        "rossi_project"
+    } else {
+        project_name.trim()
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<projectDescription>
+  <name>{}</name>
+  <comment></comment>
+  <projects></projects>
+  <buildSpec>
+    <buildCommand>
+      <name>org.rodinp.core.rodinbuilder</name>
+      <arguments></arguments>
+    </buildCommand>
+  </buildSpec>
+  <natures>
+    <nature>org.rodinp.core.rodinnature</nature>
+  </natures>
+</projectDescription>
+"#,
+        escape_xml(project_name)
+    )
 }
 
 /// Converts a Context to .buc XML format
@@ -1550,6 +1633,16 @@ fn write_action_xml(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tempdir_unique(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn test_parse_simple_context_xml() {
@@ -2447,5 +2540,54 @@ mod tests {
         let zip_data = to_zip(&[]).unwrap();
         let parsed = parse_zip(&zip_data).unwrap();
         assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn test_to_project_zip_includes_project_descriptor() {
+        let ctx = Context::new("test_ctx".to_string());
+        let named = NamedComponent {
+            filename: "test_ctx.buc".to_string(),
+            component: Component::Context(ctx),
+        };
+
+        let zip_data = to_project_zip(&[named], "Rossi & <Project>").unwrap();
+        let parsed = parse_zip(&zip_data).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].filename, "test_ctx.buc");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data)).unwrap();
+        let mut project = archive.by_name(".project").unwrap();
+        let mut project_xml = String::new();
+        std::io::Read::read_to_string(&mut project, &mut project_xml).unwrap();
+        assert!(project_xml.contains("<name>Rossi &amp; &lt;Project&gt;</name>"));
+        assert!(project_xml.contains("<nature>org.rodinp.core.rodinnature</nature>"));
+        assert!(project_xml.contains("<name>org.rodinp.core.rodinbuilder</name>"));
+    }
+
+    #[test]
+    fn test_write_project_directory_includes_project_descriptor() {
+        let dir = tempdir_unique("rossi-project-dir");
+        let ctx = Context::new("test_ctx".to_string());
+        let named = NamedComponent {
+            filename: "test_ctx.buc".to_string(),
+            component: Component::Context(ctx),
+        };
+
+        write_project_directory(&dir, &[named], "Dir Project").unwrap();
+        let project_xml = std::fs::read_to_string(dir.join(".project")).unwrap();
+        assert!(project_xml.contains("<name>Dir Project</name>"));
+        assert!(dir.join("test_ctx.buc").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_to_project_zip_falls_back_for_blank_project_name() {
+        let zip_data = to_project_zip(&[], "   ").unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data)).unwrap();
+        let mut project = archive.by_name(".project").unwrap();
+        let mut project_xml = String::new();
+        std::io::Read::read_to_string(&mut project, &mut project_xml).unwrap();
+        assert!(project_xml.contains("<name>rossi_project</name>"));
     }
 }
