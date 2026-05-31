@@ -15,6 +15,7 @@ import {
 } from 'vscode';
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 
 interface RossiRunResult {
@@ -46,6 +47,14 @@ interface ValidationResult {
 interface ValidationTarget {
     inputs: string[];
     cwd: string;
+}
+
+interface RodinProjectLaunch {
+    workspaceDir: string;
+    projectDir: string;
+    projectName: string;
+    importerDir: string;
+    importerBuildFile: string;
 }
 
 type InputKind =
@@ -154,6 +163,30 @@ export class RossiCommandController {
         // project directory so sibling components resolve.
         const buildInput = kind === 'rodinXmlFile' ? path.dirname(input) : input;
         await this.runBuildAndReport(buildInput, outZip);
+    }
+
+    async openInRodin(uri?: Uri): Promise<void> {
+        const input = await this.getOpenInRodinInput(uri);
+        if (!input) {
+            window.showErrorMessage('Open or select a .eventb file or folder to open in Rodin.');
+            return;
+        }
+
+        const kind = await classifyInput(input);
+        if (kind !== 'eventbFile' && kind !== 'eventbDirectory') {
+            window.showErrorMessage('Open in Rodin supports .eventb files and folders containing .eventb files.');
+            return;
+        }
+
+        await this.saveOpenEventBDocumentsUnder(input);
+
+        try {
+            const project = await this.prepareRodinProject(input);
+            await this.launchRodin(project);
+            window.showInformationMessage(`Opened ${project.projectName} in Rodin.`);
+        } catch (error) {
+            this.showCommandError(error);
+        }
     }
 
     async validateCurrentFile(uri?: Uri): Promise<void> {
@@ -376,6 +409,82 @@ export class RossiCommandController {
         }
     }
 
+    private async prepareRodinProject(input: string): Promise<RodinProjectLaunch> {
+        const projectName = rodinProjectName(input);
+        const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rossi-rodin-workspace-'));
+        const projectDir = path.join(workspaceDir, projectName);
+
+        // `rossi export` to a directory path writes a complete Rodin project
+        // (a `.project` descriptor plus each component's XML) that the importer
+        // task below registers into the temporary Rodin workspace.
+        await this.runRossi(
+            ['export', input, '-o', projectDir],
+            { title: 'Preparing Rodin project', cwd: path.dirname(input) }
+        );
+
+        const importerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rossi-rodin-importer-'));
+        const importerBuildFile = path.join(importerDir, 'build.xml');
+        await writeRodinImporterFiles(importerDir, importerBuildFile);
+
+        return { workspaceDir, projectDir, projectName, importerDir, importerBuildFile };
+    }
+
+    private async launchRodin(project: RodinProjectLaunch): Promise<void> {
+        const rodinPath = configuredRodinPath();
+
+        await this.registerRodinProject(rodinPath, project);
+        await this.suppressWelcomePage(project.workspaceDir);
+
+        const launch = rodinLaunchCommand(rodinPath, project);
+        this.output.appendLine(`> ${formatCommand(launch.command, launch.args)}`);
+
+        await spawnDetached(launch.command, launch.args);
+    }
+
+    private async registerRodinProject(rodinPath: string, project: RodinProjectLaunch): Promise<void> {
+        const command = await rodinAntRunnerCommand(rodinPath);
+        try {
+            await this.runExternal(command, [
+                '-nosplash',
+                '-application',
+                'org.eclipse.ant.core.antRunner',
+                '-data',
+                project.workspaceDir,
+                '-buildfile',
+                project.importerBuildFile,
+                `-DprojectDir=${project.projectDir}`,
+            ], 'Registering Rodin project');
+        } finally {
+            await fs.rm(project.importerDir, { recursive: true, force: true });
+        }
+    }
+
+    // A fresh Rodin workspace shows the Eclipse "Welcome" (intro) page on first
+    // launch, hiding the imported project behind it. Pre-seed the workbench
+    // preference so Rodin opens straight on the Event-B perspective. (Eclipse
+    // flips this itself after showing the intro once, but we create a new temp
+    // workspace every time, so we always hit the first-launch intro.) Best
+    // effort: a cosmetic preference must never block opening Rodin.
+    private async suppressWelcomePage(workspaceDir: string): Promise<void> {
+        const settingsDir = path.join(
+            workspaceDir,
+            '.metadata',
+            '.plugins',
+            'org.eclipse.core.runtime',
+            '.settings'
+        );
+        try {
+            await fs.mkdir(settingsDir, { recursive: true });
+            await fs.writeFile(
+                path.join(settingsDir, 'org.eclipse.ui.prefs'),
+                'eclipse.preferences.version=1\nshowIntro=false\n',
+                'utf8'
+            );
+        } catch (error) {
+            this.output.appendLine(`Could not suppress Rodin Welcome page: ${error}`);
+        }
+    }
+
     private async runRossi(args: string[], options: RossiRunOptions): Promise<RossiRunResult> {
         const toolPath = workspace.getConfiguration('rossi').get<string>('tool.path', 'rossi');
         const cwd = options.cwd ?? workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -390,12 +499,25 @@ export class RossiCommandController {
                 cancellable: true,
             },
             (_progress, token) =>
-                this.spawnRossi(toolPath, args, cwd, options.allowNonZeroExit ?? false, token, options.stdin)
+                this.spawnCommand(toolPath, args, cwd, options.allowNonZeroExit ?? false, token, options.stdin)
         );
     }
 
-    private spawnRossi(
-        toolPath: string,
+    private async runExternal(command: string, args: string[], title: string): Promise<RossiRunResult> {
+        this.output.appendLine(`> ${formatCommand(command, args)}`);
+
+        return window.withProgress(
+            {
+                location: ProgressLocation.Notification,
+                title,
+                cancellable: true,
+            },
+            (_progress, token) => this.spawnCommand(command, args, undefined, false, token)
+        );
+    }
+
+    private spawnCommand(
+        command: string,
         args: string[],
         cwd: string | undefined,
         allowNonZeroExit: boolean,
@@ -403,7 +525,7 @@ export class RossiCommandController {
         stdin?: string
     ): Promise<RossiRunResult> {
         return new Promise((resolve, reject) => {
-            const child = spawn(toolPath, args, { cwd, shell: false });
+            const child = spawn(command, args, { cwd, shell: false });
             let stdout = '';
             let stderr = '';
             let settled = false;
@@ -417,7 +539,7 @@ export class RossiCommandController {
 
             const cancellation = token.onCancellationRequested(() => {
                 child.kill();
-                finishReject(new Error('Rossi command cancelled.'));
+                finishReject(new Error('Command cancelled.'));
             });
 
             child.stdout.on('data', (data: Buffer) => {
@@ -434,7 +556,7 @@ export class RossiCommandController {
 
             child.on('error', (error) => {
                 cancellation.dispose();
-                finishReject(new Error(`Failed to start '${toolPath}': ${error.message}`));
+                finishReject(new Error(`Failed to start '${command}': ${error.message}`));
             });
 
             child.on('close', (code) => {
@@ -445,7 +567,7 @@ export class RossiCommandController {
                 settled = true;
                 this.output.appendLine('');
                 if (code !== 0 && !allowNonZeroExit) {
-                    reject(new Error(`Rossi command failed with exit code ${code}: ${formatCommand(toolPath, args)}`));
+                    reject(new Error(`Command failed with exit code ${code}: ${formatCommand(command, args)}`));
                     return;
                 }
                 resolve({ stdout, stderr, exitCode: code });
@@ -528,6 +650,26 @@ export class RossiCommandController {
         return selected?.folder.uri.fsPath;
     }
 
+    private async getOpenInRodinInput(uri?: Uri): Promise<string | undefined> {
+        if (uri?.scheme === 'file') {
+            return uri.fsPath;
+        }
+
+        const editorFile = await this.getEventBFile();
+        if (editorFile) {
+            return editorFile;
+        }
+
+        if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
+            const workspaceFolder = await this.pickWorkspaceFolder();
+            if (workspaceFolder) {
+                return workspaceFolder;
+            }
+        }
+
+        return this.pickInput('Open in Rodin', ['eventb'], true);
+    }
+
     private async getEventBFile(uri?: Uri): Promise<string | undefined> {
         if (uri?.scheme === 'file' && isEventBTextFile(uri.fsPath)) {
             return uri.fsPath;
@@ -599,6 +741,7 @@ export function registerRossiCommands(
         vscodeCommands.registerCommand('rossi.exportCurrentFileToRodinZip', (uri?: Uri) => controller.runCommand(() => controller.exportCurrentFileToRodinZip(uri))),
         vscodeCommands.registerCommand('rossi.exportWorkspaceToRodinZip', () => controller.runCommand(() => controller.exportWorkspaceToRodinZip())),
         vscodeCommands.registerCommand('rossi.buildCheckedRodinZip', (uri?: Uri) => controller.runCommand(() => controller.buildCheckedRodinZip(uri))),
+        vscodeCommands.registerCommand('rossi.openInRodin', (uri?: Uri) => controller.runCommand(() => controller.openInRodin(uri))),
         vscodeCommands.registerCommand('rossi.validateCurrentFile', (uri?: Uri) => controller.runCommand(() => controller.validateCurrentFile(uri))),
         vscodeCommands.registerCommand('rossi.validateWorkspace', () => controller.runCommand(() => controller.validateWorkspace())),
         vscodeCommands.registerCommand('rossi.convertCurrentFileToUnicode', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToUnicode(uri))),
@@ -760,3 +903,211 @@ function isPathInside(candidate: string, root: string): boolean {
 function firstNonEmptyLine(text: string): string | undefined {
     return text.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
 }
+
+function configuredRodinPath(): string {
+    const configured = workspace.getConfiguration('rossi').get<string>('rodin.path', '').trim();
+    return configured || defaultRodinPath();
+}
+
+function defaultRodinPath(): string {
+    switch (process.platform) {
+        case 'darwin':
+            return '/Applications/Rodin.app';
+        case 'win32':
+            return 'rodin.exe';
+        default:
+            return 'rodin';
+    }
+}
+
+function rodinProjectName(input: string): string {
+    const basename = path.basename(input, path.extname(input));
+    const sanitized = basename.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[.-]+/, '');
+    return sanitized || 'rossi_project';
+}
+
+type MacRodinApp =
+    | { kind: 'bundle'; appPath: string }
+    | { kind: 'name'; appName: string };
+
+// On macOS, interpret a configured Rodin path as either a `.app` bundle path or
+// a bare application name (e.g. "Rodin"). Returns undefined on other platforms
+// or for a plain executable path, so callers fall back to spawning it directly.
+function macRodinApp(rodinPath: string): MacRodinApp | undefined {
+    if (process.platform !== 'darwin') {
+        return undefined;
+    }
+    if (rodinPath.toLowerCase().endsWith('.app')) {
+        return { kind: 'bundle', appPath: rodinPath };
+    }
+    if (!hasPathSeparator(rodinPath) && /^[A-Z]/.test(rodinPath)) {
+        return { kind: 'name', appName: rodinPath };
+    }
+    return undefined;
+}
+
+function rodinLaunchCommand(
+    rodinPath: string,
+    project: RodinProjectLaunch
+): { command: string; args: string[] } {
+    const args = ['-data', project.workspaceDir];
+    const app = macRodinApp(rodinPath);
+
+    if (app?.kind === 'bundle') {
+        return { command: 'open', args: ['-n', app.appPath, '--args', ...args] };
+    }
+    if (app?.kind === 'name') {
+        return { command: 'open', args: ['-n', '-a', app.appName, '--args', ...args] };
+    }
+    return { command: rodinPath, args };
+}
+
+function spawnDetached(command: string, args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, {
+            detached: true,
+            stdio: 'ignore',
+            shell: false,
+        });
+
+        child.once('error', (error) => {
+            reject(new Error(`Failed to start '${command}': ${error.message}`));
+        });
+
+        child.once('spawn', () => {
+            child.unref();
+            resolve();
+        });
+    });
+}
+
+function hasPathSeparator(value: string): boolean {
+    return value.includes('/') || value.includes('\\');
+}
+
+async function rodinAntRunnerCommand(rodinPath: string): Promise<string> {
+    const app = macRodinApp(rodinPath);
+
+    if (app?.kind === 'bundle') {
+        return macOsAppExecutable(app.appPath);
+    }
+    if (app?.kind === 'name') {
+        return macOsAppExecutable(path.join('/Applications', `${app.appName}.app`));
+    }
+    return rodinPath;
+}
+
+async function macOsAppExecutable(appPath: string): Promise<string> {
+    const executableDir = path.join(appPath, 'Contents', 'MacOS');
+    const preferred = path.join(
+        executableDir,
+        path.basename(appPath, '.app').toLowerCase()
+    );
+    if (await pathExists(preferred)) {
+        return preferred;
+    }
+
+    let entries: import('fs').Dirent[];
+    try {
+        entries = await fs.readdir(executableDir, { withFileTypes: true });
+    } catch (error) {
+        throw new Error(`Cannot find Rodin executable inside ${appPath}`, { cause: error });
+    }
+
+    const executable = entries.find((entry) => entry.isFile());
+    if (!executable) {
+        throw new Error(`Cannot find Rodin executable inside ${appPath}`);
+    }
+    return path.join(executableDir, executable.name);
+}
+
+async function writeRodinImporterFiles(importerDir: string, buildFile: string): Promise<void> {
+    const classFile = path.join(
+        importerDir,
+        'org',
+        'rossi',
+        'vscode',
+        'RodinProjectImportTask.class'
+    );
+    await fs.mkdir(path.dirname(classFile), { recursive: true });
+    await fs.writeFile(classFile, Buffer.from(RODIN_PROJECT_IMPORT_TASK_CLASS_BASE64, 'base64'));
+    await fs.writeFile(buildFile, rodinImporterBuildXml(importerDir), 'utf8');
+}
+
+function rodinImporterBuildXml(importerDir: string): string {
+    return [
+        '<project name="rossi-rodin-import" default="import">',
+        `  <taskdef name="rossiImportProject" classname="org.rossi.vscode.RodinProjectImportTask" classpath="${escapeXmlAttribute(importerDir)}"/>`,
+        '  <target name="import">',
+        '    <rossiImportProject projectDir="${projectDir}"/>',
+        '  </target>',
+        '</project>',
+        '',
+    ].join('\n');
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+    try {
+        await fs.stat(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function escapeXmlAttribute(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+// Java 17 Ant task that calls Eclipse ResourcesPlugin to register the generated
+// .project. The base64 below is the compiled class; the reviewable source and
+// regeneration instructions live in `editors/vscode/rodin/`.
+const RODIN_PROJECT_IMPORT_TASK_CLASS_BASE64 = [
+    'yv66vgAAAD0AlAoAAgADBwAEDAAFAAYBABlvcmcvYXBhY2hlL3Rvb2xzL2FudC9UYXNrAQAGPGluaXQ+AQADKClWCQAIAAkH',
+    'AAoMAAsADAEAJ29yZy9yb3NzaS92c2NvZGUvUm9kaW5Qcm9qZWN0SW1wb3J0VGFzawEACnByb2plY3REaXIBABJMamF2YS9s',
+    'YW5nL1N0cmluZzsKAA4ADwcAEAwAEQASAQAQamF2YS9sYW5nL1N0cmluZwEAB2lzQmxhbmsBAAMoKVoHABQBACNvcmcvYXBh',
+    'Y2hlL3Rvb2xzL2FudC9CdWlsZEV4Y2VwdGlvbggAFgEAFnByb2plY3REaXIgaXMgcmVxdWlyZWQKABMAGAwABQAZAQAVKExq',
+    'YXZhL2xhbmcvU3RyaW5nOylWBwAbAQAMamF2YS9pby9GaWxlCgAaABgKABoAHgwAHwAgAQAQZ2V0Q2Fub25pY2FsRmlsZQEA',
+    'ECgpTGphdmEvaW8vRmlsZTsIACIBAAgucHJvamVjdAoAGgAkDAAFACUBACMoTGphdmEvaW8vRmlsZTtMamF2YS9sYW5nL1N0',
+    'cmluZzspVgoAGgAnDAAoABIBAAZpc0ZpbGUKAA4AKgwAKwAsAQAHdmFsdWVPZgEAJihMamF2YS9sYW5nL09iamVjdDspTGph',
+    'dmEvbGFuZy9TdHJpbmc7EgAAAC4MAC8AMAEAF21ha2VDb25jYXRXaXRoQ29uc3RhbnRzAQAmKExqYXZhL2xhbmcvU3RyaW5n',
+    'OylMamF2YS9sYW5nL1N0cmluZzsKADIAMwcANAwANQA2AQAqb3JnL2VjbGlwc2UvY29yZS9yZXNvdXJjZXMvUmVzb3VyY2Vz',
+    'UGx1Z2luAQAMZ2V0V29ya3NwYWNlAQApKClMb3JnL2VjbGlwc2UvY29yZS9yZXNvdXJjZXMvSVdvcmtzcGFjZTsHADgBAB1v',
+    'cmcvZWNsaXBzZS9jb3JlL3J1bnRpbWUvUGF0aAoAGgA6DAA7ADwBAA9nZXRBYnNvbHV0ZVBhdGgBABQoKUxqYXZhL2xhbmcv',
+    'U3RyaW5nOwoANwAYCwA/AEAHAEEMAEIAQwEAJW9yZy9lY2xpcHNlL2NvcmUvcmVzb3VyY2VzL0lXb3Jrc3BhY2UBABZsb2Fk',
+    'UHJvamVjdERlc2NyaXB0aW9uAQBSKExvcmcvZWNsaXBzZS9jb3JlL3J1bnRpbWUvSVBhdGg7KUxvcmcvZWNsaXBzZS9jb3Jl',
+    'L3Jlc291cmNlcy9JUHJvamVjdERlc2NyaXB0aW9uOwsAPwBFDABGAEcBAAdnZXRSb290AQAtKClMb3JnL2VjbGlwc2UvY29y',
+    'ZS9yZXNvdXJjZXMvSVdvcmtzcGFjZVJvb3Q7CwBJAEoHAEsMAEwAPAEALm9yZy9lY2xpcHNlL2NvcmUvcmVzb3VyY2VzL0lQ',
+    'cm9qZWN0RGVzY3JpcHRpb24BAAdnZXROYW1lCwBOAE8HAFAMAFEAUgEAKW9yZy9lY2xpcHNlL2NvcmUvcmVzb3VyY2VzL0lX',
+    'b3Jrc3BhY2VSb290AQAKZ2V0UHJvamVjdAEAOShMamF2YS9sYW5nL1N0cmluZzspTG9yZy9lY2xpcHNlL2NvcmUvcmVzb3Vy',
+    'Y2VzL0lQcm9qZWN0OwcAVAEALG9yZy9lY2xpcHNlL2NvcmUvcnVudGltZS9OdWxsUHJvZ3Jlc3NNb25pdG9yCgBTAAMLAFcA',
+    'WAcAWQwAWgASAQAjb3JnL2VjbGlwc2UvY29yZS9yZXNvdXJjZXMvSVByb2plY3QBAAZleGlzdHMLAFcAXAwAXQBeAQAGY3Jl',
+    'YXRlAQBeKExvcmcvZWNsaXBzZS9jb3JlL3Jlc291cmNlcy9JUHJvamVjdERlc2NyaXB0aW9uO0xvcmcvZWNsaXBzZS9jb3Jl',
+    'L3J1bnRpbWUvSVByb2dyZXNzTW9uaXRvcjspVgsAVwBgDABhABIBAAZpc09wZW4LAFcAYwwAZABlAQAEb3BlbgEALihMb3Jn',
+    'L2VjbGlwc2UvY29yZS9ydW50aW1lL0lQcm9ncmVzc01vbml0b3I7KVYHAGcBACRvcmcvZWNsaXBzZS9jb3JlL3Jlc291cmNl',
+    'cy9JUmVzb3VyY2ULAFcAaQwAagBrAQAMcmVmcmVzaExvY2FsAQAvKElMb3JnL2VjbGlwc2UvY29yZS9ydW50aW1lL0lQcm9n',
+    'cmVzc01vbml0b3I7KVYLAD8AbQwAbgBvAQAEc2F2ZQEAUChaTG9yZy9lY2xpcHNlL2NvcmUvcnVudGltZS9JUHJvZ3Jlc3NN',
+    'b25pdG9yOylMb3JnL2VjbGlwc2UvY29yZS9ydW50aW1lL0lTdGF0dXM7EgABAHEMAC8AcgEAOChMamF2YS9sYW5nL1N0cmlu',
+    'ZztMamF2YS9sYW5nL1N0cmluZzspTGphdmEvbGFuZy9TdHJpbmc7CgAIAHQMAHUAGQEAA2xvZwcAdwEAE2phdmEvbGFuZy9F',
+    'eGNlcHRpb24KABMAeQwABQB6AQAYKExqYXZhL2xhbmcvVGhyb3dhYmxlOylWAQAEQ29kZQEAD0xpbmVOdW1iZXJUYWJsZQEA',
+    'DXNldFByb2plY3REaXIBAAdleGVjdXRlAQANU3RhY2tNYXBUYWJsZQEACkV4Y2VwdGlvbnMBAApTb3VyY2VGaWxlAQAbUm9k',
+    'aW5Qcm9qZWN0SW1wb3J0VGFzay5qYXZhAQAQQm9vdHN0cmFwTWV0aG9kcwgAhQEAGE1pc3NpbmcgLnByb2plY3QgZmlsZTog',
+    'AQgAhwEAH0ltcG9ydGVkIFJvZGluIHByb2plY3QgASBmcm9tIAEPBgCJCgCKAIsHAIwMAC8AjQEAJGphdmEvbGFuZy9pbnZv',
+    'a2UvU3RyaW5nQ29uY2F0RmFjdG9yeQEAmChMamF2YS9sYW5nL2ludm9rZS9NZXRob2RIYW5kbGVzJExvb2t1cDtMamF2YS9s',
+    'YW5nL1N0cmluZztMamF2YS9sYW5nL2ludm9rZS9NZXRob2RUeXBlO0xqYXZhL2xhbmcvU3RyaW5nO1tMamF2YS9sYW5nL09i',
+    'amVjdDspTGphdmEvbGFuZy9pbnZva2UvQ2FsbFNpdGU7AQAMSW5uZXJDbGFzc2VzBwCQAQAlamF2YS9sYW5nL2ludm9rZS9N',
+    'ZXRob2RIYW5kbGVzJExvb2t1cAcAkgEAHmphdmEvbGFuZy9pbnZva2UvTWV0aG9kSGFuZGxlcwEABkxvb2t1cAAxAAgAAgAA',
+    'AAEAAgALAAwAAAADAAEABQAGAAEAewAAAB0AAQABAAAABSq3AAGxAAAAAQB8AAAABgABAAAADwABAH0AGQABAHsAAAAiAAIA',
+    'AgAAAAYqK7UAB7EAAAABAHwAAAAKAAIAAAATAAUAFAABAH4ABgACAHsAAAGkAAQABwAAAOIqtAAHxgANKrQAB7YADZkADbsA',
+    'E1kSFbcAF7+7ABpZKrQAB7cAHLYAHUy7ABpZKxIhtwAjTSy2ACaaABS7ABNZLLgAKboALQAAtwAXv7gAMU4tuwA3WSy2ADm3',
+    'AD25AD4CADoELbkARAEAGQS5AEgBALkATQIAOgW7AFNZtwBVOgYZBbkAVgEAmgAOGQUZBBkGuQBbAwAZBbkAXwEAmgAMGQUZ',
+    'BrkAYgIAGQUFGQa5AGgDAC0EGQa5AGwDAFcqGQS5AEgBACu4ACm6AHAAALYAc6cAEEwrv0y7ABNZK7cAeL+xAAIAGwDRANQA',
+    'EwAbANEA1wB2AAIAfAAAAF4AFwAAABgAEQAZABsAHQAqAB4ANQAfADwAIABNACMAUQAkAGQAJQB4ACYAgQAoAIsAKQCWACsA',
+    'oAAsAKkALgCzAC8AvQAwANEANQDUADEA1QAyANcAMwDYADQA4QA2AH8AAAA8AAgRCf0AMQcAGgcAGv8ASAAHBwAIBwAaBwAa',
+    'BwA/BwBJBwBXBwBTAAAS/wAqAAEHAAgAAQcAE0IHAHYJAIAAAAAEAAEAEwADAIEAAAACAIIAgwAAAA4AAgCIAAEAhACIAAEA',
+    'hgCOAAAACgABAI8AkQCTABk=',
+].join('');

@@ -64,10 +64,15 @@ code --install-extension rossi-eventb-0.1.0.vsix
 ### Basic Setup
 
 No configuration needed if `rossi-language-server` and `rossi` are in your PATH.
+`Open in Rodin` additionally works without configuration when Rodin is available at the platform default:
+
+- macOS: `/Applications/Rodin.app`
+- Windows: `rodin.exe` in `PATH`
+- Linux: `rodin` in `PATH`
 
 ### Custom Tool Paths
 
-If either binary is not in PATH, configure it:
+If either Rossi binary is not in `PATH`, configure it:
 
 1. Open Settings (Ctrl+,)
 2. Search for "rossi"
@@ -85,12 +90,33 @@ Or edit `settings.json` directly:
 }
 ```
 
+Configure `rossi.rodin.path` only if `Open in Rodin` cannot use the platform default. Examples:
+
+```json
+{
+  "rossi.rodin.path": "/Applications/Rodin.app"
+}
+```
+
+```json
+{
+  "rossi.rodin.path": "C:\\tools\\rodin\\rodin.exe"
+}
+```
+
+```json
+{
+  "rossi.rodin.path": "/opt/rodin/rodin"
+}
+```
+
 ### Recommended Settings
 
 ```json
 {
   "rossi.languageServer.path": "rossi-language-server",
   "rossi.tool.path": "rossi",
+  "rossi.rodin.path": "",
   "rossi.format.useUnicode": true,
   "rossi.format.indentation": "    ",
   "rossi.format.maxLineLength": 100,
@@ -153,12 +179,13 @@ These commands require the `rossi` CLI. Configure `rossi.tool.path` if it is not
 - Command Palette > `Rossi: Import Rodin Project`
 - Command Palette > `Rossi: Export Current File to Rodin ZIP`
 - Command Palette > `Rossi: Export Workspace to Rodin ZIP`
+- Command Palette > `Rossi: Open in Rodin`
 - Command Palette > `Rossi: Build Checked Rodin ZIP`
 - Command Palette > `Rossi: Validate Current File`
 - Command Palette > `Rossi: Validate Workspace`
 - Command Palette > `Rossi: Check Toolchain`
 
-Validation results are shown in the Problems panel and detailed command output is written to the `Rossi` output channel.
+`Open in Rodin` requires the Rodin IDE. With `rossi.rodin.path` left empty, the extension uses `/Applications/Rodin.app` on macOS, `rodin.exe` on Windows, and `rodin` on Linux. The command exports a temporary one-way Rodin project, registers it in a temporary Rodin workspace, and launches Rodin. Edits made in Rodin are not synced back to `.eventb` files. Validation results are shown in the Problems panel and detailed command output is written to the `Rossi` output channel.
 
 ### ProB
 

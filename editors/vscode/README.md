@@ -39,6 +39,7 @@ This extension provides comprehensive language support for Event-B formal modeli
 ### 🔁 Rodin Interoperability
 - Import Rodin `.zip`, `.buc`, `.bum`, or XML project folders into `.eventb` files
 - Export the current `.eventb` file or workspace to a Rodin `.zip`
+- Open the current `.eventb` file or workspace in the Rodin IDE as a temporary one-way Rodin workspace
 - Build checked Rodin `.zip` archives with generated `.bcc` / `.bcm` files
 - Run on-demand validation and show results in VS Code Problems
 - Convert the current `.eventb` file between Unicode and ASCII notation
@@ -46,7 +47,7 @@ This extension provides comprehensive language support for Event-B formal modeli
 
 ## Requirements
 
-The Rossi Language Server must be installed and accessible in your PATH. Rodin import/export/build/validation commands also require the `rossi` CLI.
+The Rossi Language Server must be installed and accessible in your PATH. Rodin import/export/build/validation commands also require the `rossi` CLI. `Open in Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
 
 ### Installation
 
@@ -65,6 +66,7 @@ This extension contributes the following settings:
 
 - `rossi.languageServer.path`: Path to the Event-B language server executable (default: searches in PATH)
 - `rossi.tool.path`: Path to the Rossi CLI executable used for import, export, build, validation, and conversion commands (default: `rossi`)
+- `rossi.rodin.path`: Path to the Rodin IDE executable, macOS `.app` bundle, or app name used by `Open in Rodin` (defaults: `/Applications/Rodin.app` on macOS, `rodin.exe` on Windows, `rodin` on Linux)
 - `rossi.format.useUnicode`: Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\, \/, =>, :) when formatting (default: `true`)
 - `rossi.format.indentation`: Indentation string (spaces or tabs) to use when formatting (default: `"    "` - 4 spaces)
 - `rossi.format.maxLineLength`: Maximum line length for future formatter wrapping behavior (default: `100`)
@@ -83,8 +85,9 @@ Add to your `.vscode/settings.json`:
 
 ```json
 {
-  "rossi.languageServer.path": "/path/to/rossi-language-server",
-  "rossi.tool.path": "/path/to/rossi",
+  "rossi.languageServer.path": "/path/to/rossi-language-server", // only if not in PATH
+  "rossi.tool.path": "/path/to/rossi", // only if not in PATH
+  "rossi.rodin.path": "/Applications/Rodin.app", // only if Rodin isn't at the platform default
   "rossi.format.useUnicode": true,
   "rossi.format.indentation": "    ",
   "rossi.format.maxLineLength": 100,
@@ -164,6 +167,7 @@ Open the Command Palette and run:
 - `Rossi: Import Rodin Project`
 - `Rossi: Export Current File to Rodin ZIP`
 - `Rossi: Export Workspace to Rodin ZIP`
+- `Rossi: Open in Rodin`
 - `Rossi: Build Checked Rodin ZIP`
 - `Rossi: Validate Current File`
 - `Rossi: Validate Workspace`
@@ -173,7 +177,7 @@ Open the Command Palette and run:
 - `Rossi: Model Check with ProB`
 - `Rossi: Check Toolchain`
 
-Rodin and conversion commands shell out to the configured `rossi.tool.path`. ProB commands are forwarded to the language server and use the `rossi.prob.*` settings.
+Rodin and conversion commands shell out to the configured `rossi.tool.path`. `Open in Rodin` exports a temporary Rodin project, registers it in a temporary workspace through Rodin’s headless Ant runner, and launches the configured `rossi.rodin.path`; edits made in Rodin are not synced back to `.eventb` files. ProB commands are forwarded to the language server and use the `rossi.prob.*` settings.
 
 ## Contributing
 

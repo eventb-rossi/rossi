@@ -31,6 +31,7 @@
     "onCommand:rossi.exportCurrentFileToRodinZip",
     "onCommand:rossi.exportWorkspaceToRodinZip",
     "onCommand:rossi.buildCheckedRodinZip",
+    "onCommand:rossi.openInRodin",
     "onCommand:rossi.validateCurrentFile",
     "onCommand:rossi.validateWorkspace",
     "onCommand:rossi.convertCurrentFileToUnicode",
@@ -90,6 +91,11 @@
       {
         "command": "rossi.buildCheckedRodinZip",
         "title": "Build Checked Rodin ZIP",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.openInRodin",
+        "title": "Open in Rodin",
         "category": "Rossi"
       },
       {
@@ -171,14 +177,24 @@
           "group": "rossi@7"
         },
         {
-          "command": "rossi.importRodinProject",
-          "when": "resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
+          "command": "rossi.openInRodin",
+          "when": "resourceExtname == .eventb",
+          "group": "rossi@8"
+        },
+        {
+          "command": "rossi.openInRodin",
+          "when": "explorerResourceIsFolder",
           "group": "rossi@8"
         },
         {
           "command": "rossi.importRodinProject",
+          "when": "resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
+          "group": "rossi@9"
+        },
+        {
+          "command": "rossi.importRodinProject",
           "when": "explorerResourceIsFolder",
-          "group": "rossi@8"
+          "group": "rossi@9"
         }
       ]
     },
@@ -195,6 +211,11 @@
           "type": "string",
           "default": "rossi-language-server",
           "description": "Path to the Event-B language server executable. If not specified, searches in PATH."
+        },
+        "rossi.rodin.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Rodin IDE executable, macOS .app bundle, or app name used by the Open in Rodin command. Leave empty to use the platform default."
         },
         "rossi.format.useUnicode": {
           "type": "boolean",
