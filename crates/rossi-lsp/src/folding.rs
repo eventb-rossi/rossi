@@ -8,6 +8,7 @@
 //! - Clause sections (SETS, CONSTANTS, VARIABLES, INVARIANTS, AXIOMS, etc.)
 
 use crate::lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams};
+use rossi::keywords::{self, KeywordGroup, KeywordId};
 
 /// Provides folding ranges for Event-B documents
 pub struct FoldingRangeProvider;
@@ -58,7 +59,9 @@ impl FoldingRangeProvider {
             let trimmed = line.trim();
 
             // Check for component start
-            if trimmed.starts_with("CONTEXT") || trimmed.starts_with("MACHINE") {
+            if trimmed.starts_with(keywords::spell(KeywordId::Context))
+                || trimmed.starts_with(keywords::spell(KeywordId::Machine))
+            {
                 component_start = Some(idx);
             }
 
@@ -94,7 +97,9 @@ impl FoldingRangeProvider {
             let trimmed = line.trim();
 
             // Check for event start
-            if trimmed.starts_with("EVENT") || trimmed.starts_with("INITIALISATION") {
+            if trimmed.starts_with(keywords::spell(KeywordId::Event))
+                || trimmed.starts_with(keywords::spell(KeywordId::Initialisation))
+            {
                 event_stack.push(idx);
             }
 
@@ -124,21 +129,11 @@ impl FoldingRangeProvider {
     fn detect_clause_sections(&self, lines: &[&str]) -> Vec<FoldingRange> {
         let mut ranges = Vec::new();
 
-        // List of clauses to detect
-        let clauses = [
-            "SETS",
-            "CONSTANTS",
-            "AXIOMS",
-            "VARIABLES",
-            "INVARIANTS",
-            "EVENTS",
-            "EXTENDS",
-            "SEES",
-            "REFINES",
-        ];
-
-        for clause in &clauses {
-            ranges.extend(self.detect_single_clause_section(lines, clause));
+        // Context and machine clause keywords, from the single source of truth.
+        for clause in keywords::iter_group(KeywordGroup::ContextClause)
+            .chain(keywords::iter_group(KeywordGroup::MachineClause))
+        {
+            ranges.extend(self.detect_single_clause_section(lines, clause.text()));
         }
 
         ranges
@@ -204,18 +199,10 @@ impl FoldingRangeProvider {
         ranges
     }
 
-    /// Check if a line starts with a clause keyword
+    /// Check if a line starts with a clause keyword (its first whitespace-separated token)
     fn is_clause_keyword(&self, trimmed: &str) -> bool {
-        trimmed.starts_with("SETS")
-            || trimmed.starts_with("CONSTANTS")
-            || trimmed.starts_with("AXIOMS")
-            || trimmed.starts_with("VARIABLES")
-            || trimmed.starts_with("INVARIANTS")
-            || trimmed.starts_with("EVENTS")
-            || trimmed.starts_with("EXTENDS")
-            || trimmed.starts_with("SEES")
-            || trimmed.starts_with("REFINES")
-            || trimmed.starts_with("VARIANT")
+        let first = trimmed.split_whitespace().next().unwrap_or("");
+        keywords::is_clause_keyword(first)
     }
 }
 
@@ -311,6 +298,31 @@ mod tests {
         // Should have a range for the AXIOMS clause
         let has_axms = ranges.iter().any(|r| r.start_line == 2 && r.end_line == 4);
         assert!(has_axms, "Should detect AXIOMS clause");
+    }
+
+    #[test]
+    fn test_fold_variant_clause() {
+        // VARIANT was previously missing from the folding clause list; it now folds.
+        let provider = FoldingRangeProvider::new();
+        let text = "MACHINE test\nVARIABLES x\nVARIANT\n    max - x\n    - 1\nEVENTS\nEND";
+
+        let ranges = provider.detect_folding_ranges(text);
+
+        let has_variant = ranges.iter().any(|r| r.start_line == 2 && r.end_line == 4);
+        assert!(has_variant, "Should detect VARIANT clause");
+    }
+
+    #[test]
+    fn test_theorems_section_is_not_folded() {
+        // THEOREMS is recognized as a recovery boundary but is not a foldable clause
+        // (the parser does not build a theorems node).
+        let provider = FoldingRangeProvider::new();
+        let text = "CONTEXT test\nTHEOREMS\n    @thm1 1 = 1\n    @thm2 2 = 2\nEND";
+
+        let ranges = provider.detect_folding_ranges(text);
+
+        let folds_theorems = ranges.iter().any(|r| r.start_line == 1);
+        assert!(!folds_theorems, "THEOREMS clause should not produce a fold");
     }
 
     #[test]

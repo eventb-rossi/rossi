@@ -9,6 +9,7 @@ use crate::lsp_types::{
     SemanticTokensParams, SemanticTokensResult,
 };
 use rossi::ast::{Component, Context, Event, LabeledAction, LabeledPredicate, Machine, Predicate};
+use rossi::keywords::{self, KeywordId};
 use tracing::debug;
 
 /// Semantic tokens provider
@@ -89,6 +90,9 @@ impl SemanticTokensProvider {
 struct SemanticTokensBuilder<'a> {
     /// Source text for position calculation
     text: &'a str,
+    /// ASCII-lowercased copy of `text` for case-insensitive keyword search.
+    /// ASCII-lowercasing preserves byte length, so offsets match `text`.
+    text_lower: String,
     /// Line offsets for quick position calculation
     line_offsets: Vec<usize>,
     /// Collected semantic tokens
@@ -125,6 +129,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         Self {
             text,
+            text_lower: text.to_ascii_lowercase(),
             line_offsets,
             tokens: Vec::new(),
             variables: Vec::new(),
@@ -151,13 +156,37 @@ impl<'a> SemanticTokensBuilder<'a> {
         (last_line as u32, column as u32)
     }
 
-    /// Find the position of a keyword in the text
+    /// Find the position of a keyword in the text (case-insensitive).
+    ///
+    /// Searches the precomputed `text_lower`; since ASCII-lowercasing preserves
+    /// byte offsets, the result maps back onto `text` and the match length
+    /// equals `keyword.len()`.
     fn find_keyword(&self, keyword: &str, start_offset: usize) -> Option<(usize, usize)> {
-        if let Some(pos) = self.text[start_offset..].find(keyword) {
-            let offset = start_offset + pos;
-            Some((offset, keyword.len()))
-        } else {
-            None
+        let needle = keyword.to_ascii_lowercase();
+        self.text_lower[start_offset..]
+            .find(&needle)
+            .map(|pos| (start_offset + pos, keyword.len()))
+    }
+
+    /// Find the keyword identified by `id` from `current_offset`, emit a token
+    /// for the spelling that matched, and return the offset just past it.
+    /// Tries each spelling in order (so `WHERE`/`WHEN`, `THEN`/`BEGIN` are both
+    /// handled), and returns `None` if no spelling is found.
+    fn mark_keyword(&mut self, id: KeywordId, current_offset: usize) -> Option<usize> {
+        for spelling in keywords::keyword(id).spellings {
+            if let Some((offset, len)) = self.find_keyword(spelling, current_offset) {
+                self.add_keyword(spelling, offset);
+                return Some(offset + len);
+            }
+        }
+        None
+    }
+
+    /// Emit a token for keyword `id` and advance `offset` past it in place
+    /// (leaving `offset` unchanged if the keyword is not found).
+    fn advance_past_keyword(&mut self, id: KeywordId, offset: &mut usize) {
+        if let Some(next) = self.mark_keyword(id, *offset) {
+            *offset = next;
         }
     }
 
@@ -216,10 +245,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         let mut current_offset = 0;
 
         // CONTEXT keyword
-        if let Some((offset, _)) = self.find_keyword("CONTEXT", current_offset) {
-            self.add_keyword("CONTEXT", offset);
-            current_offset = offset + 7;
-        }
+        self.advance_past_keyword(KeywordId::Context, &mut current_offset);
 
         // Context name
         if let Some((offset, _)) = self.find_identifier(&ctx.name, current_offset) {
@@ -229,10 +255,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // EXTENDS clause
         if !ctx.extends.is_empty()
-            && let Some((offset, _)) = self.find_keyword("EXTENDS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Extends, current_offset)
         {
-            self.add_keyword("EXTENDS", offset);
-            current_offset = offset + 7;
+            current_offset = off;
 
             for extended in &ctx.extends {
                 if let Some((offset, _)) = self.find_identifier(extended, current_offset) {
@@ -244,10 +269,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // SETS clause
         if !ctx.sets.is_empty()
-            && let Some((offset, _)) = self.find_keyword("SETS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Sets, current_offset)
         {
-            self.add_keyword("SETS", offset);
-            current_offset = offset + 4;
+            current_offset = off;
 
             for set in &ctx.sets {
                 let set_name = set.name().to_string();
@@ -261,10 +285,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // CONSTANTS clause
         if !ctx.constants.is_empty()
-            && let Some((offset, _)) = self.find_keyword("CONSTANTS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Constants, current_offset)
         {
-            self.add_keyword("CONSTANTS", offset);
-            current_offset = offset + 9;
+            current_offset = off;
 
             for constant in &ctx.constants {
                 self.constants.push(constant.name.clone());
@@ -277,10 +300,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // AXIOMS clause
         if !ctx.axioms.is_empty()
-            && let Some((offset, _)) = self.find_keyword("AXIOMS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Axioms, current_offset)
         {
-            self.add_keyword("AXIOMS", offset);
-            current_offset = offset + 6;
+            current_offset = off;
 
             for axiom in &ctx.axioms {
                 current_offset = self.visit_labeled_predicate(axiom, current_offset);
@@ -288,9 +310,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
 
         // END keyword
-        if let Some((offset, _)) = self.find_keyword("END", current_offset) {
-            self.add_keyword("END", offset);
-        }
+        self.mark_keyword(KeywordId::End, current_offset);
     }
 
     /// Visit a machine
@@ -298,10 +318,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         let mut current_offset = 0;
 
         // MACHINE keyword
-        if let Some((offset, _)) = self.find_keyword("MACHINE", current_offset) {
-            self.add_keyword("MACHINE", offset);
-            current_offset = offset + 7;
-        }
+        self.advance_past_keyword(KeywordId::Machine, &mut current_offset);
 
         // Machine name
         if let Some((offset, _)) = self.find_identifier(&mch.name, current_offset) {
@@ -311,10 +328,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // REFINES clause
         if let Some(ref refined) = mch.refines
-            && let Some((offset, _)) = self.find_keyword("REFINES", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Refines, current_offset)
         {
-            self.add_keyword("REFINES", offset);
-            current_offset = offset + 7;
+            current_offset = off;
 
             if let Some((offset, _)) = self.find_identifier(refined, current_offset) {
                 self.add_identifier(refined, offset, TokenType::Namespace, false);
@@ -324,10 +340,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // SEES clause
         if !mch.sees.is_empty()
-            && let Some((offset, _)) = self.find_keyword("SEES", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Sees, current_offset)
         {
-            self.add_keyword("SEES", offset);
-            current_offset = offset + 4;
+            current_offset = off;
 
             for seen in &mch.sees {
                 if let Some((offset, _)) = self.find_identifier(seen, current_offset) {
@@ -339,10 +354,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // VARIABLES clause
         if !mch.variables.is_empty()
-            && let Some((offset, _)) = self.find_keyword("VARIABLES", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Variables, current_offset)
         {
-            self.add_keyword("VARIABLES", offset);
-            current_offset = offset + 9;
+            current_offset = off;
 
             for variable in &mch.variables {
                 self.variables.push(variable.name.clone());
@@ -355,10 +369,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // INVARIANTS clause
         if !mch.invariants.is_empty()
-            && let Some((offset, _)) = self.find_keyword("INVARIANTS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Invariants, current_offset)
         {
-            self.add_keyword("INVARIANTS", offset);
-            current_offset = offset + 10;
+            current_offset = off;
 
             for invariant in &mch.invariants {
                 current_offset = self.visit_labeled_predicate(invariant, current_offset);
@@ -366,37 +379,29 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
 
         // VARIANT clause
-        if mch.variant.is_some()
-            && let Some((offset, _)) = self.find_keyword("VARIANT", current_offset)
-        {
-            self.add_keyword("VARIANT", offset);
-            current_offset = offset + 7;
+        if mch.variant.is_some() {
+            self.advance_past_keyword(KeywordId::Variant, &mut current_offset);
         }
 
         // INITIALISATION event
         if let Some(init) = &mch.initialisation
-            && let Some((offset, _)) = self.find_keyword("INITIALISATION", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Initialisation, current_offset)
         {
-            self.add_keyword("INITIALISATION", offset);
-            current_offset = offset + 14;
+            current_offset = off;
 
             // Actions
             for action in &init.actions {
                 current_offset = self.visit_action(action, current_offset);
             }
 
-            if let Some((offset, _)) = self.find_keyword("END", current_offset) {
-                self.add_keyword("END", offset);
-                current_offset = offset + 3;
-            }
+            self.advance_past_keyword(KeywordId::End, &mut current_offset);
         }
 
         // EVENTS clause
         if !mch.events.is_empty()
-            && let Some((offset, _)) = self.find_keyword("EVENTS", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Events, current_offset)
         {
-            self.add_keyword("EVENTS", offset);
-            current_offset = offset + 6;
+            current_offset = off;
 
             for event in &mch.events {
                 current_offset = self.visit_event(event, current_offset);
@@ -404,9 +409,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
 
         // END keyword
-        if let Some((offset, _)) = self.find_keyword("END", current_offset) {
-            self.add_keyword("END", offset);
-        }
+        self.mark_keyword(KeywordId::End, current_offset);
     }
 
     /// Visit an event
@@ -415,10 +418,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         self.parameters.clear();
 
         // EVENT keyword
-        if let Some((offset, _)) = self.find_keyword("EVENT", current_offset) {
-            self.add_keyword("EVENT", offset);
-            current_offset = offset + 5;
-        }
+        self.advance_past_keyword(KeywordId::Event, &mut current_offset);
 
         // Event name
         if let Some((offset, _)) = self.find_identifier(&event.name, current_offset) {
@@ -426,39 +426,28 @@ impl<'a> SemanticTokensBuilder<'a> {
             current_offset = offset + event.name.len();
         }
 
-        // Status keywords (convergent, anticipated)
+        // Status value (convergent, anticipated)
         if let Some(status) = event.status {
-            match status {
-                rossi::ast::EventStatus::Convergent => {
-                    if let Some((offset, _)) = self.find_keyword("CONVERGENT", current_offset) {
-                        self.add_keyword("CONVERGENT", offset);
-                        current_offset = offset + 10;
-                    }
-                }
-                rossi::ast::EventStatus::Anticipated => {
-                    if let Some((offset, _)) = self.find_keyword("ANTICIPATED", current_offset) {
-                        self.add_keyword("ANTICIPATED", offset);
-                        current_offset = offset + 11;
-                    }
-                }
-                _ => {}
+            let status_id = match status {
+                rossi::ast::EventStatus::Convergent => Some(KeywordId::Convergent),
+                rossi::ast::EventStatus::Anticipated => Some(KeywordId::Anticipated),
+                rossi::ast::EventStatus::Ordinary => None,
+            };
+            if let Some(id) = status_id {
+                self.advance_past_keyword(id, &mut current_offset);
             }
         }
 
         // REFINES clause
-        if event.refines.is_some()
-            && let Some((offset, _)) = self.find_keyword("REFINES", current_offset)
-        {
-            self.add_keyword("REFINES", offset);
-            current_offset = offset + 7;
+        if event.refines.is_some() {
+            self.advance_past_keyword(KeywordId::Refines, &mut current_offset);
         }
 
         // ANY clause (parameters)
         if !event.parameters.is_empty()
-            && let Some((offset, _)) = self.find_keyword("ANY", current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Any, current_offset)
         {
-            self.add_keyword("ANY", offset);
-            current_offset = offset + 3;
+            current_offset = off;
 
             for param in &event.parameters {
                 self.parameters.push(param.name.clone());
@@ -471,14 +460,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // WHERE/WHEN clause (guards)
         if !event.guards.is_empty() {
-            // Try WHERE first, then WHEN
-            if let Some((offset, _)) = self.find_keyword("WHERE", current_offset) {
-                self.add_keyword("WHERE", offset);
-                current_offset = offset + 5;
-            } else if let Some((offset, _)) = self.find_keyword("WHEN", current_offset) {
-                self.add_keyword("WHEN", offset);
-                current_offset = offset + 4;
-            }
+            self.advance_past_keyword(KeywordId::Where, &mut current_offset);
 
             for guard in &event.guards {
                 current_offset = self.visit_labeled_predicate(guard, current_offset);
@@ -487,10 +469,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // WITH clause (labeled predicates)
         if !event.with.is_empty() {
-            if let Some((offset, _)) = self.find_keyword("WITH", current_offset) {
-                self.add_keyword("WITH", offset);
-                current_offset = offset + 4;
-            }
+            self.advance_past_keyword(KeywordId::With, &mut current_offset);
 
             for lp in &event.with {
                 current_offset = self.visit_labeled_predicate(lp, current_offset);
@@ -499,10 +478,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // WITNESS clause (labeled predicates)
         if !event.witnesses.is_empty() {
-            if let Some((offset, _)) = self.find_keyword("WITNESS", current_offset) {
-                self.add_keyword("WITNESS", offset);
-                current_offset = offset + 7;
-            }
+            self.advance_past_keyword(KeywordId::Witness, &mut current_offset);
 
             for lp in &event.witnesses {
                 current_offset = self.visit_labeled_predicate(lp, current_offset);
@@ -511,14 +487,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 
         // THEN/BEGIN clause (actions)
         if !event.actions.is_empty() {
-            // Try THEN first, then BEGIN
-            if let Some((offset, _)) = self.find_keyword("THEN", current_offset) {
-                self.add_keyword("THEN", offset);
-                current_offset = offset + 4;
-            } else if let Some((offset, _)) = self.find_keyword("BEGIN", current_offset) {
-                self.add_keyword("BEGIN", offset);
-                current_offset = offset + 5;
-            }
+            self.advance_past_keyword(KeywordId::Then, &mut current_offset);
 
             for action in &event.actions {
                 current_offset = self.visit_action(action, current_offset);
@@ -526,10 +495,7 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
 
         // END keyword
-        if let Some((offset, _)) = self.find_keyword("END", current_offset) {
-            self.add_keyword("END", offset);
-            current_offset = offset + 3;
-        }
+        self.advance_past_keyword(KeywordId::End, &mut current_offset);
 
         current_offset
     }

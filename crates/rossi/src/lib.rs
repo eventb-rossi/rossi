@@ -41,7 +41,9 @@
 //!
 
 pub mod ast;
+pub mod builtins;
 pub mod error;
+pub mod keywords;
 pub mod operators;
 pub mod parser;
 pub mod pretty;

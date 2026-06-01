@@ -249,71 +249,10 @@ fn is_valid_identifier(s: &str) -> bool {
     chars.iter().all(|&c| text_utils::is_identifier_char(c))
 }
 
-/// Check if a string is an Event-B keyword (case-insensitive)
+/// Check if a string is a reserved Event-B keyword or built-in identifier
+/// (case-insensitive). Such names cannot be renamed.
 fn is_keyword(s: &str) -> bool {
-    matches!(
-        s.to_lowercase().as_str(),
-        // Structural keywords
-        "context"
-            | "machine"
-            | "end"
-            | "extends"
-            | "sets"
-            | "constants"
-            | "axioms"
-            | "theorem"
-            | "refines"
-            | "sees"
-            | "variables"
-            | "invariants"
-            | "variant"
-            | "events"
-            | "event"
-            | "initialisation"
-            | "any"
-            | "where"
-            | "when"
-            | "with"
-            | "witness"
-            | "then"
-            | "begin"
-            // Event status keywords
-            | "ordinary"
-            | "convergent"
-            | "anticipated"
-            // Built-in types and constants
-            | "true"
-            | "false"
-            | "bool"
-            | "nat"
-            | "nat1"
-            | "int"
-            // Logic operators
-            | "not"
-            | "or"
-            // Function/set operators
-            | "dom"
-            | "ran"
-            | "pow"
-            | "pow1"
-            | "mod"
-            | "finite"
-            | "partition"
-            | "card"
-            | "min"
-            | "max"
-            | "id"
-            | "prj1"
-            | "prj2"
-            | "closure"
-            | "closure1"
-            // Quantified operators
-            | "union"
-            | "inter"
-            // Other
-            | "oftype"
-            | "skip"
-    )
+    rossi::keywords::is_keyword(s) || rossi::builtins::is_builtin(s)
 }
 
 /// Find all references to an identifier in the text, skipping comments.

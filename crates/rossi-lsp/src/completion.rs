@@ -12,7 +12,7 @@ use crate::lsp_types::{
 };
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use rossi::{Component, operators, parse};
+use rossi::{Component, keywords, operators, parse};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -234,86 +234,42 @@ impl CompletionProvider {
 
     /// Get keyword completions based on context
     fn get_keyword_completions(&self, line_text: &str, _word: &str) -> Vec<CompletionItem> {
+        use keywords::{KeywordGroup, KeywordId, scope};
         let mut items = Vec::new();
 
         // Top-level keywords
         if line_text.trim().is_empty() || is_top_level_context(line_text) {
-            items.push(create_keyword_item(
-                "CONTEXT",
-                "Define a context (static properties)",
-            ));
-            items.push(create_keyword_item(
-                "MACHINE",
-                "Define a machine (dynamic behavior)",
-            ));
+            push_keyword_items(
+                &mut items,
+                [KeywordId::Context, KeywordId::Machine]
+                    .into_iter()
+                    .map(keywords::keyword),
+            );
         }
 
         // Context clause keywords
         if is_inside_context(line_text) {
-            items.push(create_keyword_item("EXTENDS", "Extend another context"));
-            items.push(create_keyword_item("SETS", "Define carrier sets"));
-            items.push(create_keyword_item("CONSTANTS", "Define constants"));
-            items.push(create_keyword_item("AXIOMS", "Define axioms (properties)"));
-            items.push(create_keyword_item("END", "End the context"));
+            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::CONTEXT));
         }
 
         // Machine clause keywords
         if is_inside_machine(line_text) {
-            items.push(create_keyword_item("REFINES", "Refine another machine"));
-            items.push(create_keyword_item("SEES", "See a context"));
-            items.push(create_keyword_item("VARIABLES", "Define state variables"));
-            items.push(create_keyword_item(
-                "INVARIANTS",
-                "Define invariants (properties)",
-            ));
-            items.push(create_keyword_item(
-                "VARIANT",
-                "Define variant for termination",
-            ));
-            items.push(create_keyword_item("EVENTS", "Begin events section"));
-            items.push(create_keyword_item("END", "End the machine"));
+            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::MACHINE));
         }
 
         // Events section keywords
         if is_inside_events(line_text) {
-            items.push(create_keyword_item(
-                "INITIALISATION",
-                "Define initialization event",
-            ));
-            items.push(create_keyword_item("EVENT", "Define a new event"));
+            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::EVENTS));
         }
 
         // Event keywords
         if is_inside_event(line_text) {
-            items.push(create_keyword_item("STATUS", "Define event status"));
-            items.push(create_keyword_item("REFINES", "Refine an abstract event"));
-            items.push(create_keyword_item("ANY", "Introduce event parameters"));
-            items.push(create_keyword_item("WHERE", "Define event guards"));
-            items.push(create_keyword_item(
-                "WHEN",
-                "Define event guards (alternative)",
-            ));
-            items.push(create_keyword_item("WITH", "Specify witnesses"));
-            items.push(create_keyword_item("WITNESS", "Define witness values"));
-            items.push(create_keyword_item("THEN", "Define event actions"));
-            items.push(create_keyword_item(
-                "BEGIN",
-                "Define event actions (alternative)",
-            ));
-            items.push(create_keyword_item("END", "End the event"));
+            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::EVENT));
         }
 
-        // Event status keywords
+        // Event status values (triggered on a STATUS line)
         if line_text.contains("STATUS") {
-            items.push(create_keyword_item("ordinary", "Ordinary event (default)"));
-            items.push(create_keyword_item(
-                "convergent",
-                "Convergent event (decreases variant)",
-            ));
-            items.push(create_keyword_item(
-                "anticipated",
-                "Anticipated event (may increase variant)",
-            ));
+            push_keyword_items(&mut items, keywords::iter_group(KeywordGroup::Status));
         }
 
         items
@@ -598,6 +554,19 @@ fn create_keyword_item(keyword: &str, description: &str) -> CompletionItem {
         detail: Some("Keyword".to_string()),
         documentation: Some(Documentation::String(description.to_string())),
         ..Default::default()
+    }
+}
+
+/// Push a completion item for every spelling of each keyword (so alternates like
+/// `WHEN`/`BEGIN` are offered alongside `WHERE`/`THEN`).
+fn push_keyword_items<'a>(
+    items: &mut Vec<CompletionItem>,
+    iter: impl Iterator<Item = &'a keywords::Keyword>,
+) {
+    for kw in iter {
+        for spelling in kw.spellings {
+            items.push(create_keyword_item(spelling, kw.summary));
+        }
     }
 }
 
