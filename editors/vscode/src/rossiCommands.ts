@@ -587,6 +587,47 @@ export class RossiCommandController {
         window.showErrorMessage(message);
     }
 
+    async newProject(): Promise<void> {
+        const name = await window.showInputBox({
+            title: 'New Event-B Project',
+            prompt: 'Enter a name for your Event-B project',
+            placeHolder: 'my_model',
+            validateInput: (value) =>
+                /^[A-Za-z]\w*$/.test(value)
+                    ? undefined
+                    : 'A project name must start with a letter and contain only letters, digits, or underscores.',
+        });
+        if (!name) {
+            return;
+        }
+
+        const parent = await this.pickOutputDirectory('Select a folder to create the project in');
+        if (!parent) {
+            return;
+        }
+
+        const projectDir = path.join(parent, name);
+        if (await pathExists(projectDir)) {
+            window.showErrorMessage(`A folder named "${name}" already exists in ${parent}.`);
+            return;
+        }
+
+        await fs.mkdir(projectDir, { recursive: true });
+        await fs.writeFile(path.join(projectDir, `${name}.eventb`), starterModel(name), 'utf8');
+        await fs.writeFile(path.join(projectDir, 'README.md'), starterReadme(name), 'utf8');
+        await fs.writeFile(path.join(projectDir, '.gitignore'), STARTER_GITIGNORE, 'utf8');
+        this.output.appendLine(`Created Event-B project at ${projectDir}`);
+
+        // Open in a new window only when a workspace is already loaded, so the new
+        // project does not replace the user's current session unexpectedly.
+        const openInNewWindow = Boolean(workspace.workspaceFolders?.length);
+        await vscodeCommands.executeCommand(
+            'vscode.openFolder',
+            Uri.file(projectDir),
+            { forceNewWindow: openInNewWindow }
+        );
+    }
+
     async runCommand(command: () => Promise<void>): Promise<void> {
         try {
             await command();
@@ -748,9 +789,73 @@ export function registerRossiCommands(
         vscodeCommands.registerCommand('rossi.convertCurrentFileToAscii', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToAscii(uri))),
         vscodeCommands.registerCommand('rossi.animateWithProb', (uri?: Uri) => controller.runCommand(() => controller.animateWithProb(uri))),
         vscodeCommands.registerCommand('rossi.modelCheckWithProb', (uri?: Uri) => controller.runCommand(() => controller.modelCheckWithProb(uri))),
-        vscodeCommands.registerCommand('rossi.checkToolchain', () => controller.runCommand(() => controller.checkToolchain()))
+        vscodeCommands.registerCommand('rossi.checkToolchain', () => controller.runCommand(() => controller.checkToolchain())),
+        vscodeCommands.registerCommand('rossi.newProject', () => controller.runCommand(() => controller.newProject()))
     );
 }
+
+/** Starter `.eventb` model written by the New Event-B Project command. */
+function starterModel(name: string): string {
+    return `CONTEXT ${name}_ctx
+SETS
+    S
+CONSTANTS
+    c
+AXIOMS
+    axm1: c ∈ ℕ
+END
+
+MACHINE ${name}
+SEES
+    ${name}_ctx
+VARIABLES
+    v
+INVARIANTS
+    inv1: v ∈ ℕ
+    inv2: v ≤ c
+EVENTS
+    INITIALISATION
+    BEGIN
+        act1: v := 0
+    END
+
+    EVENT step
+    WHERE
+        grd1: v < c
+    THEN
+        act1: v := v + 1
+    END
+END
+`;
+}
+
+/** Getting-started README written into a new Event-B project. */
+function starterReadme(name: string): string {
+    return `# ${name}
+
+An Event-B project edited with the Rossi Event-B extension.
+
+## Getting started
+
+1. Open \`${name}.eventb\` and edit the context and machine. Type \`context\`,
+   \`machine\`, \`event\`, … and accept the snippet to scaffold a block.
+2. Errors are reported live as you type by the Rossi language server.
+3. Run **Rossi: Validate Current File** to validate on demand.
+4. Switch operator style with **Rossi: Convert Current File to Unicode** /
+   **… to ASCII**.
+5. Export with **Rossi: Export Current File to Rodin ZIP**, or
+   **Rossi: Open in Rodin** to launch the Rodin IDE on this model.
+
+Open the Command Palette (Ctrl/Cmd+Shift+P) and search for "Rossi" to see every command.
+`;
+}
+
+const STARTER_GITIGNORE = `# Rossi / Event-B exported artifacts
+*.zip
+
+# OS files
+.DS_Store
+`;
 
 async function classifyInput(input: string): Promise<InputKind> {
     const stats = await fs.stat(input);

@@ -38,7 +38,8 @@
     "onCommand:rossi.convertCurrentFileToAscii",
     "onCommand:rossi.animateWithProb",
     "onCommand:rossi.modelCheckWithProb",
-    "onCommand:rossi.checkToolchain"
+    "onCommand:rossi.checkToolchain",
+    "onCommand:rossi.newProject"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -132,6 +133,11 @@
         "command": "rossi.checkToolchain",
         "title": "Check Toolchain",
         "category": "Rossi"
+      },
+      {
+        "command": "rossi.newProject",
+        "title": "New Event-B Project",
+        "category": "Rossi"
       }
     ],
     "menus": {
@@ -195,6 +201,11 @@
           "command": "rossi.importRodinProject",
           "when": "explorerResourceIsFolder",
           "group": "rossi@9"
+        },
+        {
+          "command": "rossi.newProject",
+          "when": "explorerResourceIsFolder",
+          "group": "rossi@10"
         }
       ]
     },
