@@ -315,26 +315,83 @@ impl CrossReferenceManager {
     /// A context is visible if:
     /// - The machine (or any machine in its refinement chain) directly SEES it, or
     /// - It is transitively extended by any such seen context.
+    ///
+    /// The result is deduplicated but unordered; callers that need a stable
+    /// order should use [`ordered_visible_contexts`](Self::ordered_visible_contexts),
+    /// which this delegates to.
     pub fn visible_contexts(&self, machine_name: &str) -> Vec<String> {
+        self.ordered_visible_contexts(machine_name)
+    }
+
+    /// Contexts visible to a machine, in deterministic depth-first pre-order.
+    ///
+    /// Like [`visible_contexts`](Self::visible_contexts) but order-preserving:
+    /// the machine and its refinement chain are visited in order; within each,
+    /// SEES targets are visited in declaration order; each seen context is
+    /// emitted immediately before its transitive EXTENDS parents. Duplicates are
+    /// dropped (first occurrence wins).
+    pub fn ordered_visible_contexts(&self, machine_name: &str) -> Vec<String> {
         let mut machines = vec![machine_name.to_string()];
         machines.extend(self.refinement_chain(machine_name));
 
-        let mut contexts = HashSet::new();
+        let mut contexts = Vec::new();
+        let mut seen = HashSet::new();
         for mch in &machines {
-            if let Some(info) = self.components.get(mch)
-                && let Some(seen) = info.references.get(&ReferenceKind::Sees)
-            {
-                for ctx in seen {
-                    if contexts.insert(ctx.clone()) {
-                        for extended in self.extends_chain(ctx) {
-                            contexts.insert(extended);
-                        }
-                    }
+            let sees = self
+                .components
+                .get(mch)
+                .and_then(|info| info.references.get(&ReferenceKind::Sees).cloned());
+            if let Some(sees) = sees {
+                for ctx in &sees {
+                    self.push_context_and_parents(ctx, &mut contexts, &mut seen);
                 }
             }
         }
 
-        contexts.into_iter().collect()
+        contexts
+    }
+
+    /// A context's transitive EXTENDS parents in depth-first pre-order, deduped.
+    ///
+    /// The starting context itself is not included (only its ancestors).
+    pub fn ordered_extends_chain(&self, context_name: &str) -> Vec<String> {
+        let mut contexts = Vec::new();
+        let mut seen = HashSet::new();
+        let parents = self
+            .components
+            .get(context_name)
+            .and_then(|info| info.references.get(&ReferenceKind::Extends).cloned());
+        if let Some(parents) = parents {
+            for parent in &parents {
+                self.push_context_and_parents(parent, &mut contexts, &mut seen);
+            }
+        }
+
+        contexts
+    }
+
+    /// Append `context_name` then its transitive EXTENDS parents (pre-order),
+    /// skipping any already in `seen`.
+    fn push_context_and_parents(
+        &self,
+        context_name: &str,
+        contexts: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        if !seen.insert(context_name.to_string()) {
+            return;
+        }
+        contexts.push(context_name.to_string());
+
+        let parents = self
+            .components
+            .get(context_name)
+            .and_then(|info| info.references.get(&ReferenceKind::Extends).cloned());
+        if let Some(parents) = parents {
+            for parent in &parents {
+                self.push_context_and_parents(parent, contexts, seen);
+            }
+        }
     }
 
     /// Return all components reachable from `start` via any reference kind (BFS).

@@ -11,6 +11,7 @@ use tracing::debug;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::identifier_utils;
 use crate::text_utils;
 
 /// Provider for renaming symbols
@@ -229,48 +230,7 @@ impl RenameProvider {
 
 /// Get the identifier and its range at the given position
 fn get_identifier_and_range_at_position(text: &str, position: Position) -> Option<(String, Range)> {
-    let lines: Vec<&str> = text.lines().collect();
-    let line_idx = position.line as usize;
-    let col_idx = position.character as usize;
-
-    if line_idx >= lines.len() {
-        return None;
-    }
-
-    let line = lines[line_idx];
-    let chars: Vec<char> = line.chars().collect();
-
-    if col_idx >= chars.len() {
-        return None;
-    }
-
-    // Find the start of the identifier
-    let mut start = col_idx;
-    while start > 0 && is_identifier_char(chars[start - 1]) {
-        start -= 1;
-    }
-
-    // Find the end of the identifier
-    let mut end = col_idx;
-    while end < chars.len() && is_identifier_char(chars[end]) {
-        end += 1;
-    }
-
-    if start < end {
-        let identifier: String = chars[start..end].iter().collect();
-        let range = Range::new(
-            Position::new(line_idx as u32, start as u32),
-            Position::new(line_idx as u32, end as u32),
-        );
-        Some((identifier, range))
-    } else {
-        None
-    }
-}
-
-/// Check if a character can be part of an identifier
-fn is_identifier_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
+    identifier_utils::identifier_at_position(text, position)
 }
 
 /// Check if a string is a valid Event-B identifier
@@ -286,7 +246,7 @@ fn is_valid_identifier(s: &str) -> bool {
     }
 
     // Rest must be alphanumeric or underscore
-    chars.iter().all(|&c| is_identifier_char(c))
+    chars.iter().all(|&c| text_utils::is_identifier_char(c))
 }
 
 /// Check if a string is an Event-B keyword (case-insensitive)
@@ -356,41 +316,11 @@ fn is_keyword(s: &str) -> bool {
     )
 }
 
-/// Find all references to an identifier in the text, skipping comments
+/// Find all references to an identifier in the text, skipping comments.
+///
+/// Returns `None` when there are no matches.
 fn find_all_references(text: &str, identifier: &str, uri: &Url) -> Option<Vec<Location>> {
-    let mut locations = Vec::new();
-    let lines: Vec<&str> = text.lines().collect();
-    let id_chars: Vec<char> = identifier.chars().collect();
-    let mut tracker = text_utils::CommentTracker::new();
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        let chars: Vec<char> = line.chars().collect();
-        let code_spans = tracker.code_spans(&chars);
-
-        for span in &code_spans {
-            let mut col = span.start;
-            while col + id_chars.len() <= span.end {
-                let matches = chars[col..col + id_chars.len()] == id_chars;
-                if matches {
-                    let before_ok = col == 0 || !is_identifier_char(chars[col - 1]);
-                    let after_ok = col + id_chars.len() >= chars.len()
-                        || !is_identifier_char(chars[col + id_chars.len()]);
-
-                    if before_ok && after_ok {
-                        locations.push(Location::new(
-                            uri.clone(),
-                            Range::new(
-                                Position::new(line_idx as u32, col as u32),
-                                Position::new(line_idx as u32, (col + id_chars.len()) as u32),
-                            ),
-                        ));
-                    }
-                }
-                col += 1;
-            }
-        }
-    }
-
+    let locations = identifier_utils::find_whole_word_locations(text, identifier, uri, None);
     if locations.is_empty() {
         None
     } else {

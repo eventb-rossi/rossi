@@ -12,6 +12,8 @@ use tracing::debug;
 
 use crate::cross_references::{ComponentKind, CrossReferenceManager};
 use crate::document::DocumentManager;
+use crate::identifier_utils;
+use crate::symbols::{SymbolKind, SymbolRef, enumerate_symbols};
 use crate::text_utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -22,31 +24,24 @@ struct SymbolIdentity {
     event: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum SymbolKind {
-    ContextSet,
-    ContextConstant,
-    MachineVariable,
-    MachineEvent,
-    MachineParameter,
-}
-
 impl SymbolIdentity {
-    fn component(name: &str, kind: SymbolKind, owner: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            kind,
-            owner: owner.to_string(),
-            event: None,
-        }
-    }
-
     fn parameter(name: &str, machine_name: &str, event_name: &str) -> Self {
         Self {
             name: name.to_string(),
-            kind: SymbolKind::MachineParameter,
+            kind: SymbolKind::Parameter,
             owner: machine_name.to_string(),
             event: Some(event_name.to_string()),
+        }
+    }
+}
+
+impl From<SymbolRef> for SymbolIdentity {
+    fn from(symbol: SymbolRef) -> Self {
+        Self {
+            name: symbol.name,
+            kind: symbol.kind,
+            owner: symbol.owner,
+            event: symbol.event,
         }
     }
 }
@@ -114,46 +109,7 @@ impl ReferenceProvider {
         identifier: &str,
         line_range: Option<(usize, usize)>,
     ) -> Vec<Location> {
-        let mut locations = Vec::new();
-        let lines: Vec<&str> = text.lines().collect();
-        let id_chars: Vec<char> = identifier.chars().collect();
-        let mut tracker = text_utils::CommentTracker::new();
-
-        for (line_idx, line) in lines.iter().enumerate() {
-            let chars: Vec<char> = line.chars().collect();
-            let code_spans = tracker.code_spans(&chars);
-
-            if let Some((start_line, end_line)) = line_range
-                && (line_idx < start_line || line_idx > end_line)
-            {
-                continue;
-            }
-
-            for span in &code_spans {
-                let mut col = span.start;
-                while col + id_chars.len() <= span.end {
-                    let matches = chars[col..col + id_chars.len()] == id_chars;
-                    if matches {
-                        let before_ok = col == 0 || !text_utils::is_identifier_char(chars[col - 1]);
-                        let after_ok = col + id_chars.len() >= chars.len()
-                            || !text_utils::is_identifier_char(chars[col + id_chars.len()]);
-
-                        if before_ok && after_ok {
-                            locations.push(Location::new(
-                                uri.clone(),
-                                Range::new(
-                                    Position::new(line_idx as u32, col as u32),
-                                    Position::new(line_idx as u32, (col + id_chars.len()) as u32),
-                                ),
-                            ));
-                        }
-                    }
-                    col += 1;
-                }
-            }
-        }
-
-        locations
+        identifier_utils::find_whole_word_locations(text, identifier, uri, line_range)
     }
 
     fn find_symbol_references_in_text_range(
@@ -204,7 +160,7 @@ impl ReferenceProvider {
         let mut locations = Vec::new();
         let mut seen = HashSet::new();
 
-        if symbol.kind == SymbolKind::MachineParameter {
+        if symbol.kind == SymbolKind::Parameter {
             let Some(event_name) = symbol.event.as_deref() else {
                 return locations;
             };
@@ -302,28 +258,26 @@ impl ReferenceProvider {
                 for machine_name in manager.refinement_chain(&machine.name) {
                     if let Some((_, _, component)) =
                         self.load_component_by_name(&machine_name, manager)
-                        && let Some(symbol) = local_machine_symbol_identity(&component, identifier)
+                        && let Some(symbol) = local_symbol_identity(&component, identifier)
                     {
                         return Some(symbol);
                     }
                 }
 
-                for context_name in
-                    self.ordered_visible_contexts_for_machine(&machine.name, manager)
-                {
+                for context_name in manager.ordered_visible_contexts(&machine.name) {
                     if let Some((_, _, component)) =
                         self.load_component_by_name(&context_name, manager)
-                        && let Some(symbol) = local_context_symbol_identity(&component, identifier)
+                        && let Some(symbol) = local_symbol_identity(&component, identifier)
                     {
                         return Some(symbol);
                     }
                 }
             }
             Component::Context(context) => {
-                for context_name in self.ordered_extends_chain(&context.name, manager) {
+                for context_name in manager.ordered_extends_chain(&context.name) {
                     if let Some((_, _, component)) =
                         self.load_component_by_name(&context_name, manager)
-                        && let Some(symbol) = local_context_symbol_identity(&component, identifier)
+                        && let Some(symbol) = local_symbol_identity(&component, identifier)
                     {
                         return Some(symbol);
                     }
@@ -339,7 +293,7 @@ impl ReferenceProvider {
         symbol: &SymbolIdentity,
         manager: &CrossReferenceManager,
     ) -> Vec<String> {
-        if symbol.kind == SymbolKind::MachineParameter {
+        if symbol.kind == SymbolKind::Parameter {
             return vec![symbol.owner.clone()];
         }
 
@@ -358,26 +312,24 @@ impl ReferenceProvider {
             };
 
             match (symbol.kind, info.kind) {
-                (SymbolKind::ContextSet | SymbolKind::ContextConstant, ComponentKind::Context)
-                    if self
-                        .ordered_extends_chain(&component_name, manager)
+                (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Context)
+                    if manager
+                        .ordered_extends_chain(&component_name)
                         .contains(&symbol.owner) =>
                 {
                     candidates.push(component_name);
                 }
-                (SymbolKind::ContextSet | SymbolKind::ContextConstant, ComponentKind::Machine)
-                    if self
-                        .ordered_visible_contexts_for_machine(&component_name, manager)
+                (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Machine)
+                    if manager
+                        .ordered_visible_contexts(&component_name)
                         .contains(&symbol.owner) =>
                 {
                     candidates.push(component_name);
                 }
-                (
-                    SymbolKind::MachineVariable | SymbolKind::MachineEvent,
-                    ComponentKind::Machine,
-                ) if manager
-                    .refinement_chain(&component_name)
-                    .contains(&symbol.owner) =>
+                (SymbolKind::Variable | SymbolKind::Event, ComponentKind::Machine)
+                    if manager
+                        .refinement_chain(&component_name)
+                        .contains(&symbol.owner) =>
                 {
                     candidates.push(component_name);
                 }
@@ -388,70 +340,6 @@ impl ReferenceProvider {
         candidates.sort();
         candidates.dedup();
         candidates
-    }
-
-    fn ordered_visible_contexts_for_machine(
-        &self,
-        machine_name: &str,
-        manager: &CrossReferenceManager,
-    ) -> Vec<String> {
-        let mut contexts = Vec::new();
-        let mut seen = HashSet::new();
-        let mut machine_names = vec![machine_name.to_string()];
-        machine_names.extend(manager.refinement_chain(machine_name));
-
-        for name in machine_names {
-            if let Some((_, _, Component::Machine(machine))) =
-                self.load_component_by_name(&name, manager)
-            {
-                for context_name in &machine.sees {
-                    self.push_context_and_parents(context_name, manager, &mut contexts, &mut seen);
-                }
-            }
-        }
-
-        contexts
-    }
-
-    fn ordered_extends_chain(
-        &self,
-        context_name: &str,
-        manager: &CrossReferenceManager,
-    ) -> Vec<String> {
-        let mut contexts = Vec::new();
-        let mut seen = HashSet::new();
-
-        if let Some((_, _, Component::Context(context))) =
-            self.load_component_by_name(context_name, manager)
-        {
-            for parent_name in &context.extends {
-                self.push_context_and_parents(parent_name, manager, &mut contexts, &mut seen);
-            }
-        }
-
-        contexts
-    }
-
-    fn push_context_and_parents(
-        &self,
-        context_name: &str,
-        manager: &CrossReferenceManager,
-        contexts: &mut Vec<String>,
-        seen: &mut HashSet<String>,
-    ) {
-        if !seen.insert(context_name.to_string()) {
-            return;
-        }
-
-        contexts.push(context_name.to_string());
-
-        if let Some((_, _, Component::Context(context))) =
-            self.load_component_by_name(context_name, manager)
-        {
-            for parent_name in &context.extends {
-                self.push_context_and_parents(parent_name, manager, contexts, seen);
-            }
-        }
     }
 
     /// Find all references across the workspace
@@ -493,81 +381,15 @@ impl ReferenceProvider {
     }
 }
 
+/// Resolve `identifier` to a symbol declared directly in `component`.
+///
+/// Parameters are excluded here — they are scoped to an event body and resolved
+/// positionally by [`local_parameter_symbol_identity_at_position`].
 fn local_symbol_identity(component: &Component, identifier: &str) -> Option<SymbolIdentity> {
-    match component {
-        Component::Context(_) => local_context_symbol_identity(component, identifier),
-        Component::Machine(_) => local_machine_symbol_identity(component, identifier),
-    }
-}
-
-fn local_context_symbol_identity(
-    component: &Component,
-    identifier: &str,
-) -> Option<SymbolIdentity> {
-    let Component::Context(context) = component else {
-        return None;
-    };
-
-    if context.sets.iter().any(|set| set.name() == identifier) {
-        return Some(SymbolIdentity::component(
-            identifier,
-            SymbolKind::ContextSet,
-            &context.name,
-        ));
-    }
-
-    if context
-        .constants
-        .iter()
-        .any(|constant| constant.name == identifier)
-    {
-        return Some(SymbolIdentity::component(
-            identifier,
-            SymbolKind::ContextConstant,
-            &context.name,
-        ));
-    }
-
-    None
-}
-
-fn local_machine_symbol_identity(
-    component: &Component,
-    identifier: &str,
-) -> Option<SymbolIdentity> {
-    let Component::Machine(machine) = component else {
-        return None;
-    };
-
-    if machine
-        .variables
-        .iter()
-        .any(|variable| variable.name == identifier)
-    {
-        return Some(SymbolIdentity::component(
-            identifier,
-            SymbolKind::MachineVariable,
-            &machine.name,
-        ));
-    }
-
-    if identifier == "INITIALISATION" && machine.initialisation.is_some() {
-        return Some(SymbolIdentity::component(
-            identifier,
-            SymbolKind::MachineEvent,
-            &machine.name,
-        ));
-    }
-
-    if machine.events.iter().any(|event| event.name == identifier) {
-        return Some(SymbolIdentity::component(
-            identifier,
-            SymbolKind::MachineEvent,
-            &machine.name,
-        ));
-    }
-
-    None
+    enumerate_symbols(component)
+        .into_iter()
+        .find(|symbol| symbol.name == identifier && symbol.kind != SymbolKind::Parameter)
+        .map(SymbolIdentity::from)
 }
 
 fn local_parameter_symbol_identity_at_position(
@@ -683,38 +505,7 @@ fn is_component_reference_position(text: &str, position: Position) -> bool {
 
 /// Get the identifier at the given position in the text
 fn get_identifier_at_position(text: &str, position: Position) -> Option<String> {
-    let lines: Vec<&str> = text.lines().collect();
-    let line_idx = position.line as usize;
-    let col_idx = position.character as usize;
-
-    if line_idx >= lines.len() {
-        return None;
-    }
-
-    let line = lines[line_idx];
-    let chars: Vec<char> = line.chars().collect();
-
-    if col_idx >= chars.len() {
-        return None;
-    }
-
-    // Find the start of the identifier
-    let mut start = col_idx;
-    while start > 0 && text_utils::is_identifier_char(chars[start - 1]) {
-        start -= 1;
-    }
-
-    // Find the end of the identifier
-    let mut end = col_idx;
-    while end < chars.len() && text_utils::is_identifier_char(chars[end]) {
-        end += 1;
-    }
-
-    if start < end {
-        Some(chars[start..end].iter().collect())
-    } else {
-        None
-    }
+    identifier_utils::identifier_at_position(text, position).map(|(identifier, _)| identifier)
 }
 
 /// Find a whole word match in a line and return its column index (in characters, not bytes)
