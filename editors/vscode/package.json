@@ -207,6 +207,69 @@
           "when": "explorerResourceIsFolder",
           "group": "rossi@10"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "rossi.validateCurrentFile",
+          "when": "editorLangId == eventb",
+          "group": "rossi@1"
+        },
+        {
+          "command": "rossi.convertCurrentFileToUnicode",
+          "when": "editorLangId == eventb",
+          "group": "rossi@2"
+        },
+        {
+          "command": "rossi.convertCurrentFileToAscii",
+          "when": "editorLangId == eventb",
+          "group": "rossi@3"
+        },
+        {
+          "command": "rossi.exportCurrentFileToRodinZip",
+          "when": "editorLangId == eventb",
+          "group": "rossi@4"
+        },
+        {
+          "command": "rossi.animateWithProb",
+          "when": "editorLangId == eventb",
+          "group": "rossi@5"
+        },
+        {
+          "command": "rossi.modelCheckWithProb",
+          "when": "editorLangId == eventb",
+          "group": "rossi@6"
+        },
+        {
+          "command": "rossi.openInRodin",
+          "when": "editorLangId == eventb",
+          "group": "rossi@7"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "rossi.validateCurrentFile",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.convertCurrentFileToUnicode",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.convertCurrentFileToAscii",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.exportCurrentFileToRodinZip",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.animateWithProb",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.modelCheckWithProb",
+          "when": "editorLangId == eventb"
+        }
       ]
     },
     "configuration": {
