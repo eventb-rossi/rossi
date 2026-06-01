@@ -42,6 +42,7 @@
 
 pub mod ast;
 pub mod builtins;
+pub mod deps;
 pub mod error;
 pub mod keywords;
 pub mod operators;
@@ -55,6 +56,7 @@ pub use ast::{
     FileMetadata, IdentPattern, InitialisationEvent, LabeledAction, LabeledPredicate, Machine,
     NamedElement, Predicate, SetDeclaration, TypedIdentifier,
 };
+pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
 pub use error::{ParseError, ParseResult, Result};
 pub use parser::{
     parse, parse_action_str, parse_components, parse_expression_str, parse_predicate_str,

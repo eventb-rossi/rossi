@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use rossi::deps::{DependencyGraph, EdgeKind};
+
 use crate::handles::HandleUri;
 use crate::project::Project;
 use crate::rodin_ids::{Kind, RodinIds, Scope};
@@ -110,8 +112,12 @@ pub fn build_project(project: &Project) -> BuildResult {
     let mut result = BuildResult::default();
     let mut checked: HashMap<String, CheckedContext> = HashMap::new();
 
+    // The shared dependency graph is the single source of truth for the
+    // EXTENDS / REFINES / SEES visibility semantics (see `rossi::deps`).
+    let graph = DependencyGraph::from_components(project.components.iter().map(|pc| &pc.component));
+
     // Topologically sort contexts by EXTENDS dependency.
-    let order = match topo_sort_contexts(project) {
+    let order = match topo_indices(project, &graph, EdgeKind::Extends) {
         Ok(o) => o,
         Err(cycle) => {
             result.diagnostics.push(crate::Diagnostic {
@@ -150,7 +156,7 @@ pub fn build_project(project: &Project) -> BuildResult {
     // Machines: emit after all contexts have been checked so SEES
     // targets are available. Topo-sort across REFINES ensures parents
     // are processed before children.
-    let mach_order = match topo_sort_machines(project) {
+    let mach_order = match topo_indices(project, &graph, EdgeKind::Refines) {
         Ok(o) => o,
         Err(cycle) => {
             result.diagnostics.push(crate::Diagnostic {
@@ -189,155 +195,35 @@ pub fn build_project(project: &Project) -> BuildResult {
     result
 }
 
-fn topo_sort_machines(project: &Project) -> Result<Vec<usize>, Vec<String>> {
-    use std::collections::HashSet;
-
-    let mut name_to_idx: HashMap<&str, usize> = HashMap::new();
-    for (i, pc) in project.components.iter().enumerate() {
-        if let rossi::Component::Machine(m) = &pc.component {
-            name_to_idx.insert(&m.name, i);
-        }
-    }
-
-    let mut order = Vec::new();
-    let mut visited: HashSet<usize> = HashSet::new();
-    let mut in_stack: HashSet<usize> = HashSet::new();
-
-    fn visit(
-        idx: usize,
-        project: &Project,
-        name_to_idx: &HashMap<&str, usize>,
-        visited: &mut HashSet<usize>,
-        in_stack: &mut HashSet<usize>,
-        order: &mut Vec<usize>,
-        stack_names: &mut Vec<String>,
-    ) -> std::result::Result<(), Vec<String>> {
-        if visited.contains(&idx) {
-            return Ok(());
-        }
-        if !in_stack.insert(idx) {
-            return Err(stack_names.clone());
-        }
-        let m = match &project.components[idx].component {
-            rossi::Component::Machine(m) => m,
-            _ => {
-                in_stack.remove(&idx);
-                return Ok(());
-            }
-        };
-        stack_names.push(m.name.clone());
-        if let Some(parent) = m.refines.as_deref()
-            && let Some(&pi) = name_to_idx.get(parent)
-        {
-            visit(
-                pi,
-                project,
-                name_to_idx,
-                visited,
-                in_stack,
-                order,
-                stack_names,
-            )?;
-        }
-        stack_names.pop();
-        in_stack.remove(&idx);
-        visited.insert(idx);
-        order.push(idx);
-        Ok(())
-    }
-
-    for i in 0..project.components.len() {
-        let mut stack = Vec::new();
-        visit(
-            i,
-            project,
-            &name_to_idx,
-            &mut visited,
-            &mut in_stack,
-            &mut order,
-            &mut stack,
-        )?;
-    }
-    Ok(order)
-}
-
-/// Topologically sort the project's contexts by EXTENDS. Returns component
-/// indices (into `project.components`) in dependency order (parents first).
+/// Map the shared dependency graph's topological order for `edge` back to
+/// indices into `project.components`, parents first.
 ///
-/// Returns `Err(cycle)` if a cycle exists; `cycle` is a list of context
-/// names along the cycle, useful for diagnostics.
-fn topo_sort_contexts(project: &Project) -> Result<Vec<usize>, Vec<String>> {
-    use std::collections::HashSet;
-
-    // Map context name → component index.
+/// Only nodes of `edge.source_kind()` participate (contexts for
+/// [`EdgeKind::Extends`], machines for [`EdgeKind::Refines`]). Returns
+/// `Err(cycle)` if a cycle exists; `cycle` is a list of component names along
+/// the cycle, useful for diagnostics.
+fn topo_indices(
+    project: &Project,
+    graph: &DependencyGraph,
+    edge: EdgeKind,
+) -> std::result::Result<Vec<usize>, Vec<String>> {
     let mut name_to_idx: HashMap<&str, usize> = HashMap::new();
     for (i, pc) in project.components.iter().enumerate() {
-        if let rossi::Component::Context(c) = &pc.component {
-            name_to_idx.insert(&c.name, i);
-        }
-    }
-
-    let mut order = Vec::new();
-    let mut visited: HashSet<usize> = HashSet::new();
-    let mut in_stack: HashSet<usize> = HashSet::new();
-
-    fn visit(
-        idx: usize,
-        project: &Project,
-        name_to_idx: &HashMap<&str, usize>,
-        visited: &mut std::collections::HashSet<usize>,
-        in_stack: &mut std::collections::HashSet<usize>,
-        order: &mut Vec<usize>,
-        stack_names: &mut Vec<String>,
-    ) -> Result<(), Vec<String>> {
-        if visited.contains(&idx) {
-            return Ok(());
-        }
-        if !in_stack.insert(idx) {
-            return Err(stack_names.clone());
-        }
-        let ctx = match &project.components[idx].component {
-            rossi::Component::Context(c) => c,
-            _ => {
-                in_stack.remove(&idx);
-                return Ok(());
-            }
+        let name = match (&pc.component, edge) {
+            (rossi::Component::Context(c), EdgeKind::Extends) => Some(c.name.as_str()),
+            (rossi::Component::Machine(m), EdgeKind::Refines) => Some(m.name.as_str()),
+            _ => None,
         };
-        stack_names.push(ctx.name.clone());
-        for parent in &ctx.extends {
-            if let Some(&pi) = name_to_idx.get(parent.as_str()) {
-                visit(
-                    pi,
-                    project,
-                    name_to_idx,
-                    visited,
-                    in_stack,
-                    order,
-                    stack_names,
-                )?;
-            }
-            // Unknown parents (referenced by name but not in project) are
-            // silently ignored here — surfaced as a diagnostic during
-            // check_context.
+        if let Some(name) = name {
+            name_to_idx.insert(name, i);
         }
-        stack_names.pop();
-        in_stack.remove(&idx);
-        visited.insert(idx);
-        order.push(idx);
-        Ok(())
     }
 
-    for i in 0..project.components.len() {
-        let mut stack = Vec::new();
-        visit(
-            i,
-            project,
-            &name_to_idx,
-            &mut visited,
-            &mut in_stack,
-            &mut order,
-            &mut stack,
-        )?;
+    match graph.topological_order(edge) {
+        Ok(order) => Ok(order
+            .iter()
+            .filter_map(|name| name_to_idx.get(name.as_str()).copied())
+            .collect()),
+        Err(cycle) => Err(cycle.components),
     }
-    Ok(order)
 }

@@ -3,51 +3,35 @@
 //! This module manages workspace-wide dependencies between Event-B files,
 //! tracking SEES, REFINES, and EXTENDS relationships to enable cross-file
 //! navigation, renaming, and reference finding.
+//!
+//! The structural model is the shared [`rossi::deps::DependencyGraph`] — the
+//! same single source of truth used by the static checker (`rossi-build`).
+//! [`CrossReferenceManager`] owns one such graph plus the URI ↔ component-name
+//! maps the language server needs for navigation.
 
-use crate::lsp_types::Url;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use rossi::{Component, parse};
-use std::collections::{HashMap, HashSet, VecDeque};
+use rossi::deps::{DependencyGraph, kind_and_name};
+use rossi::parse;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::document::DocumentManager;
+use crate::lsp_types::Url;
 
-/// Maximum depth for transitive traversal
-const MAX_TRAVERSAL_DEPTH: usize = 20;
+/// Canonical component / edge kinds, re-exported from the shared
+/// [`rossi::deps`] dependency model so existing call sites keep referring to
+/// `cross_references::{ComponentKind, ReferenceKind}`.
+pub use rossi::deps::{ComponentKind, EdgeKind as ReferenceKind};
 
-/// A detected dependency cycle
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DependencyCycle {
-    /// The reference kind forming this cycle
-    pub kind: ReferenceKind,
-    /// Component names in traversal order (implicitly closed: last → first).
-    /// Normalized: lexicographically smallest element first.
-    pub components: Vec<String>,
-}
+/// A detected dependency cycle (re-exported from [`rossi::deps`]).
+pub use rossi::deps::Cycle as DependencyCycle;
 
-/// DFS coloring for cycle detection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Color {
-    White,
-    Gray,
-    Black,
-}
-
-/// Type of cross-file reference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReferenceKind {
-    /// Machine SEES context
-    Sees,
-    /// Machine REFINES machine
-    Refines,
-    /// Context EXTENDS context
-    Extends,
-}
-
-/// Information about a component (context or machine) in the workspace
+/// Information about a component (context or machine) in the workspace.
+///
+/// A read-only view reconstructed on demand from the [`DependencyGraph`], which
+/// is the source of truth.
 #[derive(Debug, Clone)]
 pub struct ComponentInfo {
     /// URI of the file containing this component
@@ -60,23 +44,29 @@ pub struct ComponentInfo {
     pub references: HashMap<ReferenceKind, Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComponentKind {
-    Context,
-    Machine,
+/// The kind and name of the component defined in a given file.
+#[derive(Debug, Clone)]
+struct ComponentLoc {
+    kind: ComponentKind,
+    name: String,
 }
 
-/// Workspace-wide cross-reference manager
+/// Workspace-wide cross-reference manager.
+///
+/// The [`DependencyGraph`] is the single structural source of truth (shared
+/// with `rossi-build`); the URI maps only translate between file URIs and
+/// component names for navigation.
 pub struct CrossReferenceManager {
-    /// Map from component name to component info
-    /// Key: component name (e.g., "counter_ctx", "counter_machine")
-    /// Value: information about that component
-    components: Arc<DashMap<String, ComponentInfo>>,
+    /// Structural dependency graph (SEES / REFINES / EXTENDS).
+    graph: RwLock<DependencyGraph>,
 
-    /// Map from URI to component name
-    /// Key: file URI
-    /// Value: name of the component in that file
-    uri_to_component: Arc<DashMap<String, String>>,
+    /// Map from file URI to the component defined there.
+    uri_to_component: DashMap<String, ComponentLoc>,
+
+    /// Map from component name to its file URI. Event-B component names are
+    /// unique within a project, so this is the 1:1 inverse of the relevant
+    /// part of `uri_to_component`.
+    name_to_uri: DashMap<String, String>,
 
     /// Workspace root path (if available)
     workspace_root: RwLock<Option<PathBuf>>,
@@ -92,8 +82,9 @@ impl CrossReferenceManager {
     /// Create a new cross-reference manager
     pub fn new() -> Self {
         Self {
-            components: Arc::new(DashMap::new()),
-            uri_to_component: Arc::new(DashMap::new()),
+            graph: RwLock::new(DependencyGraph::new()),
+            uri_to_component: DashMap::new(),
+            name_to_uri: DashMap::new(),
             workspace_root: RwLock::new(None),
         }
     }
@@ -113,32 +104,51 @@ impl CrossReferenceManager {
     pub fn update_component(&self, uri: String, text: &str) {
         debug!("Updating component for URI: {}", uri);
 
-        // Parse the component
         let component = match parse(text) {
             Ok(comp) => comp,
             Err(e) => {
                 debug!("Failed to parse component for cross-references: {}", e);
-                // Remove old component if parsing fails
-                if let Some(old_name) = self.uri_to_component.remove(&uri) {
-                    self.components.remove(&old_name.1);
-                }
+                // Drop any previously-indexed component for this URI.
+                self.remove_component(&uri);
                 return;
             }
         };
 
-        // Extract component info
-        let info = self.extract_component_info(&component, &uri);
+        let (kind, name) = kind_and_name(&component);
 
-        // Remove old mapping if component name changed
-        if let Some(old_entry) = self.uri_to_component.get(&uri)
-            && old_entry.value() != &info.name
+        // Snapshot the previous occupant of this URI (clone out, drop guard).
+        let previous = self.uri_to_component.get(&uri).map(|r| r.value().clone());
+
         {
-            self.components.remove(old_entry.value());
+            let mut graph = self.graph.write();
+            if let Some(prev) = &previous
+                && (prev.kind != kind || prev.name != name)
+            {
+                graph.remove(prev.kind, &prev.name);
+            }
+            graph.upsert_component(&component);
         }
 
-        // Update mappings
-        self.uri_to_component.insert(uri, info.name.clone());
-        self.components.insert(info.name.clone(), info);
+        // If the component was renamed, drop the stale name→URI entry (only if
+        // it still points at this file).
+        if let Some(prev) = &previous
+            && prev.name != name
+            && self
+                .name_to_uri
+                .get(&prev.name)
+                .is_some_and(|u| u.value() == &uri)
+        {
+            self.name_to_uri.remove(&prev.name);
+        }
+
+        self.uri_to_component.insert(
+            uri.clone(),
+            ComponentLoc {
+                kind,
+                name: name.clone(),
+            },
+        );
+        self.name_to_uri.insert(name, uri);
     }
 
     /// Remove a component when its file is deleted
@@ -146,8 +156,15 @@ impl CrossReferenceManager {
     pub fn remove_component(&self, uri: &str) {
         debug!("Removing component for URI: {}", uri);
 
-        if let Some((_uri, name)) = self.uri_to_component.remove(uri) {
-            self.components.remove(&name);
+        if let Some((_uri, loc)) = self.uri_to_component.remove(uri) {
+            self.graph.write().remove(loc.kind, &loc.name);
+            if self
+                .name_to_uri
+                .get(&loc.name)
+                .is_some_and(|u| u.value().as_str() == uri)
+            {
+                self.name_to_uri.remove(&loc.name);
+            }
         }
     }
 
@@ -156,20 +173,33 @@ impl CrossReferenceManager {
     /// This searches for contexts and machines by name and returns the file URI
     /// where that component is defined.
     pub fn find_component_uri(&self, component_name: &str) -> Option<String> {
-        self.components
+        self.name_to_uri
             .get(component_name)
-            .map(|info| info.uri.clone())
+            .map(|u| u.value().clone())
     }
 
     /// Get component info by name
     pub fn get_component(&self, name: &str) -> Option<ComponentInfo> {
-        self.components.get(name).map(|info| info.clone())
+        let (kind, references) = self.graph.read().references_of(name)?;
+        let uri = self
+            .name_to_uri
+            .get(name)
+            .map(|u| u.value().clone())
+            .unwrap_or_default();
+        Some(ComponentInfo {
+            uri,
+            name: name.to_string(),
+            kind,
+            references,
+        })
     }
 
     /// Get component name from URI
     #[allow(dead_code)]
     pub fn get_component_name(&self, uri: &str) -> Option<String> {
-        self.uri_to_component.get(uri).map(|name| name.clone())
+        self.uri_to_component
+            .get(uri)
+            .map(|loc| loc.value().name.clone())
     }
 
     /// Find all components that reference a given component
@@ -182,23 +212,25 @@ impl CrossReferenceManager {
         target_name: &str,
         reference_kind: Option<ReferenceKind>,
     ) -> Vec<ComponentInfo> {
-        let mut result = Vec::new();
-
-        for entry in self.components.iter() {
-            let info = entry.value();
-
-            // Check if this component references the target
-            for (kind, refs) in &info.references {
-                if (reference_kind.is_none() || reference_kind == Some(*kind))
-                    && refs.contains(&target_name.to_string())
-                {
-                    result.push(info.clone());
-                    break;
-                }
-            }
-        }
-
-        result
+        let graph = self.graph.read();
+        graph
+            .referencing(target_name, reference_kind)
+            .into_iter()
+            .filter_map(|(kind, name)| {
+                let references = graph.references_of_kind(kind, &name)?;
+                let uri = self
+                    .name_to_uri
+                    .get(&name)
+                    .map(|u| u.value().clone())
+                    .unwrap_or_default();
+                Some(ComponentInfo {
+                    uri,
+                    name,
+                    kind,
+                    references,
+                })
+            })
+            .collect()
     }
 
     /// Scan a directory for Event-B files and index them
@@ -232,10 +264,7 @@ impl CrossReferenceManager {
 
     /// Get all component names in the workspace
     pub fn all_component_names(&self) -> Vec<String> {
-        self.components
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.graph.read().component_names()
     }
 
     /// Load the source text of a component by name.
@@ -268,211 +297,69 @@ impl CrossReferenceManager {
             .collect()
     }
 
-    // --- Transitive closure methods ---
+    // --- Transitive closure / visibility (delegated to the shared graph) ---
 
-    /// Compute the transitive closure of a single reference kind starting from `start`.
-    ///
-    /// Returns component names reachable from `start` (excluding `start` itself)
-    /// via edges of the given `kind`. Uses iterative DFS, capped at
-    /// `MAX_TRAVERSAL_DEPTH` results.
+    /// Compute the transitive closure of a single reference kind starting from
+    /// `start` (excluding `start`). Cycle-safe; referenced-but-absent targets
+    /// are included but not traversed.
     pub fn transitive_closure(&self, start: &str, kind: ReferenceKind) -> Vec<String> {
-        let mut visited = HashSet::new();
-        visited.insert(start.to_string());
-        let mut stack = vec![start.to_string()];
-        let mut result = Vec::new();
-
-        'outer: while let Some(current) = stack.pop() {
-            if let Some(info) = self.components.get(&current)
-                && let Some(refs) = info.references.get(&kind)
-            {
-                for ref_name in refs {
-                    if visited.insert(ref_name.clone()) {
-                        result.push(ref_name.clone());
-                        stack.push(ref_name.clone());
-                        if result.len() >= MAX_TRAVERSAL_DEPTH {
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        result
+        self.graph.read().transitive_closure(start, kind)
     }
 
     /// Return the refinement chain for a machine (transitive REFINES).
     pub fn refinement_chain(&self, machine_name: &str) -> Vec<String> {
-        self.transitive_closure(machine_name, ReferenceKind::Refines)
+        self.graph.read().refinement_chain(machine_name)
     }
 
     /// Return the extends chain for a context (transitive EXTENDS).
     pub fn extends_chain(&self, context_name: &str) -> Vec<String> {
-        self.transitive_closure(context_name, ReferenceKind::Extends)
+        self.graph.read().extends_chain(context_name)
     }
 
     /// Return all contexts visible to a machine.
     ///
-    /// A context is visible if:
-    /// - The machine (or any machine in its refinement chain) directly SEES it, or
-    /// - It is transitively extended by any such seen context.
-    ///
-    /// The result is deduplicated but unordered; callers that need a stable
-    /// order should use [`ordered_visible_contexts`](Self::ordered_visible_contexts),
-    /// which this delegates to.
+    /// A context is visible if the machine (or any machine in its refinement
+    /// chain) directly SEES it, or it is transitively extended by any such seen
+    /// context. Delegates to [`ordered_visible_contexts`](Self::ordered_visible_contexts).
     pub fn visible_contexts(&self, machine_name: &str) -> Vec<String> {
         self.ordered_visible_contexts(machine_name)
     }
 
     /// Contexts visible to a machine, in deterministic depth-first pre-order.
-    ///
-    /// Like [`visible_contexts`](Self::visible_contexts) but order-preserving:
-    /// the machine and its refinement chain are visited in order; within each,
-    /// SEES targets are visited in declaration order; each seen context is
-    /// emitted immediately before its transitive EXTENDS parents. Duplicates are
-    /// dropped (first occurrence wins).
     pub fn ordered_visible_contexts(&self, machine_name: &str) -> Vec<String> {
-        let mut machines = vec![machine_name.to_string()];
-        machines.extend(self.refinement_chain(machine_name));
-
-        let mut contexts = Vec::new();
-        let mut seen = HashSet::new();
-        for mch in &machines {
-            let sees = self
-                .components
-                .get(mch)
-                .and_then(|info| info.references.get(&ReferenceKind::Sees).cloned());
-            if let Some(sees) = sees {
-                for ctx in &sees {
-                    self.push_context_and_parents(ctx, &mut contexts, &mut seen);
-                }
-            }
-        }
-
-        contexts
+        self.graph.read().ordered_visible_contexts(machine_name)
     }
 
     /// A context's transitive EXTENDS parents in depth-first pre-order, deduped.
-    ///
-    /// The starting context itself is not included (only its ancestors).
+    /// The starting context itself is not included.
     pub fn ordered_extends_chain(&self, context_name: &str) -> Vec<String> {
-        let mut contexts = Vec::new();
-        let mut seen = HashSet::new();
-        let parents = self
-            .components
-            .get(context_name)
-            .and_then(|info| info.references.get(&ReferenceKind::Extends).cloned());
-        if let Some(parents) = parents {
-            for parent in &parents {
-                self.push_context_and_parents(parent, &mut contexts, &mut seen);
-            }
-        }
-
-        contexts
+        self.graph.read().ordered_extends_chain(context_name)
     }
 
-    /// Append `context_name` then its transitive EXTENDS parents (pre-order),
-    /// skipping any already in `seen`.
-    fn push_context_and_parents(
-        &self,
-        context_name: &str,
-        contexts: &mut Vec<String>,
-        seen: &mut HashSet<String>,
-    ) {
-        if !seen.insert(context_name.to_string()) {
-            return;
-        }
-        contexts.push(context_name.to_string());
-
-        let parents = self
-            .components
-            .get(context_name)
-            .and_then(|info| info.references.get(&ReferenceKind::Extends).cloned());
-        if let Some(parents) = parents {
-            for parent in &parents {
-                self.push_context_and_parents(parent, contexts, seen);
-            }
-        }
-    }
-
-    /// Return all components reachable from `start` via any reference kind (BFS).
-    ///
+    /// Return all components reachable from `start` via any reference kind.
     /// Excludes `start` itself.
     #[allow(dead_code)]
     pub fn all_reachable(&self, start: &str) -> HashSet<String> {
-        let mut visited = HashSet::new();
-        visited.insert(start.to_string());
-        let mut queue = VecDeque::new();
-        queue.push_back(start.to_string());
-        let mut result = HashSet::new();
-
-        while let Some(current) = queue.pop_front() {
-            if let Some(info) = self.components.get(&current) {
-                for refs in info.references.values() {
-                    for ref_name in refs {
-                        if visited.insert(ref_name.clone()) {
-                            result.insert(ref_name.clone());
-                            queue.push_back(ref_name.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        result
+        self.graph.read().all_reachable(start)
     }
 
     // --- Cycle detection ---
 
     /// Detect dependency cycles in the workspace.
     ///
-    /// If `kind` is `Some(k)`, only edges of kind `k` are followed.
-    /// If `kind` is `None`, all edges are followed (the kind recorded in
-    /// the result is the kind of the edge that closed the cycle).
-    ///
-    /// Cycles are normalized so the lexicographically smallest component
-    /// name appears first, and deduplicated.
+    /// If `kind` is `Some(k)`, only edges of kind `k` are followed; if `None`,
+    /// all edges are followed (the kind recorded is that of the edge that
+    /// closed the cycle). Cycles are normalized (smallest name first) and
+    /// deduplicated.
     pub fn detect_cycles(&self, kind: Option<ReferenceKind>) -> Vec<DependencyCycle> {
-        let mut colors: HashMap<String, Color> = HashMap::new();
-        for entry in self.components.iter() {
-            colors.insert(entry.key().clone(), Color::White);
+        let cycles = self.graph.read().detect_cycles(kind);
+        if !cycles.is_empty() {
+            warn!("Detected {} dependency cycles", cycles.len());
         }
-
-        let mut raw_cycles: Vec<(ReferenceKind, Vec<String>)> = Vec::new();
-
-        let component_names: Vec<String> =
-            self.components.iter().map(|e| e.key().clone()).collect();
-        for name in &component_names {
-            if colors.get(name) == Some(&Color::White) {
-                let mut path = Vec::new();
-                self.dfs_cycle_detect(name, kind, &mut colors, &mut path, &mut raw_cycles);
-            }
-        }
-
-        // Deduplicate using (kind, normalized components) as the key,
-        // so cycles with the same nodes but different edge kinds are kept.
-        let mut seen: HashSet<(ReferenceKind, Vec<String>)> = HashSet::new();
-        let mut result = Vec::new();
-        for (k, cycle) in raw_cycles {
-            let normalized = Self::normalize_cycle(cycle);
-            if seen.insert((k, normalized.clone())) {
-                result.push(DependencyCycle {
-                    kind: k,
-                    components: normalized,
-                });
-            }
-        }
-
-        if !result.is_empty() {
-            warn!("Detected {} dependency cycles", result.len());
-        }
-
-        result
+        cycles
     }
 
     /// Detect circular dependencies in the workspace (deprecated wrapper).
-    ///
-    /// Returns a list of dependency cycles as plain `Vec<String>`.
-    /// Prefer [`Self::detect_cycles`] for new code.
     #[allow(dead_code)]
     #[deprecated(note = "Use detect_cycles(None) instead")]
     pub fn detect_circular_dependencies(&self) -> Vec<Vec<String>> {
@@ -481,116 +368,12 @@ impl CrossReferenceManager {
             .map(|c| c.components)
             .collect()
     }
-
-    // Private helper methods
-
-    /// Recursive DFS for cycle detection with White/Gray/Black coloring.
-    fn dfs_cycle_detect(
-        &self,
-        current: &str,
-        kind_filter: Option<ReferenceKind>,
-        colors: &mut HashMap<String, Color>,
-        path: &mut Vec<String>,
-        cycles: &mut Vec<(ReferenceKind, Vec<String>)>,
-    ) {
-        colors.insert(current.to_string(), Color::Gray);
-        path.push(current.to_string());
-
-        // Snapshot the edges we need, then drop the DashMap Ref guard
-        // before recursing to avoid holding read locks across the call stack.
-        let edges: Vec<(ReferenceKind, Vec<String>)> = self
-            .components
-            .get(current)
-            .map(|info| {
-                let kinds = match kind_filter {
-                    Some(k) => vec![k],
-                    None => info.references.keys().copied().collect(),
-                };
-                kinds
-                    .into_iter()
-                    .filter_map(|k| info.references.get(&k).map(|r| (k, r.clone())))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        for (k, refs) in edges {
-            for ref_name in &refs {
-                match colors.get(ref_name.as_str()).copied() {
-                    Some(Color::Gray) => {
-                        // Found a cycle — extract from path
-                        if let Some(pos) = path.iter().position(|name| name == ref_name) {
-                            let cycle: Vec<String> = path[pos..].to_vec();
-                            cycles.push((k, cycle));
-                        }
-                    }
-                    Some(Color::White) | None => {
-                        self.dfs_cycle_detect(ref_name, kind_filter, colors, path, cycles);
-                    }
-                    Some(Color::Black) => {}
-                }
-            }
-        }
-
-        path.pop();
-        colors.insert(current.to_string(), Color::Black);
-    }
-
-    /// Normalize a cycle so the lexicographically smallest element is first.
-    fn normalize_cycle(cycle: Vec<String>) -> Vec<String> {
-        if cycle.is_empty() {
-            return cycle;
-        }
-        let min_pos = cycle
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.cmp(b))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let mut normalized = Vec::with_capacity(cycle.len());
-        normalized.extend_from_slice(&cycle[min_pos..]);
-        normalized.extend_from_slice(&cycle[..min_pos]);
-        normalized
-    }
-
-    /// Extract component information from a parsed component
-    fn extract_component_info(&self, component: &Component, uri: &str) -> ComponentInfo {
-        match component {
-            Component::Context(ctx) => {
-                let mut references = HashMap::new();
-                if !ctx.extends.is_empty() {
-                    references.insert(ReferenceKind::Extends, ctx.extends.clone());
-                }
-
-                ComponentInfo {
-                    uri: uri.to_string(),
-                    name: ctx.name.clone(),
-                    kind: ComponentKind::Context,
-                    references,
-                }
-            }
-            Component::Machine(mch) => {
-                let mut references = HashMap::new();
-                if !mch.sees.is_empty() {
-                    references.insert(ReferenceKind::Sees, mch.sees.clone());
-                }
-                if let Some(ref refines) = mch.refines {
-                    references.insert(ReferenceKind::Refines, vec![refines.clone()]);
-                }
-
-                ComponentInfo {
-                    uri: uri.to_string(),
-                    name: mch.name.clone(),
-                    kind: ComponentKind::Machine,
-                    references,
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_cross_reference_manager_creation() {
@@ -862,23 +645,13 @@ END
         assert_eq!(name, Some("test_ctx".to_string()));
     }
 
-    // --- Test helpers for direct DashMap insertion (no parsing overhead) ---
+    // --- Test helpers for direct graph insertion (no parsing overhead) ---
 
     fn register_context(manager: &CrossReferenceManager, name: &str, extends: &[&str]) {
-        let mut references = HashMap::new();
-        if !extends.is_empty() {
-            references.insert(
-                ReferenceKind::Extends,
-                extends.iter().map(|s| s.to_string()).collect(),
-            );
-        }
-        let info = ComponentInfo {
-            uri: format!("file:///{name}.eventb"),
-            name: name.to_string(),
-            kind: ComponentKind::Context,
-            references,
-        };
-        manager.components.insert(name.to_string(), info);
+        manager
+            .graph
+            .write()
+            .upsert_context(name, extends.iter().map(|s| s.to_string()).collect());
     }
 
     fn register_machine(
@@ -887,26 +660,11 @@ END
         refines: &[&str],
         sees: &[&str],
     ) {
-        let mut references = HashMap::new();
-        if !refines.is_empty() {
-            references.insert(
-                ReferenceKind::Refines,
-                refines.iter().map(|s| s.to_string()).collect(),
-            );
-        }
-        if !sees.is_empty() {
-            references.insert(
-                ReferenceKind::Sees,
-                sees.iter().map(|s| s.to_string()).collect(),
-            );
-        }
-        let info = ComponentInfo {
-            uri: format!("file:///{name}.eventb"),
-            name: name.to_string(),
-            kind: ComponentKind::Machine,
-            references,
-        };
-        manager.components.insert(name.to_string(), info);
+        manager.graph.write().upsert_machine(
+            name,
+            refines.first().map(|s| s.to_string()),
+            sees.iter().map(|s| s.to_string()).collect(),
+        );
     }
 
     // --- Transitive closure tests ---
@@ -1176,29 +934,5 @@ END
         let cycles = manager.detect_cycles(None);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].components, vec!["ctx_x".to_string()]);
-    }
-
-    // --- normalize_cycle tests ---
-
-    #[test]
-    fn test_normalize_cycle() {
-        let cycle = vec!["c".to_string(), "a".to_string(), "b".to_string()];
-        let normalized = CrossReferenceManager::normalize_cycle(cycle);
-        assert_eq!(
-            normalized,
-            vec!["a".to_string(), "b".to_string(), "c".to_string()]
-        );
-    }
-
-    #[test]
-    fn test_normalize_cycle_empty() {
-        let normalized = CrossReferenceManager::normalize_cycle(vec![]);
-        assert!(normalized.is_empty());
-    }
-
-    #[test]
-    fn test_normalize_cycle_single() {
-        let normalized = CrossReferenceManager::normalize_cycle(vec!["x".to_string()]);
-        assert_eq!(normalized, vec!["x".to_string()]);
     }
 }
