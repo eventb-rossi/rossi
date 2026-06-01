@@ -272,6 +272,26 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "rossi.validateCurrentFile",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorLangId == eventb && editorTextFocus"
+      },
+      {
+        "command": "rossi.convertCurrentFileToUnicode",
+        "key": "ctrl+k u",
+        "mac": "cmd+k u",
+        "when": "editorLangId == eventb && editorTextFocus"
+      },
+      {
+        "command": "rossi.convertCurrentFileToAscii",
+        "key": "ctrl+k a",
+        "mac": "cmd+k a",
+        "when": "editorLangId == eventb && editorTextFocus"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "Rossi",
