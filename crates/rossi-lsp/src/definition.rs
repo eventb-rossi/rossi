@@ -13,11 +13,11 @@ use crate::lsp_types::{
 };
 use dashmap::DashMap;
 use rossi::{Component, parse};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::symbols::SymbolKind;
 
 /// Information about where an identifier is defined
 #[derive(Debug, Clone)]
@@ -25,18 +25,9 @@ struct DefinitionInfo {
     /// The name of the identifier
     name: String,
     /// The kind of definition
-    kind: DefinitionKind,
+    kind: SymbolKind,
     /// Location in the source file
     location: Location,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum DefinitionKind {
-    Variable,
-    Constant,
-    Set,
-    Event,
-    Parameter,
 }
 
 /// Context containing all definitions in a document
@@ -59,7 +50,7 @@ impl DefinitionContext {
             d.name == name
                 && matches!(
                     d.kind,
-                    DefinitionKind::Variable | DefinitionKind::Event | DefinitionKind::Parameter
+                    SymbolKind::Variable | SymbolKind::Event | SymbolKind::Parameter
                 )
         });
         local.or_else(|| self.definitions.iter().find(|d| d.name == name))
@@ -168,7 +159,8 @@ impl DefinitionProvider {
         ))
     }
 
-    /// Extract all definitions from a component
+    /// Extract all definitions visible from a component: those declared locally
+    /// plus those reachable through SEES/EXTENDS/REFINES.
     fn extract_definitions(
         &self,
         component: &Component,
@@ -176,9 +168,28 @@ impl DefinitionProvider {
         uri_str: &str,
     ) -> DefinitionContext {
         let mut ctx = DefinitionContext::new();
+        ctx.definitions = self.extract_local_definitions(component, text, uri_str);
+
+        // Add cross-file definitions from SEES/EXTENDS/REFINES contexts and machines.
+        if let Some(crm) = &self.cross_ref_manager {
+            ctx.definitions
+                .extend(self.resolve_cross_file_definitions(component, crm));
+        }
+
+        ctx
+    }
+
+    /// Extract definitions declared directly in `component` (no cross-file walk).
+    fn extract_local_definitions(
+        &self,
+        component: &Component,
+        text: &str,
+        uri_str: &str,
+    ) -> Vec<DefinitionInfo> {
+        let mut definitions = Vec::new();
         let uri = match Url::parse(uri_str) {
             Ok(u) => u,
-            Err(_) => return ctx, // Return empty context if URI parsing fails
+            Err(_) => return definitions, // Return empty if URI parsing fails
         };
 
         match component {
@@ -187,9 +198,9 @@ impl DefinitionProvider {
                 for set in &context.sets {
                     let set_name = set.name();
                     if let Some(pos) = find_identifier_in_clause(text, "SETS", set_name) {
-                        ctx.definitions.push(DefinitionInfo {
+                        definitions.push(DefinitionInfo {
                             name: set_name.to_string(),
-                            kind: DefinitionKind::Set,
+                            kind: SymbolKind::Set,
                             location: Location {
                                 uri: uri.clone(),
                                 range: Range {
@@ -208,9 +219,9 @@ impl DefinitionProvider {
                 for constant in &context.constants {
                     if let Some(pos) = find_identifier_in_clause(text, "CONSTANTS", &constant.name)
                     {
-                        ctx.definitions.push(DefinitionInfo {
+                        definitions.push(DefinitionInfo {
                             name: constant.name.clone(),
-                            kind: DefinitionKind::Constant,
+                            kind: SymbolKind::Constant,
                             location: Location {
                                 uri: uri.clone(),
                                 range: Range {
@@ -230,9 +241,9 @@ impl DefinitionProvider {
                 for variable in &machine.variables {
                     if let Some(pos) = find_identifier_in_clause(text, "VARIABLES", &variable.name)
                     {
-                        ctx.definitions.push(DefinitionInfo {
+                        definitions.push(DefinitionInfo {
                             name: variable.name.clone(),
-                            kind: DefinitionKind::Variable,
+                            kind: SymbolKind::Variable,
                             location: Location {
                                 uri: uri.clone(),
                                 range: Range {
@@ -250,9 +261,9 @@ impl DefinitionProvider {
                 // Extract events
                 for event in &machine.events {
                     if let Some(pos) = find_event_definition(text, &event.name) {
-                        ctx.definitions.push(DefinitionInfo {
+                        definitions.push(DefinitionInfo {
                             name: event.name.clone(),
-                            kind: DefinitionKind::Event,
+                            kind: SymbolKind::Event,
                             location: Location {
                                 uri: uri.clone(),
                                 range: Range {
@@ -271,9 +282,9 @@ impl DefinitionProvider {
                         if let Some(pos) =
                             find_identifier_in_event(text, &event.name, "ANY", &param.name)
                         {
-                            ctx.definitions.push(DefinitionInfo {
+                            definitions.push(DefinitionInfo {
                                 name: param.name.clone(),
-                                kind: DefinitionKind::Parameter,
+                                kind: SymbolKind::Parameter,
                                 location: Location {
                                     uri: uri.clone(),
                                     range: Range {
@@ -293,9 +304,9 @@ impl DefinitionProvider {
                 if machine.initialisation.is_some()
                     && let Some(pos) = find_initialisation_definition(text)
                 {
-                    ctx.definitions.push(DefinitionInfo {
+                    definitions.push(DefinitionInfo {
                         name: "INITIALISATION".to_string(),
-                        kind: DefinitionKind::Event,
+                        kind: SymbolKind::Event,
                         location: Location {
                             uri: uri.clone(),
                             range: Range {
@@ -308,242 +319,43 @@ impl DefinitionProvider {
             }
         }
 
-        // Add cross-file definitions from SEES/EXTENDS contexts
-        if let Some(crm) = &self.cross_ref_manager {
-            let cross_file_defs = self.resolve_cross_file_definitions(component, crm);
-            ctx.definitions.extend(cross_file_defs);
-        }
-
-        ctx
+        definitions
     }
 
-    /// Resolve definitions from SEES/EXTENDS/REFINES for cross-file go-to-definition
+    /// Resolve definitions reachable through SEES/EXTENDS/REFINES, reusing the
+    /// cross-reference manager's visibility graph and extracting each visible
+    /// component's local definitions with `extract_local_definitions`.
     fn resolve_cross_file_definitions(
         &self,
         component: &Component,
         cross_ref_manager: &CrossReferenceManager,
     ) -> Vec<DefinitionInfo> {
-        let mut results = Vec::new();
-        let mut visited = HashSet::new();
-
-        match component {
+        let component_names = match component {
             Component::Machine(machine) => {
-                for ctx_name in &machine.sees {
-                    self.resolve_context_definitions(
-                        ctx_name,
-                        cross_ref_manager,
-                        &mut results,
-                        &mut visited,
-                    );
-                }
-                if let Some(ref refines_name) = machine.refines {
-                    self.resolve_machine_definitions(
-                        refines_name,
-                        cross_ref_manager,
-                        &mut results,
-                        &mut visited,
-                    );
-                }
+                let mut names = cross_ref_manager.refinement_chain(&machine.name);
+                names.extend(cross_ref_manager.ordered_visible_contexts(&machine.name));
+                names
             }
-            Component::Context(context) => {
-                for parent_name in &context.extends {
-                    self.resolve_context_definitions(
-                        parent_name,
-                        cross_ref_manager,
-                        &mut results,
-                        &mut visited,
-                    );
-                }
-            }
+            Component::Context(context) => cross_ref_manager.ordered_extends_chain(&context.name),
+        };
+
+        let mut results = Vec::new();
+        for name in component_names {
+            let Some(text) =
+                cross_ref_manager.load_component_text(&name, self.document_manager.as_deref())
+            else {
+                continue;
+            };
+            let Ok(component) = parse(&text) else {
+                continue;
+            };
+            let Some(uri_str) = cross_ref_manager.find_component_uri(&name) else {
+                continue;
+            };
+            results.extend(self.extract_local_definitions(&component, &text, &uri_str));
         }
 
         results
-    }
-
-    /// Recursively resolve variables, events, and parameters from a refined machine
-    fn resolve_machine_definitions(
-        &self,
-        machine_name: &str,
-        cross_ref_manager: &CrossReferenceManager,
-        results: &mut Vec<DefinitionInfo>,
-        visited: &mut HashSet<String>,
-    ) {
-        if visited.len() >= 10 || visited.contains(machine_name) {
-            return;
-        }
-        visited.insert(machine_name.to_string());
-
-        let text = match cross_ref_manager
-            .load_component_text(machine_name, self.document_manager.as_deref())
-        {
-            Some(t) => t,
-            None => return,
-        };
-
-        let component = match parse(&text) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        if let Component::Machine(m) = &component {
-            let uri_str = match cross_ref_manager.find_component_uri(machine_name) {
-                Some(u) => u,
-                None => return,
-            };
-            let uri = match Url::parse(&uri_str) {
-                Ok(u) => u,
-                Err(_) => return,
-            };
-
-            // Add variables
-            for var in &m.variables {
-                if let Some(pos) = find_identifier_in_clause(&text, "VARIABLES", &var.name) {
-                    results.push(DefinitionInfo {
-                        name: var.name.clone(),
-                        kind: DefinitionKind::Variable,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: pos,
-                                end: Position::new(pos.line, pos.character + var.name.len() as u32),
-                            },
-                        },
-                    });
-                }
-            }
-
-            // Add events
-            for event in &m.events {
-                if let Some(pos) = find_event_definition(&text, &event.name) {
-                    results.push(DefinitionInfo {
-                        name: event.name.clone(),
-                        kind: DefinitionKind::Event,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: pos,
-                                end: Position::new(
-                                    pos.line,
-                                    pos.character + event.name.len() as u32,
-                                ),
-                            },
-                        },
-                    });
-                }
-
-                // Add event parameters
-                for param in &event.parameters {
-                    if let Some(pos) =
-                        find_identifier_in_event(&text, &event.name, "ANY", &param.name)
-                    {
-                        results.push(DefinitionInfo {
-                            name: param.name.clone(),
-                            kind: DefinitionKind::Parameter,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: Range {
-                                    start: pos,
-                                    end: Position::new(
-                                        pos.line,
-                                        pos.character + param.name.len() as u32,
-                                    ),
-                                },
-                            },
-                        });
-                    }
-                }
-            }
-
-            // Resolve SEES contexts from the abstract machine
-            for ctx_name in &m.sees {
-                self.resolve_context_definitions(ctx_name, cross_ref_manager, results, visited);
-            }
-
-            // Recurse into further refinements
-            if let Some(ref refines_name) = m.refines {
-                self.resolve_machine_definitions(refines_name, cross_ref_manager, results, visited);
-            }
-        }
-    }
-
-    /// Recursively resolve constants and sets from a context and its EXTENDS parents
-    fn resolve_context_definitions(
-        &self,
-        context_name: &str,
-        cross_ref_manager: &CrossReferenceManager,
-        results: &mut Vec<DefinitionInfo>,
-        visited: &mut HashSet<String>,
-    ) {
-        if visited.len() >= 10 || visited.contains(context_name) {
-            return;
-        }
-        visited.insert(context_name.to_string());
-
-        let text = match cross_ref_manager
-            .load_component_text(context_name, self.document_manager.as_deref())
-        {
-            Some(t) => t,
-            None => return,
-        };
-
-        let component = match parse(&text) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        if let Component::Context(ctx) = &component {
-            let uri_str = match cross_ref_manager.find_component_uri(context_name) {
-                Some(u) => u,
-                None => return,
-            };
-            let uri = match Url::parse(&uri_str) {
-                Ok(u) => u,
-                Err(_) => return,
-            };
-
-            // Add constants
-            for constant in &ctx.constants {
-                if let Some(pos) = find_identifier_in_clause(&text, "CONSTANTS", &constant.name) {
-                    results.push(DefinitionInfo {
-                        name: constant.name.clone(),
-                        kind: DefinitionKind::Constant,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: pos,
-                                end: Position::new(
-                                    pos.line,
-                                    pos.character + constant.name.len() as u32,
-                                ),
-                            },
-                        },
-                    });
-                }
-            }
-
-            // Add sets
-            for set in &ctx.sets {
-                let set_name = set.name();
-                if let Some(pos) = find_identifier_in_clause(&text, "SETS", set_name) {
-                    results.push(DefinitionInfo {
-                        name: set_name.to_string(),
-                        kind: DefinitionKind::Set,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: pos,
-                                end: Position::new(pos.line, pos.character + set_name.len() as u32),
-                            },
-                        },
-                    });
-                }
-            }
-
-            // Recurse into EXTENDS parents
-            for parent_name in &ctx.extends {
-                self.resolve_context_definitions(parent_name, cross_ref_manager, results, visited);
-            }
-        }
     }
 }
 
@@ -819,11 +631,11 @@ mod tests {
 
         let count_def = cache.find_definition("count");
         assert!(count_def.is_some());
-        assert_eq!(count_def.unwrap().kind, DefinitionKind::Variable);
+        assert_eq!(count_def.unwrap().kind, SymbolKind::Variable);
 
         let total_def = cache.find_definition("total");
         assert!(total_def.is_some());
-        assert_eq!(total_def.unwrap().kind, DefinitionKind::Variable);
+        assert_eq!(total_def.unwrap().kind, SymbolKind::Variable);
     }
 
     #[test]
@@ -841,7 +653,7 @@ mod tests {
 
         let max_def = cache.find_definition("max_value");
         assert!(max_def.is_some());
-        assert_eq!(max_def.unwrap().kind, DefinitionKind::Constant);
+        assert_eq!(max_def.unwrap().kind, SymbolKind::Constant);
     }
 
     #[test]
@@ -859,7 +671,7 @@ mod tests {
 
         let status_def = cache.find_definition("STATUS");
         assert!(status_def.is_some());
-        assert_eq!(status_def.unwrap().kind, DefinitionKind::Set);
+        assert_eq!(status_def.unwrap().kind, SymbolKind::Set);
     }
 
     #[test]
@@ -877,11 +689,11 @@ mod tests {
 
         let inc_def = cache.find_definition("increment");
         assert!(inc_def.is_some());
-        assert_eq!(inc_def.unwrap().kind, DefinitionKind::Event);
+        assert_eq!(inc_def.unwrap().kind, SymbolKind::Event);
 
         let dec_def = cache.find_definition("decrement");
         assert!(dec_def.is_some());
-        assert_eq!(dec_def.unwrap().kind, DefinitionKind::Event);
+        assert_eq!(dec_def.unwrap().kind, SymbolKind::Event);
     }
 
     #[test]
@@ -1015,8 +827,10 @@ mod tests {
             "CONTEXT counter_ctx\nCONSTANTS\n    max_value\nAXIOMS\n    @axm1 max_value ∈ ℕ\nEND";
         let machine_source = "MACHINE counter\nSEES\n    counter_ctx\nVARIABLES\n    count\nINVARIANTS\n    @inv1 count ≤ max_value\nEND";
 
-        let (provider, _crm, _dm) =
-            setup_cross_file_provider("file:///counter_ctx.eventb", context_source);
+        let (provider, _crm, _dm) = setup_multi_component_provider(&[
+            ("file:///counter_ctx.eventb", context_source),
+            ("file:///counter.eventb", machine_source),
+        ]);
 
         // Update the machine definitions — this should also resolve cross-file defs
         provider.update_definitions("file:///counter.eventb".to_string(), machine_source);
@@ -1033,7 +847,7 @@ mod tests {
             "max_value should be resolved from context"
         );
         let max_def = max_def.unwrap();
-        assert_eq!(max_def.kind, DefinitionKind::Constant);
+        assert_eq!(max_def.kind, SymbolKind::Constant);
         assert_eq!(max_def.location.uri.as_str(), "file:///counter_ctx.eventb");
     }
 
@@ -1042,8 +856,10 @@ mod tests {
         let context_source = "CONTEXT types_ctx\nSETS\n    STATUS\nEND";
         let machine_source = "MACHINE sys\nSEES\n    types_ctx\nVARIABLES\n    state\nINVARIANTS\n    @inv1 state ∈ STATUS\nEND";
 
-        let (provider, _crm, _dm) =
-            setup_cross_file_provider("file:///types_ctx.eventb", context_source);
+        let (provider, _crm, _dm) = setup_multi_component_provider(&[
+            ("file:///types_ctx.eventb", context_source),
+            ("file:///sys.eventb", machine_source),
+        ]);
 
         provider.update_definitions("file:///sys.eventb".to_string(), machine_source);
 
@@ -1052,7 +868,7 @@ mod tests {
         let set_def = cache.find_definition("STATUS");
         assert!(set_def.is_some(), "STATUS should be resolved from context");
         let set_def = set_def.unwrap();
-        assert_eq!(set_def.kind, DefinitionKind::Set);
+        assert_eq!(set_def.kind, SymbolKind::Set);
         assert_eq!(set_def.location.uri.as_str(), "file:///types_ctx.eventb");
     }
 
@@ -1062,8 +878,10 @@ mod tests {
         let child_source =
             "CONTEXT child_ctx\nEXTENDS\n    base_ctx\nCONSTANTS\n    child_const\nEND";
 
-        let (provider, _crm, _dm) =
-            setup_cross_file_provider("file:///base_ctx.eventb", parent_source);
+        let (provider, _crm, _dm) = setup_multi_component_provider(&[
+            ("file:///base_ctx.eventb", parent_source),
+            ("file:///child_ctx.eventb", child_source),
+        ]);
 
         provider.update_definitions("file:///child_ctx.eventb".to_string(), child_source);
 
@@ -1079,13 +897,13 @@ mod tests {
             "base_const should be resolved from parent context"
         );
         let base_def = base_def.unwrap();
-        assert_eq!(base_def.kind, DefinitionKind::Constant);
+        assert_eq!(base_def.kind, SymbolKind::Constant);
         assert_eq!(base_def.location.uri.as_str(), "file:///base_ctx.eventb");
 
         // Should also find child_const locally
         let child_def = cache.find_definition("child_const");
         assert!(child_def.is_some(), "child_const should be found locally");
-        assert_eq!(child_def.unwrap().kind, DefinitionKind::Constant);
+        assert_eq!(child_def.unwrap().kind, SymbolKind::Constant);
     }
 
     #[test]
@@ -1105,7 +923,7 @@ mod tests {
         let x_def = cache.find_definition("x");
         assert!(x_def.is_some());
         let x_def = x_def.unwrap();
-        assert_eq!(x_def.kind, DefinitionKind::Variable);
+        assert_eq!(x_def.kind, SymbolKind::Variable);
         assert_eq!(x_def.location.uri.as_str(), "file:///m.eventb");
     }
 
@@ -1171,7 +989,7 @@ mod tests {
             "abstract_state should be resolved from refined machine"
         );
         let abs_def = abs_def.unwrap();
-        assert_eq!(abs_def.kind, DefinitionKind::Variable);
+        assert_eq!(abs_def.kind, SymbolKind::Variable);
         assert_eq!(abs_def.location.uri.as_str(), "file:///abstract_mch.eventb");
     }
 
@@ -1199,7 +1017,7 @@ mod tests {
             "update event should be resolved from refined machine"
         );
         let evt_def = evt_def.unwrap();
-        assert_eq!(evt_def.kind, DefinitionKind::Event);
+        assert_eq!(evt_def.kind, SymbolKind::Event);
         assert_eq!(evt_def.location.uri.as_str(), "file:///abstract_mch.eventb");
     }
 
@@ -1230,7 +1048,7 @@ mod tests {
             "max_val should be resolved transitively via REFINES → SEES"
         );
         let const_def = const_def.unwrap();
-        assert_eq!(const_def.kind, DefinitionKind::Constant);
+        assert_eq!(const_def.kind, SymbolKind::Constant);
         assert_eq!(const_def.location.uri.as_str(), "file:///ctx.eventb");
     }
 
@@ -1256,7 +1074,7 @@ mod tests {
         let state_def = cache.find_definition("state");
         assert!(state_def.is_some());
         let state_def = state_def.unwrap();
-        assert_eq!(state_def.kind, DefinitionKind::Variable);
+        assert_eq!(state_def.kind, SymbolKind::Variable);
         assert_eq!(
             state_def.location.uri.as_str(),
             "file:///concrete_mch.eventb"
