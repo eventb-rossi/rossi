@@ -263,7 +263,12 @@ fn parse_xml_labeled_predicate(
     )))
 }
 
-/// Write labeled predicates as XML elements
+/// Write labeled predicates as XML elements.
+///
+/// Theorems (including any parsed from a `THEOREMS` section, which lower into the
+/// axioms/invariants vec with `is_theorem = true`) are written as ordinary
+/// `org.eventb.core.axiom`/`org.eventb.core.invariant` elements carrying
+/// `org.eventb.core.theorem="true"` — Rodin has no separate theorems container.
 fn write_labeled_predicates_xml(
     xml: &mut String,
     items: &[LabeledPredicate],

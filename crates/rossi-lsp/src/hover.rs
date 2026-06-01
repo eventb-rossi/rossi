@@ -634,6 +634,11 @@ const KEYWORD_DOCS: &[KeywordDocEntry] = &[
         "Declares invariants (properties) that must always hold.\n\n```eventb\nINVARIANTS\n    @inv1 count >= 0\n    @inv2 count <= max_value\n```",
     ),
     (
+        KeywordId::Theorems,
+        "THEOREMS",
+        "Declares theorems — properties proved once from the axioms/invariants, not preserved by every event. Equivalent to the inline `theorem @x` form, and stored/exported as theorem-flagged axioms/invariants (Rodin has no separate theorems container).\n\n```eventb\nTHEOREMS\n    @thm1 count ∈ ℕ\n```",
+    ),
+    (
         KeywordId::Variant,
         "VARIANT",
         "Declares a variant expression for proving termination.\n\n```eventb\nVARIANT\n    max_value - count\n```",
@@ -1242,9 +1247,11 @@ mod tests {
     }
 
     #[test]
-    fn test_no_hover_for_unparsed_theorems_section() {
+    fn test_hover_for_theorems_section() {
         let provider = HoverProvider::new();
-        assert!(provider.hover_keyword("THEOREMS").is_none());
+        assert!(provider.hover_keyword("THEOREMS").is_some());
+        // Lookup is case-insensitive.
+        assert!(provider.hover_keyword("theorems").is_some());
     }
 
     #[test]

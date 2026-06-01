@@ -71,6 +71,11 @@ fn test_all_working_examples_parse() {
         "examples/counter_machine.eventb",
         "examples/basic_ctx.eventb",
         "examples/basic_machine.eventb",
+        // Files exercising a real THEOREMS section.
+        "examples/simple_sets_ctx.eventb",
+        "examples/sets_and_relations_ctx.eventb",
+        "examples/library_ctx.eventb",
+        "examples/library_machine.eventb",
     ];
 
     for file in example_files {
@@ -84,4 +89,34 @@ fn test_all_working_examples_parse() {
             result.err()
         );
     }
+}
+
+#[test]
+fn test_theorems_section_lowers_to_flagged_axioms() {
+    // A THEOREMS section is parsed into `Context.axioms` with `is_theorem = true`,
+    // matching Rodin's model (a theorem is a flagged axiom, not a separate section).
+    let source = fs::read_to_string("examples/simple_sets_ctx.eventb")
+        .expect("Failed to read simple_sets_ctx.eventb");
+    let Component::Context(ctx) = parse(&source).expect("should parse") else {
+        panic!("expected a Context");
+    };
+
+    let theorems: Vec<_> = ctx.axioms.iter().filter(|a| a.is_theorem).collect();
+    assert_eq!(theorems.len(), 1, "THEOREMS member should be flagged");
+    assert_eq!(theorems[0].label.as_deref(), Some("thm1"));
+    // The plain axioms remain non-theorems in the same vec.
+    assert_eq!(ctx.axioms.iter().filter(|a| !a.is_theorem).count(), 4);
+}
+
+#[test]
+fn test_machine_theorems_section_lowers_to_flagged_invariants() {
+    let source = fs::read_to_string("examples/library_machine.eventb")
+        .expect("Failed to read library_machine.eventb");
+    let Component::Machine(mch) = parse(&source).expect("should parse") else {
+        panic!("expected a Machine");
+    };
+
+    let theorems: Vec<_> = mch.invariants.iter().filter(|i| i.is_theorem).collect();
+    assert_eq!(theorems.len(), 1, "THEOREMS member should be flagged");
+    assert_eq!(theorems[0].label.as_deref(), Some("thm1"));
 }

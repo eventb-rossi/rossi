@@ -45,6 +45,10 @@ kw_extends = @{ ^"extends" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_sets = @{ ^"sets" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_constants = @{ ^"constants" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_axioms = @{ ^"axioms" ~ !(ASCII_ALPHANUMERIC | "_") }
+// THEOREMS section header. Distinct from the singular inline `kw_theorem` flag:
+// the trailing word-boundary guard means `THEOREMS` never matches `kw_theorem`
+// (the `s` fails its boundary) and vice-versa.
+kw_theorems = @{ ^"theorems" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_end = @{ ^"end" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // Machine Keywords (case-insensitive)
@@ -504,7 +508,7 @@ action_list = {
 // ==========================
 
 context_clause_extends = {
-    kw_extends ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ identifier)*
+    kw_extends ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ identifier)*
 }
 
 // Set declaration: deferred set (S) or enumerated set (S = {a, b, c})
@@ -513,11 +517,11 @@ set_declaration = {
 }
 
 context_clause_sets = {
-    kw_sets ~ set_declaration ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ set_declaration)*
+    kw_sets ~ set_declaration ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ set_declaration)*
 }
 
 context_clause_constants = {
-    kw_constants ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_end ~ identifier)*
+    kw_constants ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ identifier)*
 }
 
 // Label: "@" followed by any non-whitespace characters, per the TextEditor EBNF spec:
@@ -537,9 +541,16 @@ context_clause_axioms = {
     kw_axioms ~ labeled_predicate ~ (labeled_predicate)*
 }
 
+// A THEOREMS section is sugar for theorem-flagged axioms: the parser lowers each
+// member into `Context.axioms` with `is_theorem = true` (Rodin models a theorem as
+// a boolean attribute on an axiom, not as a separate container).
+context_clause_theorems = {
+    kw_theorems ~ labeled_predicate ~ (labeled_predicate)*
+}
+
 context_body = {
     (context_clause_extends | context_clause_sets | context_clause_constants
-     | context_clause_axioms)*
+     | context_clause_axioms | context_clause_theorems)*
 }
 
 context = {
@@ -555,15 +566,22 @@ machine_clause_refines = {
 }
 
 machine_clause_sees = {
-    kw_sees ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+    kw_sees ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
 }
 
 machine_clause_variables = {
-    kw_variables ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+    kw_variables ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
 }
 
 machine_clause_invariants = {
     kw_invariants ~ labeled_predicate ~ (labeled_predicate)*
+}
+
+// A THEOREMS section is sugar for theorem-flagged invariants: the parser lowers each
+// member into `Machine.invariants` with `is_theorem = true` (Rodin models a theorem
+// as a boolean attribute on an invariant, not as a separate container).
+machine_clause_theorems = {
+    kw_theorems ~ labeled_predicate ~ (labeled_predicate)*
 }
 
 machine_clause_variant = {
@@ -632,7 +650,7 @@ machine_clause_events = {
 
 machine_body = {
     (machine_clause_refines | machine_clause_sees | machine_clause_variables
-     | machine_clause_invariants | machine_clause_variant
+     | machine_clause_invariants | machine_clause_theorems | machine_clause_variant
      | machine_clause_events)*
 }
 

@@ -313,16 +313,15 @@ mod tests {
     }
 
     #[test]
-    fn test_theorems_section_is_not_folded() {
-        // THEOREMS is recognized as a recovery boundary but is not a foldable clause
-        // (the parser does not build a theorems node).
+    fn test_theorems_section_is_folded() {
+        // THEOREMS is a real context/machine clause, so its body folds like any other.
         let provider = FoldingRangeProvider::new();
         let text = "CONTEXT test\nTHEOREMS\n    @thm1 1 = 1\n    @thm2 2 = 2\nEND";
 
         let ranges = provider.detect_folding_ranges(text);
 
         let folds_theorems = ranges.iter().any(|r| r.start_line == 1);
-        assert!(!folds_theorems, "THEOREMS clause should not produce a fold");
+        assert!(folds_theorems, "THEOREMS clause should produce a fold");
     }
 
     #[test]
