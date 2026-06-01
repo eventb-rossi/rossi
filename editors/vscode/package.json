@@ -372,7 +372,61 @@
           "description": "Number of random animation steps for ProB animation."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "rossi.getStarted",
+        "title": "Get Started with Event-B",
+        "description": "Set up the Rossi toolchain and create your first Event-B model.",
+        "steps": [
+          {
+            "id": "rossi.getStarted.checkToolchain",
+            "title": "Check your toolchain",
+            "description": "Confirm the rossi CLI and language server are installed.\n[Check Toolchain](command:rossi.checkToolchain)",
+            "media": {
+              "markdown": "walkthroughs/check-toolchain.md"
+            },
+            "completionEvents": [
+              "onCommand:rossi.checkToolchain"
+            ]
+          },
+          {
+            "id": "rossi.getStarted.createModel",
+            "title": "Create your first model",
+            "description": "Scaffold a project with a starter .eventb file.\n[New Event-B Project](command:rossi.newProject)",
+            "media": {
+              "markdown": "walkthroughs/create-model.md"
+            },
+            "completionEvents": [
+              "onCommand:rossi.newProject"
+            ]
+          },
+          {
+            "id": "rossi.getStarted.writeEventb",
+            "title": "Write Event-B",
+            "description": "Edit the .eventb file with snippets, live diagnostics, and formatting.",
+            "media": {
+              "markdown": "walkthroughs/write-eventb.md"
+            },
+            "completionEvents": [
+              "onLanguage:eventb"
+            ]
+          },
+          {
+            "id": "rossi.getStarted.exportRodin",
+            "title": "Export to Rodin",
+            "description": "Hand the model to Rodin or explore it with ProB.\n[Open in Rodin](command:rossi.openInRodin)",
+            "media": {
+              "markdown": "walkthroughs/export-rodin.md"
+            },
+            "completionEvents": [
+              "onCommand:rossi.exportCurrentFileToRodinZip",
+              "onCommand:rossi.openInRodin"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
