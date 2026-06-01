@@ -47,8 +47,9 @@ pub enum KeywordId {
     // Inline modifiers (appear inside predicates/actions, not as clause headers)
     Theorem,
     Skip,
-    // Real Event-B section this parser does not yet build an AST node for; kept
-    // only as a clause boundary for error recovery and boundary detection.
+    // The THEOREMS section header (context and machine). The parser lowers its
+    // members into the axioms/invariants vec with `is_theorem = true`, since Rodin
+    // models a theorem as a flagged axiom/invariant, not a separate container.
     Theorems,
 }
 
@@ -62,7 +63,6 @@ pub enum KeywordGroup {
     EventClause,
     Status,
     Inline,
-    UnparsedSection,
 }
 
 /// Completion-context bitflags: the structural scopes where a keyword may be
@@ -308,13 +308,15 @@ pub const KEYWORDS: &[Keyword] = &[
         0,
         "No-op action (does nothing)",
     ),
-    // Real section this parser does not yet parse into an AST node
+    // A context AND machine clause; the dual scope is carried by `completion_scopes`
+    // (mirroring EXTENDS/REFINES). Members lower into the axioms/invariants vec with
+    // `is_theorem = true` — a theorem is a flagged axiom/invariant in Rodin's model.
     kw(
         Theorems,
         &["THEOREMS"],
-        Grp::UnparsedSection,
-        0,
-        "Theorems section (clause boundary; not yet parsed)",
+        Grp::ContextClause,
+        scope::CONTEXT | scope::MACHINE,
+        "Declares theorems (properties proved once, not preserved by events)",
     ),
 ];
 
@@ -361,10 +363,9 @@ fn is_clause_group(k: &Keyword) -> bool {
     matches!(k.group, Grp::ContextClause | Grp::MachineClause)
 }
 
-/// A clause header, `END`, or the unparsed `THEOREMS` section (the parser's
-/// error-recovery boundary set).
+/// A clause header or `END` (the parser's error-recovery boundary set).
 fn is_recovery_group(k: &Keyword) -> bool {
-    is_clause_group(k) || k.group == Grp::UnparsedSection || k.id == End
+    is_clause_group(k) || k.id == End
 }
 
 /// Whether `word` begins a context/machine clause (used by folding boundaries).
@@ -373,8 +374,7 @@ pub fn is_clause_keyword(word: &str) -> bool {
 }
 
 /// Whether `word` begins a clause or ends a component (used by the parser's
-/// error-recovery clause splitting). Equivalent to [`is_clause_keyword`] plus
-/// `END` and the unparsed `THEOREMS` section.
+/// error-recovery clause splitting). Equivalent to [`is_clause_keyword`] plus `END`.
 pub fn is_recovery_boundary(word: &str) -> bool {
     lookup(word).is_some_and(is_recovery_group)
 }
@@ -507,15 +507,22 @@ mod tests {
         assert!(clause.is_subset(&recovery));
         assert!(recovery.is_subset(&boundary));
         let extra: HashSet<&str> = recovery.difference(&clause).copied().collect();
-        assert_eq!(extra, HashSet::from(["END", "THEOREMS"]));
+        assert_eq!(extra, HashSet::from(["END"]));
     }
 
     #[test]
-    fn theorems_is_boundary_only() {
-        assert!(!is_clause_keyword("THEOREMS"), "THEOREMS must not fold");
+    fn theorems_is_a_clause_keyword() {
+        // THEOREMS is a real context+machine clause: it folds, bounds recovery, and
+        // is offered for completion in both component scopes.
+        assert!(is_clause_keyword("THEOREMS"));
         assert!(is_recovery_boundary("THEOREMS"));
         assert!(is_clause_boundary("THEOREMS"));
-        assert_eq!(keyword(Theorems).completion_scopes, 0);
+        assert_eq!(
+            keyword(Theorems).completion_scopes,
+            scope::CONTEXT | scope::MACHINE
+        );
+        assert!(iter_completion_scope(scope::CONTEXT).any(|k| k.id == Theorems));
+        assert!(iter_completion_scope(scope::MACHINE).any(|k| k.id == Theorems));
     }
 
     #[test]
@@ -536,11 +543,8 @@ mod tests {
             }
         }
 
-        // Forward: every table spelling (except the unparsed THEOREMS) has a rule.
+        // Forward: every table spelling has a `kw_` rule in the grammar.
         for k in KEYWORDS {
-            if k.group == KeywordGroup::UnparsedSection {
-                continue;
-            }
             for s in k.spellings {
                 assert!(
                     grammar_kw.contains(&s.to_ascii_lowercase()),
@@ -572,8 +576,10 @@ mod tests {
     #[test]
     fn keywords_match_language_reference() {
         // docs/EVENTB_LANGUAGE_REFERENCE.md:352 — documented structural keyword list.
-        // (The doc list omits `STATUS`, which the event EBNF at :413 and grammar.pest
-        // both define, so it is added here as a known table-only keyword.)
+        // Two keywords are added here as known doc-omissions that the grammar and
+        // EBNF nonetheless define: `STATUS` (event EBNF at :413) and `THEOREMS`
+        // (context/machine EBNF at :391/:403 — the :352 list mentions only the
+        // inline `theorem` flag).
         let expected = HashSet::from([
             "CONTEXT",
             "MACHINE",
@@ -603,10 +609,10 @@ mod tests {
             "anticipated",
             "skip",
             "STATUS",
+            "THEOREMS",
         ]);
         let table: HashSet<&str> = KEYWORDS
             .iter()
-            .filter(|k| k.group != KeywordGroup::UnparsedSection)
             .flat_map(|k| k.spellings.iter().copied())
             .collect();
         assert_eq!(table, expected);

@@ -212,7 +212,13 @@ impl PrettyPrinter {
         output
     }
 
-    /// Print a labeled predicate
+    /// Print a labeled predicate.
+    ///
+    /// Theorems are always emitted in the inline `theorem @x` form within
+    /// AXIOMS/INVARIANTS, never as a separate `THEOREMS` section. This is the
+    /// canonical, order-preserving form and mirrors Rodin's model, where a theorem
+    /// is a boolean attribute on an axiom/invariant rather than a distinct section.
+    /// Parsing a `THEOREMS` section is therefore normalized to inline on output.
     fn print_labeled_predicate(&self, output: &mut String, lp: &LabeledPredicate, indent: &str) {
         let theorem_str = if lp.is_theorem { "theorem " } else { "" };
         if let Some(label) = &lp.label {

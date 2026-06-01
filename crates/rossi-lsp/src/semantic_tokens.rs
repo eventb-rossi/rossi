@@ -190,6 +190,26 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
     }
 
+    /// Like [`Self::mark_keyword`] but only marks a spelling that ends at or before
+    /// `bound`, returning the offset just past it (or `from` unchanged if none).
+    ///
+    /// Used to color a `THEOREMS` header that sits between two predicates: a
+    /// THEOREMS section folds into the axioms/invariants vec with `is_theorem = true`
+    /// (Rodin models a theorem as a flagged axiom/invariant, so there is no THEOREMS
+    /// AST node to drive the walk). Bounding by the next predicate's start keeps the
+    /// search from grabbing a header that belongs to a later predicate.
+    fn mark_keyword_within(&mut self, id: KeywordId, from: usize, bound: usize) -> usize {
+        for spelling in keywords::keyword(id).spellings {
+            if let Some((offset, len)) = self.find_keyword(spelling, from)
+                && offset + len <= bound
+            {
+                self.add_keyword(spelling, offset);
+                return offset + len;
+            }
+        }
+        from
+    }
+
     /// Find the position of an identifier in the text
     fn find_identifier(&self, identifier: &str, start_offset: usize) -> Option<(usize, usize)> {
         // Look for the identifier as a whole word
@@ -304,8 +324,20 @@ impl<'a> SemanticTokensBuilder<'a> {
         {
             current_offset = off;
 
+            // A THEOREMS header can only sit where a predicate first becomes a
+            // theorem (theorems fold into `axioms`, so there is no node to drive the
+            // walk). Only search on that transition, not once per predicate.
+            let mut prev_is_theorem = false;
             for axiom in &ctx.axioms {
+                if axiom.is_theorem
+                    && !prev_is_theorem
+                    && let Some(span) = &axiom.span
+                {
+                    current_offset =
+                        self.mark_keyword_within(KeywordId::Theorems, current_offset, span.start);
+                }
                 current_offset = self.visit_labeled_predicate(axiom, current_offset);
+                prev_is_theorem = axiom.is_theorem;
             }
         }
 
@@ -373,8 +405,19 @@ impl<'a> SemanticTokensBuilder<'a> {
         {
             current_offset = off;
 
+            // See `visit_context`: only search for the THEOREMS header where a
+            // predicate first becomes a theorem, not once per invariant.
+            let mut prev_is_theorem = false;
             for invariant in &mch.invariants {
+                if invariant.is_theorem
+                    && !prev_is_theorem
+                    && let Some(span) = &invariant.span
+                {
+                    current_offset =
+                        self.mark_keyword_within(KeywordId::Theorems, current_offset, span.start);
+                }
                 current_offset = self.visit_labeled_predicate(invariant, current_offset);
+                prev_is_theorem = invariant.is_theorem;
             }
         }
 

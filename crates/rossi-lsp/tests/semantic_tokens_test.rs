@@ -111,3 +111,28 @@ fn test_semantic_tokens_returns_none_for_unparseable_input() {
         );
     }
 }
+
+#[test]
+fn test_theorems_header_is_highlighted() {
+    let provider = SemanticTokensProvider::new();
+    let token_count = |text: &str| -> usize {
+        let uri = Url::parse("file:///test.eventb").unwrap();
+        let params = SemanticTokensParams {
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            text_document: TextDocumentIdentifier { uri },
+        };
+        match provider.semantic_tokens(&params, text) {
+            Some(rossi_lsp::lsp_types::SemanticTokensResult::Tokens(t)) => t.data.len(),
+            other => panic!("expected tokens, got {other:?}"),
+        }
+    };
+
+    // Same predicates and labels; the only difference is the THEOREMS header, which
+    // must contribute exactly one extra keyword token. (The inline `theorem` flag is
+    // not tokenized, so the inline variant has one fewer.)
+    let sectioned = "CONTEXT c\nAXIOMS\n    @axm1 1 = 1\nTHEOREMS\n    @thm1 2 = 2\nEND\n";
+    let inline = "CONTEXT c\nAXIOMS\n    @axm1 1 = 1\n    theorem @thm1 2 = 2\nEND\n";
+
+    assert_eq!(token_count(sectioned), token_count(inline) + 1);
+}

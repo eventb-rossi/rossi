@@ -1652,6 +1652,137 @@ fn test_context_duplicate_sets_clause() {
 }
 
 #[test]
+fn test_context_theorems_section_after_axioms() {
+    // A THEOREMS section follows AXIOMS and lowers into `axioms` with the flag set.
+    let source = r#"
+    CONTEXT test
+    CONSTANTS
+        c
+    AXIOMS
+        @axm1 c > 0
+    THEOREMS
+        @thm1 c > -1
+    END
+    "#;
+
+    let Component::Context(ctx) = parse(source).expect("should parse") else {
+        panic!("expected a Context");
+    };
+    assert_eq!(ctx.axioms.len(), 2);
+    assert!(!ctx.axioms[0].is_theorem);
+    assert!(ctx.axioms[1].is_theorem);
+    assert_eq!(ctx.axioms[1].label.as_deref(), Some("thm1"));
+}
+
+#[test]
+fn test_context_rejects_axioms_after_theorems() {
+    let source = r#"
+    CONTEXT test
+    THEOREMS
+        @thm1 1 = 1
+    AXIOMS
+        @axm1 2 = 2
+    END
+    "#;
+
+    let result = parse(source);
+    assert!(result.is_err(), "AXIOMS after THEOREMS must be rejected");
+    match result.unwrap_err() {
+        ParseError::ClauseError {
+            clause_type,
+            message,
+            ..
+        } => {
+            assert_eq!(clause_type, "AXIOMS");
+            assert!(message.contains("AXIOMS") && message.contains("THEOREMS"));
+        }
+        other => panic!("Expected ClauseError, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_machine_theorems_between_invariants_and_variant() {
+    let source = r#"
+    MACHINE test
+    VARIABLES
+        x
+    INVARIANTS
+        @inv1 x > 0
+    THEOREMS
+        @thm1 x > -1
+    VARIANT
+        x
+    EVENTS
+        EVENT INITIALISATION
+        THEN
+            x := 1
+        END
+    END
+    "#;
+
+    let Component::Machine(mch) = parse(source).expect("should parse") else {
+        panic!("expected a Machine");
+    };
+    assert_eq!(mch.invariants.len(), 2);
+    assert!(!mch.invariants[0].is_theorem);
+    assert!(mch.invariants[1].is_theorem);
+    assert!(mch.variant.is_some());
+}
+
+#[test]
+fn test_machine_rejects_theorems_after_variant() {
+    let source = r#"
+    MACHINE test
+    INVARIANTS
+        @inv1 1 = 1
+    VARIANT
+        x
+    THEOREMS
+        @thm1 2 = 2
+    END
+    "#;
+
+    let result = parse(source);
+    assert!(result.is_err(), "THEOREMS after VARIANT must be rejected");
+    match result.unwrap_err() {
+        ParseError::ClauseError {
+            clause_type,
+            message,
+            ..
+        } => {
+            assert_eq!(clause_type, "THEOREMS");
+            assert!(message.contains("THEOREMS") && message.contains("VARIANT"));
+        }
+        other => panic!("Expected ClauseError, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_theorems_section_roundtrips_to_inline() {
+    // The canonical printed form is inline `theorem @x` (Rodin parity), so a parsed
+    // THEOREMS section normalizes to inline and re-parses to the same flagged rows.
+    let source = r#"
+    CONTEXT test
+    AXIOMS
+        @axm1 1 = 1
+    THEOREMS
+        @thm1 2 = 2
+    END
+    "#;
+
+    let component = parse(source).expect("should parse");
+    let printed = rossi::to_string(&component);
+    assert!(!printed.contains("THEOREMS"), "output normalizes to inline");
+    assert!(printed.contains("theorem @thm1"));
+
+    let Component::Context(reparsed) = parse(&printed).expect("reparse") else {
+        panic!("expected a Context");
+    };
+    assert_eq!(reparsed.axioms.len(), 2);
+    assert!(reparsed.axioms.iter().any(|a| a.is_theorem));
+}
+
+#[test]
 fn test_machine_clause_order_sees_before_refines() {
     let source = r#"
     MACHINE test

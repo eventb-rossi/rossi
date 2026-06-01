@@ -177,6 +177,24 @@ fn collect_labeled_predicates(
     Ok(predicates)
 }
 
+/// Collect the predicates of a `THEOREMS` clause, forcing `is_theorem = true` on
+/// each. A `THEOREMS` section is sugar for theorem-flagged axioms/invariants:
+/// Rodin models a theorem as a boolean attribute on an axiom/invariant element
+/// (there is no theorem container), so a member of a THEOREMS section is a theorem
+/// even when written without the inline `theorem` keyword. The result is appended
+/// to the same `axioms`/`invariants` vec, keeping rossi's model identical to
+/// Rodin's and lossless across the Rodin XML round-trip.
+fn collect_theorem_predicates(
+    pair: pest::iterators::Pair<Rule>,
+    keyword_rule: Rule,
+) -> Result<Vec<LabeledPredicate>, ParseError> {
+    let mut predicates = collect_labeled_predicates(pair, keyword_rule)?;
+    for p in &mut predicates {
+        p.is_theorem = true;
+    }
+    Ok(predicates)
+}
+
 /// Validate clause ordering within a context or machine body.
 /// Returns an error if a clause appears out of order or is duplicated.
 fn validate_clause_order(
@@ -296,13 +314,14 @@ pub fn parse_components(input: &str) -> Result<Vec<Component>, ParseError> {
 }
 
 /// Return the canonical ordering index for a context clause rule.
-/// EXTENDS=0, SETS=1, CONSTANTS=2, AXIOMS=3
+/// EXTENDS=0, SETS=1, CONSTANTS=2, AXIOMS=3, THEOREMS=4
 fn context_clause_order(rule: Rule) -> Option<usize> {
     match rule {
         Rule::context_clause_extends => Some(0),
         Rule::context_clause_sets => Some(1),
         Rule::context_clause_constants => Some(2),
         Rule::context_clause_axioms => Some(3),
+        Rule::context_clause_theorems => Some(4),
         _ => None,
     }
 }
@@ -314,20 +333,22 @@ fn context_clause_name(rule: Rule) -> &'static str {
         Rule::context_clause_sets => "SETS",
         Rule::context_clause_constants => "CONSTANTS",
         Rule::context_clause_axioms => "AXIOMS",
+        Rule::context_clause_theorems => "THEOREMS",
         _ => "unknown",
     }
 }
 
 /// Return the canonical ordering index for a machine clause rule.
-/// REFINES=0, SEES=1, VARIABLES=2, INVARIANTS=3, VARIANT=4, EVENTS=5
+/// REFINES=0, SEES=1, VARIABLES=2, INVARIANTS=3, THEOREMS=4, VARIANT=5, EVENTS=6
 fn machine_clause_order(rule: Rule) -> Option<usize> {
     match rule {
         Rule::machine_clause_refines => Some(0),
         Rule::machine_clause_sees => Some(1),
         Rule::machine_clause_variables => Some(2),
         Rule::machine_clause_invariants => Some(3),
-        Rule::machine_clause_variant => Some(4),
-        Rule::machine_clause_events => Some(5),
+        Rule::machine_clause_theorems => Some(4),
+        Rule::machine_clause_variant => Some(5),
+        Rule::machine_clause_events => Some(6),
         _ => None,
     }
 }
@@ -339,6 +360,7 @@ fn machine_clause_name(rule: Rule) -> &'static str {
         Rule::machine_clause_sees => "SEES",
         Rule::machine_clause_variables => "VARIABLES",
         Rule::machine_clause_invariants => "INVARIANTS",
+        Rule::machine_clause_theorems => "THEOREMS",
         Rule::machine_clause_variant => "VARIANT",
         Rule::machine_clause_events => "EVENTS",
         _ => "unknown",
@@ -406,6 +428,12 @@ fn parse_context(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                     context
                         .axioms
                         .extend(collect_labeled_predicates(pair, Rule::kw_axioms)?);
+                }
+                Rule::context_clause_theorems => {
+                    // THEOREMS lowers into `axioms` with `is_theorem = true`.
+                    context
+                        .axioms
+                        .extend(collect_theorem_predicates(pair, Rule::kw_theorems)?);
                 }
                 Rule::kw_end => break,
                 _ => {
@@ -481,6 +509,12 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                     machine
                         .invariants
                         .extend(collect_labeled_predicates(pair, Rule::kw_invariants)?);
+                }
+                Rule::machine_clause_theorems => {
+                    // THEOREMS lowers into `invariants` with `is_theorem = true`.
+                    machine
+                        .invariants
+                        .extend(collect_theorem_predicates(pair, Rule::kw_theorems)?);
                 }
                 Rule::machine_clause_variant => {
                     for vp in pair.into_inner() {
@@ -1943,6 +1977,17 @@ fn recover_labeled_predicates(
     result
 }
 
+/// Recover a `THEOREMS` clause, forcing `is_theorem = true` on each predicate.
+/// Mirrors the strict parser, which lowers THEOREMS into the axioms/invariants vec
+/// with the flag set (a theorem is a flagged axiom/invariant in Rodin's model).
+fn recover_theorem_predicates(input: &str, errors: &mut Vec<ParseError>) -> Vec<LabeledPredicate> {
+    let mut result = recover_labeled_predicates(input, "THEOREMS", "theorem", errors);
+    for p in &mut result {
+        p.is_theorem = true;
+    }
+    result
+}
+
 /// Parse an Event-B component with error recovery
 ///
 /// This function attempts to parse the input and recover from syntax errors
@@ -2017,6 +2062,9 @@ fn parse_context_with_recovery(input: &str, initial_error: ParseError) -> ParseR
         .map(NamedElement::new)
         .collect();
     context.axioms = recover_labeled_predicates(input, "AXIOMS", "axiom", &mut errors);
+    context
+        .axioms
+        .extend(recover_theorem_predicates(input, &mut errors));
 
     ParseResult::with_errors(Some(Component::Context(context)), errors)
 }
@@ -2039,6 +2087,9 @@ fn parse_machine_with_recovery(input: &str, initial_error: ParseError) -> ParseR
         .map(NamedElement::new)
         .collect();
     machine.invariants = recover_labeled_predicates(input, "INVARIANTS", "invariant", &mut errors);
+    machine
+        .invariants
+        .extend(recover_theorem_predicates(input, &mut errors));
 
     // Note: VARIANT and EVENTS are more complex and would need specialized recovery
     // For now, we'll skip them if they fail to parse
