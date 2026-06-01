@@ -154,30 +154,7 @@ pub fn event_name_from_line(line: &str) -> Option<String> {
 }
 
 pub fn is_clause_boundary_keyword(word: &str) -> bool {
-    [
-        "MACHINE",
-        "CONTEXT",
-        "REFINES",
-        "SEES",
-        "EXTENDS",
-        "SETS",
-        "CONSTANTS",
-        "VARIABLES",
-        "AXIOMS",
-        "INVARIANTS",
-        "THEOREMS",
-        "VARIANT",
-        "EVENTS",
-        "EVENT",
-        "ANY",
-        "WHERE",
-        "WITH",
-        "THEN",
-        "STATUS",
-        "END",
-    ]
-    .iter()
-    .any(|keyword| word.eq_ignore_ascii_case(keyword))
+    rossi::keywords::is_clause_boundary(word)
 }
 
 #[cfg(test)]

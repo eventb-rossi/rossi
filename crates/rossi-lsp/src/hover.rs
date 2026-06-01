@@ -10,6 +10,7 @@ use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupK
 use dashmap::DashMap;
 use rossi::{
     Component, Expression, LabeledPredicate, Predicate, PrettyPrinter,
+    keywords::{self, KeywordId},
     operators::{self, OperatorId},
     parse,
 };
@@ -214,7 +215,11 @@ impl HoverProvider {
 
     /// Get hover information for keywords
     fn hover_keyword(&self, word: &str) -> Option<Hover> {
-        lookup_doc(KEYWORD_DOCS, word).map(|(t, d)| create_hover(t, d))
+        let id = keywords::lookup(word)?.id;
+        KEYWORD_DOCS
+            .iter()
+            .find(|(doc_id, _, _)| *doc_id == id)
+            .map(|(_, title, desc)| create_hover(title, desc))
     }
 
     /// Get hover information for operators
@@ -552,6 +557,7 @@ use crate::identifier_utils::get_word_at_position;
 /// Documentation entry: `(keys, title, markdown description)`.
 type DocEntry = (&'static [&'static str], &'static str, &'static str);
 type OperatorDocEntry = (OperatorId, &'static str, &'static str);
+type KeywordDocEntry = (KeywordId, &'static str, &'static str);
 
 fn lookup_doc(table: &[DocEntry], word: &str) -> Option<(&'static str, &'static str)> {
     table
@@ -568,136 +574,142 @@ fn lookup_operator_doc(word: &str) -> Option<(&'static str, &'static str)> {
         .map(|(_, title, desc)| (*title, *desc))
 }
 
-const KEYWORD_DOCS: &[DocEntry] = &[
+const KEYWORD_DOCS: &[KeywordDocEntry] = &[
     // Top-level
     (
-        &["CONTEXT"],
+        KeywordId::Context,
         "CONTEXT",
         "Defines a context containing static properties of a model.\n\nA context can declare sets, constants, axioms, and theorems.",
     ),
     (
-        &["MACHINE"],
+        KeywordId::Machine,
         "MACHINE",
         "Defines a machine containing dynamic behavior.\n\nA machine can declare variables, invariants, variants, and events.",
     ),
     (
-        &["END"],
+        KeywordId::End,
         "END",
         "Marks the end of a context, machine, or event definition.",
     ),
     // Context clauses
     (
-        &["EXTENDS"],
+        KeywordId::Extends,
         "EXTENDS",
-        "Extends another context, inheriting its sets, constants, and axioms.\n\n```eventb\nEXTENDS\n    base_context\n```",
+        "Extends another context, inheriting its sets, constants, and axioms.\n\n```eventb\nEXTENDS\n    base_context\n```\n\nAt the event level, `EXTENDS` marks an extended event that inherits the abstract event's parameters, guards, and actions.",
     ),
     (
-        &["SETS"],
+        KeywordId::Sets,
         "SETS",
         "Declares carrier sets (enumerated or deferred).\n\n```eventb\nSETS\n    STATUS\n    COLORS\n```",
     ),
     (
-        &["CONSTANTS"],
+        KeywordId::Constants,
         "CONSTANTS",
         "Declares constants whose values are constrained by axioms.\n\n```eventb\nCONSTANTS\n    max_value\n    min_value\n```",
     ),
     (
-        &["AXIOMS"],
+        KeywordId::Axioms,
         "AXIOMS",
         "Declares axioms (properties) that must hold for constants and sets.\n\n```eventb\nAXIOMS\n    @axm1 max_value > 0\n    @axm2 max_value = 100\n```",
     ),
     // Machine clauses
     (
-        &["REFINES"],
+        KeywordId::Refines,
         "REFINES",
         "Refines an abstract machine, adding more detail.\n\n```eventb\nREFINES\n    abstract_machine\n```",
     ),
     (
-        &["SEES"],
+        KeywordId::Sees,
         "SEES",
         "References contexts to use their sets and constants.\n\n```eventb\nSEES\n    context_name\n```",
     ),
     (
-        &["VARIABLES"],
+        KeywordId::Variables,
         "VARIABLES",
         "Declares state variables.\n\n```eventb\nVARIABLES\n    count\n    total\n```",
     ),
     (
-        &["INVARIANTS"],
+        KeywordId::Invariants,
         "INVARIANTS",
         "Declares invariants (properties) that must always hold.\n\n```eventb\nINVARIANTS\n    @inv1 count >= 0\n    @inv2 count <= max_value\n```",
     ),
     (
-        &["VARIANT"],
+        KeywordId::Variant,
         "VARIANT",
         "Declares a variant expression for proving termination.\n\n```eventb\nVARIANT\n    max_value - count\n```",
     ),
     (
-        &["EVENTS"],
+        KeywordId::Events,
         "EVENTS",
         "Begins the events section of a machine.\n\n```eventb\nEVENTS\n    EVENT INITIALISATION\n    ...\n    EVENT event_name\n    ...\nEND\n```",
     ),
     // Event keywords
     (
-        &["EVENT"],
+        KeywordId::Event,
         "EVENT",
         "Defines an event that can change the machine state.\n\n```eventb\nEVENT increment\nWHERE\n    @grd1 count < max_value\nTHEN\n    @act1 count := count + 1\nEND\n```",
     ),
     (
-        &["INITIALISATION"],
+        KeywordId::Initialisation,
         "INITIALISATION",
         "Special event that initializes machine variables.\n\n```eventb\nEVENT INITIALISATION\nTHEN\n    count := 0\nEND\n```",
     ),
     (
-        &["STATUS"],
+        KeywordId::Status,
         "STATUS",
         "Specifies the convergence status of an event.\n\nValues: `ordinary`, `convergent`, `anticipated`",
     ),
     (
-        &["ANY"],
+        KeywordId::Any,
         "ANY",
         "Introduces event parameters (local variables).\n\n```eventb\nANY x\nWHERE\n    @grd1 x ∈ ℕ\nTHEN\n    @act1 count := x\nEND\n```",
     ),
     (
-        &["WHERE", "WHEN"],
+        KeywordId::Where,
         "WHERE/WHEN",
         "Declares event guards (preconditions).\n\n```eventb\nWHERE\n    @grd1 count < max_value\n    @grd2 count >= 0\n```",
     ),
     (
-        &["WITH"],
+        KeywordId::With,
         "WITH",
         "Specifies witness predicates for refinement.\n\n```eventb\nWITH\n    @x x = count + 1\n```",
     ),
     (
-        &["WITNESS"],
+        KeywordId::Witness,
         "WITNESS",
         "Declares witness predicates for abstract parameters.\n\n```eventb\nWITNESS\n    @x x = count + 1\n```",
     ),
     (
-        &["THEN", "BEGIN"],
+        KeywordId::Then,
         "THEN/BEGIN",
         "Declares event actions (state changes).\n\n```eventb\nTHEN\n    @act1 count := count + 1\n    @act2 total := total + count\n```",
     ),
+    // Inline modifiers
+    (
+        KeywordId::Theorem,
+        "theorem",
+        "Marks a labeled predicate as a theorem — a property that follows from the others and is proved once, not preserved by every event.\n\n```eventb\nINVARIANTS\n    @thm1 theorem count ∈ ℕ\n```",
+    ),
+    (
+        KeywordId::Skip,
+        "skip",
+        "A no-op action that makes no state change.\n\n```eventb\nTHEN\n    skip\n```",
+    ),
     // Event status values
     (
-        &["ordinary"],
+        KeywordId::Ordinary,
         "ordinary",
         "Ordinary event (default). Does not affect variant.",
     ),
     (
-        &["convergent"],
+        KeywordId::Convergent,
         "convergent",
         "Convergent event. Must decrease the variant, proving termination.",
     ),
     (
-        &["anticipated"],
+        KeywordId::Anticipated,
         "anticipated",
         "Anticipated event. May increase variant but will be refined to convergent.",
-    ),
-    (
-        &["extended"],
-        "extended",
-        "Extended event. Inherits guards and actions from refined event.",
     ),
 ];
 
@@ -1203,34 +1215,16 @@ mod tests {
     fn test_hover_all_keywords() {
         let provider = HoverProvider::new();
 
-        let keywords = vec![
-            "CONTEXT",
-            "MACHINE",
-            "END",
-            "EXTENDS",
-            "SETS",
-            "CONSTANTS",
-            "AXIOMS",
-            "REFINES",
-            "SEES",
-            "VARIABLES",
-            "INVARIANTS",
-            "VARIANT",
-            "EVENTS",
-            "EVENT",
-            "INITIALISATION",
-            "STATUS",
-            "ANY",
-            "WHERE",
-            "THEN",
-            "ordinary",
-            "convergent",
-            "anticipated",
-        ];
-
-        for keyword in keywords {
-            let hover = provider.hover_keyword(keyword);
-            assert!(hover.is_some(), "Missing hover for keyword: {}", keyword);
+        for (id, _, _) in KEYWORD_DOCS {
+            for spelling in keywords::keyword(*id).spellings {
+                // Hover lookup is case-insensitive.
+                for variant in [spelling.to_string(), spelling.to_lowercase()] {
+                    assert!(
+                        provider.hover_keyword(&variant).is_some(),
+                        "Missing hover for keyword: {variant}"
+                    );
+                }
+            }
         }
     }
 
@@ -1245,6 +1239,12 @@ mod tests {
                 assert!(hover.is_some(), "Missing hover for operator: {}", op);
             }
         }
+    }
+
+    #[test]
+    fn test_no_hover_for_unparsed_theorems_section() {
+        let provider = HoverProvider::new();
+        assert!(provider.hover_keyword("THEOREMS").is_none());
     }
 
     #[test]

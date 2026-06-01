@@ -2067,25 +2067,10 @@ fn extract_clause_content(input: &str, clause_keyword: &str) -> Option<String> {
     // Find the start of this clause
     let start = upper_input.find(&keyword_upper)?;
 
-    // Find the end of this clause (next keyword or END)
-    let keywords = [
-        "EXTENDS",
-        "SETS",
-        "CONSTANTS",
-        "AXIOMS",
-        "THEOREMS",
-        "REFINES",
-        "SEES",
-        "VARIABLES",
-        "INVARIANTS",
-        "VARIANT",
-        "EVENTS",
-        "END",
-    ];
-
+    // Find the end of this clause: the next clause keyword, THEOREMS, or END.
     let mut end = input.len();
-    for keyword in &keywords {
-        if keyword == &clause_keyword {
+    for keyword in crate::keywords::recovery_boundary_spellings() {
+        if keyword.eq_ignore_ascii_case(clause_keyword) {
             continue;
         }
         if let Some(pos) = upper_input[start + keyword_upper.len()..].find(keyword) {
