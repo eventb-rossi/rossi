@@ -12,7 +12,7 @@ syn case ignore
 syn keyword eventbKeyword any axioms begin constants context end event events extends initialisation invariants machine refines sees sets status then theorems variables variant when where with witness
 syn keyword eventbStatusKeyword anticipated convergent ordinary skip theorem
 syn keyword eventbConstant bool false int nat nat1 true
-syn keyword eventbBuiltin card closure closure1 finite id max min partition pred prj1 prj2 succ
+syn keyword eventbBuiltin card finite id max min partition pred prj1 prj2 succ
 syn keyword eventbOperator circ dom inter mod not oftype or pow pow1 ran union
 syn case match
 

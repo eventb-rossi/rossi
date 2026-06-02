@@ -112,7 +112,7 @@
       "name": "constant.language.eventb"
     },
     "tokens_4": {
-      "match": "(?i)\\b(card|closure|closure1|finite|id|max|min|partition|pred|prj1|prj2|succ)\\b",
+      "match": "(?i)\\b(card|finite|id|max|min|partition|pred|prj1|prj2|succ)\\b",
       "name": "support.function.eventb"
     },
     "tokens_5": {

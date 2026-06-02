@@ -293,10 +293,6 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                 let r_clone = (*r).clone();
                 Some(Type::pow(Type::prod(Type::prod(*l, *r), r_clone)))
             }
-            // closure(r) and closure1(r) : ℙ(T × T) when r : ℙ(T × T).
-            BuiltinFunction::Closure | BuiltinFunction::Closure1 => {
-                type_of_expression(env, arguments.first()?)
-            }
         },
         // `r[A]` — relational image: `r : ℙ(α × β)` ⇒ `r[A] : ℙ(β)`.
         Expression::RelationalImage { relation, set: _ } => {

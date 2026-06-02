@@ -362,8 +362,6 @@ mod tests {
         assert!(is_keyword("id"));
         assert!(is_keyword("prj1"));
         assert!(is_keyword("prj2"));
-        assert!(is_keyword("closure"));
-        assert!(is_keyword("closure1"));
 
         // Quantified
         assert!(is_keyword("UNION"));
