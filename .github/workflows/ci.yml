@@ -38,6 +38,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check editor grammars are up to date
+        run: cargo run -p rossi-cli -- gen-grammars --check
+
       - name: Run tests
         run: cargo test --verbose
 
