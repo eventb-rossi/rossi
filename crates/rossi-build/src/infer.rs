@@ -52,7 +52,7 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
         // identifier; typing them here also makes `succ(n)`/`pred(n) : ℤ` fall
         // out of the function-application arm.
         Expression::Identifier(name) if name == "succ" || name == "pred" => {
-            Some(Type::pow(Type::prod(Type::Integer, Type::Integer)))
+            Some(Type::relation(Type::Integer, Type::Integer))
         }
         Expression::Identifier(name) => env.get(name).cloned(),
         Expression::EmptySet => None, // needs a type annotation / context
@@ -67,27 +67,18 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                         _ => None,
                     }
                 }
-                UnaryOp::Domain => match inner {
-                    Type::PowerSet(inner) => match *inner {
-                        Type::Product(l, _) => Some(Type::pow(*l)),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                UnaryOp::Range => match inner {
-                    Type::PowerSet(inner) => match *inner {
-                        Type::Product(_, r) => Some(Type::pow(*r)),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                UnaryOp::Inverse => match inner {
-                    Type::PowerSet(inner) => match *inner {
-                        Type::Product(l, r) => Some(Type::pow(Type::prod(*r, *l))),
-                        _ => None,
-                    },
-                    _ => None,
-                },
+                UnaryOp::Domain => {
+                    let (l, _) = inner.into_relation()?;
+                    Some(Type::pow(l))
+                }
+                UnaryOp::Range => {
+                    let (_, r) = inner.into_relation()?;
+                    Some(Type::pow(r))
+                }
+                UnaryOp::Inverse => {
+                    let (l, r) = inner.into_relation()?;
+                    Some(Type::relation(r, l))
+                }
             }
         }
         Expression::SetEnumeration(items) => {
@@ -145,67 +136,32 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             // `r ; s` (forward, Semicolon): r:ℙ(α×β), s:ℙ(β×γ) ⇒ ℙ(α×γ).
             // `s ∘ r` (backward, Composition): s:ℙ(β×γ), r:ℙ(α×β) ⇒ ℙ(α×γ).
             BinaryOp::Semicolon => {
-                let (lt, rt) = (
-                    type_of_expression(env, left)?,
-                    type_of_expression(env, right)?,
-                );
-                let (Type::PowerSet(lp), Type::PowerSet(rp)) = (lt, rt) else {
-                    return None;
-                };
-                let (Type::Product(la, _), Type::Product(_, rb)) = (*lp, *rp) else {
-                    return None;
-                };
-                Some(Type::pow(Type::prod(*la, *rb)))
+                let (la, _) = type_of_expression(env, left)?.into_relation()?;
+                let (_, rb) = type_of_expression(env, right)?.into_relation()?;
+                Some(Type::relation(la, rb))
             }
             BinaryOp::Composition => {
-                let (lt, rt) = (
-                    type_of_expression(env, left)?,
-                    type_of_expression(env, right)?,
-                );
-                let (Type::PowerSet(lp), Type::PowerSet(rp)) = (lt, rt) else {
-                    return None;
-                };
-                let (Type::Product(_, lb), Type::Product(ra, _)) = (*lp, *rp) else {
-                    return None;
-                };
-                Some(Type::pow(Type::prod(*ra, *lb)))
+                let (_, lb) = type_of_expression(env, left)?.into_relation()?;
+                let (ra, _) = type_of_expression(env, right)?.into_relation()?;
+                Some(Type::relation(ra, lb))
             }
             // `r ⊗ s` (DirectProduct): r:ℙ(α×β), s:ℙ(α×γ) ⇒ ℙ(α×(β×γ)).
             BinaryOp::DirectProduct => {
-                let (lt, rt) = (
-                    type_of_expression(env, left)?,
-                    type_of_expression(env, right)?,
-                );
-                let (Type::PowerSet(lp), Type::PowerSet(rp)) = (lt, rt) else {
-                    return None;
-                };
-                let (Type::Product(la, lb), Type::Product(_, rb)) = (*lp, *rp) else {
-                    return None;
-                };
-                Some(Type::pow(Type::prod(*la, Type::prod(*lb, *rb))))
+                let (la, lb) = type_of_expression(env, left)?.into_relation()?;
+                let (_, rb) = type_of_expression(env, right)?.into_relation()?;
+                Some(Type::relation(la, Type::prod(lb, rb)))
             }
             // `r ∥ s` (ParallelProduct): r:ℙ(α×β), s:ℙ(γ×δ) ⇒ ℙ((α×γ)×(β×δ)).
             BinaryOp::ParallelProduct => {
-                let (lt, rt) = (
-                    type_of_expression(env, left)?,
-                    type_of_expression(env, right)?,
-                );
-                let (Type::PowerSet(lp), Type::PowerSet(rp)) = (lt, rt) else {
-                    return None;
-                };
-                let (Type::Product(la, lb), Type::Product(ra, rb)) = (*lp, *rp) else {
-                    return None;
-                };
-                Some(Type::pow(Type::prod(
-                    Type::prod(*la, *ra),
-                    Type::prod(*lb, *rb),
-                )))
+                let (la, lb) = type_of_expression(env, left)?.into_relation()?;
+                let (ra, rb) = type_of_expression(env, right)?.into_relation()?;
+                Some(Type::relation(Type::prod(la, ra), Type::prod(lb, rb)))
             }
             BinaryOp::CartesianProduct => {
                 let lt = type_of_expression(env, left)?;
                 let rt = type_of_expression(env, right)?;
                 match (lt, rt) {
-                    (Type::PowerSet(l), Type::PowerSet(r)) => Some(Type::pow(Type::prod(*l, *r))),
+                    (Type::PowerSet(l), Type::PowerSet(r)) => Some(Type::relation(*l, *r)),
                     _ => None,
                 }
             }
@@ -231,7 +187,7 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                 let rt = type_of_expression(env, right)?;
                 match (lt, rt) {
                     (Type::PowerSet(l), Type::PowerSet(r)) => {
-                        Some(Type::pow(Type::pow(Type::prod(*l, *r))))
+                        Some(Type::pow(Type::relation(*l, *r)))
                     }
                     _ => None,
                 }
@@ -250,14 +206,8 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             // typecheck the argument here — Rodin's well-definedness
             // pass owns that — but we do return the codomain so
             // dependent constants/parameters can pick it up.
-            let fn_ty = type_of_expression(env, function)?;
-            let Type::PowerSet(prod) = fn_ty else {
-                return None;
-            };
-            let Type::Product(_, codomain) = *prod else {
-                return None;
-            };
-            Some(*codomain)
+            let (_, codomain) = type_of_expression(env, function)?.into_relation()?;
+            Some(codomain)
         }
         Expression::BuiltinApplication {
             function,
@@ -296,14 +246,8 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
         },
         // `r[A]` — relational image: `r : ℙ(α × β)` ⇒ `r[A] : ℙ(β)`.
         Expression::RelationalImage { relation, set: _ } => {
-            let r = type_of_expression(env, relation)?;
-            let Type::PowerSet(prod) = r else {
-                return None;
-            };
-            let Type::Product(_, b) = *prod else {
-                return None;
-            };
-            Some(Type::pow(*b))
+            let (_, b) = type_of_expression(env, relation)?.into_relation()?;
+            Some(Type::pow(b))
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
         Expression::Bool(_) => Some(Type::Boolean),
@@ -328,7 +272,7 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             }
             let dom = pattern_to_type(pattern, &bound)?;
             let body_ty = type_of_expression(&local, expression)?;
-            Some(Type::pow(Type::prod(dom, body_ty)))
+            Some(Type::relation(dom, body_ty))
         }
         // `{ x ⦂ T · P ∣ E }` (extended) and `{ x · P }` (basic). Bind
         // each binder from explicit `T` if present, else from `P`. Body
@@ -947,8 +891,7 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
             if found.is_some() {
                 return;
             }
-            if let Some(Type::PowerSet(prod)) = type_of_expression(env, function)
-                && let Type::Product(dom, _cod) = *prod
+            if let Some((dom, _)) = type_of_expression(env, function).and_then(Type::into_relation)
             {
                 let arg_expr = left_assoc_maplet(arguments);
                 if let Some(t) = infer_from_maplet_pattern(&arg_expr, &dom, target) {
@@ -1348,7 +1291,7 @@ mod tests {
         // `succ`/`pred` are core atomic relations of type ℙ(ℤ × ℤ); applying
         // one to an integer yields ℤ, and `c = succ` types `c` as the relation.
         let env = TypeEnv::new();
-        let int_rel = Type::pow(Type::prod(Type::Integer, Type::Integer));
+        let int_rel = Type::relation(Type::Integer, Type::Integer);
         assert_eq!(
             type_of_expression(&env, &parse_expr("succ")),
             Some(int_rel.clone())
@@ -1361,7 +1304,7 @@ mod tests {
         let p = parse_predicate_str("c = succ").unwrap();
         assert_eq!(
             infer_constant_from_predicate(&env, &p, "c"),
-            Some(Type::pow(Type::prod(Type::Integer, Type::Integer)))
+            Some(Type::relation(Type::Integer, Type::Integer))
         );
     }
 
@@ -1422,10 +1365,7 @@ mod tests {
         // A relation argument (ℙ(S × T)) is not a maplet ⇒ no projection.
         env.insert(
             "r",
-            Type::pow(Type::prod(
-                Type::GivenSet("S".into()),
-                Type::GivenSet("T".into()),
-            )),
+            Type::relation(Type::GivenSet("S".into()), Type::GivenSet("T".into())),
         );
         assert_eq!(type_of_expression(&env, &parse_expr("prj1(r)")), None);
     }
@@ -1438,10 +1378,10 @@ mod tests {
         env.add_carrier_set("FLOORS");
         env.insert(
             "floor",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("CABINS".into()),
                 Type::GivenSet("FLOORS".into()),
-            )),
+            ),
         );
         env.insert("cabin", Type::GivenSet("CABINS".into()));
         assert_eq!(
@@ -1511,19 +1451,19 @@ mod tests {
         env.add_carrier_set("GUEST");
         env.insert(
             "checked",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("ROOM".into()),
                 Type::GivenSet("GUEST".into()),
-            )),
+            ),
         );
         env.insert("gst", Type::GivenSet("GUEST".into()));
         let ty = type_of_expression(&env, &parse_expr("checked ▷ {gst}"));
         assert_eq!(
             ty,
-            Some(Type::pow(Type::prod(
+            Some(Type::relation(
                 Type::GivenSet("ROOM".into()),
                 Type::GivenSet("GUEST".into()),
-            )))
+            ))
         );
     }
 
@@ -1535,10 +1475,10 @@ mod tests {
         env.add_carrier_set("GUEST");
         env.insert(
             "checked",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("ROOM".into()),
                 Type::GivenSet("GUEST".into()),
-            )),
+            ),
         );
         env.insert("gst", Type::GivenSet("GUEST".into()));
         let p = parse_predicate_str("result = dom(checked ▷ {gst})").unwrap();
@@ -1557,24 +1497,18 @@ mod tests {
         env.add_carrier_set("C");
         env.insert(
             "r",
-            Type::pow(Type::prod(
-                Type::GivenSet("A".into()),
-                Type::GivenSet("B".into()),
-            )),
+            Type::relation(Type::GivenSet("A".into()), Type::GivenSet("B".into())),
         );
         env.insert(
             "s",
-            Type::pow(Type::prod(
-                Type::GivenSet("B".into()),
-                Type::GivenSet("C".into()),
-            )),
+            Type::relation(Type::GivenSet("B".into()), Type::GivenSet("C".into())),
         );
         assert_eq!(
             type_of_expression(&env, &parse_expr("r ; s")),
-            Some(Type::pow(Type::prod(
+            Some(Type::relation(
                 Type::GivenSet("A".into()),
                 Type::GivenSet("C".into()),
-            )))
+            ))
         );
     }
 
@@ -1587,10 +1521,10 @@ mod tests {
         env.add_carrier_set("STATES");
         env.insert(
             "lift_states",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("LIFTS".into()),
                 Type::GivenSet("STATES".into()),
-            )),
+            ),
         );
         env.insert("lifts", Type::pow(Type::GivenSet("LIFTS".into())));
         assert_eq!(
@@ -1630,10 +1564,10 @@ mod tests {
         env.add_carrier_set("STATES");
         env.insert(
             "lift_states",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("LIFTS".into()),
                 Type::GivenSet("STATES".into()),
-            )),
+            ),
         );
         env.insert("IDLE", Type::GivenSet("STATES".into()));
         let p = parse_predicate_str("lift_states(lift) = IDLE").unwrap();
@@ -1652,13 +1586,13 @@ mod tests {
         env.add_carrier_set("LIFTS");
         env.add_carrier_set("FLOORS");
         env.add_carrier_set("BUTTON_STATES");
-        let inner_fn = Type::pow(Type::prod(
+        let inner_fn = Type::relation(
             Type::GivenSet("FLOORS".into()),
             Type::GivenSet("BUTTON_STATES".into()),
-        ));
+        );
         env.insert(
             "lift_buttons_states",
-            Type::pow(Type::prod(Type::GivenSet("LIFTS".into()), inner_fn)),
+            Type::relation(Type::GivenSet("LIFTS".into()), inner_fn),
         );
         env.insert("lift", Type::GivenSet("LIFTS".into()));
         env.insert("ACTIVE", Type::GivenSet("BUTTON_STATES".into()));
@@ -1758,10 +1692,10 @@ mod tests {
         let p = parse_predicate_str("f = (λx · x ∈ USERS ∣ x)").unwrap();
         assert_eq!(
             infer_constant_from_predicate(&env, &p, "f"),
-            Some(Type::pow(Type::prod(
+            Some(Type::relation(
                 Type::GivenSet("USERS".into()),
                 Type::GivenSet("USERS".into()),
-            )))
+            ))
         );
     }
 
@@ -1787,10 +1721,10 @@ mod tests {
         let p = parse_predicate_str("direct = {x ↦ y ∣ x ∈ ROLES ∧ y = TRUE}").unwrap();
         assert_eq!(
             infer_constant_from_predicate(&env, &p, "direct"),
-            Some(Type::pow(Type::prod(
+            Some(Type::relation(
                 Type::GivenSet("ROLES".into()),
                 Type::Boolean,
-            )))
+            ))
         );
     }
 
@@ -1805,10 +1739,10 @@ mod tests {
         env.insert("port", Type::GivenSet("PORTS".into()));
         env.insert(
             "f",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("PORTS".into()),
                 Type::prod(Type::GivenSet("MESSAGES".into()), Type::Integer),
-            )),
+            ),
         );
         let p = parse_predicate_str("m ↦ t = f(port)").unwrap();
         assert_eq!(
@@ -1830,10 +1764,10 @@ mod tests {
         env.insert("port", Type::GivenSet("PORTS".into()));
         env.insert(
             "f",
-            Type::pow(Type::prod(
+            Type::relation(
                 Type::GivenSet("PORTS".into()),
                 Type::prod(Type::GivenSet("MESSAGES".into()), Type::Integer),
-            )),
+            ),
         );
         let p = parse_predicate_str("f(port) = m ↦ t").unwrap();
         assert_eq!(
@@ -1855,10 +1789,7 @@ mod tests {
         env.insert("tr", Type::GivenSet("TRAIN".into()));
         env.insert(
             "ma",
-            Type::pow(Type::prod(
-                Type::GivenSet("TRAIN".into()),
-                Type::GivenSet("VSS".into()),
-            )),
+            Type::relation(Type::GivenSet("TRAIN".into()), Type::GivenSet("VSS".into())),
         );
         let p = parse_predicate_str("vss_set ∩ ma[{tr}] = ∅").unwrap();
         assert_eq!(
