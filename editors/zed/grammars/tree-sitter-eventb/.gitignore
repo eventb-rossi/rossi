@@ -1,0 +1,5 @@
+# tree-sitter-cli is only needed to regenerate src/parser.c; the generated
+# parser under src/ is committed so Zed can build the grammar without Node.
+# package-lock.json IS committed (like editors/vscode) so CI's `npm ci` is
+# reproducible and the dependency cache has a lockfile to key on.
+/node_modules/

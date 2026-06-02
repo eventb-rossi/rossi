@@ -6,14 +6,18 @@
 //! which are themselves kept in sync with `crates/rossi/src/grammar.pest` and
 //! `docs/EVENTB_LANGUAGE_REFERENCE.md` by unit tests in those modules. Here we
 //! fold them into one format-neutral [`Model`] of token *groups*, then render it
-//! into each editor's native regex grammar (TextMate, Sublime, Vim, Emacs).
+//! into each editor's native grammar (TextMate, Sublime, Vim, Emacs, Zed).
 //!
 //! ## Why a highlighter can be generated but a parser cannot
 //!
 //! TextMate / Sublime / Vim-syntax / Emacs-font-lock are all *lexical* (regex)
 //! highlighters: every distinction they draw is token data, which is exactly
-//! what the tables hold. (Tree-sitter, by contrast, needs a full parser grammar
-//! and is intentionally out of scope.)
+//! what the tables hold. Zed is the one consumer that needs a tree-sitter
+//! grammar, but only a *lexical* one: the [`zed`] emitter generates the token
+//! rules (the regex alternations that recognise each coloured class) into
+//! `grammar.js`, while the surrounding structure and the `highlights.scm`
+//! node→capture mapping are hand-maintained — so the table-derived part stays
+//! generated and the (small) parser scaffold does not pretend to parse Event-B.
 //!
 //! ## Correctness rules baked into the [`Model`]
 //!
@@ -43,6 +47,7 @@ pub mod snippets_vscode;
 pub mod sublime;
 pub mod textmate;
 pub mod vim;
+pub mod zed;
 
 use rossi::builtins::BUILTIN_WORDS;
 use rossi::keywords::{KEYWORDS, KeywordGroup};
@@ -211,13 +216,20 @@ fn word_group(scope: Scope, mut members: Vec<String>) -> TokenGroup {
     }
 }
 
+/// Order two spellings longest-first, ties broken lexically — so an engine that
+/// tries alternatives left-to-right (Oniguruma/Vim `|`, or a JS `(?:…)` regex)
+/// matches the longest token first (`<=>` before `<`, `events` before `event`).
+/// The lexical tie-break keeps the result stable and byte-reproducible.
+pub(super) fn longest_first(a: &str, b: &str) -> std::cmp::Ordering {
+    b.len().cmp(&a.len()).then_with(|| a.cmp(b))
+}
+
 /// Deduplicated symbol group, ordered longest-first so an ordered-alternation
-/// engine matches the longest token (`<=>` before `<`). Ties broken lexically
-/// for a stable, byte-reproducible result.
+/// engine matches the longest token (`<=>` before `<`).
 fn symbol_group(scope: Scope, mut members: Vec<String>) -> TokenGroup {
     members.sort();
     members.dedup();
-    members.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    members.sort_by(|a, b| longest_first(a, b));
     TokenGroup {
         scope,
         kind: MatchKind::Symbol,
@@ -263,11 +275,19 @@ pub mod paths {
     pub const SUBLIME: &str = "editors/sublime/EventB.sublime-syntax";
     pub const VIM: &str = "editors/neovim/syntax/eventb.vim";
     pub const EMACS: &str = "editors/emacs/eventb-mode.el";
+    /// Zed tree-sitter grammar: the token rules live in a generated region; the
+    /// surrounding structure is hand-maintained (so this is a region target).
+    pub const ZED_GRAMMAR: &str = "editors/zed/grammars/tree-sitter-eventb/grammar.js";
+    /// Zed highlight queries: node→capture mapping, generated whole-file.
+    pub const ZED_HIGHLIGHTS: &str = "editors/zed/languages/eventb/highlights.scm";
 
     // Snippet libraries.
     pub const SNIPPETS_VSCODE: &str = "editors/vscode/snippets/eventb.json";
     pub const NVIM_SNIPPETS_PACKAGE: &str = "editors/neovim/snippets/package.json";
     pub const NVIM_SNIPPETS_JSON: &str = "editors/neovim/snippets/eventb.json";
+    /// Zed reuses the VS Code snippet JSON verbatim; the filename is the
+    /// lowercased Zed language name (`Event-B` → `event-b.json`).
+    pub const ZED_SNIPPETS: &str = "editors/zed/snippets/event-b.json";
     /// Directory holding one yasnippet file per snippet (per the `eventb-mode`
     /// major mode); individual files are `<dir>/<prefix>`.
     pub const EMACS_SNIPPETS_DIR: &str = "editors/emacs/snippets/eventb-mode";
