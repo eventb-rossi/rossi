@@ -2,9 +2,15 @@ name: VS Code Extension
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
+    paths:
+      - 'editors/vscode/**'
+      - '.github/workflows/vscode.yml'
   pull_request:
-    branches: [main, master]
+    branches: [main]
+    paths:
+      - 'editors/vscode/**'
+      - '.github/workflows/vscode.yml'
 
 permissions:
   contents: read
