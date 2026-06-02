@@ -9,7 +9,7 @@
 //!
 //! The vocabulary matches the structural keyword list documented in
 //! `docs/EVENTB_LANGUAGE_REFERENCE.md` and is kept in sync with `grammar.pest`
-//! by [`tests::keywords_match_grammar`].
+//! by the `keywords_match_grammar` test.
 
 /// Stable identifier for a structural keyword.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

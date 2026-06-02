@@ -865,7 +865,7 @@ impl LanguageServer for RossiLanguageServer {
 /// request. Only operators whose ASCII and Unicode spellings differ are
 /// included. `symbolic` marks operators with no word characters (alphabetic
 /// ops are leader-only); `eager` marks the subset an input method should
-/// substitute as you type (see [`OperatorSpelling::is_eager_input`]).
+/// substitute as you type (see [`rossi::operators::OperatorSpelling::is_eager_input`]).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OperatorRow {
     pub ascii: String,

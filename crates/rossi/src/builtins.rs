@@ -10,7 +10,7 @@
 //! [`crate::operators`]; only identifier-shaped words live here.
 //!
 //! [`crate::ast::BuiltinFunction`] and [`crate::ast::BuiltinPredicate`] remain the
-//! sources used during parsing; [`tests::builtins_cover_parsed_vocabulary`] keeps
+//! sources used during parsing; the `builtins_cover_parsed_vocabulary` test keeps
 //! this list from drifting away from them and from the operator words.
 
 /// Reserved built-in identifiers, lowercase. Membership is case-insensitive.
