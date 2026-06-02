@@ -272,30 +272,19 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             // (e.g. id(S) : ℙ(S), id(n) : ℤ). This matches Rodin's modern
             // KID_GEN semantics, not the legacy "identity-on-set" reading.
             BuiltinFunction::Id => type_of_expression(env, arguments.first()?),
-            // prj1(r) : ℙ((α × β) × α) when r : ℙ(α × β).
-            BuiltinFunction::Prj1 => {
-                let arg_ty = type_of_expression(env, arguments.first()?)?;
-                let Type::PowerSet(prod) = arg_ty else {
-                    return None;
-                };
-                let Type::Product(l, r) = *prod else {
-                    return None;
-                };
-                let l_clone = (*l).clone();
-                Some(Type::pow(Type::prod(Type::prod(*l, *r), l_clone)))
-            }
-            // prj2(r) : ℙ((α × β) × β) when r : ℙ(α × β).
-            BuiltinFunction::Prj2 => {
-                let arg_ty = type_of_expression(env, arguments.first()?)?;
-                let Type::PowerSet(prod) = arg_ty else {
-                    return None;
-                };
-                let Type::Product(l, r) = *prod else {
-                    return None;
-                };
-                let r_clone = (*r).clone();
-                Some(Type::pow(Type::prod(Type::prod(*l, *r), r_clone)))
-            }
+            // prj1(x)/prj2(x) are function application of the generic
+            // projections (Rodin's KPRJ1_GEN/KPRJ2_GEN): for x : α × β,
+            // prj1(x) : α and prj2(x) : β. Like `id`, this is application of a
+            // polymorphic atom, not the legacy "projection of a relation"
+            // reading (which would take r : ℙ(α × β) and return ℙ((α×β)×α)).
+            BuiltinFunction::Prj1 => match type_of_expression(env, arguments.first()?)? {
+                Type::Product(l, _) => Some(*l),
+                _ => None,
+            },
+            BuiltinFunction::Prj2 => match type_of_expression(env, arguments.first()?)? {
+                Type::Product(_, r) => Some(*r),
+                _ => None,
+            },
             // Generalized union/intersection collapses one power-set level:
             // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).
             BuiltinFunction::Union | BuiltinFunction::Inter => {
@@ -1414,6 +1403,31 @@ mod tests {
             type_of_expression(&env, &parse_expr("id(n)")),
             Some(Type::Integer)
         );
+    }
+
+    #[test]
+    fn prj1_prj2_are_application_of_generic_projections() {
+        // For a maplet m : S × T, prj1(m) : S and prj2(m) : T (Rodin
+        // KPRJ1_GEN/KPRJ2_GEN application). The legacy "projection of a
+        // relation" reading would instead take r : ℙ(S × T); a relation
+        // argument has no maplet to project, so it types as None.
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        env.add_carrier_set("T");
+        let s = Type::GivenSet("S".into());
+        let t = Type::GivenSet("T".into());
+        env.insert("m", Type::prod(s.clone(), t.clone()));
+        assert_eq!(type_of_expression(&env, &parse_expr("prj1(m)")), Some(s));
+        assert_eq!(type_of_expression(&env, &parse_expr("prj2(m)")), Some(t));
+        // A relation argument (ℙ(S × T)) is not a maplet ⇒ no projection.
+        env.insert(
+            "r",
+            Type::pow(Type::prod(
+                Type::GivenSet("S".into()),
+                Type::GivenSet("T".into()),
+            )),
+        );
+        assert_eq!(type_of_expression(&env, &parse_expr("prj1(r)")), None);
     }
 
     #[test]
