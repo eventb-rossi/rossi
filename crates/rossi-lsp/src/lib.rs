@@ -48,7 +48,12 @@ pub async fn run_stdio() -> Result<()> {
 
     info!("Starting Rossi Language Server");
 
-    let (service, socket) = LspService::new(server::RossiLanguageServer::new);
+    let (service, socket) = LspService::build(server::RossiLanguageServer::new)
+        .custom_method(
+            "rossi/operatorTable",
+            server::RossiLanguageServer::operator_table,
+        )
+        .finish();
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
