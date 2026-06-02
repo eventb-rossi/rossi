@@ -47,6 +47,13 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             Some(Type::pow(Type::Integer))
         }
         Expression::BoolType => Some(Type::pow(Type::Boolean)),
+        // `succ`/`pred` are core atomic relations of type ℙ(ℤ × ℤ) (Rodin's
+        // KSUCC/KPRED). They are reserved words, so they never shadow a user
+        // identifier; typing them here also makes `succ(n)`/`pred(n) : ℤ` fall
+        // out of the function-application arm.
+        Expression::Identifier(name) if name == "succ" || name == "pred" => {
+            Some(Type::pow(Type::prod(Type::Integer, Type::Integer)))
+        }
         Expression::Identifier(name) => env.get(name).cloned(),
         Expression::EmptySet => None, // needs a type annotation / context
         Expression::Unary { op, operand } => {
@@ -1340,6 +1347,28 @@ mod tests {
         assert_eq!(
             type_of_expression(&env, &parse_expr("max(0 ‥ 10)")),
             Some(Type::Integer)
+        );
+    }
+
+    #[test]
+    fn succ_pred_are_integer_relations() {
+        // `succ`/`pred` are core atomic relations of type ℙ(ℤ × ℤ); applying
+        // one to an integer yields ℤ, and `c = succ` types `c` as the relation.
+        let env = TypeEnv::new();
+        let int_rel = Type::pow(Type::prod(Type::Integer, Type::Integer));
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("succ")),
+            Some(int_rel.clone())
+        );
+        assert_eq!(type_of_expression(&env, &parse_expr("pred")), Some(int_rel));
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("succ(3)")),
+            Some(Type::Integer)
+        );
+        let p = parse_predicate_str("c = succ").unwrap();
+        assert_eq!(
+            infer_constant_from_predicate(&env, &p, "c"),
+            Some(Type::pow(Type::prod(Type::Integer, Type::Integer)))
         );
     }
 
