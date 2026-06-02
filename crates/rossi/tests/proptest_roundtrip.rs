@@ -150,6 +150,8 @@ fn arb_builtin_function() -> impl Strategy<Value = BuiltinFunction> {
         Just(BuiltinFunction::Min),
         Just(BuiltinFunction::Max),
         Just(BuiltinFunction::Id),
+        Just(BuiltinFunction::Union),
+        Just(BuiltinFunction::Inter),
         Just(BuiltinFunction::Prj1),
         Just(BuiltinFunction::Prj2),
     ]

@@ -300,6 +300,14 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                 let r_clone = (*r).clone();
                 Some(Type::pow(Type::prod(Type::prod(*l, *r), r_clone)))
             }
+            // Generalized union/intersection collapses one power-set level:
+            // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).
+            BuiltinFunction::Union | BuiltinFunction::Inter => {
+                match type_of_expression(env, arguments.first()?)? {
+                    Type::PowerSet(inner) if matches!(*inner, Type::PowerSet(_)) => Some(*inner),
+                    _ => None,
+                }
+            }
         },
         // `r[A]` — relational image: `r : ℙ(α × β)` ⇒ `r[A] : ℙ(β)`.
         Expression::RelationalImage { relation, set: _ } => {
@@ -1370,6 +1378,29 @@ mod tests {
             infer_constant_from_predicate(&env, &p, "c"),
             Some(Type::pow(Type::prod(Type::Integer, Type::Integer)))
         );
+    }
+
+    #[test]
+    fn generalized_union_inter_collapse_a_power_set_level() {
+        // nested : ℙ(ℙ(USERS)) ⇒ union(nested)/inter(nested) : ℙ(USERS).
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("USERS");
+        env.insert(
+            "nested",
+            Type::pow(Type::pow(Type::GivenSet("USERS".into()))),
+        );
+        let expected = Some(Type::pow(Type::GivenSet("USERS".into())));
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("union(nested)")),
+            expected
+        );
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("inter(nested)")),
+            expected
+        );
+        // Non-nested argument (ℙ(USERS)) has no power-set level to collapse.
+        env.insert("flat", Type::pow(Type::GivenSet("USERS".into())));
+        assert_eq!(type_of_expression(&env, &parse_expr("union(flat)")), None);
     }
 
     #[test]

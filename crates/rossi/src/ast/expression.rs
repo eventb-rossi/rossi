@@ -109,6 +109,10 @@ pub enum BuiltinFunction {
     Id,
     Prj1,
     Prj2,
+    /// Generalized union `union(S)` (prefix `⋃` over a set of sets).
+    Union,
+    /// Generalized intersection `inter(S)` (prefix `⋂` over a set of sets).
+    Inter,
 }
 
 impl BuiltinFunction {
@@ -121,6 +125,8 @@ impl BuiltinFunction {
             BuiltinFunction::Id => "id",
             BuiltinFunction::Prj1 => "prj1",
             BuiltinFunction::Prj2 => "prj2",
+            BuiltinFunction::Union => "union",
+            BuiltinFunction::Inter => "inter",
         }
     }
 
@@ -137,7 +143,9 @@ impl BuiltinFunction {
             | BuiltinFunction::Max
             | BuiltinFunction::Id
             | BuiltinFunction::Prj1
-            | BuiltinFunction::Prj2 => 1,
+            | BuiltinFunction::Prj2
+            | BuiltinFunction::Union
+            | BuiltinFunction::Inter => 1,
         }
     }
 
@@ -147,7 +155,9 @@ impl BuiltinFunction {
             BuiltinFunction::Card
             | BuiltinFunction::Min
             | BuiltinFunction::Max
-            | BuiltinFunction::Id => 1,
+            | BuiltinFunction::Id
+            | BuiltinFunction::Union
+            | BuiltinFunction::Inter => 1,
             BuiltinFunction::Prj1 | BuiltinFunction::Prj2 => 2,
         }
     }
@@ -166,6 +176,8 @@ impl BuiltinFunction {
             "id" => Some(BuiltinFunction::Id),
             "prj1" => Some(BuiltinFunction::Prj1),
             "prj2" => Some(BuiltinFunction::Prj2),
+            "union" => Some(BuiltinFunction::Union),
+            "inter" => Some(BuiltinFunction::Inter),
             _ => None,
         }
     }
