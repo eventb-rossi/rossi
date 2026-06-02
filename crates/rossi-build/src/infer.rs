@@ -208,6 +208,77 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
     ground(&u, &t)
 }
 
+/// The reserved relational atoms when written *bare*. `succ`/`pred` are the
+/// monomorphic integer relations (Rodin's KSUCC/KPRED, `ℙ(ℤ×ℤ)`);
+/// `id`/`prj1`/`prj2` are the generic atoms (KID_GEN/KPRJ1_GEN/KPRJ2_GEN) and
+/// carry fresh type variables the surrounding context must solve — if nothing
+/// solves them the expression keeps a free variable and `ground` drops it,
+/// exactly as Rodin drops an unsolved `TypeVariable`. (Applied forms — `id(x)`
+/// etc. — are the `BuiltinApplication` arm.) These are reserved words, so the
+/// `Identifier` arm consults this before an env lookup.
+fn reserved_atom(name: &str, u: &mut Unifier) -> Option<ITy> {
+    match name {
+        "succ" | "pred" => Some(ITy::relation(ITy::Integer, ITy::Integer)),
+        "id" => {
+            let a = u.fresh();
+            Some(ITy::relation(a.clone(), a))
+        }
+        "prj1" => {
+            let a = u.fresh();
+            let b = u.fresh();
+            Some(ITy::relation(ITy::prod(a.clone(), b), a))
+        }
+        "prj2" => {
+            let a = u.fresh();
+            let b = u.fresh();
+            Some(ITy::relation(ITy::prod(a, b.clone()), b))
+        }
+        _ => None,
+    }
+}
+
+/// Synthesize both operands and destructure each as a relation `ℙ(·×·)`,
+/// returning `((dom_l, ran_l), (dom_r, ran_r))`. The shared prologue of the
+/// composition / product arms; each caller then unifies the components it
+/// shares and builds its own result.
+fn synth_two_relations(
+    env: &TypeEnv,
+    left: &Expression,
+    right: &Expression,
+    u: &mut Unifier,
+) -> Option<((ITy, ITy), (ITy, ITy))> {
+    let lt = synth(env, left, u)?;
+    let lr = u.as_relation(&lt)?;
+    let rt = synth(env, right, u)?;
+    let rr = u.as_relation(&rt)?;
+    Some((lr, rr))
+}
+
+/// Constrain one side of a relation (its domain or range) to the element type
+/// of a restricting `set`. Used by `◁`/`▷`/`⩤`/`⩥` and relational image; a
+/// `None` set (a sibling still resolving in the fixpoint) is simply skipped.
+fn constrain_with_set(u: &mut Unifier, side: &ITy, set: Option<ITy>) {
+    if let Some(set_t) = set {
+        let elem = u.fresh();
+        u.unify(&set_t, &ITy::pow(elem.clone())).ok();
+        u.unify(side, &elem).ok();
+    }
+}
+
+/// Combine two operands that must share a type: unify them when both type,
+/// tolerate one still-unresolved side (returning the other), and drop only
+/// when neither types. Used by `∪`/`∩`/`∖`/`⊕` and `if … then … else`.
+fn unify_or_either(u: &mut Unifier, a: Option<ITy>, b: Option<ITy>) -> Option<ITy> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            u.unify(&a, &b).ok()?;
+            Some(a)
+        }
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
+
 /// Synthesize a partial type for `expr`, threading the unifier `u`. The
 /// public [`type_of_expression`] wraps this and grounds the result. One
 /// `Unifier` serves a whole top-level expression — type variables never
@@ -221,35 +292,11 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             Some(ITy::pow(ITy::Integer))
         }
         Expression::BoolType => Some(ITy::pow(ITy::Boolean)),
-        // `succ`/`pred` are core atomic relations of type ℙ(ℤ × ℤ) (Rodin's
-        // KSUCC/KPRED). They are reserved words, so they never shadow a user
-        // identifier; typing them here also makes `succ(n)`/`pred(n) : ℤ` fall
-        // out of the function-application arm.
-        Expression::Identifier(name) if name == "succ" || name == "pred" => {
-            Some(ITy::relation(ITy::Integer, ITy::Integer))
+        // A reserved relational atom (`succ`/`pred`/`id`/`prj1`/`prj2`) wins
+        // over an env lookup; everything else is an env-typed identifier.
+        Expression::Identifier(name) => {
+            reserved_atom(name, u).or_else(|| env.get(name).map(ITy::from))
         }
-        // `id` / `prj1` / `prj2` are Rodin's generic atoms (KID_GEN /
-        // KPRJ1_GEN / KPRJ2_GEN). Bare (not applied — that's the
-        // BuiltinApplication arm), each carries fresh type variables the
-        // surrounding context must solve. If nothing solves them the
-        // expression keeps a free variable and `ground` drops it, exactly
-        // as Rodin drops an unsolved `TypeVariable`. They are reserved
-        // words, so the name check (before the env lookup) is safe.
-        Expression::Identifier(name) if name == "id" => {
-            let a = u.fresh();
-            Some(ITy::relation(a.clone(), a))
-        }
-        Expression::Identifier(name) if name == "prj1" => {
-            let a = u.fresh();
-            let b = u.fresh();
-            Some(ITy::relation(ITy::prod(a.clone(), b), a))
-        }
-        Expression::Identifier(name) if name == "prj2" => {
-            let a = u.fresh();
-            let b = u.fresh();
-            Some(ITy::relation(ITy::prod(a, b.clone()), b))
-        }
-        Expression::Identifier(name) => env.get(name).map(ITy::from),
         // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
         // keeps a free variable and drops; in context (`∅ ∪ r`, `∅ ⦂ T`)
         // the variable is solved.
@@ -314,14 +361,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             | BinaryOp::Overwrite => {
                 let lt = synth(env, left, u);
                 let rt = synth(env, right, u);
-                match (lt, rt) {
-                    (Some(a), Some(b)) => {
-                        u.unify(&a, &b).ok()?;
-                        Some(a)
-                    }
-                    (Some(a), None) | (None, Some(a)) => Some(a),
-                    (None, None) => None,
-                }
+                unify_or_either(u, lt, rt)
             }
             // `S ◁ r` / `S ⩤ r`: the set restricts the relation's domain;
             // the result keeps the relation's type. Unifying the set's
@@ -330,22 +370,16 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             BinaryOp::DomainRestriction | BinaryOp::DomainSubtraction => {
                 let rel = synth(env, right, u)?;
                 let (dom, _) = u.as_relation(&rel)?;
-                if let Some(set_t) = synth(env, left, u) {
-                    let elem = u.fresh();
-                    u.unify(&set_t, &ITy::pow(elem.clone())).ok();
-                    u.unify(&dom, &elem).ok();
-                }
+                let set = synth(env, left, u);
+                constrain_with_set(u, &dom, set);
                 Some(rel)
             }
             // `r ▷ S` / `r ⩥ S`: the set restricts the relation's range.
             BinaryOp::RangeRestriction | BinaryOp::RangeSubtraction => {
                 let rel = synth(env, left, u)?;
                 let (_, ran) = u.as_relation(&rel)?;
-                if let Some(set_t) = synth(env, right, u) {
-                    let elem = u.fresh();
-                    u.unify(&set_t, &ITy::pow(elem.clone())).ok();
-                    u.unify(&ran, &elem).ok();
-                }
+                let set = synth(env, right, u);
+                constrain_with_set(u, &ran, set);
                 Some(rel)
             }
             // Forward / backward composition, unifying the shared middle
@@ -353,37 +387,25 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // `r ; s` (forward, Semicolon): r:ℙ(α×β), s:ℙ(β×γ) ⇒ ℙ(α×γ).
             // `s ∘ r` (backward, Composition): s:ℙ(β×γ), r:ℙ(α×β) ⇒ ℙ(α×γ).
             BinaryOp::Semicolon => {
-                let lt = synth(env, left, u)?;
-                let (la, lb) = u.as_relation(&lt)?;
-                let rt = synth(env, right, u)?;
-                let (rb, rc) = u.as_relation(&rt)?;
+                let ((la, lb), (rb, rc)) = synth_two_relations(env, left, right, u)?;
                 u.unify(&lb, &rb).ok()?;
                 Some(ITy::relation(la, rc))
             }
             BinaryOp::Composition => {
-                let lt = synth(env, left, u)?;
-                let (lb, lc) = u.as_relation(&lt)?;
-                let rt = synth(env, right, u)?;
-                let (ra, rb) = u.as_relation(&rt)?;
+                let ((lb, lc), (ra, rb)) = synth_two_relations(env, left, right, u)?;
                 u.unify(&lb, &rb).ok()?;
                 Some(ITy::relation(ra, lc))
             }
             // `r ⊗ s` (DirectProduct): r:ℙ(α×β), s:ℙ(α×γ) ⇒ ℙ(α×(β×γ)).
             // Unify the shared domain so e.g. `r ⊗ id` pins `id` from `r`.
             BinaryOp::DirectProduct => {
-                let lt = synth(env, left, u)?;
-                let (la, lb) = u.as_relation(&lt)?;
-                let rt = synth(env, right, u)?;
-                let (ra, rb) = u.as_relation(&rt)?;
+                let ((la, lb), (ra, rb)) = synth_two_relations(env, left, right, u)?;
                 u.unify(&la, &ra).ok()?;
                 Some(ITy::relation(la, ITy::prod(lb, rb)))
             }
             // `r ∥ s` (ParallelProduct): r:ℙ(α×β), s:ℙ(γ×δ) ⇒ ℙ((α×γ)×(β×δ)).
             BinaryOp::ParallelProduct => {
-                let lt = synth(env, left, u)?;
-                let (la, lb) = u.as_relation(&lt)?;
-                let rt = synth(env, right, u)?;
-                let (ra, rb) = u.as_relation(&rt)?;
+                let ((la, lb), (ra, rb)) = synth_two_relations(env, left, right, u)?;
                 Some(ITy::relation(ITy::prod(la, ra), ITy::prod(lb, rb)))
             }
             BinaryOp::CartesianProduct => {
@@ -502,11 +524,8 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         Expression::RelationalImage { relation, set } => {
             let rel = synth(env, relation, u)?;
             let (dom, ran) = u.as_relation(&rel)?;
-            if let Some(set_t) = synth(env, set, u) {
-                let elem = u.fresh();
-                u.unify(&set_t, &ITy::pow(elem.clone())).ok();
-                u.unify(&dom, &elem).ok();
-            }
+            let set_t = synth(env, set, u);
+            constrain_with_set(u, &dom, set_t);
             Some(ITy::pow(ran))
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
@@ -519,14 +538,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         } => {
             let t = synth(env, then_expr, u);
             let e = synth(env, else_expr, u);
-            match (t, e) {
-                (Some(a), Some(b)) => {
-                    u.unify(&a, &b).ok()?;
-                    Some(a)
-                }
-                (Some(a), None) | (None, Some(a)) => Some(a),
-                (None, None) => None,
-            }
+            unify_or_either(u, t, e)
         }
         // λ pattern · P ∣ E. Bind the pattern names from explicit type
         // ascriptions or from `P`, then return ℙ(dom × typeof(E)).
