@@ -35,74 +35,266 @@ use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
+// ---------------------------------------------------------------------------
+// Unification machinery (inference-only; never reaches the public `Type`).
+// ---------------------------------------------------------------------------
+//
+// The synthesizer reads types off structurally, but the polymorphic atoms
+// `id` / `prj1` / `prj2` / `∅` (Rodin's KID_GEN / KPRJ1_GEN / KPRJ2_GEN /
+// EMPTYSET) carry a *type variable* that the surrounding context must solve.
+// `ITy` is `Type` plus a `Var` leaf; `Unifier` solves the variables (mirroring
+// Rodin's `TypeUnifier`); `ground` lowers a fully-solved `ITy` back to `Type`
+// and drops anything still holding a free variable — exactly Rodin's treatment
+// of an unsolved `TypeVariable`. None of this escapes `infer.rs`.
+
+/// Inference-only partial type: [`Type`] extended with a unification
+/// variable leaf. Built only inside [`synth`]; lowered to [`Type`] by
+/// [`ground`] at the [`type_of_expression`] boundary.
+#[derive(Clone, Debug, PartialEq)]
+enum ITy {
+    Boolean,
+    Integer,
+    GivenSet(String),
+    PowerSet(Box<ITy>),
+    Product(Box<ITy>, Box<ITy>),
+    Var(u32),
+}
+
+impl ITy {
+    fn pow(t: ITy) -> ITy {
+        ITy::PowerSet(Box::new(t))
+    }
+    fn prod(l: ITy, r: ITy) -> ITy {
+        ITy::Product(Box::new(l), Box::new(r))
+    }
+    /// `ℙ(l × r)` — Event-B's `l ↔ r`. Mirrors [`Type::relation`].
+    fn relation(l: ITy, r: ITy) -> ITy {
+        ITy::pow(ITy::prod(l, r))
+    }
+}
+
+/// Lift a concrete [`Type`] into [`ITy`]. Introduces no variables.
+impl From<&Type> for ITy {
+    fn from(t: &Type) -> ITy {
+        match t {
+            Type::Boolean => ITy::Boolean,
+            Type::Integer => ITy::Integer,
+            Type::GivenSet(n) => ITy::GivenSet(n.clone()),
+            Type::PowerSet(inner) => ITy::pow(ITy::from(inner.as_ref())),
+            Type::Product(l, r) => ITy::prod(ITy::from(l.as_ref()), ITy::from(r.as_ref())),
+        }
+    }
+}
+
+/// A first-order unifier over [`ITy`], mirroring Rodin's `TypeUnifier`:
+/// structural descent through `ℙ` / `×`, given-set equality by name,
+/// ground `ℤ` / `BOOL`, variable binding with an occurs check.
+struct Unifier {
+    /// `slots[i]` is the binding for `Var(i)` (`None` while unsolved).
+    slots: Vec<Option<ITy>>,
+}
+
+impl Unifier {
+    fn new() -> Unifier {
+        Unifier { slots: Vec::new() }
+    }
+
+    /// Mint a fresh, unbound variable.
+    fn fresh(&mut self) -> ITy {
+        let id = self.slots.len() as u32;
+        self.slots.push(None);
+        ITy::Var(id)
+    }
+
+    /// Apply the current substitution everywhere (Rodin's `solve`).
+    fn resolve(&self, t: &ITy) -> ITy {
+        match t {
+            ITy::Var(i) => match &self.slots[*i as usize] {
+                Some(bound) => self.resolve(bound),
+                None => t.clone(),
+            },
+            ITy::PowerSet(inner) => ITy::pow(self.resolve(inner)),
+            ITy::Product(l, r) => ITy::prod(self.resolve(l), self.resolve(r)),
+            _ => t.clone(),
+        }
+    }
+
+    /// Unify two partial types. `Err(())` on a clash or a circular
+    /// binding (occurs check); callers turn that into a dropped type.
+    fn unify(&mut self, a: &ITy, b: &ITy) -> Result<(), ()> {
+        let a = self.resolve(a);
+        let b = self.resolve(b);
+        match (a, b) {
+            (ITy::Var(i), ITy::Var(j)) if i == j => Ok(()),
+            (ITy::Var(i), other) | (other, ITy::Var(i)) => {
+                if self.occurs(i, &other) {
+                    return Err(());
+                }
+                self.slots[i as usize] = Some(other);
+                Ok(())
+            }
+            (ITy::PowerSet(c1), ITy::PowerSet(c2)) => self.unify(&c1, &c2),
+            (ITy::Product(l1, r1), ITy::Product(l2, r2)) => {
+                self.unify(&l1, &l2)?;
+                self.unify(&r1, &r2)
+            }
+            (ITy::Integer, ITy::Integer) => Ok(()),
+            (ITy::Boolean, ITy::Boolean) => Ok(()),
+            (ITy::GivenSet(n1), ITy::GivenSet(n2)) if n1 == n2 => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    /// Does `Var(var)` occur in `t`? `t` is assumed already resolved.
+    fn occurs(&self, var: u32, t: &ITy) -> bool {
+        match t {
+            ITy::Var(i) => *i == var,
+            ITy::PowerSet(inner) => self.occurs(var, inner),
+            ITy::Product(l, r) => self.occurs(var, l) || self.occurs(var, r),
+            _ => false,
+        }
+    }
+
+    /// Destructure (or constrain) `t` as a relation `ℙ(l × r)`, returning
+    /// `(l, r)`. Replacement for [`Type::into_relation`]: when `t` is (or
+    /// resolves to) a variable, fresh `l` / `r` are minted and bound into
+    /// it, so a polymorphic atom flowing through a relation operator gets
+    /// its variable pinned by the other operand.
+    fn as_relation(&mut self, t: &ITy) -> Option<(ITy, ITy)> {
+        match self.resolve(t) {
+            ITy::PowerSet(inner) => match *inner {
+                ITy::Product(l, r) => Some((*l, *r)),
+                ITy::Var(_) => {
+                    let l = self.fresh();
+                    let r = self.fresh();
+                    self.unify(&inner, &ITy::prod(l.clone(), r.clone())).ok()?;
+                    Some((l, r))
+                }
+                _ => None,
+            },
+            v @ ITy::Var(_) => {
+                let l = self.fresh();
+                let r = self.fresh();
+                self.unify(&v, &ITy::relation(l.clone(), r.clone())).ok()?;
+                Some((l, r))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Lower a partial type to a concrete [`Type`]. Returns `None` if any
+/// unification variable survives resolution — the constant then drops,
+/// matching Rodin's treatment of an unsolved `TypeVariable`.
+fn ground(u: &Unifier, t: &ITy) -> Option<Type> {
+    match u.resolve(t) {
+        ITy::Boolean => Some(Type::Boolean),
+        ITy::Integer => Some(Type::Integer),
+        ITy::GivenSet(n) => Some(Type::GivenSet(n)),
+        ITy::PowerSet(inner) => Some(Type::pow(ground(u, &inner)?)),
+        ITy::Product(l, r) => Some(Type::prod(ground(u, &l)?, ground(u, &r)?)),
+        ITy::Var(_) => None,
+    }
+}
+
 /// Derive the type of an expression given a type environment.
 ///
 /// Returns `None` when the expression cannot be typed with the information
-/// in `env` (typically because it references an untyped identifier).
+/// in `env` — either it references an untyped identifier, or a polymorphic
+/// atom's type variable is left unconstrained by the surrounding context.
 pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
+    let mut u = Unifier::new();
+    let t = synth(env, expr, &mut u)?;
+    ground(&u, &t)
+}
+
+/// Synthesize a partial type for `expr`, threading the unifier `u`. The
+/// public [`type_of_expression`] wraps this and grounds the result. One
+/// `Unifier` serves a whole top-level expression — type variables never
+/// need to cross a top-level boundary (binder bodies and equality
+/// propagation see concrete types by the time they read a sub-result).
+fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
     match expr {
-        Expression::Integer(_) => Some(Type::Integer),
-        Expression::True | Expression::False => Some(Type::Boolean),
+        Expression::Integer(_) => Some(ITy::Integer),
+        Expression::True | Expression::False => Some(ITy::Boolean),
         Expression::Integers | Expression::Naturals | Expression::Naturals1 => {
-            Some(Type::pow(Type::Integer))
+            Some(ITy::pow(ITy::Integer))
         }
-        Expression::BoolType => Some(Type::pow(Type::Boolean)),
+        Expression::BoolType => Some(ITy::pow(ITy::Boolean)),
         // `succ`/`pred` are core atomic relations of type ℙ(ℤ × ℤ) (Rodin's
         // KSUCC/KPRED). They are reserved words, so they never shadow a user
         // identifier; typing them here also makes `succ(n)`/`pred(n) : ℤ` fall
         // out of the function-application arm.
         Expression::Identifier(name) if name == "succ" || name == "pred" => {
-            Some(Type::relation(Type::Integer, Type::Integer))
+            Some(ITy::relation(ITy::Integer, ITy::Integer))
         }
-        Expression::Identifier(name) => env.get(name).cloned(),
-        Expression::EmptySet => None, // needs a type annotation / context
+        // `id` / `prj1` / `prj2` are Rodin's generic atoms (KID_GEN /
+        // KPRJ1_GEN / KPRJ2_GEN). Bare (not applied — that's the
+        // BuiltinApplication arm), each carries fresh type variables the
+        // surrounding context must solve. If nothing solves them the
+        // expression keeps a free variable and `ground` drops it, exactly
+        // as Rodin drops an unsolved `TypeVariable`. They are reserved
+        // words, so the name check (before the env lookup) is safe.
+        Expression::Identifier(name) if name == "id" => {
+            let a = u.fresh();
+            Some(ITy::relation(a.clone(), a))
+        }
+        Expression::Identifier(name) if name == "prj1" => {
+            let a = u.fresh();
+            let b = u.fresh();
+            Some(ITy::relation(ITy::prod(a.clone(), b), a))
+        }
+        Expression::Identifier(name) if name == "prj2" => {
+            let a = u.fresh();
+            let b = u.fresh();
+            Some(ITy::relation(ITy::prod(a, b.clone()), b))
+        }
+        Expression::Identifier(name) => env.get(name).map(ITy::from),
+        // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
+        // keeps a free variable and drops; in context (`∅ ∪ r`, `∅ ⦂ T`)
+        // the variable is solved.
+        Expression::EmptySet => Some(ITy::pow(u.fresh())),
         Expression::Unary { op, operand } => {
-            let inner = type_of_expression(env, operand)?;
+            let inner = synth(env, operand, u)?;
             match op {
-                UnaryOp::Minus => Some(Type::Integer),
+                UnaryOp::Minus => Some(ITy::Integer),
                 UnaryOp::PowerSet | UnaryOp::PowerSet1 => {
                     // POW(X) : ℙ(ℙ(elem))
-                    match inner {
-                        Type::PowerSet(t) => Some(Type::pow(Type::pow(*t))),
+                    match u.resolve(&inner) {
+                        ITy::PowerSet(t) => Some(ITy::pow(ITy::pow(*t))),
                         _ => None,
                     }
                 }
                 UnaryOp::Domain => {
-                    let (l, _) = inner.into_relation()?;
-                    Some(Type::pow(l))
+                    let (l, _) = u.as_relation(&inner)?;
+                    Some(ITy::pow(l))
                 }
                 UnaryOp::Range => {
-                    let (_, r) = inner.into_relation()?;
-                    Some(Type::pow(r))
+                    let (_, r) = u.as_relation(&inner)?;
+                    Some(ITy::pow(r))
                 }
                 UnaryOp::Inverse => {
-                    let (l, r) = inner.into_relation()?;
-                    Some(Type::relation(r, l))
+                    let (l, r) = u.as_relation(&inner)?;
+                    Some(ITy::relation(r, l))
                 }
             }
         }
         Expression::SetEnumeration(items) => {
             // `{e₁, e₂, …}` has type ℙ(T) where T is the common element
-            // type. Untyped EmptySet items contribute no constraint —
-            // they pick up whatever the typed siblings establish (so
-            // `{abstract_selectedAirplane, ∅}` types as
-            // `ℙ(typeof(abstract_selectedAirplane))`).
-            let mut ty: Option<Type> = None;
+            // type. A polymorphic item (`∅`) contributes a fresh variable
+            // that unifies with its typed siblings (so `{x, ∅}` types as
+            // `ℙ(typeof(x))`); an all-polymorphic set keeps a free variable
+            // and drops, matching Rodin.
+            let mut ty: Option<ITy> = None;
             for it in items {
-                let t = match type_of_expression(env, it) {
-                    Some(t) => t,
-                    None if matches!(it, Expression::EmptySet) => continue,
-                    None => return None,
-                };
+                let t = synth(env, it, u)?;
                 if let Some(prev) = &ty {
-                    if *prev != t {
-                        return None;
-                    }
+                    u.unify(prev, &t).ok()?;
                 } else {
                     ty = Some(t);
                 }
             }
-            ty.map(Type::pow)
+            ty.map(ITy::pow)
         }
         Expression::Binary { op, left, right } => match op {
             BinaryOp::Add
@@ -110,65 +302,102 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             | BinaryOp::Multiply
             | BinaryOp::Divide
             | BinaryOp::Modulo
-            | BinaryOp::Exponent => Some(Type::Integer),
-            BinaryOp::Range => Some(Type::pow(Type::Integer)),
-            // Relation-preserving binary ops: result has the same type as
-            // whichever side is a relation (`ℙ(α×β)`).
-            // - `Union`/`Intersection`/`Difference`/`Overwrite`: either side
-            //   is a relation; pick the typed one.
-            // - `DomainRestriction (◁)`/`DomainSubtraction (⩤)`: relation is
-            //   on the right.
-            // - `RangeRestriction (▷)`/`RangeSubtraction (⩥)`: relation is
-            //   on the left.
-            BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference => {
-                type_of_expression(env, left).or_else(|| type_of_expression(env, right))
+            | BinaryOp::Exponent => Some(ITy::Integer),
+            BinaryOp::Range => Some(ITy::pow(ITy::Integer)),
+            // Set/relation-preserving binary ops: both operands share a
+            // type, so unify them — that lets a polymorphic operand (`∅`,
+            // `id`) be pinned by its sibling. One legitimately-untyped side
+            // (a constant not yet resolved in the fixpoint) is tolerated.
+            BinaryOp::Union
+            | BinaryOp::Intersection
+            | BinaryOp::Difference
+            | BinaryOp::Overwrite => {
+                let lt = synth(env, left, u);
+                let rt = synth(env, right, u);
+                match (lt, rt) {
+                    (Some(a), Some(b)) => {
+                        u.unify(&a, &b).ok()?;
+                        Some(a)
+                    }
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                }
             }
-            BinaryOp::Overwrite => {
-                type_of_expression(env, left).or_else(|| type_of_expression(env, right))
-            }
+            // `S ◁ r` / `S ⩤ r`: the set restricts the relation's domain;
+            // the result keeps the relation's type. Unifying the set's
+            // element type with the domain pins a polymorphic relation
+            // (e.g. `S ◁ id : ℙ(S×S)`).
             BinaryOp::DomainRestriction | BinaryOp::DomainSubtraction => {
-                type_of_expression(env, right).or_else(|| type_of_expression(env, left))
+                let rel = synth(env, right, u)?;
+                let (dom, _) = u.as_relation(&rel)?;
+                if let Some(set_t) = synth(env, left, u) {
+                    let elem = u.fresh();
+                    u.unify(&set_t, &ITy::pow(elem.clone())).ok();
+                    u.unify(&dom, &elem).ok();
+                }
+                Some(rel)
             }
+            // `r ▷ S` / `r ⩥ S`: the set restricts the relation's range.
             BinaryOp::RangeRestriction | BinaryOp::RangeSubtraction => {
-                type_of_expression(env, left).or_else(|| type_of_expression(env, right))
+                let rel = synth(env, left, u)?;
+                let (_, ran) = u.as_relation(&rel)?;
+                if let Some(set_t) = synth(env, right, u) {
+                    let elem = u.fresh();
+                    u.unify(&set_t, &ITy::pow(elem.clone())).ok();
+                    u.unify(&ran, &elem).ok();
+                }
+                Some(rel)
             }
-            // Forward / backward composition.
+            // Forward / backward composition, unifying the shared middle
+            // type so a polymorphic operand is pinned by the other.
             // `r ; s` (forward, Semicolon): r:ℙ(α×β), s:ℙ(β×γ) ⇒ ℙ(α×γ).
             // `s ∘ r` (backward, Composition): s:ℙ(β×γ), r:ℙ(α×β) ⇒ ℙ(α×γ).
             BinaryOp::Semicolon => {
-                let (la, _) = type_of_expression(env, left)?.into_relation()?;
-                let (_, rb) = type_of_expression(env, right)?.into_relation()?;
-                Some(Type::relation(la, rb))
+                let lt = synth(env, left, u)?;
+                let (la, lb) = u.as_relation(&lt)?;
+                let rt = synth(env, right, u)?;
+                let (rb, rc) = u.as_relation(&rt)?;
+                u.unify(&lb, &rb).ok()?;
+                Some(ITy::relation(la, rc))
             }
             BinaryOp::Composition => {
-                let (_, lb) = type_of_expression(env, left)?.into_relation()?;
-                let (ra, _) = type_of_expression(env, right)?.into_relation()?;
-                Some(Type::relation(ra, lb))
+                let lt = synth(env, left, u)?;
+                let (lb, lc) = u.as_relation(&lt)?;
+                let rt = synth(env, right, u)?;
+                let (ra, rb) = u.as_relation(&rt)?;
+                u.unify(&lb, &rb).ok()?;
+                Some(ITy::relation(ra, lc))
             }
             // `r ⊗ s` (DirectProduct): r:ℙ(α×β), s:ℙ(α×γ) ⇒ ℙ(α×(β×γ)).
+            // Unify the shared domain so e.g. `r ⊗ id` pins `id` from `r`.
             BinaryOp::DirectProduct => {
-                let (la, lb) = type_of_expression(env, left)?.into_relation()?;
-                let (_, rb) = type_of_expression(env, right)?.into_relation()?;
-                Some(Type::relation(la, Type::prod(lb, rb)))
+                let lt = synth(env, left, u)?;
+                let (la, lb) = u.as_relation(&lt)?;
+                let rt = synth(env, right, u)?;
+                let (ra, rb) = u.as_relation(&rt)?;
+                u.unify(&la, &ra).ok()?;
+                Some(ITy::relation(la, ITy::prod(lb, rb)))
             }
             // `r ∥ s` (ParallelProduct): r:ℙ(α×β), s:ℙ(γ×δ) ⇒ ℙ((α×γ)×(β×δ)).
             BinaryOp::ParallelProduct => {
-                let (la, lb) = type_of_expression(env, left)?.into_relation()?;
-                let (ra, rb) = type_of_expression(env, right)?.into_relation()?;
-                Some(Type::relation(Type::prod(la, ra), Type::prod(lb, rb)))
+                let lt = synth(env, left, u)?;
+                let (la, lb) = u.as_relation(&lt)?;
+                let rt = synth(env, right, u)?;
+                let (ra, rb) = u.as_relation(&rt)?;
+                Some(ITy::relation(ITy::prod(la, ra), ITy::prod(lb, rb)))
             }
             BinaryOp::CartesianProduct => {
-                let lt = type_of_expression(env, left)?;
-                let rt = type_of_expression(env, right)?;
-                match (lt, rt) {
-                    (Type::PowerSet(l), Type::PowerSet(r)) => Some(Type::relation(*l, *r)),
+                let lt = synth(env, left, u)?;
+                let rt = synth(env, right, u)?;
+                match (u.resolve(&lt), u.resolve(&rt)) {
+                    (ITy::PowerSet(l), ITy::PowerSet(r)) => Some(ITy::relation(*l, *r)),
                     _ => None,
                 }
             }
             BinaryOp::Maplet => {
-                let lt = type_of_expression(env, left)?;
-                let rt = type_of_expression(env, right)?;
-                Some(Type::prod(lt, rt))
+                let lt = synth(env, left, u)?;
+                let rt = synth(env, right, u)?;
+                Some(ITy::prod(lt, rt))
             }
             // Relation / function type constructors: `S ↔ T`, `S → T`, etc.
             // all produce `ℙ(ℙ(S×T))` (a set of relations of S to T).
@@ -183,30 +412,35 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             | BinaryOp::TotalSurjection
             | BinaryOp::PartialSurjection
             | BinaryOp::Bijection => {
-                let lt = type_of_expression(env, left)?;
-                let rt = type_of_expression(env, right)?;
-                match (lt, rt) {
-                    (Type::PowerSet(l), Type::PowerSet(r)) => {
-                        Some(Type::pow(Type::relation(*l, *r)))
-                    }
+                let lt = synth(env, left, u)?;
+                let rt = synth(env, right, u)?;
+                match (u.resolve(&lt), u.resolve(&rt)) {
+                    (ITy::PowerSet(l), ITy::PowerSet(r)) => Some(ITy::pow(ITy::relation(*l, *r))),
                     _ => None,
                 }
             }
             // `e ⦂ T` — type ascription. The RHS is itself a type
             // expression (`ℤ`, `ℙ(USERS)`, `T × U`); interpret it as a
             // [`Type`] rather than as a set value.
-            BinaryOp::OfType => parse_type_from_expression(right),
+            BinaryOp::OfType => parse_type_from_expression(right).map(|t| ITy::from(&t)),
         },
         Expression::FunctionApplication {
             function,
-            arguments: _,
+            arguments,
         } => {
             // `f(x)` (or curried `f(a, b)` ≡ `f(a ↦ b)`): when
-            // `f : ℙ(α × β)`, the application has type `β`. We don't
-            // typecheck the argument here — Rodin's well-definedness
-            // pass owns that — but we do return the codomain so
-            // dependent constants/parameters can pick it up.
-            let (_, codomain) = type_of_expression(env, function)?.into_relation()?;
+            // `f : ℙ(α × β)`, the application has type `β`. Best-effort
+            // unify the argument against the domain (an argument still
+            // resolving in the fixpoint is skipped) so a polymorphic
+            // function's domain variable gets pinned; return the codomain.
+            let f = synth(env, function, u)?;
+            let (dom, codomain) = u.as_relation(&f)?;
+            if !arguments.is_empty() {
+                let arg_expr = left_assoc_maplet(arguments);
+                if let Some(arg_t) = synth(env, &arg_expr, u) {
+                    u.unify(&dom, &arg_t).ok();
+                }
+            }
             Some(codomain)
         }
         Expression::BuiltinApplication {
@@ -215,48 +449,85 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
         } => match function {
             // Cardinality / min / max of any set return integers.
             BuiltinFunction::Card | BuiltinFunction::Min | BuiltinFunction::Max => {
-                Some(Type::Integer)
+                Some(ITy::Integer)
             }
             // `id` is the generic identity relation (ℙ(α × α)); `id(x)` is
             // function application of identity, so `id(x) : typeof(x)`
             // (e.g. id(S) : ℙ(S), id(n) : ℤ). This matches Rodin's modern
             // KID_GEN semantics, not the legacy "identity-on-set" reading.
-            BuiltinFunction::Id => type_of_expression(env, arguments.first()?),
+            BuiltinFunction::Id => synth(env, arguments.first()?, u),
             // prj1(x)/prj2(x) are function application of the generic
             // projections (Rodin's KPRJ1_GEN/KPRJ2_GEN): for x : α × β,
-            // prj1(x) : α and prj2(x) : β. Like `id`, this is application of a
-            // polymorphic atom, not the legacy "projection of a relation"
-            // reading (which would take r : ℙ(α × β) and return ℙ((α×β)×α)).
-            BuiltinFunction::Prj1 => match type_of_expression(env, arguments.first()?)? {
-                Type::Product(l, _) => Some(*l),
-                _ => None,
-            },
-            BuiltinFunction::Prj2 => match type_of_expression(env, arguments.first()?)? {
-                Type::Product(_, r) => Some(*r),
-                _ => None,
-            },
+            // prj1(x) : α and prj2(x) : β. A bare-variable argument is
+            // split into a fresh product so the projection still resolves.
+            BuiltinFunction::Prj1 => {
+                let arg = synth(env, arguments.first()?, u)?;
+                match u.resolve(&arg) {
+                    ITy::Product(l, _) => Some(*l),
+                    ITy::Var(_) => {
+                        let l = u.fresh();
+                        let r = u.fresh();
+                        u.unify(&arg, &ITy::prod(l.clone(), r)).ok()?;
+                        Some(l)
+                    }
+                    _ => None,
+                }
+            }
+            BuiltinFunction::Prj2 => {
+                let arg = synth(env, arguments.first()?, u)?;
+                match u.resolve(&arg) {
+                    ITy::Product(_, r) => Some(*r),
+                    ITy::Var(_) => {
+                        let l = u.fresh();
+                        let r = u.fresh();
+                        u.unify(&arg, &ITy::prod(l, r.clone())).ok()?;
+                        Some(r)
+                    }
+                    _ => None,
+                }
+            }
             // Generalized union/intersection collapses one power-set level:
             // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).
             BuiltinFunction::Union | BuiltinFunction::Inter => {
-                match type_of_expression(env, arguments.first()?)? {
-                    Type::PowerSet(inner) if matches!(*inner, Type::PowerSet(_)) => Some(*inner),
+                let arg = synth(env, arguments.first()?, u)?;
+                match u.resolve(&arg) {
+                    ITy::PowerSet(inner) if matches!(*inner, ITy::PowerSet(_)) => Some(*inner),
                     _ => None,
                 }
             }
         },
-        // `r[A]` — relational image: `r : ℙ(α × β)` ⇒ `r[A] : ℙ(β)`.
-        Expression::RelationalImage { relation, set: _ } => {
-            let (_, b) = type_of_expression(env, relation)?.into_relation()?;
-            Some(Type::pow(b))
+        // `r[A]` — relational image: `r : ℙ(α × β)`, `A : ℙ(α)` ⇒ `ℙ(β)`.
+        // Unifying A's element type with the domain pins a polymorphic
+        // relation (e.g. `id[S] : ℙ(S)`).
+        Expression::RelationalImage { relation, set } => {
+            let rel = synth(env, relation, u)?;
+            let (dom, ran) = u.as_relation(&rel)?;
+            if let Some(set_t) = synth(env, set, u) {
+                let elem = u.fresh();
+                u.unify(&set_t, &ITy::pow(elem.clone())).ok();
+                u.unify(&dom, &elem).ok();
+            }
+            Some(ITy::pow(ran))
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
-        Expression::Bool(_) => Some(Type::Boolean),
+        Expression::Bool(_) => Some(ITy::Boolean),
         // `if P then E1 else E2` — both branches share the same type.
         Expression::IfThenElse {
             condition: _,
             then_expr,
             else_expr,
-        } => type_of_expression(env, then_expr).or_else(|| type_of_expression(env, else_expr)),
+        } => {
+            let t = synth(env, then_expr, u);
+            let e = synth(env, else_expr, u);
+            match (t, e) {
+                (Some(a), Some(b)) => {
+                    u.unify(&a, &b).ok()?;
+                    Some(a)
+                }
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (None, None) => None,
+            }
+        }
         // λ pattern · P ∣ E. Bind the pattern names from explicit type
         // ascriptions or from `P`, then return ℙ(dom × typeof(E)).
         Expression::Lambda {
@@ -271,8 +542,8 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                 return None;
             }
             let dom = pattern_to_type(pattern, &bound)?;
-            let body_ty = type_of_expression(&local, expression)?;
-            Some(Type::relation(dom, body_ty))
+            let body_ty = synth(&local, expression, u)?;
+            Some(ITy::relation(ITy::from(&dom), body_ty))
         }
         // `{ x ⦂ T · P ∣ E }` (extended) and `{ x · P }` (basic). Bind
         // each binder from explicit `T` if present, else from `P`. Body
@@ -290,10 +561,10 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
                 return None;
             }
             let body_ty = match expression {
-                Some(e) => type_of_expression(&local, e)?,
-                None => binder_left_assoc_product(&names, &bound)?,
+                Some(e) => synth(&local, e, u)?,
+                None => ITy::from(&binder_left_assoc_product(&names, &bound)?),
             };
-            Some(Type::pow(body_ty))
+            Some(ITy::pow(body_ty))
         }
         // `{ E ∣ P }` — set builder. Bound identifiers are the free
         // identifiers of `E` not already in scope; bind them from `P`.
@@ -310,8 +581,8 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             if !bound_names.iter().all(|n| bound.contains_key(*n)) {
                 return None;
             }
-            let body_ty = type_of_expression(&local, member_expression)?;
-            Some(Type::pow(body_ty))
+            let body_ty = synth(&local, member_expression, u)?;
+            Some(ITy::pow(body_ty))
         }
         // `⋃ x ⦂ T · P ∣ E` and `⋂ x ⦂ T · P ∣ E`. Bind binders, then
         // return typeof(E) — the body must already be a set.
@@ -331,7 +602,7 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             if !names.iter().all(|n| bound.contains_key(*n)) {
                 return None;
             }
-            type_of_expression(&local, expression)
+            synth(&local, expression, u)
         }
         _ => None,
     }
@@ -1856,5 +2127,116 @@ mod tests {
         env.add_carrier_set("S");
         let e = parse_expr("{ bool(x ∈ S) ∣ x ∈ S }");
         assert_eq!(type_of_expression(&env, &e), Some(Type::pow(Type::Boolean)),);
+    }
+
+    // ===== polymorphic atoms resolved by unification against context =====
+
+    /// Env with carrier set S, `selfrel : S ↔ S`, and `sub_s : ℙ(S)`.
+    fn env_s() -> TypeEnv {
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        env.insert("selfrel", Type::relation(s_ty(), s_ty()));
+        env.insert("sub_s", Type::pow(s_ty()));
+        env
+    }
+
+    fn s_ty() -> Type {
+        Type::GivenSet("S".into())
+    }
+
+    #[test]
+    fn bare_polymorphic_atoms_drop() {
+        // With no surrounding context to solve the type variable, the
+        // generic atoms keep a free variable and drop — exactly as Rodin
+        // leaves an unsolved TypeVariable untyped.
+        let env = env_s();
+        for src in [
+            "id",
+            "prj1",
+            "prj2",
+            "∅",
+            "dom(id)",
+            "ran(prj1)",
+            "∅ ∪ ∅",
+            "id ; id",
+        ] {
+            assert_eq!(
+                type_of_expression(&env, &parse_expr(src)),
+                None,
+                "expected `{src}` to drop (free type variable)"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_restricted_to_set_resolves() {
+        // `sub_s ◁ id` and `id ▷ sub_s`: the set pins id's variable to S.
+        let env = env_s();
+        let s_rel = Type::relation(s_ty(), s_ty());
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("sub_s ◁ id")),
+            Some(s_rel.clone())
+        );
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("id ▷ sub_s")),
+            Some(s_rel)
+        );
+    }
+
+    #[test]
+    fn image_of_identity_resolves() {
+        // `id[sub_s]`: id's domain unifies with sub_s's element type S,
+        // so the image has type ℙ(S).
+        let env = env_s();
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("id[sub_s]")),
+            Some(Type::pow(s_ty()))
+        );
+    }
+
+    #[test]
+    fn composition_with_identity_resolves() {
+        // `id ; selfrel` and `selfrel ; id`: the shared middle type pins id.
+        let env = env_s();
+        let s_rel = Type::relation(s_ty(), s_ty());
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("id ; selfrel")),
+            Some(s_rel.clone())
+        );
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("selfrel ; id")),
+            Some(s_rel)
+        );
+    }
+
+    #[test]
+    fn direct_product_with_identity_resolves() {
+        // `selfrel ⊗ id`: the shared domain S pins id ⇒ ℙ(S × (S × S)).
+        let env = env_s();
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("selfrel ⊗ id")),
+            Some(Type::relation(s_ty(), Type::prod(s_ty(), s_ty())))
+        );
+    }
+
+    #[test]
+    fn empty_set_union_resolves() {
+        // `∅ ∪ selfrel`: ∅'s ℙ(α) unifies with selfrel ⇒ ℙ(S × S).
+        let env = env_s();
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("∅ ∪ selfrel")),
+            Some(Type::relation(s_ty(), s_ty()))
+        );
+    }
+
+    #[test]
+    fn projection_in_composition_resolves() {
+        // `(selfrel ⊗ selfrel) ; prj1`: the left relation S ↔ (S × S)
+        // composed with prj1 : (S × S) ↔ S pins prj1's variables ⇒ ℙ(S × S).
+        let env = env_s();
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("(selfrel ⊗ selfrel) ; prj1")),
+            Some(Type::relation(s_ty(), s_ty()))
+        );
     }
 }
