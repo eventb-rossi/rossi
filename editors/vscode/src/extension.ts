@@ -6,6 +6,7 @@ import {
     ExecutableOptions,
 } from 'vscode-languageclient/node';
 import { registerRossiCommands } from './rossiCommands';
+import { registerSymbolInput } from './symbolInput';
 
 let client: LanguageClient;
 
@@ -113,6 +114,9 @@ export function activate(context: ExtensionContext) {
     });
     languageServerReady.catch(() => undefined);
     registerRossiCommands(context, diagnostics, output, () => languageServerReady);
+
+    // Editor-side ASCII -> Unicode input method (type `=>`, `\and`, ...).
+    registerSymbolInput(context, client, languageServerReady);
 }
 
 export function deactivate(): Thenable<void> | undefined {

@@ -109,6 +109,32 @@ impl OperatorSpelling {
             self.ascii
         }
     }
+
+    /// True when the ASCII spelling contains no word characters, so it is safe
+    /// to substitute eagerly while typing (symbolic combos like `=>`, `|->`),
+    /// as opposed to alphabetic ops (`NAT`, `or`, `dom`) which would block
+    /// typing ordinary words and are only offered through the `\name` leader.
+    pub fn is_symbolic(&self) -> bool {
+        !is_alphabetic_op(self.ascii)
+    }
+
+    /// True when an as-you-type input method should substitute this operator
+    /// eagerly (maximal munch) rather than only through the `\name` leader.
+    ///
+    /// This is the single source of truth for eager-input eligibility, kept
+    /// here with the operator data so editors never re-encode the policy. An
+    /// op qualifies when it is symbolic, does not contain the `\` leader, and
+    /// is not a bare `/` or `.` (which collide with `//` comments and decimal
+    /// or qualifier dots). Multi-character forms like `/=` and `..` still
+    /// qualify.
+    pub fn is_eager_input(&self) -> bool {
+        self.is_symbolic() && !self.ascii.contains('\\') && self.ascii != "/" && self.ascii != "."
+    }
+
+    /// Human-friendly leader-key aliases for this operator (e.g. `and`, `to`).
+    pub fn aliases(&self) -> &'static [&'static str] {
+        aliases_for(self.id)
+    }
 }
 
 pub const TOTAL_RELATION: &str = "\u{E100}";
@@ -719,6 +745,62 @@ pub fn lookup_token(token: &str) -> Option<&'static OperatorSpelling> {
         .find(|entry| entry.unicode == token || entry.ascii == token)
 }
 
+/// Human-friendly leader-key aliases used by editor `\name` input methods,
+/// keyed by operator id. Returns `&[]` for operators without curated aliases.
+///
+/// This is the single source of truth for the leader vocabulary; aliases must
+/// be unique across operators. Grow as needed.
+pub fn aliases_for(id: OperatorId) -> &'static [&'static str] {
+    use OperatorId::*;
+    match id {
+        And => &["and", "land", "wedge"],
+        Or => &["or", "lor", "vee"],
+        Not => &["not", "lnot", "neg"],
+        Implies => &["implies", "imp"],
+        Equivalent => &["iff", "equiv"],
+        ForAll => &["forall", "all"],
+        Exists => &["exists", "ex"],
+        In => &["in", "mem"],
+        NotIn => &["notin", "nin"],
+        Subset => &["subseteq", "sub"],
+        SubsetStrict => &["subset", "subsetneq"],
+        NotSubset => &["nsubseteq"],
+        NotSubsetStrict => &["nsubset"],
+        LessEqual => &["le", "leq"],
+        GreaterEqual => &["ge", "geq"],
+        NotEqual => &["ne", "neq"],
+        EmptySet => &["emptyset", "empty"],
+        Naturals => &["nat"],
+        Naturals1 => &["nat1"],
+        Integers => &["int"],
+        PowerSet => &["pow", "powerset"],
+        PowerSet1 => &["pow1"],
+        Union => &["union", "cup"],
+        Intersection => &["inter", "cap"],
+        Difference => &["setminus", "diff"],
+        CartesianProduct => &["times", "prod"],
+        Relation => &["rel"],
+        TotalFunction => &["to", "tfun", "fun"],
+        PartialFunction => &["pfun"],
+        TotalInjection => &["tinj"],
+        PartialInjection => &["pinj"],
+        TotalSurjection => &["tsur"],
+        PartialSurjection => &["psur"],
+        Bijection => &["bij"],
+        Maplet => &["maplet", "mapsto"],
+        Lambda => &["lambda"],
+        Composition => &["circ", "comp"],
+        Inverse => &["inv", "inverse"],
+        Assignment => &["assign", "becomes"],
+        DirectProduct => &["dprod"],
+        ParallelProduct => &["pprod"],
+        OfType => &["oftype"],
+        QuantifiedUnion => &["qunion"],
+        QuantifiedIntersection => &["qinter"],
+        _ => &[],
+    }
+}
+
 /// Operators whose ASCII and Unicode spellings differ, in declaration order.
 static DIFFERING_SPELLINGS: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
     std::sync::LazyLock::new(|| {
@@ -918,4 +1000,50 @@ fn contains_whole_word(text: &str, word: &str) -> bool {
         start = abs_pos + word.len();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn aliases_are_unique_and_well_formed() {
+        let mut owner: HashMap<&str, OperatorId> = HashMap::new();
+        for entry in OPERATOR_SPELLINGS {
+            for alias in entry.aliases() {
+                assert!(
+                    !alias.is_empty()
+                        && alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "alias {alias:?} for {:?} must be a non-empty word token",
+                    entry.id
+                );
+                if let Some(prev) = owner.insert(alias, entry.id) {
+                    panic!(
+                        "alias {alias:?} claimed by both {prev:?} and {:?}",
+                        entry.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn is_symbolic_matches_ascii_shape() {
+        assert!(spelling(OperatorId::Implies).is_symbolic()); // "=>"
+        assert!(spelling(OperatorId::Maplet).is_symbolic()); // "|->"
+        assert!(spelling(OperatorId::Assignment).is_symbolic()); // ":="
+        assert!(!spelling(OperatorId::Naturals).is_symbolic()); // "NAT"
+        assert!(!spelling(OperatorId::Or).is_symbolic()); // "or"
+    }
+
+    #[test]
+    fn is_eager_input_excludes_collisions() {
+        assert!(spelling(OperatorId::Implies).is_eager_input()); // "=>"
+        assert!(spelling(OperatorId::Range).is_eager_input()); // ".." (multi-char)
+        assert!(!spelling(OperatorId::Divide).is_eager_input()); // bare "/" (// comments)
+        assert!(!spelling(OperatorId::Dot).is_eager_input()); // bare "." (decimals)
+        assert!(!spelling(OperatorId::Union).is_eager_input()); // "\/" contains the leader
+        assert!(!spelling(OperatorId::Naturals).is_eager_input()); // alphabetic
+    }
 }

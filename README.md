@@ -548,7 +548,7 @@ The project includes a fully-featured **Language Server Protocol (LSP)** impleme
 
 Extensions are available in the `editors/` directory:
 
-- **VS Code** (`editors/vscode/`) - Syntax highlighting, LSP integration, snippets
+- **VS Code** (`editors/vscode/`) - Syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
 - **Neovim** (`editors/neovim/`) - File detection, syntax highlighting, LSP config
 - **Emacs** (`editors/emacs/`) - Major mode for Event-B
 

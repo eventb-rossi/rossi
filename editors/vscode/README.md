@@ -36,6 +36,14 @@ This extension provides comprehensive language support for Event-B formal modeli
 - Keyboard shortcuts:
   - Format Document: `Shift+Alt+F` (Windows/Linux) or `Shift+Option+F` (Mac)
 
+### ⌨️ Symbol Input (type ASCII, get Unicode)
+- Convert ASCII to Unicode math symbols **as you type** — no special keyboard needed
+- **Eager combos** convert on the fly: `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `:=` → ≔, `<:` → ⊆
+- **`\name` leader** expands any operator on a boundary: `\and` → ∧, `\to` → →, `\forall` → ∀, `\nat` → ℕ
+- Maximal munch handles ambiguous prefixes (`<=` → ≤ but `<=>` → ⇔)
+- Each conversion is one undo step, so `Ctrl+Z` restores the ASCII you typed
+- Toggle with `rossi.input.enabled`; disable only the eager combos with `rossi.input.eager`
+
 ### 🔁 Rodin Interoperability
 - Import Rodin `.zip`, `.buc`, `.bum`, or XML project folders into `.eventb` files
 - Export the current `.eventb` file or workspace to a Rodin `.zip`
@@ -73,6 +81,8 @@ This extension contributes the following settings:
 - `rossi.diagnostics.enabled`: Enable real-time diagnostics for syntax errors (default: `true`)
 - `rossi.diagnostics.debounceMs`: Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing (default: `500`)
 - `rossi.completion.enabled`: Enable Event-B code completion (default: `true`)
+- `rossi.input.enabled`: Convert ASCII to Unicode math symbols as you type — eager combos and the `\name` leader (default: `true`)
+- `rossi.input.eager`: Eagerly substitute symbolic combos (`=>`, `<=>`, `|->`, `:=`) while typing; when `false`, only the `\name` leader converts (default: `true`)
 - `rossi.trace.server`: Traces communication between VS Code and the language server (default: `"off"`)
 - `rossi.prob.enabled`: Enable ProB integration features (default: `true`)
 - `rossi.prob.path`: Path to `probcli`; empty searches in PATH (default: `""`)
@@ -94,6 +104,8 @@ Add to your `.vscode/settings.json`:
   "rossi.diagnostics.enabled": true,
   "rossi.diagnostics.debounceMs": 500,
   "rossi.completion.enabled": true,
+  "rossi.input.enabled": true,
+  "rossi.input.eager": true,
   "rossi.prob.enabled": true,
   "rossi.prob.path": "",
   "rossi.prob.timeout": 10000,
@@ -153,6 +165,19 @@ END
 - **Format entire document**: `Shift+Alt+F` (Windows/Linux) or `Shift+Option+F` (Mac)
 - **Format on save**: Enable `"editor.formatOnSave": true` in settings
 - **Choose operator style**: Set `rossi.format.useUnicode` to `true` (Unicode) or `false` (ASCII)
+
+### Symbol Input
+
+Type ASCII and get Unicode without leaving the keyboard. Two ways, both on by default:
+
+- **Eager combos** — symbolic operators convert as soon as they are unambiguous:
+  - `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `:=` → ≔, `:` → ∈, `<:` → ⊆, `..` → ‥
+  - Longest-match wins: `<=` becomes ≤ only once you type a non-`>` character, while `<=>` becomes ⇔.
+- **`\name` leader** — type a backslash, an operator name, then a space or any boundary character:
+  - `\and` → ∧, `\or` → ∨, `\not` → ¬, `\to` → →, `\forall` → ∀, `\exists` → ∃, `\in` → ∈, `\nat` → ℕ, `\int` → ℤ, `\pow` → ℙ
+  - The leader is also how you enter alphabetic operators (`NAT`, `or`, …) — these are never converted eagerly so they don't interfere with ordinary text.
+
+Press `Ctrl+Z` right after a conversion to restore your ASCII. Turn the feature off with `rossi.input.enabled`, or keep only the leader by setting `rossi.input.eager` to `false`. This complements the whole-file `Rossi: Convert Current File to Unicode/ASCII` commands.
 
 ### Symbol Navigation
 

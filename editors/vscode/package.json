@@ -341,6 +341,16 @@
           "default": true,
           "description": "Enable Event-B code completion."
         },
+        "rossi.input.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Convert ASCII to Unicode math symbols as you type. Eager combos (=> ⇒, |-> ↦) and the `\\name` leader (\\and ∧, \\to →, \\nat ℕ). The leader key is `\\`."
+        },
+        "rossi.input.eager": {
+          "type": "boolean",
+          "default": true,
+          "description": "Eagerly substitute symbolic operator combos (=>, <=>, |->, :=) while typing. When off, only the `\\name` leader converts. Requires rossi.input.enabled."
+        },
         "rossi.trace.server": {
           "type": "string",
           "enum": [
@@ -433,6 +443,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
+    "test:matcher": "tsc -p ./ && node out/symbolMatcher.test.js",
     "package": "vsce package"
   },
   "devDependencies": {
