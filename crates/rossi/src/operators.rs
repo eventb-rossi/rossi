@@ -1046,4 +1046,130 @@ mod tests {
         assert!(!spelling(OperatorId::Union).is_eager_input()); // "\/" contains the leader
         assert!(!spelling(OperatorId::Naturals).is_eager_input()); // alphabetic
     }
+
+    /// Extract and un-escape every `"…"` literal on a line, handling the pest
+    /// escapes our operator rules use (`\\`, `\"`, `\u{XXXX}`).
+    fn pest_string_literals(line: &str) -> Vec<String> {
+        let mut lits = Vec::new();
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '"' {
+                continue;
+            }
+            let mut s = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => break,
+                    '\\' => match chars.next() {
+                        Some('\\') => s.push('\\'),
+                        Some('"') => s.push('"'),
+                        Some('n') => s.push('\n'),
+                        Some('t') => s.push('\t'),
+                        Some('r') => s.push('\r'),
+                        Some('u') => {
+                            // \u{XXXX}
+                            if chars.next() == Some('{') {
+                                let mut hex = String::new();
+                                while let Some(&h) = chars.peek() {
+                                    chars.next();
+                                    if h == '}' {
+                                        break;
+                                    }
+                                    hex.push(h);
+                                }
+                                if let Some(ch) =
+                                    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                                {
+                                    s.push(ch);
+                                }
+                            }
+                        }
+                        Some(other) => s.push(other),
+                        None => break,
+                    },
+                    _ => s.push(c),
+                }
+            }
+            lits.push(s);
+        }
+        lits
+    }
+
+    /// The editor-grammar generator renders [`OPERATOR_SPELLINGS`], so that table
+    /// must stay the faithful mirror of the `op_*` rules in `grammar.pest`. This
+    /// closes the chain `tables → grammar.pest → generated editor grammars` for
+    /// operators, the way [`crate::keywords::tests::keywords_match_grammar`] does
+    /// for keywords.
+    #[test]
+    fn operators_match_grammar() {
+        use std::collections::HashSet;
+        let grammar = include_str!("grammar.pest");
+
+        // `op_*` literals (the symbolic/relational operators) and `kw_*` literals
+        // (where the number-set/boolean atoms `ℕ NAT ℤ INT …` live) are collected
+        // separately: the forward check accepts either, the reverse check ranges
+        // over `op_*` only.
+        let mut op_lits: HashSet<String> = HashSet::new();
+        let mut atom_lits: HashSet<String> = HashSet::new();
+        for line in grammar.lines() {
+            let line = line.trim_start();
+            let bucket = if line.starts_with("op_") {
+                &mut op_lits
+            } else if line.starts_with("kw_") {
+                &mut atom_lits
+            } else {
+                continue;
+            };
+            let rhs = line.split_once('=').map(|x| x.1).unwrap_or("");
+            bucket.extend(pest_string_literals(rhs));
+        }
+
+        // Forward: every canonical spelling has a matching grammar literal. Atoms
+        // are case-insensitive keyword rules (`^"nat"`), so compare lowercased.
+        // Skip the syntax tokens the grammar defines under bespoke rule names
+        // (`dot`, lambda/quantifier/comprehension rules).
+        let defined_elsewhere = [
+            OperatorId::Lambda,
+            OperatorId::Dot,
+            OperatorId::Bar,
+            OperatorId::QuantifiedUnion,
+            OperatorId::QuantifiedIntersection,
+        ];
+        let folded: HashSet<String> = op_lits
+            .iter()
+            .chain(atom_lits.iter())
+            .map(|s| s.to_lowercase())
+            .collect();
+        for op in OPERATOR_SPELLINGS {
+            if defined_elsewhere.contains(&op.id) {
+                continue;
+            }
+            for s in [op.unicode, op.ascii] {
+                assert!(
+                    folded.contains(&s.to_lowercase()),
+                    "operator spelling {s:?} ({:?}) has no op_/kw_ literal in grammar.pest",
+                    op.id
+                );
+            }
+        }
+
+        // Reverse: every grammar `op_` literal is a canonical spelling, except the
+        // input-only aliases the parser accepts but the tools never emit (`,,`
+        // empty set, `⊕` U+2295 for the override whose canonical glyph is U+E103)
+        // and `_`, which appears only in the `!(… | "_")` word-boundary guards.
+        let allow = [",,", "⊕", "_"];
+        let canonical: HashSet<&str> = OPERATOR_SPELLINGS
+            .iter()
+            .flat_map(|op| [op.unicode, op.ascii])
+            .collect();
+        for lit in &op_lits {
+            if allow.contains(&lit.as_str()) {
+                continue;
+            }
+            assert!(
+                canonical.contains(lit.as_str()),
+                "grammar op_ literal {lit:?} is missing from OPERATOR_SPELLINGS"
+            );
+        }
+    }
 }

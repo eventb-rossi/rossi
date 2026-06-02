@@ -7,6 +7,8 @@ mod commands {
     pub mod eventb_io;
     pub mod export;
     pub mod fmt;
+    pub mod gen_grammars;
+    pub mod grammars;
     pub mod import;
     pub mod sarif;
     pub mod validate;
@@ -41,6 +43,9 @@ enum Command {
     /// Static-check a Rodin project and emit `.bcc` / `.bcm` output.
     #[command(about = "Static-check a Rodin project and emit .bcc/.bcm output")]
     Build(commands::build::BuildArgs),
+    /// Regenerate editor syntax grammars from the canonical token tables.
+    #[command(about = "Regenerate editor syntax grammars from the canonical token tables")]
+    GenGrammars(commands::gen_grammars::GenGrammarsArgs),
     /// Run the Rossi language server over stdio.
     #[command(about = "Run the Rossi language server over stdio")]
     Lsp,
@@ -54,6 +59,7 @@ async fn main() -> ExitCode {
         Command::Export(args) => commands::export::run(args),
         Command::Fmt(args) => commands::fmt::run(args),
         Command::Build(args) => commands::build::run_build_command(args),
+        Command::GenGrammars(args) => commands::gen_grammars::run(args),
         Command::Lsp => match rossi_lsp::run_stdio().await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

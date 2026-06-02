@@ -76,101 +76,49 @@ Can be a string (command name) or a list (command with arguments)."
 
 ;;; Syntax highlighting
 
+;; >>> rossi gen-grammars (generated, do not edit)
 (defconst eventb-keywords
-  '("CONTEXT" "MACHINE" "END"
-    "EXTENDS" "SEES" "REFINES"
-    "SETS" "CONSTANTS" "AXIOMS" "THEOREMS"
-    "VARIABLES" "INVARIANTS" "VARIANT"
-    "EVENTS" "INITIALISATION" "EVENT"
-    "REFINES" "ANY" "WHERE" "WHEN" "WITH" "WITNESS" "THEN" "BEGIN"
-    "ordinary" "convergent" "anticipated")
-  "Event-B keywords.")
+  '("any" "axioms" "begin" "constants" "context" "end" "event" "events" "extends" "initialisation" "invariants" "machine" "refines" "sees" "sets" "status" "then" "theorems" "variables" "variant" "when" "where" "with" "witness")
+  "Event-B section and event keywords.")
 
-(defconst eventb-logical-operators-unicode
-  '("¬" "∧" "∨" "⇒" "⇔" "∀" "∃")
-  "Event-B logical operators (Unicode).")
-
-(defconst eventb-logical-operators-ascii
-  '("not" "/\\\\" "\\\\/" "=>" "<=>" "!" "#")
-  "Event-B logical operators (ASCII).")
-
-(defconst eventb-set-operators-unicode
-  '("∈" "∉" "⊂" "⊆" "⊄" "⊈" "∩" "∪" "∖" "×" "℘" "ℙ" "ℤ" "ℕ" "ℕ1" "∅")
-  "Event-B set operators (Unicode).")
-
-(defconst eventb-set-operators-ascii
-  '(":" "/:" "<:" "<<:" "/<:" "/<<:" "/\\\\" "\\\\/" "\\\\" "**" "POW" "INT" "NAT" "NAT1" "{}")
-  "Event-B set operators (ASCII).")
-
-(defconst eventb-arithmetic-operators
-  '("+" "-" "*" "/" "^" "mod" ".." "min" "max" "card")
-  "Event-B arithmetic operators.")
-
-(defconst eventb-relation-operators-unicode
-  '("↔" "→" "⇸" "↠" "⤔" "↣" "↪" "⤀" "⊗" "∥" "◁" "⩤" "▷" "⩥" "⊕" "∘" "∼" "⊤" "⊥")
-  "Event-B relation operators (Unicode).")
-
-(defconst eventb-relation-operators-ascii
-  '("<->" "->" "+->" "->>" "+->>" ">+>" ">->" ">>->" "><" "||" "<|" "<<|" "|>" "|>>" "<+" ";" "~" "prj1" "prj2" "id")
-  "Event-B relation operators (ASCII).")
-
-(defconst eventb-action-operators
-  '(":=" ":|" ":∈" ":<-" ":(" ":)")
-  "Event-B action operators.")
+(defconst eventb-status-keywords
+  '("anticipated" "convergent" "ordinary" "skip" "theorem")
+  "Event-B status and inline modifiers.")
 
 (defconst eventb-constants
-  '("TRUE" "FALSE" "BOOL")
-  "Event-B built-in constants.")
+  '("bool" "false" "int" "nat" "nat1" "true")
+  "Event-B literal constants and number sets.")
+
+(defconst eventb-builtins
+  '("card" "closure" "closure1" "finite" "id" "max" "min" "partition" "pred" "prj1" "prj2" "succ")
+  "Event-B built-in functions and predicates.")
+
+(defconst eventb-operator-words
+  '("circ" "dom" "inter" "mod" "not" "oftype" "or" "pow" "pow1" "ran" "union")
+  "Event-B alphabetic operators.")
+
+(defconst eventb-constant-symbols
+  '("ℕ1" "ℕ" "ℤ" "∅" "{}")
+  "Event-B symbolic constants.")
+
+(defconst eventb-operator-symbols
+  '("<<->>" "/<<:" ":∈" ":∣" "<->>" "<<->" ">->>" "ℙ1" "+->" "+>>" "-->" "->>" "/<:" "<->" "<<:" "<<|" "<=>" ">+>" ">->" "|->" "|>>" "‥" "ℙ" "→" "↔" "↠" "↣" "↦" "⇒" "⇔" "⇸" "∀" "∃" "∈" "∉" "−" "∖" "∗" "∘" "∣" "∥" "∧" "∨" "∩" "∪" "∼" "≔" "≠" "≤" "≥" "⊂" "⊄" "⊆" "⊈" "⊗" "⋂" "⋃" "▷" "◁" "⤀" "⤔" "⤖" "⦂" "⩤" "⩥" "" "" "" "" "**" ".." "/:" "/=" "/\\" "::" ":=" ":|" "<+" "<:" "<=" "<|" "=>" "><" ">=" "\\/" "|>" "||" "¬" "·" "×" "÷" "λ" "!" "#" "%" "&" "*" "+" "-" "." "/" ":" ";" "<" "=" ">" "\\" "^" "|" "~")
+  "Event-B symbolic operators.")
 
 (defvar eventb-font-lock-keywords
-  `(
-    ;; Keywords
-    (,(regexp-opt eventb-keywords 'words) . font-lock-keyword-face)
-
-    ;; Built-in constants
-    (,(regexp-opt eventb-constants 'words) . font-lock-constant-face)
-
-    ;; Labels (e.g., "axm1:", "inv2:", "grd3:", "act1:")
-    ("\\<\\([a-zA-Z_][a-zA-Z0-9_]*\\):" 1 font-lock-variable-name-face)
-
-    ;; Event names (after EVENT keyword)
+  `((,(regexp-opt eventb-keywords 'words) . font-lock-keyword-face)
+    (,(regexp-opt eventb-status-keywords 'words) . font-lock-keyword-face)
     ("\\<EVENT\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-function-name-face)
-
-    ;; Context and Machine names
     ("\\<\\(CONTEXT\\|MACHINE\\)\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 2 font-lock-type-face)
-
-    ;; Logical operators (Unicode)
-    (,(regexp-opt eventb-logical-operators-unicode) . font-lock-builtin-face)
-
-    ;; Logical operators (ASCII)
-    (,(regexp-opt eventb-logical-operators-ascii t) . font-lock-builtin-face)
-
-    ;; Set operators (Unicode)
-    (,(regexp-opt eventb-set-operators-unicode) . font-lock-builtin-face)
-
-    ;; Set operators (ASCII)
-    (,(regexp-opt eventb-set-operators-ascii t) . font-lock-builtin-face)
-
-    ;; Arithmetic operators
-    (,(regexp-opt eventb-arithmetic-operators t) . font-lock-builtin-face)
-
-    ;; Relation operators (Unicode)
-    (,(regexp-opt eventb-relation-operators-unicode) . font-lock-builtin-face)
-
-    ;; Relation operators (ASCII)
-    (,(regexp-opt eventb-relation-operators-ascii t) . font-lock-builtin-face)
-
-    ;; Action operators
-    (,(regexp-opt eventb-action-operators) . font-lock-builtin-face)
-
-    ;; Numbers
+    (,(regexp-opt eventb-constants 'words) . font-lock-constant-face)
+    (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
+    (,(regexp-opt eventb-builtins 'words) . font-lock-function-name-face)
+    (,(regexp-opt eventb-operator-words 'words) . font-lock-builtin-face)
+    (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
     ("\\<[0-9]+\\>" . font-lock-constant-face)
-
-    ;; Comments (C-style and line comments)
-    ("//.*$" . font-lock-comment-face)
-    ("/\\*.*?\\*/" . font-lock-comment-face)
-    )
-  "Font lock keywords for Event-B mode.")
+    ("@[A-Za-z0-9_]+" . font-lock-preprocessor-face))
+  "Font lock keywords for Event-B mode (comments and strings come from the syntax table).")
+;; <<< rossi gen-grammars
 
 ;;; Syntax table
 
@@ -314,6 +262,9 @@ used in safety-critical systems and formal verification.
 
   ;; Font lock
   (setq font-lock-defaults '(eventb-font-lock-keywords))
+  ;; Event-B reserves its vocabulary case-insensitively; the generated word
+  ;; lists are lowercased, so fold case when matching them.
+  (setq-local font-lock-keywords-case-fold-search t)
 
   ;; Comments
   (setq-local comment-start "// ")
