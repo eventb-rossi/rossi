@@ -19,7 +19,7 @@ use clap::Args;
 
 use super::grammars::{
     Markers, Model, emacs, input_emacs, operators_nvim, paths, snippets_emacs, snippets_nvim,
-    snippets_vscode, sublime, textmate, vim,
+    snippets_vscode, sublime, textmate, vim, zed,
 };
 
 #[derive(Args)]
@@ -47,6 +47,11 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let root = workspace_root();
     let model = Model::build();
 
+    // Zed reuses the VS Code snippet JSON verbatim (same format), so render it
+    // once and write it to both files (named for the lowercased Zed language,
+    // `Event-B` → `event-b.json`).
+    let snippets = snippets_vscode::render();
+
     // (relative path, desired full content), one entry per concrete file on
     // disk. Whole-file producers contribute one entry; multi-file producers
     // (the yasnippet directory, the Neovim snippet package) contribute several.
@@ -54,12 +59,14 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let mut targets: Vec<(String, String)> = vec![
         (paths::TEXTMATE.to_string(), textmate::render(&model)),
         (paths::SUBLIME.to_string(), sublime::render(&model)),
-        (
-            paths::SNIPPETS_VSCODE.to_string(),
-            snippets_vscode::render(),
-        ),
+        (paths::SNIPPETS_VSCODE.to_string(), snippets.clone()),
         (paths::NVIM_OPERATORS.to_string(), operators_nvim::render()),
         (paths::EMACS_INPUT.to_string(), input_emacs::render()),
+        (
+            paths::ZED_HIGHLIGHTS.to_string(),
+            zed::render_highlights(&model),
+        ),
+        (paths::ZED_SNIPPETS.to_string(), snippets),
     ];
     // Multi-file producers: each returns its own list of (rel path, content).
     targets.extend(snippets_nvim::render());
@@ -67,6 +74,11 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     for (rel, markers, body) in [
         (paths::VIM, &vim::MARKERS, vim::render(&model)),
         (paths::EMACS, &emacs::MARKERS, emacs::render(&model)),
+        (
+            paths::ZED_GRAMMAR,
+            &zed::MARKERS,
+            zed::render_grammar_region(&model),
+        ),
     ] {
         let path = root.join(rel);
         let existing = fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;

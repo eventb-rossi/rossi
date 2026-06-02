@@ -6,6 +6,9 @@ members = [
     "crates/rossi-cli",
     "crates/rossi-lsp",
 ]
+# The Zed extension is a standalone `cdylib` built to wasm by Zed (against
+# `zed_extension_api`), not part of this workspace's native build/test.
+exclude = ["editors/zed"]
 
 [workspace.package]
 version = "0.1.0"

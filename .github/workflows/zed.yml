@@ -1,0 +1,58 @@
+name: Zed Extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'editors/zed/**'
+      - '.github/workflows/zed.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'editors/zed/**'
+      - '.github/workflows/zed.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  zed:
+    name: Build extension and check grammar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # The extension is a wasm cdylib (excluded from the workspace); building it
+      # validates src/lib.rs against zed_extension_api and the committed Cargo.lock.
+      - name: Add wasm target
+        run: rustup target add wasm32-wasip1
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: editors/zed
+
+      - name: Build extension (wasm)
+        run: cargo build --locked --target wasm32-wasip1
+        working-directory: editors/zed
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: editors/zed/grammars/tree-sitter-eventb/package-lock.json
+
+      # `rossi gen-grammars` keeps highlights.scm / grammar.js in sync with the
+      # token tables (guarded by the main CI's `gen-grammars --check`); this step
+      # guards that src/parser.c was regenerated from the current grammar.js.
+      - name: Regenerate parser
+        run: |
+          npm ci
+          npx tree-sitter generate
+        working-directory: editors/zed/grammars/tree-sitter-eventb
+
+      - name: Check parser is up to date
+        run: git diff --exit-code -- editors/zed/grammars/tree-sitter-eventb/src

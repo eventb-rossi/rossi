@@ -1,0 +1,5 @@
+# Rust build output for the extension crate (Zed rebuilds it to wasm on install).
+/target/
+
+# Compiled extension artifact produced by `zed extension package`.
+*.wasm

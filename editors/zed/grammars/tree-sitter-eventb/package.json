@@ -1,0 +1,30 @@
+{
+  "name": "tree-sitter-eventb",
+  "version": "0.1.0",
+  "description": "Event-B lexical grammar for tree-sitter (Rossi)",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/eventb-rossi/rossi",
+  "keywords": [
+    "tree-sitter",
+    "eventb",
+    "event-b",
+    "formal-methods"
+  ],
+  "scripts": {
+    "generate": "tree-sitter generate"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "0.26.9"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.eventb",
+      "file-types": [
+        "eventb"
+      ],
+      "highlights": [
+        "../../languages/eventb/highlights.scm"
+      ]
+    }
+  ]
+}

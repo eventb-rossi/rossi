@@ -19,7 +19,7 @@ Rossi covers the full author-to-Rodin path:
 - **`rossi-cli`** — the `rossi` command-line tool wrapping the
   parser, checker, and language server.
 - **`rossi-lsp`** — Language Server Protocol implementation powering
-  editor extensions for VS Code, Neovim, and Emacs.
+  editor extensions for VS Code, Neovim, Emacs, and Zed.
 
 ## Features
 
@@ -492,7 +492,9 @@ rossi/
 └── editors/
     ├── vscode/       # VS Code extension
     ├── neovim/       # Neovim plugin
-    └── emacs/        # Emacs major mode
+    ├── sublime/      # Sublime Text syntax (also used by bat, delta)
+    ├── emacs/        # Emacs major mode
+    └── zed/          # Zed extension (LSP + tree-sitter grammar)
 ```
 
 ## Development
@@ -551,7 +553,9 @@ Extensions are available in the `editors/` directory:
 
 - **VS Code** (`editors/vscode/`) - Syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
 - **Neovim** (`editors/neovim/`) - File detection, syntax highlighting, LSP config
+- **Sublime Text** (`editors/sublime/`) - Generated syntax (also used by `bat` and `delta`)
 - **Emacs** (`editors/emacs/`) - Major mode for Event-B
+- **Zed** (`editors/zed/`) - LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay and ProB code lenses
 
 See each editor's README and INSTALL files for setup instructions.
 

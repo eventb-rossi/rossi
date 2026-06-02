@@ -1,0 +1,14 @@
+[package]
+name = "zed-eventb"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Zed extension for Event-B (Rossi): language server + syntax highlighting"
+repository = "https://github.com/eventb-rossi/rossi"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"
