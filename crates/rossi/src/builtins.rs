@@ -75,6 +75,8 @@ mod tests {
             BuiltinFunction::Id,
             BuiltinFunction::Prj1,
             BuiltinFunction::Prj2,
+            BuiltinFunction::Union,
+            BuiltinFunction::Inter,
         ];
         for f in functions {
             assert!(
