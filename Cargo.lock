@@ -1270,6 +1270,7 @@ dependencies = [
  "quick-xml",
  "rossi",
  "serde",
+ "serde_json",
  "thiserror",
  "walkdir",
  "zip",

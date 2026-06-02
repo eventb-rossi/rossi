@@ -1,0 +1,19 @@
+CONTEXT set_ops
+SETS
+    S
+CONSTANTS
+    a, b, x, uni, intr, diff, pw, pw1, ext, rng, natc, intc
+AXIOMS
+    @axm1 a ⊆ S
+    @axm2 b ⊆ S
+    @axm3 x ∈ S
+    @axm4 uni = a ∪ b
+    @axm5 intr = a ∩ b
+    @axm6 diff = a ∖ b
+    @axm7 pw ∈ ℙ(S)
+    @axm8 pw1 ∈ ℙ1(S)
+    @axm9 ext = {x}
+    @axm10 rng = 1 ‥ 10
+    @axm11 natc = ℕ
+    @axm12 intc = ℤ
+END

@@ -1,0 +1,26 @@
+CONTEXT relations
+SETS
+    S, T, U
+CONSTANTS
+    r, s, r2, sub_s,
+    dm, rn, inv, fcomp, bcomp, dprod, pprod,
+    dres, rres, dsub, rsub, img, idc
+AXIOMS
+    @axm1 r ∈ S ↔ T
+    @axm2 s ∈ T ↔ U
+    @axm3 r2 ∈ S ↔ U
+    @axm4 sub_s ⊆ S
+    @axm5 dm = dom(r)
+    @axm6 rn = ran(r)
+    @axm7 inv = r∼
+    @axm8 fcomp = (r ; s)
+    @axm9 bcomp = (s ∘ r)
+    @axm10 dprod = (r ⊗ r2)
+    @axm11 pprod = (r ∥ s)
+    @axm12 dres = (sub_s ◁ r)
+    @axm13 rres = (r ▷ ran(r))
+    @axm14 dsub = (sub_s ⩤ r)
+    @axm15 rsub = (r ⩥ ran(r))
+    @axm17 img = r[sub_s]
+    @axm18 idc = id(S)
+END

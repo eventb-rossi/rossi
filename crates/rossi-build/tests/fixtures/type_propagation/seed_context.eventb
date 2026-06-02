@@ -1,0 +1,14 @@
+CONTEXT seed_context
+SETS
+    S, T
+CONSTANTS
+    n, c, sub, rel, fun, pair, ps
+AXIOMS
+    @axm1 n = 5
+    @axm2 c ∈ S
+    @axm3 sub ⊆ S
+    @axm4 rel ∈ S ↔ T
+    @axm5 fun ∈ S → T
+    @axm6 pair ∈ S × T
+    @axm7 ps ∈ ℙ(S)
+END

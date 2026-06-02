@@ -1,0 +1,12 @@
+CONTEXT comprehensions
+SETS
+    S
+CONSTANTS
+    a, comp_long, comp_short, qunion, qinter
+AXIOMS
+    @axm1 a ⊆ S
+    @axm2 comp_long = {x · x ∈ a ∣ x}
+    @axm3 comp_short = {x ∣ x ∈ a}
+    @axm4 qunion = (⋃ y · y ∈ ℙ(a) ∣ y)
+    @axm5 qinter = (⋂ y · y ∈ ℙ(a) ∣ y)
+END

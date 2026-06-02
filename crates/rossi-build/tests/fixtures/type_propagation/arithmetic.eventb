@@ -1,0 +1,15 @@
+CONTEXT arithmetic
+CONSTANTS
+    add, sub, mul, divv, modd, expp, neg, cardc, minc, maxc
+AXIOMS
+    @axm1 add = 2 + 3
+    @axm2 sub = 7 − 2
+    @axm3 mul = 2 ∗ 4
+    @axm4 divv = 9 ÷ 2
+    @axm5 modd = 9 mod 2
+    @axm6 expp = 2 ^ 3
+    @axm7 neg = −5
+    @axm8 cardc = card({1, 2, 3})
+    @axm9 minc = min({1, 2, 3})
+    @axm10 maxc = max({1, 2, 3})
+END

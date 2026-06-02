@@ -1,0 +1,17 @@
+CONTEXT functions
+SETS
+    S, T
+CONSTANTS
+    x, pfun, tfun, pinj, tinj, psur, tsur, bij, app, lam
+AXIOMS
+    @axm1 x ∈ S
+    @axm2 pfun ∈ S ⇸ T
+    @axm3 tfun ∈ S → T
+    @axm4 pinj ∈ S ⤔ T
+    @axm5 tinj ∈ S ↣ T
+    @axm6 psur ∈ S ⤀ T
+    @axm7 tsur ∈ S ↠ T
+    @axm8 bij ∈ S ⤖ T
+    @axm9 app = tfun(x)
+    @axm10 lam = (λ y · y ∈ S ∣ y)
+END

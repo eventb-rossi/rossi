@@ -1,0 +1,43 @@
+CONTEXT advanced
+SETS
+    S, T, U
+CONSTANTS
+    x, selfrel, curried, app2, nested_pow, set_of_rel,
+    gen_union, gen_inter, succ_c, pred_c, lam_pair,
+    m_pair, prj1_of, prj2_of,
+    int_set, succ_img, pred_img,
+    lam_id, comp_id, lam_prj1, comp_prj1, comp_prj2,
+    sub_s, r1, r2, r3, r4, r5, r6, r7, r8
+AXIOMS
+    @axm1 x ∈ S
+    @axm2 selfrel ∈ S ↔ S
+    @axm3 curried ∈ S → (T → U)
+    @axm4 app2 = curried(x)
+    @axm5 nested_pow ∈ ℙ(ℙ(S))
+    @axm6 set_of_rel ∈ ℙ(S ↔ T)
+    @axm7 gen_union = union(nested_pow)
+    @axm8 gen_inter = inter(nested_pow)
+    @axm9 succ_c = succ
+    @axm10 pred_c = pred
+    @axm11 lam_pair = (λ a ↦ b · a ∈ S ∧ b ∈ T ∣ b)
+    @axm12 m_pair ∈ S × T
+    @axm13 prj1_of = prj1(m_pair)
+    @axm14 prj2_of = prj2(m_pair)
+    @axm15 int_set ∈ ℙ(ℤ)
+    @axm16 succ_img = succ[int_set]
+    @axm17 pred_img = pred[int_set]
+    @axm18 lam_id = (λ x · x ∈ S ∣ id(x))
+    @axm19 comp_id = {x · x ∈ S ∣ id(x)}
+    @axm20 lam_prj1 = (λ p · p ∈ S × T ∣ prj1(p))
+    @axm21 comp_prj1 = {p · p ∈ S × T ∣ prj1(p)}
+    @axm22 comp_prj2 = {p · p ∈ S × T ∣ prj2(p)}
+    @axm23 sub_s ⊆ S
+    @axm24 r1 = sub_s ◁ id
+    @axm25 r2 = id ▷ sub_s
+    @axm26 r3 = id[sub_s]
+    @axm27 r4 = id ; selfrel
+    @axm28 r5 = selfrel ; id
+    @axm29 r6 = selfrel ⊗ id
+    @axm30 r7 = ∅ ∪ selfrel
+    @axm31 r8 = (selfrel ⊗ selfrel) ; prj1
+END
