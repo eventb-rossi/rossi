@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Guard
+# key: grd
+# --
+${1:grd1}: ${2:condition}

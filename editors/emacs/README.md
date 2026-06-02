@@ -28,7 +28,24 @@ This directory contains Emacs configuration for Event-B formal modeling, providi
 - **Signature Help**: Parameter hints for quantifiers and lambda
 - **Code Actions**: Quick fixes and refactorings
 - **Folding Ranges**: Collapse/expand code sections
+- **Selection Range**: Smart expand/shrink of the active region
 - **ProB Integration**: Run ProB animator and model checker
+
+### ✏️ Snippets (yasnippet)
+- Ready-made templates for the common Event-B constructs
+- Expand by typing a key and pressing `TAB`: `mch`, `ctx`, `evt`, `inv`, `grd`, `act`, and 9 more
+- Tab through the mirrored fields; bodies use Unicode operators by default
+
+### ⌨️ Unicode Input Method (Quail)
+- Type Unicode operators with a backslash leader: `\to` → →, `\and` → ∧, `\nat` → ℕ, `\forall` → ∀
+- Generated from the same canonical operator table as the language server, so the spellings never drift
+- Leader-only by design — `=>`, `<=>`, and the other eager symbolic combos are a Neovim/VS Code convenience and are intentionally not bound here
+
+### 🛠️ Commands
+- Convert the current buffer between Unicode and ASCII notation
+- Validate the current file against the Rossi checker
+- Animate or model check with ProB
+- Import, export, and build Rodin projects
 
 ## Quick Start
 
@@ -149,6 +166,22 @@ All settings can be customized via Emacs customization interface (`M-x customize
 (setq lsp-rossi-completion-enabled t)        ; Enable/disable completion
 ```
 
+### Pinned LSP Client Defaults
+
+For the best Event-B experience, enable these `lsp-mode` features. They light up
+capabilities the server already provides:
+
+```elisp
+(setq lsp-semantic-tokens-enable t)  ; Server-driven semantic highlighting
+(setq lsp-lens-enable t)             ; Show ProB animate/model-check code lens
+(setq lsp-extend-selection t)        ; Enable smart expand/shrink selection
+```
+
+With `lsp-lens-enable` on, ProB actions appear as code lenses on
+MACHINE/CONTEXT declarations; trigger them with `M-x lsp-avy-lens`.
+With `lsp-extend-selection`, `M-x lsp-extend-selection` grows the active region
+to the next syntactic scope (and `lsp-shrink-selection` reverses it).
+
 ### Custom Server Path
 
 If the server is not in your PATH:
@@ -256,6 +289,124 @@ Run ProB directly from Emacs:
 - Animate or model check your specifications
 - Counterexamples shown as diagnostics
 
+### Snippets
+
+This directory ships [yasnippet](https://github.com/joaotavora/yasnippet)
+templates under `snippets/eventb-mode/`. To enable them, add the directory to
+`yas-snippet-dirs` and turn on `yas-minor-mode` in `eventb-mode`:
+
+```elisp
+(use-package yasnippet
+  :ensure t
+  :config
+  (add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+  (yas-reload-all)
+  (add-hook 'eventb-mode-hook #'yas-minor-mode))
+```
+
+Type a key and press `TAB` to expand it, then `TAB` again to move between fields:
+
+| Key | Expands to |
+|-----|------------|
+| `mch` | A MACHINE skeleton (VARIABLES/INVARIANTS/EVENTS) |
+| `ctx` | A CONTEXT skeleton (SETS/CONSTANTS/AXIOMS) |
+| `evt` | An EVENT with WHERE/THEN |
+| `inv` | An invariant label and predicate |
+| `grd` | A guard label and predicate |
+| `act` | An action label and assignment |
+
+These are six of the 15 bundled keys; the rest mirror the VS Code and Neovim
+snippet set (`axm`, `init`, `actnd`, `forall`, `lambda`, `refines`, …). Run
+`M-x yas-describe-tables` in an Event-B buffer to list them all.
+
+### Unicode Input Method
+
+`eventb-input.el` defines a [Quail](https://www.gnu.org/software/emacs/manual/html_node/emacs/Input-Methods.html)
+input method named `eventb` for typing Event-B Unicode operators. `eventb-mode`
+activates it automatically because the `eventb-enable-input-method` defcustom
+defaults to `t`; you can also toggle it per buffer or activate it by hand:
+
+```elisp
+;; Auto-enable in every Event-B buffer (default)
+(setq eventb-enable-input-method t)
+```
+
+```
+;; Toggle on/off in the current buffer
+C-c C-i                          ; eventb-toggle-input-method
+
+;; Or activate it explicitly
+M-x eventb-activate-input-method
+```
+
+When the method is active the mode line shows the `EvB` indicator. It is a
+**leader-only** method: prefix the spelling with a backslash and the symbol is
+inserted immediately.
+
+| Type | Inserts |
+|------|---------|
+| `\to` | → |
+| `\and` | ∧ |
+| `\or` | ∨ |
+| `\not` | ¬ |
+| `\nat` | ℕ |
+| `\int` | ℤ |
+| `\forall` | ∀ |
+| `\exists` | ∃ |
+| `\in` | ∈ |
+| `\maplet` | ↦ |
+| `\lambda` | λ |
+
+Most operators accept several aliases (`\implies` and `\imp` both give ⇒). The
+rule set is generated from the same canonical operator table as the language
+server, so editor input and `rossi/operatorTable` can never disagree.
+
+> Note: the eager symbolic combos that convert as you type — `=>` → ⇒, `<=>` → ⇔,
+> `|->` → ↦, `:=` → ≔ — are a Neovim/VS Code-only convenience by design. In Emacs
+> use the backslash leader, or the `Convert to Unicode` command below to convert a
+> whole buffer at once.
+
+### Commands
+
+Beyond the LSP code actions, `eventb-mode` provides commands that drive the
+Rossi CLI and ProB:
+
+| Command | Action |
+|---------|--------|
+| `M-x eventb-convert-to-unicode` | Rewrite the current buffer with Unicode operators |
+| `M-x eventb-convert-to-ascii` | Rewrite the current buffer with ASCII operators |
+| `M-x eventb-validate` | Validate the current file against the Rossi checker |
+| `M-x eventb-validate-workspace` | Validate every `.eventb` file in the workspace |
+| `M-x eventb-animate-prob` | Animate the current machine with ProB |
+| `M-x eventb-model-check-prob` | Model check the current machine with ProB |
+| `M-x eventb-import` | Import a Rodin project into `.eventb` files |
+| `M-x eventb-export` | Export the current file to a Rodin ZIP |
+| `M-x eventb-build` | Build a checked Rodin ZIP |
+| `M-x eventb-toggle-input-method` (`C-c C-i`) | Toggle the backslash-leader Unicode input |
+
+The conversion, validation, import, export, and build commands shell out to the
+`rossi` CLI; ensure it is on your `PATH` or set `rossi-tool-path` to its
+location. The ProB commands are forwarded through the language server.
+
+```elisp
+(setq rossi-tool-path "~/.cargo/bin/rossi")  ; defaults to "rossi" on exec-path
+```
+
+Suggested keybindings:
+
+```elisp
+(use-package eventb-mode
+  :load-path "/path/to/rossi/editors/emacs"
+  :mode "\\.eventb\\'"
+  :bind (:map eventb-mode-map
+         ("C-c C-u" . eventb-convert-to-unicode)
+         ("C-c C-d" . eventb-convert-to-ascii)
+         ("C-c C-v" . eventb-validate)
+         ("C-c C-p a" . eventb-animate-prob)
+         ("C-c C-p m" . eventb-model-check-prob))
+  :hook (eventb-mode . lsp-deferred))
+```
+
 ## Recommended Packages
 
 ### Essential
@@ -264,6 +415,7 @@ Run ProB directly from Emacs:
 
 ### Highly Recommended
 - [lsp-ui](https://github.com/emacs-lsp/lsp-ui) - Enhanced LSP UI (sideline, documentation)
+- [yasnippet](https://github.com/joaotavora/yasnippet) - Template expansion for the bundled snippets
 - [flycheck](https://github.com/flycheck/flycheck) - On-the-fly syntax checking
 - [which-key](https://github.com/justbur/emacs-which-key) - Display available keybindings
 
@@ -286,7 +438,11 @@ Here's a complete example configuration using `use-package`:
   (setq lsp-keymap-prefix "C-c l")
   :config
   (lsp-enable-which-key-integration t)
-  (setq lsp-headerline-breadcrumb-enable t))
+  (setq lsp-headerline-breadcrumb-enable t)
+  ;; Pinned Event-B defaults
+  (setq lsp-semantic-tokens-enable t)   ; Semantic highlighting
+  (setq lsp-lens-enable t)              ; ProB animate/model-check code lens
+  (setq lsp-extend-selection t))        ; Smart expand/shrink selection
 
 ;; LSP UI
 (use-package lsp-ui
@@ -307,19 +463,36 @@ Here's a complete example configuration using `use-package`:
   (setq company-minimum-prefix-length 1)
   (setq company-idle-delay 0.1))
 
+;; Snippets
+(use-package yasnippet
+  :ensure t
+  :config
+  (add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+  (yas-reload-all))
+
 ;; Event-B Mode
 (use-package eventb-mode
   :load-path "/path/to/rossi/editors/emacs"
   :mode "\\.eventb\\'"
-  :hook (eventb-mode . lsp-deferred)
+  :hook ((eventb-mode . lsp-deferred)
+         (eventb-mode . yas-minor-mode))
   :bind (:map eventb-mode-map
-         ("C-c C-f" . lsp-format-buffer)
-         ("C-c C-a" . lsp-execute-code-action)
-         ("C-c r"   . lsp-rename))
+         ("C-c C-f"   . lsp-format-buffer)
+         ("C-c C-a"   . lsp-execute-code-action)
+         ("C-c r"     . lsp-rename)
+         ("C-c C-u"   . eventb-convert-to-unicode)
+         ("C-c C-d"   . eventb-convert-to-ascii)
+         ("C-c C-v"   . eventb-validate)
+         ("C-c C-p a" . eventb-animate-prob)
+         ("C-c C-p m" . eventb-model-check-prob))
   :config
   ;; Event-B specific settings
   (setq lsp-rossi-format-use-unicode t)
   (setq lsp-rossi-format-indentation "    ")
+
+  ;; Backslash-leader Unicode input is auto-enabled by eventb-mode;
+  ;; set this to nil to opt out.
+  (setq eventb-enable-input-method t)
 
   ;; Enable format on save
   (add-hook 'eventb-mode-hook
@@ -352,6 +525,17 @@ Here's a complete example configuration using `use-package`:
 | `C-c l a a` | Execute code action |
 | `C-c l r r` | Rename symbol |
 | `C-c C-f` | Format buffer |
+
+### Event-B Commands (suggested binds)
+| Key | Action |
+|-----|--------|
+| `TAB` (after a key) | Expand yasnippet (`mch`, `evt`, `inv`, …) |
+| `\to` `\and` `\forall` … | Insert Unicode via the input method |
+| `C-c C-u` | `eventb-convert-to-unicode` |
+| `C-c C-d` | `eventb-convert-to-ascii` |
+| `C-c C-v` | `eventb-validate` |
+| `C-c C-p a` | `eventb-animate-prob` |
+| `C-c C-p m` | `eventb-model-check-prob` |
 
 ### Diagnostics
 | Key | Action |

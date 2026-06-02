@@ -14,11 +14,25 @@ This directory contains Neovim configuration for Event-B formal modeling, provid
   - Comments and strings
   - Numbers and identifiers
 
+### ⌨️ Symbol Input (type ASCII, get Unicode)
+- **Eager combos** convert on the fly: `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `<:` → ⊆
+- **`\name` leader** expands any operator on a boundary: `\and` → ∧, `\to` → →, `\forall` → ∀, `\nat` → ℕ
+- Maximal munch handles ambiguous prefixes (`<=` → ≤ but `<=>` → ⇔)
+- Toggle with `rossi.input.enabled`; disable only the eager combos with `rossi.input.eager`
+
+### ✂️ Snippets (LuaSnip)
+- Ready-made scaffolds for machines, contexts, events, and clauses
+- Expand by prefix: `mch`, `ctx`, `evt`, `inv`, `grd`, `act`, and more
+- Generated from the canonical Rossi snippet table, shared with the VS Code extension
+
 ### 🔍 LSP Features (via Language Server)
 - **Real-time Diagnostics**: Instant feedback on syntax errors
 - **Document Symbols**: Hierarchical outline and quick navigation
 - **Code Formatting**: Auto-format with Unicode or ASCII operators
 - **Code Completion**: Context-aware suggestions
+- **Semantic Tokens**: Precise, parser-driven highlighting (applied automatically)
+- **Code Lens**: ProB animate/model-check actions on MACHINE/CONTEXT
+- **Selection Range**: Smart expand/shrink selection along the syntax tree
 - **Hover Documentation**: Operator and symbol documentation
 - **Go-to-Definition**: Jump to symbol definitions (across files!)
 - **Find References**: Find all symbol usages
@@ -275,13 +289,127 @@ Press `<leader>f` or `:lua vim.lsp.buf.format()` to:
 - Operator normalization (Unicode or ASCII)
 - Clause ordering
 
+### Semantic Tokens
+
+Highlighting is refined by the language server as you edit:
+- Parser-driven token types disambiguate keywords, labels, and operators
+- Applied automatically once the LSP client attaches — no extra configuration
+- Falls back to the bundled `syntax/eventb.vim` rules before the server is ready
+
+### Selection Range
+
+Grow and shrink the selection along the syntax tree:
+- Expands from the symbol under the cursor outward (term → clause → section)
+- Drives `vim.lsp.buf.selection_range` and treesitter-style incremental selection
+
 ### ProB Integration
 
 Run ProB directly from Neovim:
 - Code lens appears on MACHINE/CONTEXT declarations
-- Commands: `:LspCodeLens` to see available actions
+- Run `vim.lsp.codelens.refresh()` then `vim.lsp.codelens.run()` to execute an action
+- Or use the `:RossiAnimateWithProb` / `:RossiModelCheckWithProb` commands
 - Animate or model check your specifications
 - Counterexamples shown as diagnostics
+
+## Symbol Input
+
+Type ASCII and get Unicode without leaving the keyboard. Enable it for Event-B
+buffers:
+
+```lua
+-- Set up the input method once, then enable it on the eventb filetype.
+require('eventb.input').setup{}
+
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'eventb',
+  callback = function()
+    require('eventb.input').enable(0) -- enable for the current buffer
+  end,
+})
+```
+
+Two ways to enter symbols, both on by default:
+
+- **Eager combos** — symbolic operators convert as soon as they are unambiguous:
+  - `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `:` → ∈, `<:` → ⊆, `..` → ‥
+  - Longest-match wins: `<=` becomes ≤ only once you type a non-`>` character,
+    while `<=>` becomes ⇔.
+- **`\name` leader** — type a backslash, an operator name, then a space or any
+  boundary character:
+  - `\and` → ∧, `\or` → ∨, `\not` → ¬, `\to` → →, `\forall` → ∀, `\exists` → ∃,
+    `\in` → ∈, `\nat` → ℕ, `\int` → ℤ, `\pow` → ℙ
+  - The leader is also how you enter alphabetic operators (`NAT`, `or`, …) —
+    these are never converted eagerly so they don't interfere with ordinary text.
+
+Toggle the whole feature with `rossi.input.enabled`, or keep only the `\name`
+leader by setting `rossi.input.eager` to `false`:
+
+```lua
+require('eventb.input').setup{
+  enabled = true, -- master switch (rossi.input.enabled)
+  eager = true,   -- eager combos; false keeps only the \name leader
+}
+```
+
+This complements the whole-file `:RossiConvertCurrentFileToUnicode` /
+`:RossiConvertCurrentFileToAscii` commands.
+
+## Snippets
+
+Snippets are distributed in the VS Code JSON format and load through LuaSnip's
+`from_vscode` loader. Point the loader at the bundled `snippets` directory (it
+contains the generated `package.json` and `eventb.json`):
+
+```lua
+require('luasnip.loaders.from_vscode').lazy_load({
+  paths = { '/path/to/rossi/editors/neovim/snippets' },
+})
+```
+
+Type a prefix in an Event-B buffer and expand it (the key depends on your
+LuaSnip mapping, commonly `<Tab>` or `<C-k>`). A few examples:
+
+| Prefix | Inserts                          |
+|--------|----------------------------------|
+| `mch`  | A MACHINE skeleton               |
+| `ctx`  | A CONTEXT skeleton               |
+| `evt`  | An EVENT with guards and actions |
+| `inv`  | An invariant line                |
+| `grd`  | A guard line                     |
+| `act`  | An action (assignment) line      |
+
+The snippet table is shared with the VS Code extension, so prefixes and bodies
+stay identical across editors.
+
+## Editor Commands
+
+The plugin exposes the same actions as the VS Code extension, as `:Rossi*`
+user commands:
+
+- `:RossiImportRodinProject`
+- `:RossiExportCurrentFileToRodinZip`
+- `:RossiExportWorkspaceToRodinZip`
+- `:RossiOpenInRodin`
+- `:RossiBuildCheckedRodinZip`
+- `:RossiValidateCurrentFile`
+- `:RossiValidateWorkspace`
+- `:RossiConvertCurrentFileToUnicode`
+- `:RossiConvertCurrentFileToAscii`
+- `:RossiAnimateWithProb`
+- `:RossiModelCheckWithProb`
+- `:RossiCheckToolchain`
+
+Suggested keymaps (set them in your `on_attach` or an `eventb` FileType
+autocommand):
+
+```lua
+local opts = { noremap = true, silent = true, buffer = bufnr }
+vim.keymap.set('n', '<leader>pu', '<Cmd>RossiConvertCurrentFileToUnicode<CR>', opts)
+vim.keymap.set('n', '<leader>pa', '<Cmd>RossiConvertCurrentFileToAscii<CR>', opts)
+vim.keymap.set('n', '<leader>pp', '<Cmd>RossiAnimateWithProb<CR>', opts)
+vim.keymap.set('n', '<leader>pm', '<Cmd>RossiModelCheckWithProb<CR>', opts)
+vim.keymap.set('n', '<leader>pv', '<Cmd>RossiValidateCurrentFile<CR>', opts)
+```
 
 ## Recommended Plugins
 
@@ -388,6 +516,17 @@ return {
 |---------|--------|
 | `:LspDocumentSymbol` | Document outline |
 | `:LspWorkspaceSymbol` | Workspace-wide symbol search |
+
+### Rossi Commands
+| Command | Action |
+|---------|--------|
+| `:RossiConvertCurrentFileToUnicode` | Convert operators to Unicode |
+| `:RossiConvertCurrentFileToAscii` | Convert operators to ASCII |
+| `:RossiAnimateWithProb` | Animate with ProB |
+| `:RossiModelCheckWithProb` | Model check with ProB |
+| `:RossiValidateCurrentFile` | Validate the current file |
+
+See [Editor Commands](#editor-commands) for the full list and suggested keymaps.
 
 ## Troubleshooting
 

@@ -17,7 +17,10 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use super::grammars::{Markers, Model, emacs, paths, sublime, textmate, vim};
+use super::grammars::{
+    Markers, Model, emacs, input_emacs, operators_nvim, paths, snippets_emacs, snippets_nvim,
+    snippets_vscode, sublime, textmate, vim,
+};
 
 #[derive(Args)]
 pub struct GenGrammarsArgs {
@@ -44,19 +47,30 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let root = workspace_root();
     let model = Model::build();
 
-    // (relative path, desired full content). Whole-file targets are rendered
-    // entirely; region targets are spliced into the existing file's markers.
-    let mut targets: Vec<(&str, String)> = vec![
-        (paths::TEXTMATE, textmate::render(&model)),
-        (paths::SUBLIME, sublime::render(&model)),
+    // (relative path, desired full content), one entry per concrete file on
+    // disk. Whole-file producers contribute one entry; multi-file producers
+    // (the yasnippet directory, the Neovim snippet package) contribute several.
+    // Region targets are spliced into the existing file's markers below.
+    let mut targets: Vec<(String, String)> = vec![
+        (paths::TEXTMATE.to_string(), textmate::render(&model)),
+        (paths::SUBLIME.to_string(), sublime::render(&model)),
+        (
+            paths::SNIPPETS_VSCODE.to_string(),
+            snippets_vscode::render(),
+        ),
+        (paths::NVIM_OPERATORS.to_string(), operators_nvim::render()),
+        (paths::EMACS_INPUT.to_string(), input_emacs::render()),
     ];
+    // Multi-file producers: each returns its own list of (rel path, content).
+    targets.extend(snippets_nvim::render());
+    targets.extend(snippets_emacs::render());
     for (rel, markers, body) in [
         (paths::VIM, &vim::MARKERS, vim::render(&model)),
         (paths::EMACS, &emacs::MARKERS, emacs::render(&model)),
     ] {
         let path = root.join(rel);
         let existing = fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;
-        targets.push((rel, splice(&existing, markers, &body, &path)?));
+        targets.push((rel.to_string(), splice(&existing, markers, &body, &path)?));
     }
 
     let mut stale = 0usize;
@@ -85,6 +99,42 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
                 fs::write(&path, desired).map_err(|e| io_err(&path, e))?;
                 if args.verbose {
                     eprintln!("wrote     {rel}");
+                }
+            }
+        }
+    }
+
+    // Prune orphans in fully-generated directories: a file left behind when its
+    // source row is removed (e.g. a snippet dropped from the canonical table)
+    // would silently disagree with the source of truth, the very drift this
+    // command exists to prevent. `--check` reports it; a write removes it.
+    // Dotfiles (e.g. yasnippet's `.yas-parents`) are left alone so any
+    // hand-maintained directory metadata survives.
+    let wanted: std::collections::HashSet<&str> =
+        targets.iter().map(|(rel, _)| rel.as_str()).collect();
+    for dir in [paths::EMACS_SNIPPETS_DIR] {
+        let entries = match fs::read_dir(root.join(dir)) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || !path.is_file() {
+                continue;
+            }
+            let rel = format!("{dir}/{name}");
+            if wanted.contains(rel.as_str()) {
+                continue;
+            }
+            if args.check {
+                println!("{rel}");
+                stale += 1;
+            } else {
+                fs::remove_file(&path).map_err(|e| io_err(&path, e))?;
+                if args.verbose {
+                    eprintln!("removed   {rel}");
                 }
             }
         }

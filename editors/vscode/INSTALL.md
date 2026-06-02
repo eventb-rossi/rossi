@@ -151,9 +151,9 @@ Type a prefix and press Tab:
 
 | Prefix | Description |
 |--------|-------------|
-| `context` | Full context template |
-| `machine` | Full machine template |
-| `event` | Event with parameters |
+| `ctx` | Context template |
+| `mch` | Machine template |
+| `evt` | Event with guards and actions |
 | `init` | Initialisation event |
 | `axm` | Labeled axiom |
 | `inv` | Labeled invariant |
@@ -343,7 +343,7 @@ END
 
 ### Example 3: Using Snippets
 
-1. Type `machine` and press Tab
+1. Type `mch` and press Tab
 2. Fill in the placeholders
 3. Press Tab to move between fields
 4. Customize as needed

@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: For All (Universal Quantification)
+# key: forall
+# --
+∀${1:x}·(${2:x} ∈ ${3:set} ⇒ ${4:predicate})

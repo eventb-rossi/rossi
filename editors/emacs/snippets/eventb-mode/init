@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Event-B Initialisation
+# key: init
+# --
+INITIALISATION
+BEGIN
+    ${1:var} := ${2:value}
+END

@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Event-B Context
+# key: ctx
+# --
+CONTEXT ${1:context_name}
+SETS
+    ${2:SET_NAME}
+CONSTANTS
+    ${3:const_name}
+AXIOMS
+    ${4:axm1}: ${5:predicate}
+END

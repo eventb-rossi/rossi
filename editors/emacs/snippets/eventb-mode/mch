@@ -1,0 +1,15 @@
+# -*- mode: snippet -*-
+# name: Event-B Machine
+# key: mch
+# --
+MACHINE ${1:machine_name}
+VARIABLES
+    ${2:var_name}
+INVARIANTS
+    ${3:inv1}: ${4:predicate}
+EVENTS
+    INITIALISATION
+    BEGIN
+        ${5:var_name} := ${6:value}
+    END
+END

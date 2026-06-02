@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Set Comprehension
+# key: setcomp
+# --
+{${1:x} · ${2:x} ∈ ${3:set} ∧ ${4:predicate}}
