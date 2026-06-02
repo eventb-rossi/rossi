@@ -22,6 +22,10 @@ done
 echo "  Running cargo clippy..."
 cargo clippy --all-targets --all-features -- -D warnings
 
-# 3. Test
+# 3. Docs (mirrors the Documentation CI job)
+echo "  Running cargo doc..."
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features
+
+# 4. Test
 echo "  Running cargo test..."
 cargo test --quiet
