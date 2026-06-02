@@ -104,23 +104,8 @@ fn members_for(model: &Model, scope: Scope, kind: MatchKind) -> Vec<String> {
 fn defconst(out: &mut String, name: &str, members: &[String], doc: &str) {
     let items = members
         .iter()
-        .map(|m| elisp_string(m))
+        .map(|m| super::elisp_string(m))
         .collect::<Vec<_>>()
         .join(" ");
     out.push_str(&format!("(defconst {name}\n  '({items})\n  \"{doc}\")\n\n"));
-}
-
-/// An Elisp string literal. `regexp-opt` handles regex escaping later, so we only
-/// escape what a string literal needs: backslash and double quote.
-fn elisp_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        if c == '\\' || c == '"' {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('"');
-    out
 }

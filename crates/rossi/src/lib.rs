@@ -49,6 +49,7 @@ pub mod operators;
 pub mod parser;
 pub mod pretty;
 pub mod selection;
+pub mod snippets;
 pub mod xml;
 
 // Re-export main types for convenience

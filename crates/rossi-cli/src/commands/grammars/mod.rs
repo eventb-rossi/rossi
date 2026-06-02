@@ -35,6 +35,11 @@
 //!   ordering is provably correct.
 
 pub mod emacs;
+pub mod input_emacs;
+pub mod operators_nvim;
+pub mod snippets_emacs;
+pub mod snippets_nvim;
+pub mod snippets_vscode;
 pub mod sublime;
 pub mod textmate;
 pub mod vim;
@@ -235,12 +240,41 @@ pub fn escape_oniguruma(s: &str) -> String {
     out
 }
 
-/// The grammar files this generator owns, relative to the workspace root.
+/// An Elisp string literal (with surrounding quotes). Escapes backslash and
+/// double quote — the two characters a double-quoted Elisp string must escape.
+/// (`regexp-opt` handles any regex escaping for callers that build patterns.)
+pub(super) fn elisp_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
+/// The files this generator owns, relative to the workspace root.
 pub mod paths {
+    // Syntax-highlighting grammars.
     pub const TEXTMATE: &str = "editors/vscode/syntaxes/eventb.tmLanguage.json";
     pub const SUBLIME: &str = "editors/sublime/EventB.sublime-syntax";
     pub const VIM: &str = "editors/neovim/syntax/eventb.vim";
     pub const EMACS: &str = "editors/emacs/eventb-mode.el";
+
+    // Snippet libraries.
+    pub const SNIPPETS_VSCODE: &str = "editors/vscode/snippets/eventb.json";
+    pub const NVIM_SNIPPETS_PACKAGE: &str = "editors/neovim/snippets/package.json";
+    pub const NVIM_SNIPPETS_JSON: &str = "editors/neovim/snippets/eventb.json";
+    /// Directory holding one yasnippet file per snippet (per the `eventb-mode`
+    /// major mode); individual files are `<dir>/<prefix>`.
+    pub const EMACS_SNIPPETS_DIR: &str = "editors/emacs/snippets/eventb-mode";
+
+    // Operator/input-method tables shared with the LSP `rossi/operatorTable`.
+    pub const NVIM_OPERATORS: &str = "editors/neovim/lua/eventb/operators.lua";
+    pub const EMACS_INPUT: &str = "editors/emacs/eventb-input.el";
 }
 
 /// Markers delimiting the generated region inside an otherwise hand-maintained
@@ -325,5 +359,103 @@ mod tests {
         }
         assert!(funcs.contains(&"card".to_string()));
         assert!(funcs.contains(&"finite".to_string()));
+    }
+
+    /// The generated Neovim `operators.lua` must expose exactly the rows the LSP
+    /// serves over `rossi/operatorTable` — same `ascii != unicode` filter, same
+    /// fields — so the editor input method and the language server can never
+    /// disagree on the ASCII↔Unicode mapping. We assert by reconstructing the
+    /// expected `{ ascii = …, unicode = …, … }` line for every
+    /// [`operator_rows`] row and checking the rendered module contains it (in
+    /// order), and that the row count matches.
+    #[test]
+    fn nvim_operators_match_lsp_rows() {
+        use rossi_lsp::server::operator_rows;
+        let rendered = operators_nvim::render();
+        let rows = operator_rows();
+
+        // One emitted row line per LSP row, no more, no fewer.
+        let emitted = rendered.matches("{ ascii = ").count();
+        assert_eq!(
+            emitted,
+            rows.len(),
+            "operators.lua emitted {emitted} rows but the LSP serves {}",
+            rows.len()
+        );
+
+        // Every LSP row appears verbatim, in declaration order. Reuse the
+        // emitter's own `lua_string` escaping so the needle matches byte-for-byte
+        // (operator glyphs include private-use codepoints `{:?}` would escape).
+        let s = operators_nvim::lua_string;
+        let mut cursor = 0usize;
+        for row in &rows {
+            let aliases = row
+                .aliases
+                .iter()
+                .map(|a| s(a))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let aliases = if aliases.is_empty() {
+                String::new()
+            } else {
+                format!(" {aliases} ")
+            };
+            let needle = format!(
+                "{{ ascii = {}, unicode = {}, aliases = {{{}}}, symbolic = {}, eager = {} }}",
+                s(&row.ascii),
+                s(&row.unicode),
+                aliases,
+                row.symbolic,
+                row.eager
+            );
+            let at = rendered[cursor..].find(&needle).unwrap_or_else(|| {
+                panic!("operators.lua is missing row {needle} (or it is out of order)")
+            });
+            cursor += at + needle.len();
+        }
+    }
+
+    /// The generated Emacs Quail method must define a `\<key>` rule for every
+    /// alias the LSP serves (and a `\<ascii>` rule for every alphabetic row),
+    /// each mapping to that row's Unicode glyph — derived from the same
+    /// `operator_rows()` filter, so the input method can never drift from the
+    /// canonical mapping. Leader-only by design: no bare (non-backslash) rules.
+    #[test]
+    fn emacs_quail_matches_lsp_rows() {
+        use rossi_lsp::server::operator_rows;
+        let rendered = input_emacs::render();
+        let rows = operator_rows();
+
+        // Reuse the emitter's own `elisp_string` escaping for the Unicode glyph
+        // so needles match byte-for-byte regardless of how `{:?}` would render it.
+        let es = super::elisp_string;
+        let mut expected_rules = 0usize;
+        for row in &rows {
+            let unicode = es(&row.unicode);
+            for alias in &row.aliases {
+                let rule = format!("({} {})", es(&format!("\\{alias}")), unicode);
+                assert!(
+                    rendered.contains(&rule),
+                    "eventb-input.el is missing alias rule {rule}"
+                );
+                expected_rules += 1;
+            }
+            if !row.symbolic && !row.aliases.contains(&row.ascii) {
+                let rule = format!("({} {})", es(&format!("\\{}", row.ascii)), unicode);
+                assert!(
+                    rendered.contains(&rule),
+                    "eventb-input.el is missing alphabetic rule {rule}"
+                );
+                expected_rules += 1;
+            }
+        }
+
+        // Exactly the expected number of rules — no extras, in particular no
+        // eager non-backslash rules (every rule line starts with `("\\`).
+        let emitted = rendered.matches("(\"\\\\").count();
+        assert_eq!(
+            emitted, expected_rules,
+            "eventb-input.el emitted {emitted} rules but {expected_rules} were expected"
+        );
     }
 }

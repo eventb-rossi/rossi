@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Invariant
+# key: inv
+# --
+${1:inv1}: ${2:predicate}

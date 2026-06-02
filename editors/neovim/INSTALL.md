@@ -9,6 +9,8 @@ This guide provides detailed installation instructions for setting up Event-B la
   - [Method 1: Using a Plugin Manager (Recommended)](#method-1-using-a-plugin-manager-recommended)
   - [Method 2: Manual Installation](#method-2-manual-installation)
 - [LSP Configuration](#lsp-configuration)
+- [Symbol Input](#symbol-input)
+- [Snippets](#snippets)
 - [Verification](#verification)
 - [Troubleshooting](#troubleshooting)
 
@@ -371,6 +373,68 @@ require('lspconfig').eventb.setup{
   cmd = { vim.fn.expand('~/.cargo/bin/rossi-language-server') },
 }
 ```
+
+The language server pins sensible defaults for the newer LSP features, so no
+extra setup is required to get them:
+
+- **Semantic tokens** — applied automatically once the client attaches.
+- **Code lens** — ProB animate/model-check actions on MACHINE/CONTEXT
+  declarations; refresh with `vim.lsp.codelens.refresh()`.
+- **Selection range** — smart expand/shrink; bind `vim.lsp.buf.selection_range`.
+
+---
+
+## Symbol Input
+
+Type ASCII and get Unicode as you type. The input method ships with the plugin
+under `lua/eventb/`. Set it up once and enable it for Event-B buffers:
+
+```lua
+require('eventb.input').setup{
+  enabled = true, -- master switch (rossi.input.enabled)
+  eager = true,   -- eager combos; set false to keep only the \name leader
+}
+
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'eventb',
+  callback = function()
+    require('eventb.input').enable(0)
+  end,
+})
+```
+
+- **Eager combos**: `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `<:` → ⊆.
+- **`\name` leader**: `\and` → ∧, `\to` → →, `\forall` → ∀, `\nat` → ℕ.
+
+See the [README](README.md#symbol-input) for the full behavior and toggles.
+
+---
+
+## Snippets
+
+Snippets are bundled in the VS Code JSON format under `snippets/` and load
+through LuaSnip. Install [LuaSnip](https://github.com/L3MON4D3/LuaSnip) (it is
+already a dependency of the nvim-cmp setup above), then point its `from_vscode`
+loader at the bundled `snippets` directory:
+
+```lua
+require('luasnip.loaders.from_vscode').lazy_load({
+  paths = { '/path/to/rossi/editors/neovim/snippets' },
+})
+```
+
+If you installed the plugin with a plugin manager, use the plugin's runtime
+path instead of a hard-coded path, for example:
+
+```lua
+require('luasnip.loaders.from_vscode').lazy_load({
+  paths = { vim.fn.expand('~/.local/share/nvim/lazy/rossi/editors/neovim/snippets') },
+})
+```
+
+Expand a prefix (`mch`, `ctx`, `evt`, `inv`, `grd`, `act`, …) in an
+Event-B buffer with your LuaSnip expand key. See the
+[README](README.md#snippets) for the prefix list.
 
 ---
 

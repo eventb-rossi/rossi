@@ -62,6 +62,11 @@ This guide provides detailed installation instructions for setting up Event-B la
    ;; Will be installed via package manager in the next steps
    ```
 
+3. **yasnippet** - Template expansion for the bundled Event-B snippets
+   ```elisp
+   ;; Will be installed via package manager in the next steps
+   ```
+
 ---
 
 ## Installation Methods
@@ -122,6 +127,13 @@ Add to your configuration:
   :config
   (setq company-minimum-prefix-length 1)
   (setq company-idle-delay 0.1))
+
+;; Snippets (template expansion)
+(use-package yasnippet
+  :ensure t
+  :config
+  (add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+  (yas-reload-all))
 ```
 
 #### Step 3: Install Event-B Mode
@@ -133,11 +145,16 @@ Add to your configuration (replace `/path/to/rossi` with the actual path):
 (use-package eventb-mode
   :load-path "/path/to/rossi/editors/emacs"
   :mode "\\.eventb\\'"
-  :hook (eventb-mode . lsp-deferred)
+  :hook ((eventb-mode . lsp-deferred)
+         (eventb-mode . yas-minor-mode))
   :config
   ;; Configure Event-B settings
   (setq lsp-rossi-format-use-unicode t)
   (setq lsp-rossi-format-indentation "    ")
+
+  ;; Backslash-leader Unicode input (\to, \and, \forall, …) is auto-enabled
+  ;; by eventb-mode; set this to nil to opt out.
+  (setq eventb-enable-input-method t)
 
   ;; Enable format on save (optional)
   (add-hook 'eventb-mode-hook
@@ -170,6 +187,7 @@ M-x package-refresh-contents
 M-x package-install RET lsp-mode
 M-x package-install RET lsp-ui
 M-x package-install RET company
+M-x package-install RET yasnippet
 ```
 
 #### Step 2: Copy Event-B Mode Files
@@ -179,8 +197,11 @@ cd rossi/editors/emacs
 
 # Copy to Emacs load path (create directory if it doesn't exist)
 mkdir -p ~/.emacs.d/lisp
-cp eventb-mode.el ~/.emacs.d/lisp/
+cp eventb-mode.el eventb-input.el ~/.emacs.d/lisp/
 ```
+
+The `snippets/` directory can stay in place; you add its path to
+`yas-snippet-dirs` in the next step.
 
 #### Step 3: Configure Emacs
 
@@ -203,15 +224,23 @@ Add to `~/.emacs.d/init.el`:
 (require 'company)
 (add-hook 'prog-mode-hook #'company-mode)
 
-;; Load Event-B mode
+;; Load yasnippet and register the Event-B snippets
+(require 'yasnippet)
+(add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+(yas-reload-all)
+
+;; Load Event-B mode (it loads eventb-input and eventb-commands on demand)
 (require 'eventb-mode)
 
-;; Enable LSP for Event-B files
+;; Enable LSP and snippets for Event-B files
+;; (the backslash-leader input method is auto-enabled by eventb-mode)
 (add-hook 'eventb-mode-hook #'lsp-deferred)
+(add-hook 'eventb-mode-hook #'yas-minor-mode)
 
 ;; Configure Event-B settings
 (setq lsp-rossi-format-use-unicode t)
 (setq lsp-rossi-format-indentation "    ")
+(setq eventb-enable-input-method t)   ; set to nil to opt out of \-leader input
 ```
 
 #### Step 4: Restart Emacs
@@ -231,14 +260,21 @@ If you use `straight.el` as your package manager:
 (straight-use-package 'lsp-mode)
 (straight-use-package 'lsp-ui)
 (straight-use-package 'company)
+(straight-use-package 'yasnippet)
+
+;; Register the Event-B snippets
+(add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+(yas-reload-all)
 
 ;; Install Event-B mode from local path
 (use-package eventb-mode
   :straight (eventb-mode :type built-in
                          :local-repo "/path/to/rossi/editors/emacs")
   :mode "\\.eventb\\'"
-  :hook (eventb-mode . lsp-deferred)
+  :hook ((eventb-mode . lsp-deferred)
+         (eventb-mode . yas-minor-mode))
   :config
+  ;; \-leader Unicode input is auto-enabled by eventb-mode
   (setq lsp-rossi-format-use-unicode t))
 ```
 
@@ -269,7 +305,11 @@ Enhanced configuration with keybindings and settings:
   :config
   (lsp-enable-which-key-integration t)
   (setq lsp-headerline-breadcrumb-enable t)
-  (setq lsp-idle-delay 0.5))
+  (setq lsp-idle-delay 0.5)
+  ;; Pinned Event-B defaults
+  (setq lsp-semantic-tokens-enable t)   ; Server-driven semantic highlighting
+  (setq lsp-lens-enable t)              ; ProB animate/model-check code lens
+  (setq lsp-extend-selection t))        ; Smart expand/shrink selection
 
 ;; LSP UI configuration
 (use-package lsp-ui
@@ -292,20 +332,35 @@ Enhanced configuration with keybindings and settings:
   (setq company-idle-delay 0.1)
   (setq company-selection-wrap-around t))
 
+;; Snippets configuration
+(use-package yasnippet
+  :ensure t
+  :config
+  (add-to-list 'yas-snippet-dirs "/path/to/rossi/editors/emacs/snippets")
+  (yas-reload-all))
+
 ;; Event-B Mode configuration
 (use-package eventb-mode
   :load-path "/path/to/rossi/editors/emacs"
   :mode "\\.eventb\\'"
-  :hook (eventb-mode . lsp-deferred)
+  :hook ((eventb-mode . lsp-deferred)
+         (eventb-mode . yas-minor-mode))
   :bind (:map eventb-mode-map
          ;; Formatting
-         ("C-c C-f" . lsp-format-buffer)
+         ("C-c C-f"   . lsp-format-buffer)
          ;; Code actions
-         ("C-c C-a" . lsp-execute-code-action)
+         ("C-c C-a"   . lsp-execute-code-action)
          ;; Rename
-         ("C-c r"   . lsp-rename)
+         ("C-c r"     . lsp-rename)
          ;; Documentation
-         ("C-c h"   . lsp-describe-thing-at-point))
+         ("C-c h"     . lsp-describe-thing-at-point)
+         ;; Notation conversion
+         ("C-c C-u"   . eventb-convert-to-unicode)
+         ("C-c C-d"   . eventb-convert-to-ascii)
+         ;; Checker and ProB
+         ("C-c C-v"   . eventb-validate)
+         ("C-c C-p a" . eventb-animate-prob)
+         ("C-c C-p m" . eventb-model-check-prob))
   :config
   ;; Event-B specific settings
   (setq lsp-rossi-format-use-unicode t)
@@ -314,6 +369,10 @@ Enhanced configuration with keybindings and settings:
   (setq lsp-rossi-diagnostics-enabled t)
   (setq lsp-rossi-diagnostics-debounce-ms 500)
   (setq lsp-rossi-completion-enabled t)
+
+  ;; Backslash-leader Unicode input (\to, \and, \forall, …) is auto-enabled
+  ;; by eventb-mode; set this to nil to opt out.
+  (setq eventb-enable-input-method t)
 
   ;; Enable format on save
   (add-hook 'eventb-mode-hook
@@ -465,6 +524,51 @@ M-x locate-library RET eventb-mode
    ```
    M-x company-complete
    ```
+
+### Snippets Not Expanding
+
+**Problem**: Typing `mch` then `TAB` does not expand a template
+
+**Solution**:
+1. Ensure yasnippet is active in the buffer:
+   ```
+   M-x yas-minor-mode
+   ```
+
+2. Verify the snippet directory is registered and loaded:
+   ```elisp
+   M-: yas-snippet-dirs        ; should include .../editors/emacs/snippets
+   M-x yas-reload-all
+   ```
+
+3. List the snippets available in the buffer:
+   ```
+   M-x yas-describe-tables
+   ```
+
+### Input Method Not Inserting Unicode
+
+**Problem**: Typing `\to` does not produce →
+
+**Solution**:
+1. Make sure the package is loaded and the method is active:
+   ```
+   M-x eventb-activate-input-method
+   ```
+   The mode line should show the `EvB` indicator.
+
+2. Confirm the method is registered:
+   ```
+   M-x list-input-methods
+   ```
+   Look for `eventb`. If missing, load it:
+   ```elisp
+   (require 'eventb-input)
+   ```
+
+3. Remember it is **leader-only**: `=>` and the other eager combos are not bound
+   in Emacs by design. Use the backslash spelling (`\implies`) or
+   `M-x eventb-convert-to-unicode` to convert the whole buffer.
 
 ### Unicode Characters Not Displaying
 
