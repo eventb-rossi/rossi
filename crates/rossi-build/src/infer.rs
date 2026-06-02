@@ -267,15 +267,11 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
             BuiltinFunction::Card | BuiltinFunction::Min | BuiltinFunction::Max => {
                 Some(Type::Integer)
             }
-            // id(S) : ℙ(T × T) when S : ℙ(T).
-            BuiltinFunction::Id => {
-                let arg_ty = type_of_expression(env, arguments.first()?)?;
-                let Type::PowerSet(elem) = arg_ty else {
-                    return None;
-                };
-                let elem_clone = (*elem).clone();
-                Some(Type::pow(Type::prod(*elem, elem_clone)))
-            }
+            // `id` is the generic identity relation (ℙ(α × α)); `id(x)` is
+            // function application of identity, so `id(x) : typeof(x)`
+            // (e.g. id(S) : ℙ(S), id(n) : ℤ). This matches Rodin's modern
+            // KID_GEN semantics, not the legacy "identity-on-set" reading.
+            BuiltinFunction::Id => type_of_expression(env, arguments.first()?),
             // prj1(r) : ℙ((α × β) × α) when r : ℙ(α × β).
             BuiltinFunction::Prj1 => {
                 let arg_ty = type_of_expression(env, arguments.first()?)?;
@@ -1401,6 +1397,23 @@ mod tests {
         // Non-nested argument (ℙ(USERS)) has no power-set level to collapse.
         env.insert("flat", Type::pow(Type::GivenSet("USERS".into())));
         assert_eq!(type_of_expression(&env, &parse_expr("union(flat)")), None);
+    }
+
+    #[test]
+    fn id_is_application_of_generic_identity() {
+        // id(x) : typeof(x). id(S) : ℙ(S); id(n) : ℤ. (Rodin KID_GEN, not the
+        // legacy identity-on-set reading that would give ℙ(S × S).)
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        env.insert("n", Type::Integer);
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("id(S)")),
+            Some(Type::pow(Type::GivenSet("S".into())))
+        );
+        assert_eq!(
+            type_of_expression(&env, &parse_expr("id(n)")),
+            Some(Type::Integer)
+        );
     }
 
     #[test]
