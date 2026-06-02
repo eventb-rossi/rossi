@@ -580,10 +580,7 @@ mod tests {
         let mut env = TypeEnv::new();
         env.insert(
             "integral",
-            Type::pow(Type::prod(
-                Type::pow(Type::prod(Type::Integer, Type::Integer)),
-                Type::Integer,
-            )),
+            Type::relation(Type::relation(Type::Integer, Type::Integer), Type::Integer),
         );
         let p =
             parse_predicate_str("integral = (λ x · x = ∅ ∣ 0) ∪ (λ x⦂ℙ(ℤ×ℤ) · x = ∅ ∣ 1)").unwrap();
@@ -668,7 +665,7 @@ mod tests {
         // If the binder already carries an explicit type, expected-type
         // propagation must not override it.
         let mut env = TypeEnv::new();
-        env.insert("f", Type::pow(Type::prod(Type::Integer, Type::Integer)));
+        env.insert("f", Type::relation(Type::Integer, Type::Integer));
         let p = parse_predicate_str("f = (λ x⦂BOOL · x = TRUE ∣ 0)").unwrap();
         let enriched = enrich_predicate(p, &env);
         let Predicate::Comparison { right, .. } = enriched else {

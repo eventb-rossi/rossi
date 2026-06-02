@@ -31,6 +31,25 @@ impl Type {
         Type::Product(Box::new(left), Box::new(right))
     }
 
+    /// Relation / function type `ℙ(left × right)` — Event-B's `left ↔ right`.
+    pub fn relation(left: Type, right: Type) -> Type {
+        Type::pow(Type::prod(left, right))
+    }
+
+    /// Inverse of [`Type::relation`]: if `self` is `ℙ(α × β)`, consume it and
+    /// yield `(α, β)`; otherwise `None`. Consuming (not borrowing) so callers
+    /// move the component types out without cloning, matching the inference
+    /// engine's idiom.
+    pub fn into_relation(self) -> Option<(Type, Type)> {
+        match self {
+            Type::PowerSet(inner) => match *inner {
+                Type::Product(l, r) => Some((*l, *r)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// A carrier-set `S` has type `ℙ(S)` in Rodin's system — this is the
     /// type of the set itself, not of its elements.
     pub fn carrier_set_type(name: &str) -> Type {
@@ -144,8 +163,35 @@ mod tests {
 
     #[test]
     fn canonical_relation_type() {
-        // ℙ(ℤ×ℤ) — from binary-search's constant `f`.
+        // ℙ(ℤ×ℤ) — from binary-search's constant `f`. Built from the primitive
+        // `pow`/`prod` on purpose, to keep the canonical-form check decoupled
+        // from the `relation` constructor (see `relation_constructor`).
         let t = Type::pow(Type::prod(Type::Integer, Type::Integer));
         assert_eq!(t.to_rodin_canonical(), "ℙ(ℤ×ℤ)");
+    }
+
+    #[test]
+    fn relation_constructor() {
+        // relation(α, β) is ℙ(α×β) — equal to the primitive spelling and
+        // rendering the same canonical string.
+        let r = Type::relation(Type::Integer, Type::GivenSet("S".into()));
+        assert_eq!(
+            r,
+            Type::pow(Type::prod(Type::Integer, Type::GivenSet("S".into())))
+        );
+        assert_eq!(r.to_rodin_canonical(), "ℙ(ℤ×S)");
+    }
+
+    #[test]
+    fn into_relation_roundtrip_and_rejects_non_relations() {
+        // relation/into_relation are inverses.
+        let (a, b) = (Type::Integer, Type::GivenSet("S".into()));
+        assert_eq!(
+            Type::relation(a.clone(), b.clone()).into_relation(),
+            Some((a, b))
+        );
+        // A powerset of a non-product (ℙ(ℤ)) and a bare type both yield None.
+        assert_eq!(Type::pow(Type::Integer).into_relation(), None);
+        assert_eq!(Type::Integer.into_relation(), None);
     }
 }

@@ -193,10 +193,7 @@ mod tests {
         env.insert("item", Type::pow(Type::carrier_elem("ITEMS")));
         env.insert(
             "auctions",
-            Type::pow(Type::prod(
-                Type::carrier_elem("AUCTIONS"),
-                Type::carrier_elem("ITEMS"),
-            )),
+            Type::relation(Type::carrier_elem("AUCTIONS"), Type::carrier_elem("ITEMS")),
         );
         env
     }
