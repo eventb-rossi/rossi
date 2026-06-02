@@ -500,7 +500,7 @@ rossi/
 ### Setup
 
 ```bash
-# Enable pre-commit hook (runs cargo fmt, clippy, and tests)
+# Enable pre-commit hook (runs cargo fmt, clippy, doc, and tests)
 git config core.hooksPath .githooks
 ```
 
