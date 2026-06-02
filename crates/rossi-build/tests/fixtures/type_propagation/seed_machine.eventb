@@ -1,0 +1,31 @@
+CONTEXT seed_machine_ctx
+SETS
+    S
+END
+
+MACHINE seed_machine
+SEES
+    seed_machine_ctx
+VARIABLES
+    v, w
+INVARIANTS
+    @inv1 v ∈ ℤ
+    @inv2 w ∈ S ↔ ℤ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 v ≔ 0
+        @act2 w ≔ ∅
+    END
+
+    EVENT step
+    ANY
+        p
+        q
+    WHERE
+        @grd1 p ∈ S
+        @grd2 q ∈ ℤ
+    THEN
+        @act1 v ≔ q
+    END
+END

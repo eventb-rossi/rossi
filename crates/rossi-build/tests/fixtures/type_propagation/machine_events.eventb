@@ -1,0 +1,53 @@
+CONTEXT machine_events_ctx
+SETS
+    S, T
+CONSTANTS
+    rel, fn
+AXIOMS
+    @axm1 rel ∈ S ↔ T
+    @axm2 fn ∈ S → T
+END
+
+MACHINE machine_events
+SEES
+    machine_events_ctx
+VARIABLES
+    var_rel, var_int
+INVARIANTS
+    @inv1 var_rel ∈ S ⇸ T
+    @inv2 var_int ∈ ℤ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 var_rel ≔ ∅
+        @act2 var_int ≔ 0
+    END
+
+    EVENT param_by_maplet
+    ANY
+        p
+        q
+    WHERE
+        @grd1 p ↦ q ∈ rel
+    THEN
+        @act1 var_rel ≔ {p ↦ q}
+    END
+
+    EVENT param_by_application
+    ANY
+        a
+    WHERE
+        @grd1 fn(a) ∈ T
+    THEN
+        @act1 var_int ≔ var_int + 1
+    END
+
+    EVENT param_by_comparison
+    ANY
+        n
+    WHERE
+        @grd1 n > var_int
+    THEN
+        @act1 var_int ≔ n
+    END
+END

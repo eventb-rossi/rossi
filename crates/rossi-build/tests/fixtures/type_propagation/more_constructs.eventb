@@ -1,0 +1,15 @@
+CONTEXT more_constructs
+SETS
+    S, T, U
+CONSTANTS
+    x, y, f, dapp, ge_c, rel_prod, notin_seed
+AXIOMS
+    @axm1 x ∈ S
+    @axm2 y ∈ T
+    @axm3 f ∈ S → (T → U)
+    @axm4 dapp = f(x)(y)
+    @axm5 ge_c ≥ 0
+    @axm6 rel_prod ∈ (S × T) ↔ U
+    @axm7 notin_seed ⊆ S
+    @axm8 x ∉ notin_seed
+END

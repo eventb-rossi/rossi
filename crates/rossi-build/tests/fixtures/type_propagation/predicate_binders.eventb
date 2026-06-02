@@ -1,0 +1,12 @@
+CONTEXT predicate_binders
+SETS
+    S
+CONSTANTS
+    part_a, part_b, boolc, lt, le, qexpr
+AXIOMS
+    @axm1 partition(S, part_a, part_b)
+    @axm2 boolc = bool(1 < 2)
+    @axm3 lt > 0
+    @axm4 le ≤ 100
+    @axm5 ∀w · w ∈ part_a ⇒ qexpr ∈ part_b
+END

@@ -1,0 +1,13 @@
+CONTEXT products_maplets
+SETS
+    S, T, U
+CONSTANTS
+    x, y, z, prod, mp, mp3
+AXIOMS
+    @axm1 x ∈ S
+    @axm2 y ∈ T
+    @axm3 z ∈ U
+    @axm4 prod ∈ S × T
+    @axm5 mp = x ↦ y
+    @axm6 mp3 = x ↦ y ↦ z
+END
