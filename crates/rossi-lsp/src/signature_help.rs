@@ -6,6 +6,7 @@
 //! - Lambda functions: λx,y·E
 //! - Set comprehension: {x·P | E}
 
+use crate::identifier_utils::position_to_offset;
 use crate::lsp_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureHelpParams,
     SignatureInformation,
@@ -404,35 +405,6 @@ impl SignatureHelpProvider {
     }
 }
 
-/// Convert LSP Position to byte offset in text
-fn position_to_offset(text: &str, position: Position) -> Option<usize> {
-    let mut line = 0;
-    let mut col = 0;
-    let mut offset = 0;
-
-    for ch in text.chars() {
-        if line == position.line as usize && col == position.character as usize {
-            return Some(offset);
-        }
-
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-
-        offset += ch.len_utf8();
-    }
-
-    // Handle position at end of file
-    if line == position.line as usize && col == position.character as usize {
-        Some(offset)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,16 +424,6 @@ mod tests {
             work_done_progress_params: crate::lsp_types::WorkDoneProgressParams::default(),
             context: None,
         }
-    }
-
-    #[test]
-    fn test_position_to_offset() {
-        let text = "line1\nline2\nline3";
-        assert_eq!(position_to_offset(text, make_position(0, 0)), Some(0));
-        assert_eq!(position_to_offset(text, make_position(0, 5)), Some(5));
-        assert_eq!(position_to_offset(text, make_position(1, 0)), Some(6));
-        assert_eq!(position_to_offset(text, make_position(1, 3)), Some(9));
-        assert_eq!(position_to_offset(text, make_position(2, 5)), Some(17));
     }
 
     #[test]

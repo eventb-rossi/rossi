@@ -3,36 +3,9 @@
 //! This module analyzes Event-B components and extracts symbols for navigation
 //! and other LSP features.
 
-use crate::lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
-use rossi::ast::Span;
+use crate::identifier_utils::span_to_range;
+use crate::lsp_types::{DocumentSymbol, Range, SymbolKind};
 use rossi::{Component, Context, Event, EventStatus, Machine};
-
-/// Convert a Span to an LSP Range using the source text
-fn span_to_range(span: &Span, source: &str) -> Range {
-    let (start_line, start_col) = span.to_line_col(source);
-
-    // Calculate end position
-    let mut line = start_line;
-    let mut col = start_col;
-    for (i, c) in source.char_indices() {
-        if i >= span.end {
-            break;
-        }
-        if i >= span.start {
-            if c == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-    }
-
-    Range {
-        start: Position::new(start_line as u32, start_col as u32),
-        end: Position::new(line as u32, col as u32),
-    }
-}
 
 /// Extract document symbols from a component
 pub fn extract_symbols(component: &Component, source: &str) -> Vec<DocumentSymbol> {

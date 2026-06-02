@@ -48,6 +48,7 @@ pub mod keywords;
 pub mod operators;
 pub mod parser;
 pub mod pretty;
+pub mod selection;
 pub mod xml;
 
 // Re-export main types for convenience
@@ -66,6 +67,7 @@ pub use pretty::{
     PrettyPrinter, components_to_string, components_to_string_ascii, format_str, to_string,
     to_string_ascii,
 };
+pub use selection::enclosing_spans;
 pub use xml::{
     NamedComponent, component_filename, parse_xml, parse_zip, parse_zip_file,
     parse_zip_file_with_recovery, parse_zip_with_recovery, to_project_zip, to_xml, to_zip,

@@ -21,6 +21,7 @@ use crate::hover::HoverProvider;
 use crate::prob::ProBProvider;
 use crate::references::ReferenceProvider;
 use crate::rename::RenameProvider;
+use crate::selection_range::SelectionRangeProvider;
 use crate::semantic_tokens::SemanticTokensProvider;
 use crate::signature_help::SignatureHelpProvider;
 use crate::workspace::WorkspaceSymbolProvider;
@@ -57,6 +58,8 @@ pub struct RossiLanguageServer {
     code_actions_provider: Arc<CodeActionProvider>,
     /// Folding range provider
     folding_range_provider: Arc<FoldingRangeProvider>,
+    /// Selection range provider (smart expand/shrink selection)
+    selection_range_provider: Arc<SelectionRangeProvider>,
     /// Signature help provider
     signature_help_provider: Arc<SignatureHelpProvider>,
     /// ProB integration provider
@@ -117,6 +120,7 @@ impl RossiLanguageServer {
             document_links_provider: Arc::new(document_links_provider),
             code_actions_provider: Arc::new(CodeActionProvider::new()),
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
+            selection_range_provider: Arc::new(SelectionRangeProvider::new()),
             signature_help_provider: Arc::new(SignatureHelpProvider::new()),
             prob_provider: Arc::new(ProBProvider::new()),
         }
@@ -232,6 +236,7 @@ impl LanguageServer for RossiLanguageServer {
                     },
                 )),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec![
                         "∀".to_string(),
@@ -434,6 +439,27 @@ impl LanguageServer for RossiLanguageServer {
         let symbols = analysis::extract_symbols(&component, &text);
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        let uri = params.text_document.uri;
+        debug!("Selection range request for: {}", uri);
+
+        let text = match self.document_manager.get_text(&uri) {
+            Some(text) => text,
+            None => {
+                debug!("Document not found: {}", uri);
+                return Ok(None);
+            }
+        };
+
+        let ranges = self
+            .selection_range_provider
+            .selection_ranges(&text, &params.positions);
+        Ok(Some(ranges))
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

@@ -541,6 +541,7 @@ The project includes a fully-featured **Language Server Protocol (LSP)** impleme
 - **Signature help** - Quantifier and lambda parameter hints
 - **Document links** - Clickable SEES/REFINES/EXTENDS references
 - **Code folding** - Collapse contexts, machines, events, and clause sections
+- **Smart selection** - Expand/shrink selection by syntactic structure
 - **Cross-file resolution** - Transitive SEES/REFINES/EXTENDS chain traversal
 - **ProB integration** - Code lenses for model checking (when ProB is installed)
 
