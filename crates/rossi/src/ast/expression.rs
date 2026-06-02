@@ -109,8 +109,6 @@ pub enum BuiltinFunction {
     Id,
     Prj1,
     Prj2,
-    Closure,
-    Closure1,
 }
 
 impl BuiltinFunction {
@@ -123,8 +121,6 @@ impl BuiltinFunction {
             BuiltinFunction::Id => "id",
             BuiltinFunction::Prj1 => "prj1",
             BuiltinFunction::Prj2 => "prj2",
-            BuiltinFunction::Closure => "closure",
-            BuiltinFunction::Closure1 => "closure1",
         }
     }
 
@@ -141,9 +137,7 @@ impl BuiltinFunction {
             | BuiltinFunction::Max
             | BuiltinFunction::Id
             | BuiltinFunction::Prj1
-            | BuiltinFunction::Prj2
-            | BuiltinFunction::Closure
-            | BuiltinFunction::Closure1 => 1,
+            | BuiltinFunction::Prj2 => 1,
         }
     }
 
@@ -153,9 +147,7 @@ impl BuiltinFunction {
             BuiltinFunction::Card
             | BuiltinFunction::Min
             | BuiltinFunction::Max
-            | BuiltinFunction::Id
-            | BuiltinFunction::Closure
-            | BuiltinFunction::Closure1 => 1,
+            | BuiltinFunction::Id => 1,
             BuiltinFunction::Prj1 | BuiltinFunction::Prj2 => 2,
         }
     }
@@ -174,8 +166,6 @@ impl BuiltinFunction {
             "id" => Some(BuiltinFunction::Id),
             "prj1" => Some(BuiltinFunction::Prj1),
             "prj2" => Some(BuiltinFunction::Prj2),
-            "closure" => Some(BuiltinFunction::Closure),
-            "closure1" => Some(BuiltinFunction::Closure1),
             _ => None,
         }
     }

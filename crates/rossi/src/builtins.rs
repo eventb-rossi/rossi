@@ -3,8 +3,7 @@
 //! This is the single source of truth for the built-in type/constant, function,
 //! and predicate identifiers that may not be used as user identifiers. The word
 //! list is taken from *The Event-B Mathematical Language* (`docs/kernel_lang.pdf`,
-//! §2.2, p.4), plus the Rodin extensions this codebase supports (`closure`,
-//! `closure1`) and the alphabetic spellings of operator words.
+//! §2.2, p.4) and the alphabetic spellings of operator words.
 //!
 //! The non-ASCII symbol atoms (`ℕ ℕ1 ℙ ℙ1 ℤ` …) are operator spellings handled by
 //! [`crate::operators`]; only identifier-shaped words live here.
@@ -24,7 +23,7 @@ pub const BUILTIN_WORDS: &[&str] = &[
     "int",
     "pow",
     "pow1",
-    // Built-in functions (kernel_lang §2.2 + Rodin closure extensions)
+    // Built-in functions (kernel_lang §2.2)
     "card",
     "min",
     "max",
@@ -33,8 +32,6 @@ pub const BUILTIN_WORDS: &[&str] = &[
     "prj2",
     "pred",
     "succ",
-    "closure",
-    "closure1",
     // Built-in predicates
     "finite",
     "partition",
@@ -78,8 +75,6 @@ mod tests {
             BuiltinFunction::Id,
             BuiltinFunction::Prj1,
             BuiltinFunction::Prj2,
-            BuiltinFunction::Closure,
-            BuiltinFunction::Closure1,
         ];
         for f in functions {
             assert!(

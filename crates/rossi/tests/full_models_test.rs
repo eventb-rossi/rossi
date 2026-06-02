@@ -1138,27 +1138,6 @@ fn test_builtin_min_max() {
 }
 
 #[test]
-fn test_builtin_closure() {
-    let ctx = common::parse_context(
-        "CONTEXT test\nAXIOMS\n    @axm1 closure(r) = S\n    @axm2 closure1(r) = S\nEND\n",
-    );
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
-        assert!(
-            matches!(left, Expression::BuiltinApplication { function, .. } if *function == BuiltinFunction::Closure),
-            "Expected Closure, got {:?}",
-            left
-        );
-    }
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[1].predicate {
-        assert!(
-            matches!(left, Expression::BuiltinApplication { function, .. } if *function == BuiltinFunction::Closure1),
-            "Expected Closure1, got {:?}",
-            left
-        );
-    }
-}
-
-#[test]
 fn test_builtin_id_prj() {
     let ctx = common::parse_context(
         "CONTEXT test\nAXIOMS\n    @axm1 id(S) = S\n    @axm2 prj1(S, T) = S\n    @axm3 prj2(S, T) = T\nEND\n",

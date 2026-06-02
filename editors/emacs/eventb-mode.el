@@ -99,7 +99,7 @@ with `eventb-toggle-input-method'."
   "Event-B literal constants and number sets.")
 
 (defconst eventb-builtins
-  '("card" "closure" "closure1" "finite" "id" "max" "min" "partition" "pred" "prj1" "prj2" "succ")
+  '("card" "finite" "id" "max" "min" "partition" "pred" "prj1" "prj2" "succ")
   "Event-B built-in functions and predicates.")
 
 (defconst eventb-operator-words

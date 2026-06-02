@@ -24,7 +24,7 @@ contexts:
       scope: constant.language.eventb
     - match: '(?i)\b(bool|false|int|nat|nat1|true)\b'
       scope: constant.language.eventb
-    - match: '(?i)\b(card|closure|closure1|finite|id|max|min|partition|pred|prj1|prj2|succ)\b'
+    - match: '(?i)\b(card|finite|id|max|min|partition|pred|prj1|prj2|succ)\b'
       scope: support.function.eventb
     - match: '(<<->>|/<<:|:∈|:∣|<->>|<<->|>->>|ℙ1|\+->|\+>>|-->|->>|/<:|<->|<<:|<<\||<=>|>\+>|>->|\|->|\|>>|‥|ℙ|→|↔|↠|↣|↦|⇒|⇔|⇸|∀|∃|∈|∉|−|∖|∗|∘|∣|∥|∧|∨|∩|∪|∼|≔|≠|≤|≥|⊂|⊄|⊆|⊈|⊗|⋂|⋃|▷|◁|⤀|⤔|⤖|⦂|⩤|⩥|||||\*\*|\.\.|/:|/=|/\\|::|:=|:\||<\+|<:|<=|<\||=>|><|>=|\\/|\|>|\|\||¬|·|×|÷|λ|!|#|%|&|\*|\+|-|\.|/|:|;|<|=|>|\\|\^|\||~)'
       scope: keyword.operator.eventb
