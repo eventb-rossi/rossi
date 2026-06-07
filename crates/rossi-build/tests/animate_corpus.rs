@@ -1,7 +1,11 @@
 //! Corpus integration test — regenerate every model with our static checker,
-//! then load it in ProB via the `animate` CLI and compare the outcome
+//! then load it in ProB via the `eventb-animate` CLI and compare the outcome
 //! (`success` / `invariant_violation` / `load_error` / `deadlock` / `timeout`)
 //! against the reference `animate_results.tsv`.
+//!
+//! Requires `eventb-animate` v5.0+, which exits 0 on success and 1 on load
+//! error, deadlock, or invariant violation (v4.x treated deadlock as exit 0,
+//! so since v5.0 `deadlock` is a first-class reference outcome).
 //!
 //! `#[ignore]` by default: the corpus and animate executable live outside the
 //! repo. Run locally:
@@ -16,8 +20,8 @@
 //!
 //! Per-model metadata comes from the corpus itself: column 4 of
 //! `animate_results.tsv` names the machine each reference outcome was
-//! recorded with (`(auto)` = let the animate CLI pick), and
-//! `model_flags.tsv` flags known-defective models.
+//! recorded with (`(auto)` = let eventb-animate pick), and
+//! `model_flags.tsv` flags known-defective and nondeterministic models.
 //!
 //! Output:
 //!   target/eventb-models-regen/<model>.zip     — regenerated archives
@@ -27,6 +31,8 @@
 //!   match   — actual outcome matches the reference TSV
 //!   known   — mismatch on a model flagged `defective` in the corpus
 //!             `model_flags.tsv` (does not fail)
+//!   flaky   — success ↔ invariant_violation drift on a model flagged
+//!             `nondeterministic` (does not fail)
 //!   regress — unexpected mismatch (fails the test)
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -118,6 +124,10 @@ fn animate_regenerated_corpus_matches_reference() {
             "match"
         } else if has_flag(&model, "defective") {
             "known"
+        } else if has_flag(&model, "nondeterministic")
+            && is_invariant_drift(&expected_outcome, actual_str)
+        {
+            "flaky"
         } else {
             regressions += 1;
             "regress"
@@ -272,7 +282,7 @@ fn load_expected(tsv: &Path) -> Option<BTreeMap<String, String>> {
 }
 
 /// Column 4 of `animate_results.tsv`: the machine the reference outcome was
-/// recorded with. `(auto)` rows are omitted (the animate CLI picks).
+/// recorded with. `(auto)` rows are omitted (eventb-animate picks).
 fn load_machines(tsv: &Path) -> Option<BTreeMap<String, String>> {
     let s = std::fs::read_to_string(tsv).ok()?;
     let mut out = BTreeMap::new();
@@ -393,7 +403,17 @@ fn wait_with_timeout(
     }
 }
 
+/// True when the two outcomes differ only by hitting (or missing) a
+/// reachable invariant violation — the drift the `nondeterministic`
+/// flag tolerates.
+fn is_invariant_drift(expected: &str, actual: &str) -> bool {
+    const DRIFT: [&str; 2] = ["success", "invariant_violation"];
+    DRIFT.contains(&expected) && DRIFT.contains(&actual)
+}
+
 fn classify(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
+    // eventb-animate v5.0 exit contract: 0 = success; 1 = load error,
+    // deadlock, or invariant violation, distinguished by the output text.
     if exit == Some(0) {
         return Outcome::Success;
     }
@@ -402,10 +422,7 @@ fn classify(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
     if combined.contains("violated invariants") {
         return Outcome::InvariantViolation;
     }
-    if lower.contains("can't find an event")
-        || lower.contains("deadlock")
-        || lower.contains("no events")
-    {
+    if lower.contains("can't find an event") || lower.contains("deadlock") {
         return Outcome::Deadlock;
     }
     // Pull a short hint for the report.
