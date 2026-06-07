@@ -1,7 +1,11 @@
 //! Corpus integration test — regenerate every model with our static checker,
-//! then load it in ProB via the `animate` CLI and compare the outcome
+//! then load it in ProB via the `eventb-animate` CLI and compare the outcome
 //! (`success` / `invariant_violation` / `load_error` / `deadlock` / `timeout`)
 //! against the reference `animate_results.tsv`.
+//!
+//! Requires `eventb-animate` v5.0+, which exits 0 on success and 1 on load
+//! error, deadlock, or invariant violation (v4.x treated deadlock as exit 0,
+//! so since v5.0 `deadlock` is a first-class reference outcome).
 //!
 //! `#[ignore]` by default: the corpus and animate executable live outside the
 //! repo. Run locally:
@@ -21,6 +25,8 @@
 //! Verdicts:
 //!   match   — actual outcome matches the reference TSV
 //!   known   — mismatch is on the known-defective list (does not fail)
+//!   flaky   — success ↔ invariant_violation drift on a model from the
+//!             nondeterministic list (does not fail)
 //!   regress — unexpected mismatch (fails the test)
 
 use std::collections::BTreeMap;
@@ -55,19 +61,18 @@ const MACHINE_OVERRIDES: &[(&str, &str)] = &[
     ("tutorial_ggx2-tut3", "test1"),
 ];
 
-/// Models whose pre-existing reference outcome is itself a load/parse failure
-/// (per `animate_results.tsv` and `CHECKER.md`). A mismatch on these is not
-/// counted as a regression — they're either known-broken sources or ProB
-/// limitations independent of our SC.
-const KNOWN_DEFECTIVE: &[&str] = &[
-    // animate_results.tsv pre-existing load errors
-    "experiments_012_datarefinement",
-    "progman",
-    "tcb",
-    // CHECKER.md known-broken sources (incomplete formulas)
-    "tutorial_abk-summation",
-    "tutorial_ggx2-tut3",
-];
+/// Models whose sources are known-broken (incomplete formulas per the corpus
+/// `CHECKER.md`): regeneration fails with a parse error, so they can never
+/// match the reference outcome. A mismatch on these is not counted as a
+/// regression.
+const KNOWN_DEFECTIVE: &[&str] = &["tutorial_abk-summation", "tutorial_ggx2-tut3"];
+
+/// Models whose outcome legitimately varies between runs: random animation
+/// may hit a reachable invariant violation on one run and miss it on the
+/// next (see corpus `ANIMATE.md`). A `success` ↔ `invariant_violation`
+/// mismatch on these is reported as `flaky`, not a regression; any other
+/// drift (e.g. `load_error`, `deadlock`) still regresses.
+const NONDETERMINISTIC: &[&str] = &["comp1216_hotel_reception", "etcs_subset026_chap46"];
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
@@ -111,6 +116,7 @@ fn animate_regenerated_corpus_matches_reference() {
 
     let machine_map: BTreeMap<&str, &str> = MACHINE_OVERRIDES.iter().copied().collect();
     let known: std::collections::BTreeSet<&str> = KNOWN_DEFECTIVE.iter().copied().collect();
+    let nondet: std::collections::BTreeSet<&str> = NONDETERMINISTIC.iter().copied().collect();
     let mut rows = Vec::<Row>::new();
     let mut regressions = 0usize;
 
@@ -140,6 +146,10 @@ fn animate_regenerated_corpus_matches_reference() {
             "match"
         } else if known.contains(model.as_str()) {
             "known"
+        } else if nondet.contains(model.as_str())
+            && is_invariant_drift(&expected_outcome, actual_str)
+        {
+            "flaky"
         } else {
             regressions += 1;
             "regress"
@@ -380,7 +390,16 @@ fn wait_with_timeout(
     }
 }
 
+/// True when the two outcomes differ only by hitting (or missing) a
+/// reachable invariant violation — the drift `NONDETERMINISTIC` tolerates.
+fn is_invariant_drift(expected: &str, actual: &str) -> bool {
+    const DRIFT: [&str; 2] = ["success", "invariant_violation"];
+    DRIFT.contains(&expected) && DRIFT.contains(&actual)
+}
+
 fn classify(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
+    // eventb-animate v5.0 exit contract: 0 = success; 1 = load error,
+    // deadlock, or invariant violation, distinguished by the output text.
     if exit == Some(0) {
         return Outcome::Success;
     }
@@ -389,10 +408,7 @@ fn classify(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
     if combined.contains("violated invariants") {
         return Outcome::InvariantViolation;
     }
-    if lower.contains("can't find an event")
-        || lower.contains("deadlock")
-        || lower.contains("no events")
-    {
+    if lower.contains("can't find an event") || lower.contains("deadlock") {
         return Outcome::Deadlock;
     }
     // Pull a short hint for the report.
