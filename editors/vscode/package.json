@@ -11,7 +11,7 @@
     "url": "https://github.com/eventb-rossi/rossi"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages",
@@ -449,7 +449,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.2",
-    "@types/vscode": "^1.75.0",
+    "@types/vscode": "^1.91.0",
     "@typescript-eslint/eslint-plugin": "^8.60.1",
     "@typescript-eslint/parser": "^8.60.0",
     "@vscode/vsce": "^3.9.2",
@@ -457,6 +457,6 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.0.0"
   }
 }
