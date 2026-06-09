@@ -1,14 +1,21 @@
-//! Zed tree-sitter grammar (`editors/zed/grammars/tree-sitter-eventb`) and its
-//! highlight queries (`editors/zed/languages/eventb/highlights.scm`).
+//! The standalone tree-sitter grammar (`editors/tree-sitter-eventb`, published as
+//! `eventb-rossi/tree-sitter-eventb`) and its highlight queries. This grammar is
+//! consumed by the Zed extension, nvim-treesitter, Helix and friends; the captures
+//! use the standard ecosystem names (`@keyword`, `@operator`, …).
 //!
-//! Zed is the only editor that needs a tree-sitter grammar rather than a regex
-//! highlighter, but it only needs a *lexical* one: a parser that recognises each
-//! coloured token class as its own node. We generate exactly that — the token
-//! rules — into `grammar.js`'s marked region, and the `highlights.scm`
-//! node→capture mapping whole-file. The grammar's surrounding scaffold
+//! tree-sitter consumers need a *lexical* grammar to start: a parser that
+//! recognises each coloured token class as its own node. We generate exactly that
+//! — the token rules — into `grammar.js`'s marked region, and the token→capture
+//! lines into `highlights.scm`'s marked region (so hand-written captures for future
+//! structural nodes can live outside it). The grammar's surrounding scaffold
 //! (`source_file`, `identifier`, `number`, `string`, `comment`, `label`,
-//! punctuation, `extras`, `word`) is hand-maintained, since it is fixed
-//! structure rather than token data.
+//! punctuation, `extras`, `word`) — and any later hand-written structural rules —
+//! are hand-maintained, since they are structure rather than token data.
+//!
+//! We also emit a token *manifest* ([`tokens_manifest`]): the canonical
+//! classification as plain JSON the standalone repo's behavioral test reads to
+//! check the built parser still tokenizes every canonical spelling correctly —
+//! a contract that holds even after the grammar is hand-extended.
 //!
 //! ## Why one node per (class, kind), and no `prec`
 //!
@@ -37,11 +44,22 @@ pub const MARKERS: Markers = Markers {
     end: "// <<< rossi gen-grammars",
 };
 
+/// The generated region inside the standalone grammar's `queries/highlights.scm`
+/// (the one hand-editable highlights file; Zed's bundled copy is written verbatim
+/// from it). The token→capture lines are generated; hand-written captures for
+/// future structural nodes live outside the region, so highlighting can be
+/// hand-extended without breaking the byte check.
+pub const MARKERS_SCM: Markers = Markers {
+    begin: "; >>> rossi gen-grammars (generated, do not edit)",
+    end: "; <<< rossi gen-grammars",
+};
+
 /// The tree-sitter node (rule) name a coloured class is emitted as, split by
 /// match kind so word nodes stay pure (keyword-extractable) and symbol nodes
 /// stay free of identifier collisions. The hand-maintained `_token` rule in
-/// `grammar.js` lists exactly these names, and [`render_highlights`] captures
-/// them — so a new [`Scope`] variant breaks this `match` until it is handled.
+/// `grammar.js` lists exactly these names, and [`render_highlights_region`]
+/// captures them — so a new [`Scope`] variant breaks this `match` until it is
+/// handled.
 pub fn node_name(scope: Scope, kind: MatchKind) -> &'static str {
     match (scope, kind) {
         (Scope::KeywordControl, _) => "keyword",
@@ -54,13 +72,14 @@ pub fn node_name(scope: Scope, kind: MatchKind) -> &'static str {
     }
 }
 
-/// The Zed/tree-sitter highlight capture a class maps to in `highlights.scm` (a
-/// Helix/nvim-treesitter capture name Zed resolves to a theme style). The
-/// generated grammar splits each class into a `*_word` and/or `*_sym` node (see
-/// [`node_name`]); both map to this one capture. Kept beside `node_name` as a
-/// renderer-local mapping (not a method on the shared `Scope`), since both are
-/// Zed-only — matching how `vim_group` lives in `vim.rs`.
-fn zed_capture(scope: Scope) -> &'static str {
+/// The tree-sitter highlight capture a class maps to in `highlights.scm` — the
+/// standard ecosystem capture names (nvim-treesitter/Helix conventions, which
+/// Zed also resolves to theme styles). The generated grammar splits each class
+/// into a `*_word` and/or `*_sym` node (see [`node_name`]); both map to this one
+/// capture. Kept beside `node_name` as a renderer-local mapping (not a method on
+/// the shared `Scope`), since both are tree-sitter-only — matching how
+/// `vim_group` lives in `vim.rs`.
+fn capture_name(scope: Scope) -> &'static str {
     match scope {
         Scope::KeywordControl | Scope::KeywordOther => "keyword",
         Scope::ConstantLanguage => "constant.builtin",
@@ -85,14 +104,14 @@ pub fn render_grammar_region(model: &Model) -> String {
     out
 }
 
-/// Render the whole `highlights.scm`: one capture per generated node (locked to
-/// [`zed_capture`]) plus the fixed structural captures.
-pub fn render_highlights(model: &Model) -> String {
+/// Render the generated region of `highlights.scm` (between [`MARKERS_SCM`]):
+/// one capture per generated node (locked to [`capture_name`]) plus the fixed
+/// structural captures. Spliced into the standalone grammar's
+/// `queries/highlights.scm`; Zed's bundled copy is then written verbatim from the
+/// spliced result. Hand-written captures for future structural nodes live outside
+/// the region and are preserved by the splice.
+pub fn render_highlights_region(model: &Model) -> String {
     let mut out = String::new();
-    out.push_str(
-        "; Generated by `rossi gen-grammars` from the canonical token tables. Do not edit by hand.\n\
-         ; The captured node names are produced by editors/zed/grammars/tree-sitter-eventb.\n\n",
-    );
     // One capture per non-empty group; `node_name` gives each a distinct node
     // (so does `render_grammar_region`, which relies on the same uniqueness).
     for group in &model.groups {
@@ -100,7 +119,7 @@ pub fn render_highlights(model: &Model) -> String {
             continue;
         }
         let name = node_name(group.scope, group.kind);
-        out.push_str(&format!("({}) @{}\n", name, zed_capture(group.scope)));
+        out.push_str(&format!("({}) @{}\n", name, capture_name(group.scope)));
     }
     out.push_str(
         "\n(comment) @comment\n\
@@ -111,6 +130,30 @@ pub fn render_highlights(model: &Model) -> String {
          [\"(\" \")\" \"[\" \"]\" \"{\" \"}\"] @punctuation.bracket\n\
          \",\" @punctuation.delimiter\n",
     );
+    out
+}
+
+/// Render the canonical token manifest (`paths::TS_TOKENS`): a JSON object
+/// `{ node_name: [spellings…] }` over every non-empty model group. Generated and
+/// byte-checked here, then read by the standalone repo's behavioral test, which
+/// parses each spelling with the built grammar and asserts it tokenizes to the
+/// matching node — so "the grammar's core matches gen-grammars" stays verifiable
+/// even after the grammar is hand-extended (the test asserts behavior, not text).
+///
+/// Keys are emitted in sorted order (a `BTreeMap`, so the ordering cannot be
+/// flipped by a dependency enabling serde_json's `preserve_order` feature) and
+/// each value keeps the group's own order (sorted words / longest-first symbols),
+/// so the output is deterministic and byte-reproducible.
+pub fn tokens_manifest(model: &Model) -> String {
+    let mut map = std::collections::BTreeMap::new();
+    for group in &model.groups {
+        if group.members.is_empty() {
+            continue;
+        }
+        map.insert(node_name(group.scope, group.kind), &group.members);
+    }
+    let mut out = serde_json::to_string_pretty(&map).expect("serialize token manifest");
+    out.push('\n');
     out
 }
 
@@ -170,7 +213,7 @@ mod tests {
     /// guarded explicitly.
     fn grammar_js() -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../editors/zed/grammars/tree-sitter-eventb/grammar.js");
+            .join("../../editors/tree-sitter-eventb/grammar.js");
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
     }
 
@@ -193,13 +236,13 @@ mod tests {
     #[test]
     fn highlights_capture_every_node_and_the_structural_tokens() {
         let model = Model::build();
-        let scm = render_highlights(&model);
+        let scm = render_highlights_region(&model);
         for group in &model.groups {
             if group.members.is_empty() {
                 continue;
             }
             let name = node_name(group.scope, group.kind);
-            let capture = zed_capture(group.scope);
+            let capture = capture_name(group.scope);
             assert!(
                 scm.contains(&format!("({name}) @{capture}\n")),
                 "highlights.scm is missing `({name}) @{capture}`"
@@ -215,6 +258,54 @@ mod tests {
         ] {
             assert!(scm.contains(fixed), "highlights.scm is missing `{fixed}`");
         }
+    }
+
+    #[test]
+    fn tokens_manifest_lists_every_node_and_all_members() {
+        let model = Model::build();
+        let json: serde_json::Value =
+            serde_json::from_str(&tokens_manifest(&model)).expect("manifest is valid JSON");
+        let obj = json.as_object().expect("manifest is a JSON object");
+        for group in &model.groups {
+            if group.members.is_empty() {
+                continue;
+            }
+            let name = node_name(group.scope, group.kind);
+            let arr = obj
+                .get(name)
+                .unwrap_or_else(|| panic!("manifest missing node `{name}`"))
+                .as_array()
+                .unwrap_or_else(|| panic!("manifest `{name}` is not an array"));
+            let listed: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
+            for m in &group.members {
+                assert!(
+                    listed.contains(&m.as_str()),
+                    "manifest `{name}` is missing spelling `{m}`"
+                );
+            }
+        }
+        // Spot-check the contract the behavioral test relies on.
+        assert!(
+            obj["keyword"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "context")
+        );
+        assert!(
+            obj["builtin"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "card")
+        );
+        assert!(
+            obj["operator_sym"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "∈")
+        );
     }
 
     /// Extract the `|`-separated alternatives from a `token(/(?:…)/i)` rule line.

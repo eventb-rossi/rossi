@@ -1,7 +1,8 @@
 //! Zed extension for Event-B (Rossi).
 //!
 //! Zed needs Rust only to launch the language server; syntax highlighting comes
-//! from the bundled tree-sitter grammar (`grammars/tree-sitter-eventb`) and its
+//! from the standalone `tree-sitter-eventb` grammar (pinned in `extension.toml`,
+//! developed in this monorepo under `editors/tree-sitter-eventb/`) and its
 //! `languages/eventb/highlights.scm`, and everything else (diagnostics,
 //! completion, hover, goto, rename, formatting, code actions, outline, folding,
 //! ProB code lenses) comes from `rossi-language-server` over LSP.

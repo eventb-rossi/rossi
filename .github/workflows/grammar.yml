@@ -1,0 +1,65 @@
+name: Grammar
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'editors/tree-sitter-eventb'
+      - '.github/workflows/grammar.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'editors/tree-sitter-eventb'
+      - '.github/workflows/grammar.yml'
+
+permissions:
+  contents: read
+
+# The grammar is developed in-tree as the tree-sitter-eventb submodule, so a
+# rossi PR can bump the submodule pointer to a commit whose own CI never ran
+# (e.g. one pushed straight to a side branch). Whenever the pointer moves,
+# re-run the standalone repo's checks against the pinned commit: the committed
+# src/parser.c must match grammar.js, the corpus must parse, and the token
+# contract must hold. (`gen-grammars --check` in the main CI only byte-checks
+# the generated grammar.js/highlights regions, never parser.c.)
+jobs:
+  grammar:
+    name: Verify pinned grammar
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/tree-sitter-eventb
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # Node 22 LTS: node-tree-sitter (`tree-sitter` dev dependency) compiles
+      # with -std=c++17, which Node 23+'s C++20-requiring V8 headers reject.
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/tree-sitter-eventb/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate parser
+        run: npx tree-sitter generate
+
+      # `git add -N` so files newly created by `tree-sitter generate` (untracked)
+      # also fail the freshness check, not just modified ones.
+      - name: Check parser is up to date
+        run: |
+          git add -N src
+          git diff --exit-code -- src
+
+      - name: tree-sitter test
+        run: npx tree-sitter test
+
+      - name: Token contract + binding test
+        run: npm test

@@ -16,6 +16,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # The tree-sitter-eventb grammar is a submodule; `gen-grammars --check`
+          # and the gen_grammars test read its grammar.js / queries.
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -123,6 +127,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Tarpaulin runs the same tests as the test job, which read the
+          # tree-sitter-eventb submodule (gen-grammars --check, grammar.js).
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

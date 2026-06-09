@@ -7,8 +7,10 @@ members = [
     "crates/rossi-lsp",
 ]
 # The Zed extension is a standalone `cdylib` built to wasm by Zed (against
-# `zed_extension_api`), not part of this workspace's native build/test.
-exclude = ["editors/zed"]
+# `zed_extension_api`), not part of this workspace's native build/test. The
+# tree-sitter grammar is its own repository (a submodule) with its own Rust
+# binding crate; without the exclude, cargo refuses to run inside it.
+exclude = ["editors/zed", "editors/tree-sitter-eventb"]
 
 [workspace.package]
 version = "0.1.0"

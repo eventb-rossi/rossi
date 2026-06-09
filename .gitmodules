@@ -1,0 +1,3 @@
+[submodule "editors/tree-sitter-eventb"]
+	path = editors/tree-sitter-eventb
+	url = https://github.com/eventb-rossi/tree-sitter-eventb.git

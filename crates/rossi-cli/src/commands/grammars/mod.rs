@@ -12,12 +12,13 @@
 //!
 //! TextMate / Sublime / Vim-syntax / Emacs-font-lock are all *lexical* (regex)
 //! highlighters: every distinction they draw is token data, which is exactly
-//! what the tables hold. Zed is the one consumer that needs a tree-sitter
-//! grammar, but only a *lexical* one: the [`zed`] emitter generates the token
-//! rules (the regex alternations that recognise each coloured class) into
-//! `grammar.js`, while the surrounding structure and the `highlights.scm`
-//! node→capture mapping are hand-maintained — so the table-derived part stays
-//! generated and the (small) parser scaffold does not pretend to parse Event-B.
+//! what the tables hold. The tree-sitter consumers (Zed, nvim-treesitter,
+//! Helix) need a tree-sitter grammar, but only a *lexical* one: the [`zed`]
+//! emitter generates the token rules (the regex alternations that recognise
+//! each coloured class) into the standalone grammar's `grammar.js` and the
+//! node→capture lines into its `highlights.scm` (both as marked regions inside
+//! hand-maintained scaffolding) — so the table-derived part stays generated and
+//! the (small) parser scaffold does not pretend to parse Event-B.
 //!
 //! ## Correctness rules baked into the [`Model`]
 //!
@@ -275,19 +276,68 @@ pub mod paths {
     pub const SUBLIME: &str = "editors/sublime/EventB.sublime-syntax";
     pub const VIM: &str = "editors/neovim/syntax/eventb.vim";
     pub const EMACS: &str = "editors/emacs/eventb-mode.el";
-    /// Zed tree-sitter grammar: the token rules live in a generated region; the
-    /// surrounding structure is hand-maintained (so this is a region target).
-    pub const ZED_GRAMMAR: &str = "editors/zed/grammars/tree-sitter-eventb/grammar.js";
-    /// Zed highlight queries: node→capture mapping, generated whole-file.
+    /// The standalone tree-sitter grammar (published as
+    /// `eventb-rossi/tree-sitter-eventb`, vendored here as a submodule). The token
+    /// rules live in a generated region; the surrounding scaffold — and any future
+    /// hand-written structural rules — are hand-maintained (so this is a region
+    /// target). The Zed extension and nvim-treesitter/Helix all consume this repo.
+    pub const TS_GRAMMAR: &str = "editors/tree-sitter-eventb/grammar.js";
+    /// The standalone grammar's highlight queries: node→capture mapping. The
+    /// generated token captures live in a region so hand-written captures for
+    /// future structural nodes can sit outside it (region target). The one
+    /// hand-editable highlights file — Zed's bundled copy derives from it via
+    /// [`COPIES`].
+    pub const TS_HIGHLIGHTS: &str = "editors/tree-sitter-eventb/queries/highlights.scm";
+    /// Canonical token classification exported as data: `{ node_name: [spellings] }`,
+    /// generated whole-file and byte-checked here, then consumed by the standalone
+    /// repo's behavioral test so it can verify the *built* parser still classifies
+    /// every canonical spelling correctly — a contract that survives the grammar
+    /// being hand-extended (the test asserts behavior, not source text).
+    pub const TS_TOKENS: &str = "editors/tree-sitter-eventb/test/tokens.json";
+    /// Zed's bundled copy of the highlight queries (Zed loads queries from the
+    /// extension's `languages/` dir, not the grammar repo). A [`COPIES`] entry.
     pub const ZED_HIGHLIGHTS: &str = "editors/zed/languages/eventb/highlights.scm";
+    /// Examples directory in the standalone grammar repo. Every file in it is a
+    /// [`COPIES`] destination, so orphans are pruned like any fully-generated dir.
+    pub const TS_EXAMPLES_DIR: &str = "editors/tree-sitter-eventb/examples";
 
     // Snippet libraries.
     pub const SNIPPETS_VSCODE: &str = "editors/vscode/snippets/eventb.json";
     pub const NVIM_SNIPPETS_PACKAGE: &str = "editors/neovim/snippets/package.json";
     pub const NVIM_SNIPPETS_JSON: &str = "editors/neovim/snippets/eventb.json";
-    /// Zed reuses the VS Code snippet JSON verbatim; the filename is the
-    /// lowercased Zed language name (`Event-B` → `event-b.json`).
+    /// Zed's copy of the VS Code snippet JSON (same format); the filename is the
+    /// lowercased Zed language name (`Event-B` → `event-b.json`). A [`COPIES`] entry.
     pub const ZED_SNIPPETS: &str = "editors/zed/snippets/event-b.json";
+
+    /// Verbatim copies, `(source, destination)`: the destination file carries the
+    /// source's content byte-for-byte. A generated source is copied from its
+    /// freshly rendered content (never from disk, so a copy cannot lag its source
+    /// within one run); a non-generated source is read from disk. Why each exists:
+    /// - Zed loads queries and snippets only from the extension's own
+    ///   directories, never from the grammar repo, so it bundles copies of
+    ///   [`TS_HIGHLIGHTS`] and [`SNIPPETS_VSCODE`].
+    /// - The standalone grammar repo ships example models (also the prepared
+    ///   Linguist samples) copied from `crates/rossi/examples`.
+    pub const COPIES: &[(&str, &str)] = &[
+        (SNIPPETS_VSCODE, ZED_SNIPPETS),
+        (TS_HIGHLIGHTS, ZED_HIGHLIGHTS),
+        (
+            "crates/rossi/examples/bank_account_machine.eventb",
+            "editors/tree-sitter-eventb/examples/bank_account_machine.eventb",
+        ),
+        (
+            "crates/rossi/examples/counter.eventb",
+            "editors/tree-sitter-eventb/examples/counter.eventb",
+        ),
+        (
+            "crates/rossi/examples/simple_machine.eventb",
+            "editors/tree-sitter-eventb/examples/simple_machine.eventb",
+        ),
+        (
+            "crates/rossi/examples/traffic_light_machine.eventb",
+            "editors/tree-sitter-eventb/examples/traffic_light_machine.eventb",
+        ),
+    ];
     /// Directory holding one yasnippet file per snippet (per the `eventb-mode`
     /// major mode); individual files are `<dir>/<prefix>`.
     pub const EMACS_SNIPPETS_DIR: &str = "editors/emacs/snippets/eventb-mode";

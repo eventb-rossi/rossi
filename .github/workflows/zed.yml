@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   zed:
-    name: Build extension and check grammar
+    name: Build extension (wasm)
     runs-on: ubuntu-latest
 
     steps:
@@ -34,25 +34,10 @@ jobs:
         with:
           workspaces: editors/zed
 
+      # The tree-sitter grammar now lives in the standalone tree-sitter-eventb
+      # repository, which has its own CI for `tree-sitter generate`/`test`. The
+      # main CI's `gen-grammars --check` still guards that its generated regions
+      # match the token tables. Here we only build the wasm extension.
       - name: Build extension (wasm)
         run: cargo build --locked --target wasm32-wasip1
         working-directory: editors/zed
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: editors/zed/grammars/tree-sitter-eventb/package-lock.json
-
-      # `rossi gen-grammars` keeps highlights.scm / grammar.js in sync with the
-      # token tables (guarded by the main CI's `gen-grammars --check`); this step
-      # guards that src/parser.c was regenerated from the current grammar.js.
-      - name: Regenerate parser
-        run: |
-          npm ci
-          npx tree-sitter generate
-        working-directory: editors/zed/grammars/tree-sitter-eventb
-
-      - name: Check parser is up to date
-        run: git diff --exit-code -- editors/zed/grammars/tree-sitter-eventb/src

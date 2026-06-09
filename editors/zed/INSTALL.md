@@ -18,13 +18,12 @@ rossi-language-server --help    # or: which rossi-language-server
 ## 2. Make the tree-sitter grammar loadable
 
 Zed fetches grammars from a git repository pinned to a revision; it cannot load
-a grammar from a plain local directory. The grammar sources are committed here
-under `grammars/tree-sitter-eventb/` (and `src/parser.c` is checked in, so no
-Node toolchain is needed to *use* it).
+a grammar from a plain local directory. The grammar is the standalone
+`tree-sitter-eventb` repository, developed in this monorepo under
+`editors/tree-sitter-eventb/` (with `src/parser.c` checked in, so no Node
+toolchain is needed to *use* it).
 
-**For a published release**, push `grammars/tree-sitter-eventb/` to a standalone
-repository (e.g. `github.com/eventb-rossi/tree-sitter-eventb`) and pin it in
-`extension.toml`:
+**For a published release**, pin the published repository in `extension.toml`:
 
 ```toml
 [grammars.eventb]
@@ -32,20 +31,22 @@ repository = "https://github.com/eventb-rossi/tree-sitter-eventb"
 rev = "<commit-sha>"
 ```
 
-**For local development** before that repository exists, turn the grammar
-directory into a local git repo and point `extension.toml` at it:
+**For local development** before that repository is published, point
+`extension.toml` at the local grammar repo. Zed fetches the pinned rev from the
+repo's git history, so everything must be committed first — uncommitted files
+are invisible to Zed:
 
 ```bash
-cd editors/zed/grammars/tree-sitter-eventb
-git init && git add -A && git commit -m "tree-sitter-eventb"
-git rev-parse HEAD          # copy this SHA
+cd editors/tree-sitter-eventb
+git add -A && git commit -m "wip"   # make sure the grammar is actually at HEAD
+git rev-parse HEAD                  # copy this SHA
 ```
 
 Then edit `editors/zed/extension.toml`:
 
 ```toml
 [grammars.eventb]
-repository = "file:///ABSOLUTE/PATH/TO/editors/zed/grammars/tree-sitter-eventb"
+repository = "file:///ABSOLUTE/PATH/TO/editors/tree-sitter-eventb"
 rev = "<the SHA you copied>"
 ```
 

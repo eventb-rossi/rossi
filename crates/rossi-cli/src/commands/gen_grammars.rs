@@ -7,9 +7,13 @@
 //!   writes). CI runs this so a table change that isn't regenerated fails the
 //!   build, exactly as `keywords_match_grammar` guards the tables themselves.
 //!
-//! Whole-file targets (TextMate JSON, Sublime YAML) are pure grammar files and
-//! are generated entirely. The Vim and Emacs files carry hand-maintained logic,
-//! so only the marked region between their generated markers is replaced.
+//! Whole-file targets (TextMate JSON, Sublime YAML, the tree-sitter token
+//! manifest, and the verbatim copies: Zed's snippets and highlights, the
+//! standalone grammar repo's examples) are pure generated files. The Vim and
+//! Emacs files, the tree-sitter `grammar.js`, and the standalone grammar's
+//! `highlights.scm` carry hand-maintained scaffolding (and may be
+//! hand-extended), so only the marked region between their generated markers is
+//! replaced — the rest is preserved.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,11 +51,6 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let root = workspace_root();
     let model = Model::build();
 
-    // Zed reuses the VS Code snippet JSON verbatim (same format), so render it
-    // once and write it to both files (named for the lowercased Zed language,
-    // `Event-B` → `event-b.json`).
-    let snippets = snippets_vscode::render();
-
     // (relative path, desired full content), one entry per concrete file on
     // disk. Whole-file producers contribute one entry; multi-file producers
     // (the yasnippet directory, the Neovim snippet package) contribute several.
@@ -59,14 +58,13 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let mut targets: Vec<(String, String)> = vec![
         (paths::TEXTMATE.to_string(), textmate::render(&model)),
         (paths::SUBLIME.to_string(), sublime::render(&model)),
-        (paths::SNIPPETS_VSCODE.to_string(), snippets.clone()),
+        (
+            paths::SNIPPETS_VSCODE.to_string(),
+            snippets_vscode::render(),
+        ),
         (paths::NVIM_OPERATORS.to_string(), operators_nvim::render()),
         (paths::EMACS_INPUT.to_string(), input_emacs::render()),
-        (
-            paths::ZED_HIGHLIGHTS.to_string(),
-            zed::render_highlights(&model),
-        ),
-        (paths::ZED_SNIPPETS.to_string(), snippets),
+        (paths::TS_TOKENS.to_string(), zed::tokens_manifest(&model)),
     ];
     // Multi-file producers: each returns its own list of (rel path, content).
     targets.extend(snippets_nvim::render());
@@ -75,14 +73,35 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
         (paths::VIM, &vim::MARKERS, vim::render(&model)),
         (paths::EMACS, &emacs::MARKERS, emacs::render(&model)),
         (
-            paths::ZED_GRAMMAR,
+            paths::TS_GRAMMAR,
             &zed::MARKERS,
             zed::render_grammar_region(&model),
+        ),
+        (
+            paths::TS_HIGHLIGHTS,
+            &zed::MARKERS_SCM,
+            zed::render_highlights_region(&model),
         ),
     ] {
         let path = root.join(rel);
         let existing = fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;
         targets.push((rel.to_string(), splice(&existing, markers, &body, &path)?));
+    }
+
+    // Verbatim copies (see [`paths::COPIES`] for why each exists). A generated
+    // source is copied from its just-computed desired content — never from disk
+    // — so a copy cannot lag its source within one run, not even in content
+    // outside a spliced region (e.g. hand-written captures in the standalone
+    // highlights.scm flow into Zed's bundled copy).
+    for (src, dst) in paths::COPIES {
+        let content = match targets.iter().find(|(rel, _)| rel == src) {
+            Some((_, content)) => content.clone(),
+            None => {
+                let path = root.join(src);
+                fs::read_to_string(&path).map_err(|e| io_err(&path, e))?
+            }
+        };
+        targets.push((dst.to_string(), content));
     }
 
     let mut stale = 0usize;
@@ -124,7 +143,7 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     // hand-maintained directory metadata survives.
     let wanted: std::collections::HashSet<&str> =
         targets.iter().map(|(rel, _)| rel.as_str()).collect();
-    for dir in [paths::EMACS_SNIPPETS_DIR] {
+    for dir in [paths::EMACS_SNIPPETS_DIR, paths::TS_EXAMPLES_DIR] {
         let entries = match fs::read_dir(root.join(dir)) {
             Ok(entries) => entries,
             Err(_) => continue,
