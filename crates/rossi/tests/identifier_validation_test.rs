@@ -8,19 +8,18 @@ use rossi::parse_xml;
 #[test]
 fn hyphen_in_context_identifier_accepted() {
     // Rodin permits hyphens in machine/context names (e.g. `A-C0`,
-    // `CTX-1`). They only appear in opaque attribute positions
-    // (refines/sees targets, context names) so the text-grammar lexer
-    // never has to read them.
+    // `CTX-1`). They appear in opaque attribute positions such as
+    // seesContext targets, so we test via that path.
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<org.eventb.core.contextFile version="3">
-    <org.eventb.core.context org.eventb.core.identifier="A-C0"/>
-</org.eventb.core.contextFile>"#;
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.seesContext name="A-C0" org.eventb.core.target="A-C0"/>
+</org.eventb.core.machineFile>"#;
 
     let comp = parse_xml(xml).expect("should accept hyphenated context name");
-    if let rossi::Component::Context(ctx) = comp {
-        assert_eq!(ctx.name, "A-C0");
+    if let rossi::Component::Machine(m) = comp {
+        assert_eq!(m.sees[0], "A-C0");
     } else {
-        panic!("expected Context");
+        panic!("expected Machine");
     }
 }
 
@@ -33,7 +32,6 @@ fn reserved_keyword_constant_accepted() {
     // reservation. So `partition(L, {end})` parses correctly.
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context org.eventb.core.identifier="CLOC"/>
     <org.eventb.core.constant name="int1" org.eventb.core.identifier="end"/>
 </org.eventb.core.contextFile>"#;
 
@@ -52,7 +50,7 @@ fn digit_leading_identifier_rejected() {
     // lexer if the name ever flowed into a parsed predicate.
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context org.eventb.core.identifier="1bad"/>
+    <org.eventb.core.extendsContext name="bad" org.eventb.core.target="1bad"/>
 </org.eventb.core.contextFile>"#;
 
     let err = parse_xml(xml).expect_err("should reject digit-leading identifier");
@@ -74,7 +72,7 @@ fn leading_hyphen_identifier_rejected() {
     // first character.
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context org.eventb.core.identifier="-bad"/>
+    <org.eventb.core.extendsContext name="bad" org.eventb.core.target="-bad"/>
 </org.eventb.core.contextFile>"#;
 
     let err = parse_xml(xml).expect_err("should reject leading hyphen");
@@ -94,7 +92,6 @@ fn leading_hyphen_identifier_rejected() {
 fn malformed_predicate_attribute_wraps_pest_error() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context org.eventb.core.identifier="Bad"/>
     <org.eventb.core.axiom name="int1" org.eventb.core.label="axm1" org.eventb.core.predicate="a &#x2227; )" org.eventb.core.theorem="false"/>
 </org.eventb.core.contextFile>"#;
 

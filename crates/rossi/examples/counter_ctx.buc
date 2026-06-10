@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
-    <org.eventb.core.context name="counter_ctx" comment="Counter context with maximum value"/>
-    <org.eventb.core.carrierSet identifier="STATUS" comment="Status enumeration"/>
-    <org.eventb.core.constant identifier="max_value" comment="Maximum counter value"/>
-    <org.eventb.core.axiom label="axm1" predicate="max_value = 100" comment="Maximum value is 100"/>
-    <org.eventb.core.axiom label="axm2" predicate="max_value &gt; 0" comment="Maximum value must be positive"/>
+<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd" org.eventb.core.comment="Counter context with maximum value">
+    <org.eventb.core.carrierSet name="STATUS" org.eventb.core.identifier="STATUS" org.eventb.core.comment="Status enumeration"/>
+    <org.eventb.core.constant name="max_value" org.eventb.core.identifier="max_value" org.eventb.core.comment="Maximum counter value"/>
+    <org.eventb.core.axiom name="axm1" org.eventb.core.label="axm1" org.eventb.core.predicate="max_value = 100" org.eventb.core.theorem="false" org.eventb.core.comment="Maximum value is 100"/>
+    <org.eventb.core.axiom name="axm2" org.eventb.core.label="axm2" org.eventb.core.predicate="max_value &gt; 0" org.eventb.core.theorem="false" org.eventb.core.comment="Maximum value must be positive"/>
 </org.eventb.core.contextFile>

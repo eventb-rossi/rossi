@@ -1,19 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
-    <org.eventb.core.machine name="counter" comment="Simple counter machine"/>
-    <org.eventb.core.seesContext target="counter_ctx"/>
-    <org.eventb.core.variable identifier="count" comment="Current counter value"/>
-    <org.eventb.core.invariant label="inv1" predicate="count &gt;= 0" comment="Counter is non-negative"/>
-    <org.eventb.core.invariant label="inv2" predicate="count &lt;= max_value" comment="Counter doesn't exceed maximum"/>
-    <org.eventb.core.event name="INITIALISATION" comment="Initialize counter to zero">
-        <org.eventb.core.action label="act1" assignment="count := 0"/>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd" org.eventb.core.comment="Simple counter machine">
+    <org.eventb.core.seesContext name="counter_ctx" org.eventb.core.target="counter_ctx"/>
+    <org.eventb.core.variable name="count" org.eventb.core.identifier="count" org.eventb.core.comment="Current counter value"/>
+    <org.eventb.core.invariant name="inv1" org.eventb.core.label="inv1" org.eventb.core.predicate="count &gt;= 0" org.eventb.core.theorem="false" org.eventb.core.comment="Counter is non-negative"/>
+    <org.eventb.core.invariant name="inv2" org.eventb.core.label="inv2" org.eventb.core.predicate="count &lt;= max_value" org.eventb.core.theorem="false" org.eventb.core.comment="Counter doesn't exceed maximum"/>
+    <org.eventb.core.event name="INITIALISATION" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION" org.eventb.core.comment="Initialize counter to zero">
+        <org.eventb.core.action name="act1" org.eventb.core.label="act1" org.eventb.core.assignment="count := 0"/>
     </org.eventb.core.event>
-    <org.eventb.core.event name="increment" comment="Increment the counter">
-        <org.eventb.core.guard label="grd1" predicate="count &lt; max_value"/>
-        <org.eventb.core.action label="act1" assignment="count := count + 1"/>
+    <org.eventb.core.event name="increment" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="increment" org.eventb.core.comment="Increment the counter">
+        <org.eventb.core.guard name="grd1" org.eventb.core.label="grd1" org.eventb.core.predicate="count &lt; max_value" org.eventb.core.theorem="false"/>
+        <org.eventb.core.action name="act1" org.eventb.core.label="act1" org.eventb.core.assignment="count := count + 1"/>
     </org.eventb.core.event>
-    <org.eventb.core.event name="decrement" comment="Decrement the counter">
-        <org.eventb.core.guard label="grd1" predicate="count &gt; 0"/>
-        <org.eventb.core.action label="act1" assignment="count := count - 1"/>
+    <org.eventb.core.event name="decrement" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="decrement" org.eventb.core.comment="Decrement the counter">
+        <org.eventb.core.guard name="grd1" org.eventb.core.label="grd1" org.eventb.core.predicate="count &gt; 0" org.eventb.core.theorem="false"/>
+        <org.eventb.core.action name="act1" org.eventb.core.label="act1" org.eventb.core.assignment="count := count - 1"/>
     </org.eventb.core.event>
 </org.eventb.core.machineFile>

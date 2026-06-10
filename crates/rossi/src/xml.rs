@@ -14,7 +14,7 @@
 //! let xml = r#"
 //! <?xml version="1.0" encoding="UTF-8"?>
 //! <org.eventb.core.contextFile version="3">
-//!     <org.eventb.core.context name="counter_ctx"/>
+//!     <org.eventb.core.carrierSet name="S" org.eventb.core.identifier="S"/>
 //! </org.eventb.core.contextFile>
 //! "#;
 //!
@@ -263,6 +263,14 @@ fn parse_xml_labeled_predicate(
     )))
 }
 
+/// Returns the element's label as an XML-escaped `name` attribute value, or `_{idx}` when
+/// no label is present. The `_{idx}` fallback uses an underscore prefix, which is not a
+/// valid start character for Event-B labels or identifiers, so it cannot collide with any
+/// user-defined name.
+fn label_or_index(label: Option<&str>, idx: usize) -> String {
+    label.map(escape_xml).unwrap_or_else(|| format!("_{idx}"))
+}
+
 /// Write labeled predicates as XML elements.
 ///
 /// Theorems (including any parsed from a `THEOREMS` section, which lower into the
@@ -276,8 +284,9 @@ fn write_labeled_predicates_xml(
     printer: &PrettyPrinter,
     indent: &str,
 ) {
-    for item in items {
+    for (i, item) in items.iter().enumerate() {
         let predicate_str = printer.print_predicate(&item.predicate);
+        let name = label_or_index(item.label.as_deref(), i);
         let label_attr = if let Some(label) = &item.label {
             format!(" org.eventb.core.label=\"{}\"", escape_xml(label))
         } else {
@@ -289,9 +298,10 @@ fn write_labeled_predicates_xml(
             String::new()
         };
         xml.push_str(&format!(
-            "{}<{} name=\"internal\"{} org.eventb.core.predicate=\"{}\" org.eventb.core.theorem=\"{}\"{}/>\n",
+            "{}<{} name=\"{}\"{} org.eventb.core.predicate=\"{}\" org.eventb.core.theorem=\"{}\"{}/>\n",
             indent,
             element_name,
+            name,
             label_attr,
             escape_xml(&predicate_str),
             item.is_theorem,
@@ -406,6 +416,7 @@ fn parse_context_xml_with_name(
                         version,
                         configuration,
                     });
+                    context_comment = get_xml_attr(&e, b"org.eventb.core.comment")?;
                 }
             }
             Ok(XmlEvent::Empty(e)) => {
@@ -415,16 +426,6 @@ fn parse_context_xml_with_name(
                     .to_string();
 
                 match tag_name.as_str() {
-                    "org.eventb.core.context" => {
-                        // Try `identifier` first (Rodin prefixed format), then
-                        // fall back to `name` (hand-crafted files).
-                        if let Some(name) = get_xml_attr(&e, b"identifier")? {
-                            context_name = name;
-                        } else if let Some(name) = get_xml_attr(&e, b"name")? {
-                            context_name = name;
-                        }
-                        context_comment = get_xml_attr(&e, b"comment")?;
-                    }
                     "org.eventb.core.extendsContext" => {
                         let target = required_attr(&e, b"target")?;
                         validate_identifier(&target, &format!("extends target in {}", origin))?;
@@ -528,6 +529,7 @@ fn parse_machine_xml_with_name(
                         version,
                         configuration,
                     });
+                    machine_comment = get_xml_attr(&e, b"org.eventb.core.comment")?;
                 } else if tag_name == "org.eventb.core.event" {
                     // In real Rodin XML, `name` is an internal id (e.g. `'`)
                     // and `org.eventb.core.label` holds the human-readable name.
@@ -562,16 +564,6 @@ fn parse_machine_xml_with_name(
                     .to_string();
 
                 match tag_name.as_str() {
-                    "org.eventb.core.machine" => {
-                        // Try `identifier` first (Rodin prefixed format), then
-                        // fall back to `name` (hand-crafted files).
-                        if let Some(name) = get_xml_attr(&e, b"identifier")? {
-                            machine_name = name;
-                        } else if let Some(name) = get_xml_attr(&e, b"name")? {
-                            machine_name = name;
-                        }
-                        machine_comment = get_xml_attr(&e, b"comment")?;
-                    }
                     "org.eventb.core.refinesMachine" => {
                         let target = required_attr(&e, b"target")?;
                         validate_identifier(&target, &format!("refines target in {}", origin))?;
@@ -1352,45 +1344,42 @@ fn context_to_xml(ctx: &Context) -> String {
         .as_ref()
         .and_then(|m| m.configuration.as_deref())
         .unwrap_or("org.eventb.core.fwd");
-    xml.push_str(&format!(
-        "<org.eventb.core.contextFile version=\"{}\" org.eventb.core.configuration=\"{}\">\n",
-        escape_xml(version),
-        escape_xml(configuration)
-    ));
-
-    // Context identity element (preserves name through standalone XML roundtrip)
     let comment_attr = format_comment_attr(ctx.comment.as_deref());
     xml.push_str(&format!(
-        "    <org.eventb.core.context name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-        escape_xml(&ctx.name),
-        comment_attr
+        "<org.eventb.core.contextFile version=\"{}\" org.eventb.core.configuration=\"{}\"{}>\n",
+        escape_xml(version),
+        escape_xml(configuration),
+        comment_attr,
     ));
 
-    // Extends
-    for extended in &ctx.extends {
-        xml.push_str(&format!(
-            "    <org.eventb.core.extendsContext name=\"internal\" org.eventb.core.target=\"{}\"/>\n",
-            escape_xml(extended)
-        ));
+    // Extends (deduplicated: duplicate entries would produce sibling name collisions)
+    {
+        let mut emitted = std::collections::HashSet::new();
+        for extended in &ctx.extends {
+            if emitted.insert(extended.as_str()) {
+                let esc = escape_xml(extended);
+                xml.push_str(&format!(
+                    "    <org.eventb.core.extendsContext name=\"{esc}\" org.eventb.core.target=\"{esc}\"/>\n"
+                ));
+            }
+        }
     }
 
     // Sets
     for set in &ctx.sets {
         let set_comment = format_comment_attr(set.comment());
+        let esc = escape_xml(set.name());
         xml.push_str(&format!(
-            "    <org.eventb.core.carrierSet name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-            escape_xml(set.name()),
-            set_comment
+            "    <org.eventb.core.carrierSet name=\"{esc}\" org.eventb.core.identifier=\"{esc}\"{set_comment}/>\n"
         ));
     }
 
     // Constants
     for constant in &ctx.constants {
         let const_comment = format_comment_attr(constant.comment.as_deref());
+        let esc = escape_xml(&constant.name);
         xml.push_str(&format!(
-            "    <org.eventb.core.constant name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-            escape_xml(&constant.name),
-            const_comment
+            "    <org.eventb.core.constant name=\"{esc}\" org.eventb.core.identifier=\"{esc}\"{const_comment}/>\n"
         ));
     }
 
@@ -1424,43 +1413,41 @@ fn machine_to_xml(machine: &Machine) -> String {
         .as_ref()
         .and_then(|m| m.configuration.as_deref())
         .unwrap_or("org.eventb.core.fwd");
-    xml.push_str(&format!(
-        "<org.eventb.core.machineFile version=\"{}\" org.eventb.core.configuration=\"{}\">\n",
-        escape_xml(version),
-        escape_xml(configuration)
-    ));
-
-    // Machine identity element (preserves name through standalone XML roundtrip)
     let comment_attr = format_comment_attr(machine.comment.as_deref());
     xml.push_str(&format!(
-        "    <org.eventb.core.machine name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-        escape_xml(&machine.name),
-        comment_attr
+        "<org.eventb.core.machineFile version=\"{}\" org.eventb.core.configuration=\"{}\"{}>\n",
+        escape_xml(version),
+        escape_xml(configuration),
+        comment_attr,
     ));
 
     // Refines
     if let Some(ref refined) = machine.refines {
+        let esc = escape_xml(refined);
         xml.push_str(&format!(
-            "    <org.eventb.core.refinesMachine name=\"internal\" org.eventb.core.target=\"{}\"/>\n",
-            escape_xml(refined)
+            "    <org.eventb.core.refinesMachine name=\"{esc}\" org.eventb.core.target=\"{esc}\"/>\n"
         ));
     }
 
-    // Sees
-    for seen in &machine.sees {
-        xml.push_str(&format!(
-            "    <org.eventb.core.seesContext name=\"internal\" org.eventb.core.target=\"{}\"/>\n",
-            escape_xml(seen)
-        ));
+    // Sees (deduplicated: duplicate entries would produce sibling name collisions)
+    {
+        let mut emitted = std::collections::HashSet::new();
+        for seen in &machine.sees {
+            if emitted.insert(seen.as_str()) {
+                let esc = escape_xml(seen);
+                xml.push_str(&format!(
+                    "    <org.eventb.core.seesContext name=\"{esc}\" org.eventb.core.target=\"{esc}\"/>\n"
+                ));
+            }
+        }
     }
 
     // Variables
     for variable in &machine.variables {
         let var_comment = format_comment_attr(variable.comment.as_deref());
+        let esc = escape_xml(&variable.name);
         xml.push_str(&format!(
-            "    <org.eventb.core.variable name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-            escape_xml(&variable.name),
-            var_comment
+            "    <org.eventb.core.variable name=\"{esc}\" org.eventb.core.identifier=\"{esc}\"{var_comment}/>\n"
         ));
     }
 
@@ -1478,7 +1465,7 @@ fn machine_to_xml(machine: &Machine) -> String {
     if let Some(variant) = &machine.variant {
         let expr_str = printer.print_expression(variant);
         xml.push_str(&format!(
-            "    <org.eventb.core.variant name=\"internal\" org.eventb.core.expression=\"{}\"/>\n",
+            "    <org.eventb.core.variant name=\"_vr\" org.eventb.core.expression=\"{}\"/>\n",
             escape_xml(&expr_str)
         ));
     }
@@ -1488,17 +1475,21 @@ fn machine_to_xml(machine: &Machine) -> String {
         let init_comment = format_comment_attr(init.comment.as_deref());
         let extended_str = if init.extended { "true" } else { "false" };
         xml.push_str(&format!(
-            "    <org.eventb.core.event name=\"internal\" org.eventb.core.convergence=\"0\" org.eventb.core.extended=\"{}\" org.eventb.core.label=\"INITIALISATION\"{}>\n",
+            "    <org.eventb.core.event name=\"INITIALISATION\" org.eventb.core.convergence=\"0\" org.eventb.core.extended=\"{}\" org.eventb.core.label=\"INITIALISATION\"{}>\n",
             extended_str, init_comment
         ));
+        let mut idx = 0usize;
         for lp in &init.with {
-            write_witness_xml(&mut xml, lp, &printer, "        ", false);
+            write_witness_xml(&mut xml, lp, &printer, "        ", false, idx);
+            idx += 1;
         }
         for lp in &init.witnesses {
-            write_witness_xml(&mut xml, lp, &printer, "        ", true);
+            write_witness_xml(&mut xml, lp, &printer, "        ", true, idx);
+            idx += 1;
         }
         for action in &init.actions {
-            write_action_xml(&mut xml, action, &printer, "        ");
+            write_action_xml(&mut xml, action, &printer, "        ", idx);
+            idx += 1;
         }
         xml.push_str("    </org.eventb.core.event>\n");
     }
@@ -1524,7 +1515,8 @@ fn write_event_xml(xml: &mut String, event: &Event, printer: &PrettyPrinter) {
     let extended_str = if event.extended { "true" } else { "false" };
     let event_comment = format_comment_attr(event.comment.as_deref());
     xml.push_str(&format!(
-        "    <org.eventb.core.event name=\"internal\" org.eventb.core.convergence=\"{}\" org.eventb.core.extended=\"{}\" org.eventb.core.label=\"{}\"{}>\n",
+        "    <org.eventb.core.event name=\"{}\" org.eventb.core.convergence=\"{}\" org.eventb.core.extended=\"{}\" org.eventb.core.label=\"{}\"{}>\n",
+        escape_xml(&event.name),
         convergence,
         extended_str,
         escape_xml(&event.name),
@@ -1533,25 +1525,27 @@ fn write_event_xml(xml: &mut String, event: &Event, printer: &PrettyPrinter) {
 
     // Refines
     if let Some(ref refined) = event.refines {
+        let esc = escape_xml(refined);
         xml.push_str(&format!(
-            "        <org.eventb.core.refinesEvent name=\"internal\" org.eventb.core.target=\"{}\"/>\n",
-            escape_xml(refined)
+            "        <org.eventb.core.refinesEvent name=\"{esc}\" org.eventb.core.target=\"{esc}\"/>\n"
         ));
     }
 
     // Parameters
     for param in &event.parameters {
         let param_comment = format_comment_attr(param.comment.as_deref());
+        let esc = escape_xml(&param.name);
         xml.push_str(&format!(
-            "        <org.eventb.core.parameter name=\"internal\" org.eventb.core.identifier=\"{}\"{}/>\n",
-            escape_xml(&param.name),
-            param_comment
+            "        <org.eventb.core.parameter name=\"{esc}\" org.eventb.core.identifier=\"{esc}\"{param_comment}/>\n"
         ));
     }
 
-    // Guards
+    // Guards, witnesses, and actions share a single index so that unlabeled fallback names
+    // (_0, _1, …) are unique across all siblings within the event.
+    let mut idx = 0usize;
     for guard in &event.guards {
         let predicate_str = printer.print_predicate(&guard.predicate);
+        let name = label_or_index(guard.label.as_deref(), idx);
         let label_attr = if let Some(label) = &guard.label {
             format!(" org.eventb.core.label=\"{}\"", escape_xml(label))
         } else {
@@ -1559,23 +1553,25 @@ fn write_event_xml(xml: &mut String, event: &Event, printer: &PrettyPrinter) {
         };
         let guard_comment = format_comment_attr(guard.comment.as_deref());
         xml.push_str(&format!(
-            "        <org.eventb.core.guard name=\"internal\"{} org.eventb.core.predicate=\"{}\"{}/>\n",
+            "        <org.eventb.core.guard name=\"{}\"{} org.eventb.core.predicate=\"{}\"{}/>\n",
+            name,
             label_attr,
             escape_xml(&predicate_str),
             guard_comment
         ));
+        idx += 1;
     }
-
     for lp in &event.with {
-        write_witness_xml(xml, lp, printer, "        ", false);
+        write_witness_xml(xml, lp, printer, "        ", false, idx);
+        idx += 1;
     }
     for lp in &event.witnesses {
-        write_witness_xml(xml, lp, printer, "        ", true);
+        write_witness_xml(xml, lp, printer, "        ", true, idx);
+        idx += 1;
     }
-
-    // Actions
     for action in &event.actions {
-        write_action_xml(xml, action, printer, "        ");
+        write_action_xml(xml, action, printer, "        ", idx);
+        idx += 1;
     }
 
     xml.push_str("    </org.eventb.core.event>\n");
@@ -1591,8 +1587,10 @@ fn write_witness_xml(
     printer: &PrettyPrinter,
     indent: &str,
     kind_witness: bool,
+    idx: usize,
 ) {
     let predicate_str = printer.print_predicate(&lp.predicate);
+    let name = label_or_index(lp.label.as_deref(), idx);
     let label_attr = lp
         .label
         .as_deref()
@@ -1604,8 +1602,9 @@ fn write_witness_xml(
         ""
     };
     xml.push_str(&format!(
-        "{}<org.eventb.core.witness name=\"internal\"{} org.eventb.core.predicate=\"{}\"{}/>\n",
+        "{}<org.eventb.core.witness name=\"{}\"{} org.eventb.core.predicate=\"{}\"{}/>\n",
         indent,
+        name,
         label_attr,
         escape_xml(&predicate_str),
         kind_attr,
@@ -1618,8 +1617,10 @@ fn write_action_xml(
     action: &crate::ast::LabeledAction,
     printer: &PrettyPrinter,
     indent: &str,
+    idx: usize,
 ) {
     let action_str = printer.print_action(&action.action);
+    let name = label_or_index(action.label.as_deref(), idx);
     let label_attr = if let Some(label) = &action.label {
         format!(" org.eventb.core.label=\"{}\"", escape_xml(label))
     } else {
@@ -1627,8 +1628,9 @@ fn write_action_xml(
     };
     let comment_attr = format_comment_attr(action.comment.as_deref());
     xml.push_str(&format!(
-        "{}<org.eventb.core.action name=\"internal\"{} org.eventb.core.assignment=\"{}\"{}/>\n",
+        "{}<org.eventb.core.action name=\"{}\"{} org.eventb.core.assignment=\"{}\"{}/>\n",
         indent,
+        name,
         label_attr,
         escape_xml(&action_str),
         comment_attr
@@ -1653,14 +1655,13 @@ mod tests {
     fn test_parse_simple_context_xml() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context name="test_ctx"/>
 </org.eventb.core.contextFile>"#;
 
         let result = parse_xml(xml);
         assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
         if let Component::Context(ctx) = result.unwrap() {
-            assert_eq!(ctx.name, "test_ctx");
+            assert_eq!(ctx.name, "unnamed_context");
         } else {
             panic!("Expected Context component");
         }
@@ -1670,7 +1671,6 @@ mod tests {
     fn test_parse_context_with_sets_xml() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context name="counter_ctx"/>
     <org.eventb.core.carrierSet identifier="STATUS"/>
     <org.eventb.core.carrierSet identifier="PERSON"/>
 </org.eventb.core.contextFile>"#;
@@ -1679,7 +1679,6 @@ mod tests {
         assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
         if let Component::Context(ctx) = result.unwrap() {
-            assert_eq!(ctx.name, "counter_ctx");
             assert_eq!(ctx.sets.len(), 2);
             assert_eq!(ctx.sets[0].name(), "STATUS");
             assert_eq!(ctx.sets[1].name(), "PERSON");
@@ -1692,14 +1691,13 @@ mod tests {
     fn test_parse_simple_machine_xml() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="counter"/>
 </org.eventb.core.machineFile>"#;
 
         let result = parse_xml(xml);
         assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
         if let Component::Machine(m) = result.unwrap() {
-            assert_eq!(m.name, "counter");
+            assert_eq!(m.name, "unnamed_machine");
         } else {
             panic!("Expected Machine component");
         }
@@ -1738,7 +1736,7 @@ mod tests {
         assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(xml.contains("<org.eventb.core.contextFile"));
         assert!(xml.contains("version=\"3\""));
-        assert!(xml.contains("org.eventb.core.identifier=\"test_ctx\""));
+        assert!(!xml.contains("<org.eventb.core.context "));
         assert!(xml.contains("</org.eventb.core.contextFile>"));
     }
 
@@ -1827,7 +1825,7 @@ mod tests {
         assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(xml.contains("<org.eventb.core.machineFile"));
         assert!(xml.contains("version=\"5\""));
-        assert!(xml.contains("org.eventb.core.identifier=\"counter\""));
+        assert!(!xml.contains("<org.eventb.core.machine "));
         assert!(xml.contains("</org.eventb.core.machineFile>"));
     }
 
@@ -1963,7 +1961,6 @@ mod tests {
     fn test_roundtrip_simple_context() {
         let original_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
-    <org.eventb.core.context name="test_ctx"/>
     <org.eventb.core.carrierSet identifier="STATUS"/>
 </org.eventb.core.contextFile>"#;
 
@@ -1976,10 +1973,9 @@ mod tests {
         // Parse the serialized XML again
         let reparsed = parse_xml(&serialized_xml).expect("Failed to parse serialized XML");
 
-        // Compare the AST structures
+        // Name is not preserved through standalone parse_xml (no filename); check structure only.
         match (&component, &reparsed) {
             (Component::Context(ctx1), Component::Context(ctx2)) => {
-                assert_eq!(ctx1.name, ctx2.name);
                 assert_eq!(ctx1.sets, ctx2.sets);
             }
             _ => panic!("Expected Context components"),
@@ -2000,10 +1996,9 @@ mod tests {
         // Parse the serialized XML again
         let reparsed = parse_xml(&serialized_xml).expect("Failed to parse serialized XML");
 
-        // Compare the AST structures
+        // Name is not preserved through standalone parse_xml (no filename); check structure only.
         match (&component, &reparsed) {
             (Component::Context(ctx1), Component::Context(ctx2)) => {
-                assert_eq!(ctx1.name, ctx2.name);
                 assert_eq!(ctx1.sets, ctx2.sets);
                 assert_eq!(ctx1.constants, ctx2.constants);
                 assert_eq!(ctx1.axioms.len(), ctx2.axioms.len());
@@ -2026,10 +2021,9 @@ mod tests {
         // Parse the serialized XML again
         let reparsed = parse_xml(&serialized_xml).expect("Failed to parse serialized XML");
 
-        // Compare the AST structures
+        // Name is not preserved through standalone parse_xml (no filename); check structure only.
         match (&component, &reparsed) {
             (Component::Machine(m1), Component::Machine(m2)) => {
-                assert_eq!(m1.name, m2.name);
                 assert_eq!(m1.sees, m2.sees);
                 assert_eq!(m1.variables, m2.variables);
                 assert_eq!(m1.invariants.len(), m2.invariants.len());
@@ -2092,18 +2086,14 @@ mod tests {
         // Verify it produces valid XML
         assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(xml.contains("<org.eventb.core.contextFile"));
-        assert!(xml.contains("org.eventb.core.identifier=\"test_ctx\""));
+        assert!(!xml.contains("<org.eventb.core.context "));
         assert!(xml.contains("org.eventb.core.identifier=\"STATUS\""));
         assert!(xml.contains("org.eventb.core.identifier=\"max_value\""));
         assert!(xml.contains("org.eventb.core.label=\"axm1\""));
 
-        // Verify round-trip: text → XML → AST should match original AST
+        // Verify round-trip: text → XML → parse again should succeed
         let reparsed = parse_xml(&xml).expect("Failed to reparse XML");
-        if let Component::Context(ctx) = reparsed {
-            assert_eq!(ctx.name, "test_ctx");
-        } else {
-            panic!("Expected Context component");
-        }
+        assert!(matches!(reparsed, Component::Context(_)));
     }
 
     #[test]
@@ -2134,16 +2124,15 @@ mod tests {
         // Verify it produces valid XML
         assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
         assert!(xml.contains("<org.eventb.core.machineFile"));
-        assert!(xml.contains("org.eventb.core.identifier=\"counter\""));
+        assert!(!xml.contains("<org.eventb.core.machine "));
         assert!(xml.contains("org.eventb.core.identifier=\"count\""));
         assert!(xml.contains("<org.eventb.core.invariant"));
         assert!(xml.contains("org.eventb.core.label=\"INITIALISATION\""));
         assert!(xml.contains("org.eventb.core.label=\"increment\""));
 
-        // Verify round-trip
+        // Verify round-trip: text → XML → parse again should succeed
         let reparsed = parse_xml(&xml).expect("Failed to reparse XML");
         if let Component::Machine(m2) = reparsed {
-            assert_eq!(m2.name, "counter");
             assert_eq!(m2.variables, vec![NamedElement::new("count".to_string())]);
             assert_eq!(m2.events.len(), 1);
         } else {
@@ -2357,7 +2346,7 @@ mod tests {
     fn test_xml_unknown_convergence_value_errors() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="test"/>
+
     <org.eventb.core.event name="bad_evt" convergence="99">
     </org.eventb.core.event>
 </org.eventb.core.machineFile>"#;
@@ -2384,7 +2373,7 @@ mod tests {
     fn test_xml_missing_convergence_defaults_to_ordinary() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="test"/>
+
     <org.eventb.core.event name="evt_no_conv">
     </org.eventb.core.event>
 </org.eventb.core.machineFile>"#;
@@ -2407,7 +2396,7 @@ mod tests {
         // The expression "y + 1" is converted to predicate "x = y + 1"
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="test"/>
+
     <org.eventb.core.event name="evt1" convergence="0">
         <org.eventb.core.refinesEvent target="abstract_evt"/>
         <org.eventb.core.withBinding identifier="x" expression="y + 1"/>

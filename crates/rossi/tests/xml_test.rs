@@ -11,7 +11,7 @@ fn test_parse_context_xml_from_file() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Context(ctx) = result.unwrap() {
-        assert_eq!(ctx.name, "counter_ctx");
+        // Name comes from filename, not XML body; parse_xml alone yields "unnamed_context".
         assert_eq!(ctx.sets.len(), 1);
         assert_eq!(ctx.sets[0].name(), "STATUS");
         assert_eq!(ctx.constants.len(), 1);
@@ -32,7 +32,7 @@ fn test_parse_machine_xml_from_file() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Machine(m) = result.unwrap() {
-        assert_eq!(m.name, "counter");
+        // Name comes from filename, not XML body; parse_xml alone yields "unnamed_machine".
         assert_eq!(m.sees.len(), 1);
         assert_eq!(m.sees[0], "counter_ctx");
         assert_eq!(m.variables.len(), 1);
@@ -55,7 +55,6 @@ fn test_parse_machine_xml_from_file() {
 fn test_parse_simple_context_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context name="simple_ctx"/>
     <org.eventb.core.carrierSet identifier="PERSON"/>
 </org.eventb.core.contextFile>"#;
 
@@ -63,7 +62,6 @@ fn test_parse_simple_context_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Context(ctx) = result.unwrap() {
-        assert_eq!(ctx.name, "simple_ctx");
         assert_eq!(ctx.sets.len(), 1);
         assert_eq!(ctx.sets[0].name(), "PERSON");
     } else {
@@ -75,7 +73,6 @@ fn test_parse_simple_context_xml() {
 fn test_parse_context_with_extends_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context name="extended_ctx"/>
     <org.eventb.core.extendsContext target="base_ctx"/>
     <org.eventb.core.carrierSet identifier="STATUS"/>
 </org.eventb.core.contextFile>"#;
@@ -84,7 +81,6 @@ fn test_parse_context_with_extends_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Context(ctx) = result.unwrap() {
-        assert_eq!(ctx.name, "extended_ctx");
         assert_eq!(ctx.extends.len(), 1);
         assert_eq!(ctx.extends[0], "base_ctx");
         assert_eq!(ctx.sets.len(), 1);
@@ -98,7 +94,6 @@ fn test_parse_context_with_extends_xml() {
 fn test_parse_context_with_theorems_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">
-    <org.eventb.core.context name="theorem_ctx"/>
     <org.eventb.core.constant identifier="x"/>
     <org.eventb.core.axiom label="axm1" predicate="x &gt; 0"/>
     <org.eventb.core.axiom label="thm1" predicate="x &gt;= 1" theorem="true"/>
@@ -108,7 +103,6 @@ fn test_parse_context_with_theorems_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Context(ctx) = result.unwrap() {
-        assert_eq!(ctx.name, "theorem_ctx");
         assert_eq!(ctx.constants.len(), 1);
         assert_eq!(ctx.axioms.len(), 2);
         let non_theorems: Vec<_> = ctx.axioms.iter().filter(|a| !a.is_theorem).collect();
@@ -126,7 +120,6 @@ fn test_parse_context_with_theorems_xml() {
 fn test_parse_machine_with_refines_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="refined_machine"/>
     <org.eventb.core.refinesMachine target="abstract_machine"/>
     <org.eventb.core.variable identifier="x"/>
 </org.eventb.core.machineFile>"#;
@@ -135,7 +128,6 @@ fn test_parse_machine_with_refines_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Machine(m) = result.unwrap() {
-        assert_eq!(m.name, "refined_machine");
         assert_eq!(m.refines, Some("abstract_machine".to_string()));
         assert_eq!(m.variables.len(), 1);
         assert_eq!(m.variables[0].name, "x");
@@ -148,7 +140,6 @@ fn test_parse_machine_with_refines_xml() {
 fn test_parse_machine_with_variant_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="variant_machine"/>
     <org.eventb.core.variable identifier="n"/>
     <org.eventb.core.variant expression="n"/>
 </org.eventb.core.machineFile>"#;
@@ -157,7 +148,6 @@ fn test_parse_machine_with_variant_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Machine(m) = result.unwrap() {
-        assert_eq!(m.name, "variant_machine");
         assert!(m.variant.is_some());
     } else {
         panic!("Expected Machine component");
@@ -168,7 +158,6 @@ fn test_parse_machine_with_variant_xml() {
 fn test_parse_event_with_parameters_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="param_machine"/>
     <org.eventb.core.variable identifier="x"/>
     <org.eventb.core.event name="set_value">
         <org.eventb.core.parameter identifier="v"/>
@@ -181,7 +170,6 @@ fn test_parse_event_with_parameters_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Machine(m) = result.unwrap() {
-        assert_eq!(m.name, "param_machine");
         assert_eq!(m.events.len(), 1);
         assert_eq!(m.events[0].name, "set_value");
         assert_eq!(m.events[0].parameters.len(), 1);
@@ -197,7 +185,6 @@ fn test_parse_event_with_parameters_xml() {
 fn test_parse_convergent_event_xml() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
-    <org.eventb.core.machine name="convergence_machine"/>
     <org.eventb.core.variable identifier="n"/>
     <org.eventb.core.event name="decrease" convergence="1">
         <org.eventb.core.guard label="grd1" predicate="n &gt; 0"/>
@@ -209,7 +196,6 @@ fn test_parse_convergent_event_xml() {
     assert!(result.is_ok(), "Parse error: {:?}", result.err());
 
     if let Component::Machine(m) = result.unwrap() {
-        assert_eq!(m.name, "convergence_machine");
         assert_eq!(m.events.len(), 1);
         assert_eq!(m.events[0].name, "decrease");
         assert_eq!(m.events[0].status, Some(rossi::EventStatus::Convergent));
