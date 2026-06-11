@@ -799,6 +799,28 @@ pub(crate) fn collect_binder_types(
                 }
             }
         }
+        // Integer ordering: `x < e`, `x ≤ e`, `x > e`, `x ≥ e` (and the
+        // symmetric forms) demand both sides be ℤ, so a bare binder on
+        // either side is ℤ. Mirrors `infer_constant_from_predicate`'s
+        // ordering rule. (Covers corpus lambda guards `λp· p ≥ 0 ∣ …`
+        // / `λp· p < 0 ∣ …`.)
+        Predicate::Comparison {
+            op:
+                ComparisonOp::LessThan
+                | ComparisonOp::LessEqual
+                | ComparisonOp::GreaterThan
+                | ComparisonOp::GreaterEqual,
+            left,
+            right,
+        } => {
+            for side in [left, right] {
+                if let Expression::Identifier(n) = side
+                    && names.contains(&n.as_str())
+                {
+                    out.entry(n.clone()).or_insert(Type::Integer);
+                }
+            }
+        }
         Predicate::Logical {
             op: LogicalOp::And,
             left,
@@ -1552,6 +1574,17 @@ mod tests {
         let env = TypeEnv::new();
         let p = parse_predicate_str("∀i · (i ∈ 0‥7 ⇒ P(i) ∈ 0‥6)").unwrap();
         let ty = infer_constant_from_predicate(&env, &p, "P");
+        assert_eq!(ty, Some(Type::relation(Type::Integer, Type::Integer)));
+    }
+
+    #[test]
+    fn infer_const_from_union_of_lambdas_with_ordering_guards() {
+        // Each lambda binder is typed ℤ by its ordering guard
+        // (`p ≥ 0` / `p < 0`), so the union of lambdas types the
+        // constant ℙ(ℤ × ℤ).
+        let env = TypeEnv::new();
+        let p = parse_predicate_str("F = (λp· p ≥ 0 ∣ p + 1) ∪ (λp· p < 0 ∣ p − 1)").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "F");
         assert_eq!(ty, Some(Type::relation(Type::Integer, Type::Integer)));
     }
 

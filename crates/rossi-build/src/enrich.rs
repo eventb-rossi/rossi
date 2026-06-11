@@ -560,7 +560,10 @@ mod tests {
 
     #[test]
     fn no_inferable_type_leaves_binder_untyped() {
-        let p = parse_predicate_str("∀x·x>0").unwrap();
+        // `x = x` constrains nothing (`x > 0` used to be the example
+        // here, but ordering comparisons now correctly type a bare
+        // binder as ℤ, the way Rodin does).
+        let p = parse_predicate_str("∀x·x=x").unwrap();
         let enriched = enrich_predicate(p, &empty_env());
         match enriched {
             Predicate::Quantified { identifiers, .. } => {
