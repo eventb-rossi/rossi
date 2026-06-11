@@ -1020,6 +1020,23 @@ pub fn infer_constant_from_predicate(
                 {
                     return Some(ty);
                 }
+                // `c(args) ∈ S` — the constant applied as a function: the
+                // application rule `c : ℙ(α × β)` with `args : α` and
+                // `S : ℙ(β)` types the constant as a relation from the
+                // argument type to S's element type. (Covers the corpus
+                // shape `∀i · i ∈ 0‥7 ⇒ P(i) ∈ 0‥6`, which types
+                // `P : ℙ(ℤ × ℤ)` in Rodin.)
+                if let Expression::FunctionApplication {
+                    function,
+                    arguments,
+                } = left
+                    && matches!(function.as_ref(), Expression::Identifier(n) if n == constant_name)
+                    && !arguments.is_empty()
+                    && let Some(arg_t) = type_of_expression(env, &left_assoc_maplet(arguments))
+                    && let Some(Type::PowerSet(elem)) = type_of_expression(env, right)
+                {
+                    return Some(Type::pow(Type::prod(arg_t, *elem)));
+                }
                 None
             }
             ComparisonOp::Subset
@@ -1517,6 +1534,25 @@ mod tests {
         let p = parse_predicate_str("alice ∈ USERS").unwrap();
         let ty = infer_constant_from_predicate(&env, &p, "alice");
         assert_eq!(ty, Some(Type::GivenSet("USERS".into())));
+    }
+
+    #[test]
+    fn infer_const_from_own_function_application() {
+        // `f(1) ∈ 0‥6` types the applied constant itself: f : ℙ(ℤ × ℤ).
+        let env = TypeEnv::new();
+        let p = parse_predicate_str("f(1) ∈ 0‥6").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "f");
+        assert_eq!(ty, Some(Type::relation(Type::Integer, Type::Integer)));
+    }
+
+    #[test]
+    fn infer_const_from_function_application_under_quantifier() {
+        // The binder `i` is typed by the antecedent, then
+        // `P(i) ∈ 0‥6` types P : ℙ(ℤ × ℤ).
+        let env = TypeEnv::new();
+        let p = parse_predicate_str("∀i · (i ∈ 0‥7 ⇒ P(i) ∈ 0‥6)").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "P");
+        assert_eq!(ty, Some(Type::relation(Type::Integer, Type::Integer)));
     }
 
     #[test]
