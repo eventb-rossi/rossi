@@ -35,15 +35,16 @@
 //!             `nondeterministic` (does not fail)
 //!   regress — unexpected mismatch (fails the test)
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use rossi_build::project::infer_project_name_from_archive_bytes;
-use rossi_build::repack::repackage_zip_bytes;
-use rossi_build::{Project, build};
+use common::{
+    Row, WaitError, load_expected, load_flags, load_machines, locate_corpus, log_hint, regen_one,
+    resolve_program, spawn_in_group, wait_with_timeout, workspace_target, write_report,
+};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
@@ -62,20 +63,21 @@ fn animate_regenerated_corpus_matches_reference() {
         );
         return;
     };
+    // Skip-when-unset applies to the *environment* (no corpus, no animate
+    // executable); a configured corpus with a missing or malformed reference
+    // file is a loud failure — silently returning here would green-light a
+    // 0-model "gate".
     let reference_tsv = corpus.join("animate_results.tsv");
-    let Some(expected) = load_expected(&reference_tsv) else {
-        eprintln!("{} unreadable — nothing to do", reference_tsv.display());
-        return;
-    };
-    let Some(machines) = load_machines(&reference_tsv) else {
-        eprintln!("{} unreadable — nothing to do", reference_tsv.display());
-        return;
-    };
+    let expected = load_expected(&reference_tsv).unwrap_or_else(|| {
+        panic!("{} is missing or malformed", reference_tsv.display());
+    });
+    let machines = load_machines(&reference_tsv).unwrap_or_else(|| {
+        panic!("{} is missing or malformed", reference_tsv.display());
+    });
     let flags_tsv = corpus.join("model_flags.tsv");
-    let Some(flags) = load_flags(&flags_tsv) else {
-        eprintln!("{} unreadable — nothing to do", flags_tsv.display());
-        return;
-    };
+    let flags = load_flags(&flags_tsv).unwrap_or_else(|| {
+        panic!("{} is missing or malformed", flags_tsv.display());
+    });
 
     let regen_dir = workspace_target().join("eventb-models-regen");
     std::fs::create_dir_all(&regen_dir).expect("create regen dir");
@@ -142,7 +144,11 @@ fn animate_regenerated_corpus_matches_reference() {
     }
 
     let report = workspace_target().join("rossi-build-animate-corpus.tsv");
-    write_report(&report, &rows);
+    write_report(
+        &report,
+        &["model", "expected", "actual", "verdict", "notes"],
+        &rows.iter().map(Row::to_fields).collect::<Vec<_>>(),
+    );
     println!(
         "animate-corpus: {} archives, {} regressions (report: {})",
         zips.len(),
@@ -191,144 +197,9 @@ impl Outcome {
     }
 }
 
-struct Row {
-    model: String,
-    expected: String,
-    actual: String,
-    verdict: String,
-    notes: String,
-}
-
-fn locate_corpus() -> Option<PathBuf> {
-    env_path("EVENTB_CORPUS_DIR").filter(|p| p.is_dir())
-}
-
 fn locate_animate() -> Option<PathBuf> {
     let configured = std::env::var("EVENTB_ANIMATE").unwrap_or_else(|_| "eventb-animate".into());
     resolve_program(&configured)
-}
-
-fn resolve_program(program: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(program);
-    if path.is_absolute() || program.contains('/') || program.contains('\\') {
-        let resolved = if path.is_absolute() {
-            path
-        } else {
-            workspace_root().join(path)
-        };
-        return is_executable_file(&resolved).then_some(resolved);
-    }
-
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(program))
-            .find(|candidate| is_executable_file(candidate))
-    })
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-fn env_path(var: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var(var).ok()?);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        workspace_root().join(path)
-    })
-}
-
-fn workspace_target() -> PathBuf {
-    workspace_root().join("target")
-}
-
-fn workspace_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop();
-    p.pop();
-    p
-}
-
-fn load_expected(tsv: &Path) -> Option<BTreeMap<String, String>> {
-    let s = std::fs::read_to_string(tsv).ok()?;
-    let mut out = BTreeMap::new();
-    for (i, line) in s.lines().enumerate() {
-        if i == 0 || line.trim().is_empty() {
-            continue;
-        }
-        let mut cols = line.split('\t');
-        let model = cols.next()?.to_string();
-        let _exit = cols.next()?;
-        let result = cols.next()?.to_string();
-        out.insert(model, result);
-    }
-    Some(out)
-}
-
-/// Column 4 of `animate_results.tsv`: the machine the reference outcome was
-/// recorded with. `(auto)` rows are omitted (eventb-animate picks).
-fn load_machines(tsv: &Path) -> Option<BTreeMap<String, String>> {
-    let s = std::fs::read_to_string(tsv).ok()?;
-    let mut out = BTreeMap::new();
-    for (i, line) in s.lines().enumerate() {
-        if i == 0 || line.trim().is_empty() {
-            continue;
-        }
-        let mut cols = line.split('\t');
-        let model = cols.next()?.to_string();
-        let machine = cols.nth(2)?; // skip exit_code, result
-        if machine != "(auto)" {
-            out.insert(model, machine.to_string());
-        }
-    }
-    Some(out)
-}
-
-/// `model_flags.tsv` (model, flag, notes): one row per model+flag.
-fn load_flags(tsv: &Path) -> Option<BTreeMap<String, BTreeSet<String>>> {
-    let s = std::fs::read_to_string(tsv).ok()?;
-    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (i, line) in s.lines().enumerate() {
-        if i == 0 || line.trim().is_empty() {
-            continue;
-        }
-        let mut cols = line.split('\t');
-        let model = cols.next()?.to_string();
-        let flag = cols.next()?.to_string();
-        out.entry(model).or_default().insert(flag);
-    }
-    Some(out)
-}
-
-fn regen_one(zip: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = std::fs::read(zip)?;
-    let name = infer_project_name_from_archive_bytes(&bytes).unwrap_or_else(|| {
-        zip.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("project")
-            .to_string()
-    });
-    let project = Project::from_zip_bytes(&name, &bytes)?;
-    let result = build(&project);
-    let new_bytes = repackage_zip_bytes(&bytes, &result)?;
-    std::fs::write(out, new_bytes)?;
-    Ok(())
 }
 
 fn animate_one(animate: &Path, zip: &Path, machine: Option<&str>, timeout: Duration) -> Outcome {
@@ -339,11 +210,9 @@ fn animate_one(animate: &Path, zip: &Path, machine: Option<&str>, timeout: Durat
     }
     cmd.arg(zip);
 
-    let child = match cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = match spawn_in_group(&mut cmd) {
         Ok(c) => c,
         Err(e) => return Outcome::LoadError(format!("spawn: {e}")),
     };
@@ -351,55 +220,6 @@ fn animate_one(animate: &Path, zip: &Path, machine: Option<&str>, timeout: Durat
         Ok((status, stdout, stderr)) => classify(status.code(), &stdout, &stderr),
         Err(WaitError::Timeout) => Outcome::Timeout,
         Err(WaitError::Io(e)) => Outcome::LoadError(format!("wait: {e}")),
-    }
-}
-
-enum WaitError {
-    Timeout,
-    Io(std::io::Error),
-}
-
-fn wait_with_timeout(
-    mut child: std::process::Child,
-    timeout: Duration,
-) -> Result<(std::process::ExitStatus, String, String), WaitError> {
-    use std::io::Read;
-    use std::sync::mpsc;
-    use std::thread;
-
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let mut stderr = child.stderr.take().expect("piped stderr");
-    let (tx_out, rx_out) = mpsc::channel();
-    let (tx_err, rx_err) = mpsc::channel();
-    thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
-        let _ = tx_out.send(s);
-    });
-    thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stderr.read_to_string(&mut s);
-        let _ = tx_err.send(s);
-    });
-
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = rx_out.recv().unwrap_or_default();
-                let err = rx_err.recv().unwrap_or_default();
-                return Ok((status, out, err));
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(WaitError::Timeout);
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(WaitError::Io(e)),
-        }
     }
 }
 
@@ -425,61 +245,5 @@ fn classify(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
     if lower.contains("can't find an event") || lower.contains("deadlock") {
         return Outcome::Deadlock;
     }
-    // Pull a short hint for the report.
-    let hint = combined
-        .lines()
-        .rev()
-        .find(|l| {
-            if l.trim_start().starts_with("at ") {
-                return false;
-            }
-            let lc = l.to_lowercase();
-            lc.contains("error") || lc.contains("exception") || lc.contains("failed")
-        })
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    Outcome::LoadError(hint)
-}
-
-fn write_report(path: &Path, rows: &[Row]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut f = match std::fs::File::create(path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("could not write {}: {e}", path.display());
-            return;
-        }
-    };
-    let _ = writeln!(f, "model\texpected\tactual\tverdict\tnotes");
-    for r in rows {
-        let _ = writeln!(
-            f,
-            "{}\t{}\t{}\t{}\t{}",
-            sanitize(&r.model),
-            sanitize(&r.expected),
-            sanitize(&r.actual),
-            sanitize(&r.verdict),
-            sanitize(&r.notes)
-        );
-    }
-}
-
-/// Collapse embedded tabs/newlines to single spaces so each TSV row stays on
-/// one line — pest's multi-line parse errors are a common source of leakage.
-fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c == '\n' || c == '\r' || c == '\t' {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    Outcome::LoadError(log_hint(&combined))
 }
