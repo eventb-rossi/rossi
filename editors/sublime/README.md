@@ -1,10 +1,12 @@
-# Event-B syntax for Sublime Text, bat, and delta
+# Event-B Language Support for Sublime Text, bat, and delta
+
+## Intro
 
 `EventB.sublime-syntax` is a Sublime Text syntax definition. It is read by the
 [`syntect`](https://github.com/trishume/syntect) library, so the same file gives
 Event-B highlighting in **Sublime Text**, **[bat](https://github.com/sharkdp/bat)**
 (`cat` with wings), and **[delta](https://github.com/dandavison/delta)** (the git
-pager) — none of which run the Rossi language server.
+pager). The last two do not support the Rossi language server, only syntax highlighting.
 
 > **Generated file — do not edit by hand.** It is produced from the canonical
 > token tables by `cargo run -p rossi-cli -- gen-grammars` and checked in CI.
@@ -17,7 +19,30 @@ Copy `EventB.sublime-syntax` into your `Packages/User/` directory
 (`Preferences → Browse Packages…`). Files ending in `.eventb` highlight
 automatically.
 
-## bat (and delta)
+To enable the Rossi language server, you need to install [Package Control](https://docs.sublimetext.io/guide/package-control/usage.html) and the [LSP package](https://packages.sublimetext.io/packages/LSP).
+
+Open the Sublime Text Command Palette:
+
+```
+Windows/Linux: Ctrl + Shift + P
+macOS: Cmd + Shift + P
+```
+
+Type and select Preferences: `LSP Server Configurations`.This will open a split window layout. The left side displays the default settings, while the right side displays your user customization file (LanguageServers.sublime-settings). Add the following snippet:
+
+```
+{
+	"rossi-language-server": {
+      "enabled": true,
+      "command": ["rossi-language-server"],
+      "selector": "source.eventb"
+    }
+}
+```
+
+This assumes that you already installed LSP and have `rossi-language-server` in your `PATH`.
+
+## bat, and delta
 
 ```sh
 mkdir -p "$(bat --config-dir)/syntaxes"
