@@ -1249,3 +1249,78 @@ fn export_stdin_to_zip() {
 
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+use rossi::MAX_NESTING_DEPTH;
+
+/// A context whose single axiom nests parentheses `n` deep.
+fn nested_paren_context(n: usize) -> String {
+    format!(
+        "context C axioms @a {}x{} = 1 end",
+        "(".repeat(n),
+        ")".repeat(n)
+    )
+}
+
+#[test]
+fn validate_stdin_at_nesting_limit_succeeds() {
+    // Runs the full validate pipeline in a debug build — proves the parser
+    // stack headroom covers the depth limit end to end.
+    let output = run_cli_with_stdin(&["validate", "-"], &nested_paren_context(MAX_NESTING_DEPTH));
+    assert!(
+        output.status.success(),
+        "validate - at the nesting limit should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_stdin_over_nesting_limit_reports_error_not_crash() {
+    // Used to die with SIGABRT ("has overflowed its stack"); must now exit
+    // with an ordinary diagnostic.
+    let output = run_cli_with_stdin(&["validate", "-"], &nested_paren_context(5000));
+    assert!(
+        output.status.code().is_some(),
+        "validate - must not be killed by a signal"
+    );
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("nesting exceeds the maximum depth"),
+        "expected a NestingTooDeep diagnostic, got: {combined}"
+    );
+}
+
+#[test]
+fn fmt_stdin_at_nesting_limit_succeeds() {
+    let output = run_cli_with_stdin(&["fmt", "-"], &nested_paren_context(MAX_NESTING_DEPTH));
+    assert!(
+        output.status.success(),
+        "fmt - at the nesting limit should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_stdin_at_limit_negation_chain_succeeds() {
+    // Unlike parens (which collapse in the AST), a negation chain stays
+    // nested all the way through the static checks — this exercises the
+    // downstream consumers at depth in a debug build.
+    let source = format!(
+        "context C axioms @a {}(1=1) end",
+        "¬".repeat(MAX_NESTING_DEPTH - 1)
+    );
+    let output = run_cli_with_stdin(&["validate", "-"], &source);
+    assert!(
+        output.status.code().is_some(),
+        "validate - must not be killed by a signal"
+    );
+    assert!(
+        output.status.success(),
+        "validate - at-limit negation chain should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
