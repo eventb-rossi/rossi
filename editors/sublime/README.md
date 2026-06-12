@@ -42,7 +42,7 @@ Type and select Preferences: `LSP Server Configurations`.This will open a split 
 
 This assumes that you already installed LSP and have `rossi-language-server` in your `PATH`.
 
-## bat, and delta
+## bat and delta
 
 ```sh
 mkdir -p "$(bat --config-dir)/syntaxes"
