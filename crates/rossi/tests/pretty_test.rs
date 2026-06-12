@@ -486,6 +486,56 @@ fn test_pretty_print_maplet_left_grouped_no_parens() {
 }
 
 #[test]
+fn test_pretty_print_arrow_inside_maplet_no_parens() {
+    // a ↦ (b ↔ c): arrows bind tighter than maplet (kernel_lang Table 3.1),
+    // so this is the natural grouping — emit flat.
+    use rossi::ast::expression::BinaryOp;
+    let expr = Expression::Binary {
+        op: BinaryOp::Maplet,
+        left: Box::new(Expression::Identifier("a".into())),
+        right: Box::new(Expression::Binary {
+            op: BinaryOp::Relation,
+            left: Box::new(Expression::Identifier("b".into())),
+            right: Box::new(Expression::Identifier("c".into())),
+        }),
+    };
+    let output = PrettyPrinter::new().print_expression(&expr);
+    assert_eq!(output, "a \u{21A6} b \u{2194} c");
+}
+
+#[test]
+fn test_pretty_print_maplet_inside_arrow_needs_parens() {
+    // (a ↦ b) ↔ c: maplet binds looser than the arrow, so dropping the
+    // parens would re-bind as a ↦ (b ↔ c) — a different AST.
+    use rossi::ast::expression::BinaryOp;
+    let expr = Expression::Binary {
+        op: BinaryOp::Relation,
+        left: Box::new(Expression::Binary {
+            op: BinaryOp::Maplet,
+            left: Box::new(Expression::Identifier("a".into())),
+            right: Box::new(Expression::Identifier("b".into())),
+        }),
+        right: Box::new(Expression::Identifier("c".into())),
+    };
+    let output = PrettyPrinter::new().print_expression(&expr);
+    assert_eq!(output, "(a \u{21A6} b) \u{2194} c");
+}
+
+#[test]
+fn test_pretty_print_maplet_arrow_roundtrip() {
+    // Both groupings survive a print → reparse cycle unchanged.
+    for src in ["a \u{21A6} b \u{2194} c", "(a \u{21A6} b) \u{2194} c"] {
+        let parsed = rossi::parse_expression_str(src).expect("parses");
+        let printed = PrettyPrinter::new().print_expression(&parsed);
+        let reparsed = rossi::parse_expression_str(&printed).expect("reparses");
+        assert_eq!(
+            parsed, reparsed,
+            "roundtrip changed AST for {src} (printed as {printed})"
+        );
+    }
+}
+
+#[test]
 fn test_pretty_print_function_application_binary_function_keeps_parens() {
     // (mapping ◁ prj1)(x): the function side is a Binary, so
     // dropping the parens would re-bind as `mapping ◁ prj1(x)`,

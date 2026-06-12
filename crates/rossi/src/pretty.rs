@@ -664,7 +664,11 @@ impl PrettyPrinter {
     /// Precedence level of a binary operator (higher = binds tighter)
     fn op_precedence(op: BinaryOp) -> u8 {
         match op {
-            // Relation types (lowest binary precedence)
+            // Maplet / pair constructor (lowest binary precedence per
+            // kernel_lang Table 3.1: `a ↦ b ↔ c = a ↦ (b ↔ c)`)
+            BinaryOp::Maplet => 1,
+
+            // Relation types (bind tighter than maplet, looser than set ops)
             BinaryOp::Relation
             | BinaryOp::TotalRelation
             | BinaryOp::SurjectiveRelation
@@ -676,10 +680,7 @@ impl PrettyPrinter {
             | BinaryOp::TotalSurjection
             | BinaryOp::PartialSurjection
             | BinaryOp::Bijection
-            | BinaryOp::OfType => 1,
-
-            // Maplet
-            BinaryOp::Maplet => 2,
+            | BinaryOp::OfType => 2,
 
             // Binary set operators
             BinaryOp::Union
@@ -921,14 +922,16 @@ impl PrettyPrinter {
 
         match prec {
             // Set operator level — use the asymmetric compatibility matrix
-            3 => Self::are_set_ops_compatible(child, parent),
+            p if p == Self::op_precedence(BinaryOp::Union) => {
+                Self::are_set_ops_compatible(child, parent)
+            }
             // Additive: + and - can freely mix (left-associative)
-            5 => true,
+            p if p == Self::op_precedence(BinaryOp::Add) => true,
             // Multiplicative: *, ÷, mod can freely mix (left-associative)
-            6 => true,
+            p if p == Self::op_precedence(BinaryOp::Multiply) => true,
             // Maplet: left-associative, self-compatible
-            2 => child == parent,
-            // Everything else: incompatible
+            p if p == Self::op_precedence(BinaryOp::Maplet) => child == parent,
+            // Everything else (arrows, range, exponent): incompatible
             _ => false,
         }
     }

@@ -1077,7 +1077,7 @@ fn parse_binary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Pa
 /// Parse an expression
 ///
 /// The grammar's expression precedence chain (`expression` →
-/// `relation_type_expr` → `maplet_expr` → `set_operator_expr` →
+/// `maplet_expr` → `relation_type_expr` → `set_operator_expr` →
 /// `relational_expr` → `additive_expr` → `multiplicative_expr` →
 /// `exponent_expr` → `unary_expr` → `function_application` → `primary_expr`,
 /// plus `_no_semi` twins for actions) produces a deeply-nested Pair tree even

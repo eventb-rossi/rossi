@@ -12,7 +12,7 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "'")* }
 
 // Typed identifier: x⦂ℤ (bound variable with optional type annotation).
-// The type uses `ident_binder_type` rather than `relation_type_expr` so that
+// The type uses `ident_binder_type` rather than `maplet_expr` so that
 // `λx⦂T₁ ↦ y⦂T₂ · …` parses with `↦` as the lambda-pattern separator, not
 // as a maplet inside T₁ (the spec uses `↦` only as a value constructor —
 // types use `×` and the relation arrows but never a top-level `↦`).
@@ -291,7 +291,7 @@ relational_expr = {
     additive_expr ~ (op_range_op ~ additive_expr)?
 }
 
-// Binary set operators (between maplet and interval in precedence)
+// Binary set operators (between the relation arrows and interval in precedence)
 set_operator_expr = {
     relational_expr ~ ((op_cartesian | op_intersection | op_union | op_difference
                        | op_overwrite | op_semicolon | op_composition
@@ -300,19 +300,22 @@ set_operator_expr = {
                        | op_direct_product | op_parallel_product) ~ relational_expr)*
 }
 
-// Maplet (left-associative; flat-list form folded left at AST build).
-// Spec p.18 / EVENTB_LANGUAGE_REFERENCE.md: `a ↦ b ↦ c = (a ↦ b) ↦ c`.
-maplet_expr = {
-    set_operator_expr ~ (op_maplet ~ set_operator_expr)*
-}
-
-// Relation/function type operators (lowest expression precedence, non-associative)
+// Relation/function type operators (non-associative, V2). Bind tighter than
+// maplet per kernel_lang Table 3.1: group 3 (relation-set arrows) sits inside
+// group 2 (pair constructor): `a ↦ b ↔ c = a ↦ (b ↔ c)`.
 // PEG ordering: longer operators before shorter sharing a prefix
 relation_type_expr = {
-    maplet_expr ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
-                   | op_total_fn | op_partial_fn
-                   | op_total_surjective_relation | op_surjective_relation | op_total_relation
-                   | op_relation | op_oftype) ~ maplet_expr)?
+    set_operator_expr ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
+                         | op_total_fn | op_partial_fn
+                         | op_total_surjective_relation | op_surjective_relation | op_total_relation
+                         | op_relation | op_oftype) ~ set_operator_expr)?
+}
+
+// Maplet (lowest binary expression precedence; left-associative, flat-list
+// form folded left at AST build).
+// Spec p.18 / EVENTB_LANGUAGE_REFERENCE.md: `a ↦ b ↦ c = (a ↦ b) ↦ c`.
+maplet_expr = {
+    relation_type_expr ~ (op_maplet ~ relation_type_expr)*
 }
 
 // Quantified union: ⋃x·P ∣ E  or  UNION x·P ∣ E
@@ -331,7 +334,7 @@ expression = {
     lambda_expr
   | quantified_union_expr
   | quantified_inter_expr
-  | relation_type_expr
+  | maplet_expr
 }
 
 // ==========================
@@ -459,14 +462,14 @@ set_operator_expr_no_semi = {
                                | op_range_subtract | op_range_restrict
                                | op_direct_product | op_parallel_product) ~ relational_expr_no_semi)*
 }
-maplet_expr_no_semi = {
-    set_operator_expr_no_semi ~ (op_maplet ~ set_operator_expr_no_semi)*
-}
 relation_type_expr_no_semi = {
-    maplet_expr_no_semi ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
-                           | op_total_fn | op_partial_fn
-                           | op_total_surjective_relation | op_surjective_relation | op_total_relation
-                           | op_relation | op_oftype) ~ maplet_expr_no_semi)?
+    set_operator_expr_no_semi ~ ((op_total_surj | op_partial_surj | op_bijection | op_total_inj | op_partial_inj
+                                 | op_total_fn | op_partial_fn
+                                 | op_total_surjective_relation | op_surjective_relation | op_total_relation
+                                 | op_relation | op_oftype) ~ set_operator_expr_no_semi)?
+}
+maplet_expr_no_semi = {
+    relation_type_expr_no_semi ~ (op_maplet ~ relation_type_expr_no_semi)*
 }
 // No-semi quantified expression variants: body uses action_expression so that ";"
 // is unambiguously the action separator, not forward composition.
@@ -483,7 +486,7 @@ action_expression = {
     lambda_expr_no_semi
   | quantified_union_expr_no_semi
   | quantified_inter_expr_no_semi
-  | relation_type_expr_no_semi
+  | maplet_expr_no_semi
 }
 
 action = {

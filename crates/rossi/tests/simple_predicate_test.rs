@@ -417,6 +417,164 @@ fn test_maplet_left_associative() {
     }
 }
 
+#[test]
+fn test_maplet_binds_looser_than_relation_arrow() {
+    use rossi::Expression;
+    use rossi::ast::expression::BinaryOp;
+
+    // kernel_lang Table 3.1: pair constructor binds looser than relation
+    // arrows, so a ↦ b ↔ c = a ↦ (b ↔ c).
+    let source = common::axiom_context("a, b, c, r", "r = a \u{21A6} b \u{2194} c");
+    let rhs = common::parse_axiom_rhs(&source);
+    match &rhs {
+        Expression::Binary { op, left, right } => {
+            assert_eq!(*op, BinaryOp::Maplet);
+            assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "a"));
+            match right.as_ref() {
+                Expression::Binary {
+                    op: inner_op,
+                    left: inner_left,
+                    right: inner_right,
+                } => {
+                    assert_eq!(*inner_op, BinaryOp::Relation);
+                    assert!(matches!(inner_left.as_ref(), Expression::Identifier(n) if n == "b"));
+                    assert!(matches!(inner_right.as_ref(), Expression::Identifier(n) if n == "c"));
+                }
+                other => panic!("Expected inner Relation, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Maplet, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_maplet_binds_looser_than_total_fn_arrow() {
+    use rossi::Expression;
+    use rossi::ast::expression::BinaryOp;
+
+    // a ↦ b → c = a ↦ (b → c)
+    let source = common::axiom_context("a, b, c, r", "r = a \u{21A6} b \u{2192} c");
+    let rhs = common::parse_axiom_rhs(&source);
+    match &rhs {
+        Expression::Binary { op, right, .. } => {
+            assert_eq!(*op, BinaryOp::Maplet);
+            assert!(matches!(
+                right.as_ref(),
+                Expression::Binary {
+                    op: BinaryOp::TotalFunction,
+                    ..
+                }
+            ));
+        }
+        other => panic!("Expected Maplet, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_maplet_binds_looser_than_relation_arrow_ascii() {
+    // ASCII spellings parse to the same AST as the Unicode form.
+    let unicode = common::parse_axiom_rhs(&common::axiom_context(
+        "a, b, c, r",
+        "r = a \u{21A6} b \u{2194} c",
+    ));
+    let ascii = common::parse_axiom_rhs(&common::axiom_context("a, b, c, r", "r = a |-> b <-> c"));
+    assert_eq!(unicode, ascii);
+}
+
+#[test]
+fn test_parenthesized_maplet_keeps_grouping_under_arrow() {
+    use rossi::Expression;
+    use rossi::ast::expression::BinaryOp;
+
+    // Explicit parens override precedence: (a ↦ b) ↔ c stays a Relation.
+    let source = common::axiom_context("a, b, c, r", "r = (a \u{21A6} b) \u{2194} c");
+    let rhs = common::parse_axiom_rhs(&source);
+    match &rhs {
+        Expression::Binary { op, left, right } => {
+            assert_eq!(*op, BinaryOp::Relation);
+            assert!(matches!(
+                left.as_ref(),
+                Expression::Binary {
+                    op: BinaryOp::Maplet,
+                    ..
+                }
+            ));
+            assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "c"));
+        }
+        other => panic!("Expected Relation, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_maplet_chain_with_arrow_operands() {
+    use rossi::Expression;
+    use rossi::ast::expression::BinaryOp;
+
+    // Pair-expression operands may each contain one (non-associative) arrow:
+    // a ↔ b ↦ c ↔ d = (a ↔ b) ↦ (c ↔ d). Rejected by the old
+    // (inverted-precedence) grammar, which allowed only one arrow per chain.
+    let source = common::axiom_context("a, b, c, d, r", "r = a \u{2194} b \u{21A6} c \u{2194} d");
+    let rhs = common::parse_axiom_rhs(&source);
+    match &rhs {
+        Expression::Binary { op, left, right } => {
+            assert_eq!(*op, BinaryOp::Maplet);
+            assert!(matches!(
+                left.as_ref(),
+                Expression::Binary {
+                    op: BinaryOp::Relation,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                right.as_ref(),
+                Expression::Binary {
+                    op: BinaryOp::Relation,
+                    ..
+                }
+            ));
+        }
+        other => panic!("Expected Maplet, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_maplet_binds_looser_than_arrow_in_action() {
+    use rossi::Expression;
+    use rossi::ast::expression::BinaryOp;
+
+    // Same precedence through the _no_semi expression twins used in actions.
+    let m = common::parse_machine(
+        r#"
+    MACHINE test
+    VARIABLES
+        x, a, b, c
+    EVENTS
+        EVENT update
+        THEN
+            @act1 x ≔ a ↦ b ↔ c
+        END
+    END
+    "#,
+    );
+    let event = &m.events[0];
+    match &event.actions[0].action {
+        Action::Assignment { expressions, .. } => match &expressions[0] {
+            Expression::Binary { op, right, .. } => {
+                assert_eq!(*op, BinaryOp::Maplet);
+                assert!(matches!(
+                    right.as_ref(),
+                    Expression::Binary {
+                        op: BinaryOp::Relation,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("Expected Maplet, got {:?}", other),
+        },
+        other => panic!("Expected Assignment, got {:?}", other),
+    }
+}
+
 test_binary_op!(
     test_total_function,
     "S, T, f",
