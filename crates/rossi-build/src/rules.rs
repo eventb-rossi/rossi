@@ -42,6 +42,9 @@ pub enum RuleId {
     UndeclaredIdentifier,
     /// EB019 — Same component name defined in more than one file.
     DuplicateComponent,
+    /// EB021 — Declared name collides with rossi's textual operator
+    /// vocabulary and can be silently re-lexed as a token.
+    ShadowedName,
 }
 
 impl RuleId {
@@ -63,6 +66,7 @@ impl RuleId {
             RuleId::IncompleteInitialisation => "EB014",
             RuleId::UndeclaredIdentifier => "EB018",
             RuleId::DuplicateComponent => "EB019",
+            RuleId::ShadowedName => "EB021",
         }
     }
 
@@ -84,6 +88,7 @@ impl RuleId {
             RuleId::IncompleteInitialisation => "Incomplete INITIALISATION",
             RuleId::UndeclaredIdentifier => "Undeclared identifier",
             RuleId::DuplicateComponent => "Duplicate component",
+            RuleId::ShadowedName => "Shadowed identifier",
         }
     }
 
@@ -129,6 +134,9 @@ impl RuleId {
             RuleId::DuplicateComponent => {
                 "The same component name is defined in more than one file in the project."
             }
+            RuleId::ShadowedName => {
+                "A declared identifier collides with rossi's textual operator vocabulary (an ASCII operator spelling like `POW`/`or`, or a case variant of a literal token like `Nat`); uses of it can silently parse as the built-in token instead of the identifier."
+            }
         }
     }
 
@@ -150,7 +158,8 @@ impl RuleId {
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
             | RuleId::IncompleteInitialisation
-            | RuleId::DuplicateComponent => Severity::Warning,
+            | RuleId::DuplicateComponent
+            | RuleId::ShadowedName => Severity::Warning,
         }
     }
 
@@ -173,6 +182,7 @@ impl RuleId {
             RuleId::IncompleteInitialisation,
             RuleId::UndeclaredIdentifier,
             RuleId::DuplicateComponent,
+            RuleId::ShadowedName,
         ]
     }
 }

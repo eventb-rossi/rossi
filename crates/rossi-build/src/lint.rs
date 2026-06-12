@@ -13,6 +13,7 @@
 //! - **EB013** dead constant     — declared, never referenced in any axiom
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
 //! - **EB019** duplicate component — same name defined in more than one file
+//! - **EB021** shadowed name     — declared name re-lexes as a textual token
 //!
 //! EB010 (well-definedness) and EB015–17 (proof status) are deliberately
 //! out of scope here; they need their own modules.
@@ -36,6 +37,7 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
     let mut diags = lint_duplicate_component(project);
     let index = ProjectIndex::build(project);
     for pc in &project.components {
+        diags.extend(run_component(&pc.component));
         match &pc.component {
             Component::Machine(m) => {
                 let referenced = index.effective_refs_for_machine(m.name.as_str());
@@ -51,6 +53,18 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
         }
     }
     diags
+}
+
+/// Run the lints that need no cross-component context over one component.
+/// Loose `.eventb` text files have no [`Project`] (a single file's SEES /
+/// EXTENDS parents are usually absent, so the reference-based lints would
+/// false-positive); these local passes are safe to run anywhere.
+#[must_use]
+pub fn run_component(component: &Component) -> Vec<Diagnostic> {
+    match component {
+        Component::Machine(m) => lint_shadowed_names_machine(m),
+        Component::Context(c) => lint_shadowed_names_context(c),
+    }
 }
 
 // ---------- individual lint passes -----------------------------------------
@@ -164,6 +178,62 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
             rule_id: Some(RuleId::DuplicateComponent),
         })
         .collect()
+}
+
+/// EB021: a declared name that rossi's *textual* syntax can re-lex as a
+/// token. The parser hard-rejects the kernel_lang §2.2 reserved words
+/// ([`rossi::builtins::is_reserved_word`]) but deliberately accepts the rest
+/// — Rodin allows them as identifiers, so imported models must load. The
+/// trap is silent: a constant `POW` declares fine and `POW = f` works, but
+/// `POW(f)` parses as the powerset `ℙ(f)`; a constant `Nat` can never be
+/// referenced at all (`Nat` lexes as `ℕ`). Warn at the declaration.
+fn shadowed_name_diag(component: &str, kind: &str, name: &str) -> Option<Diagnostic> {
+    if !rossi::builtins::is_reserved_name(name) || rossi::builtins::is_reserved_word(name) {
+        return None;
+    }
+    Some(Diagnostic {
+        severity: Severity::Warning,
+        origin: format!("{component}.{name}"),
+        message: format!(
+            "{kind} `{name}` collides with rossi's textual operator vocabulary; \
+             uses can silently parse as the built-in token instead of this \
+             identifier (e.g. `POW(S)` is the powerset, `Nat` is ℕ) — rename it"
+        ),
+        rule_id: Some(RuleId::ShadowedName),
+    })
+}
+
+fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    for set in &c.sets {
+        diags.extend(shadowed_name_diag(&c.name, "carrier set", set.name()));
+        if let rossi::SetDeclaration::Enumerated { elements, .. } = set {
+            for e in elements {
+                diags.extend(shadowed_name_diag(&c.name, "set element", e));
+            }
+        }
+    }
+    for k in &c.constants {
+        diags.extend(shadowed_name_diag(&c.name, "constant", &k.name));
+    }
+    diags
+}
+
+fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    for v in &m.variables {
+        diags.extend(shadowed_name_diag(&m.name, "variable", &v.name));
+    }
+    for event in &m.events {
+        for p in &event.parameters {
+            diags.extend(shadowed_name_diag(
+                &format!("{}.{}", m.name, event.name),
+                "parameter",
+                &p.name,
+            ));
+        }
+    }
+    diags
 }
 
 // ---------- reference collection -------------------------------------------
@@ -569,6 +639,48 @@ mod tests {
             .collect();
         assert_eq!(dead.len(), 1);
         assert!(dead[0].message.contains("k2"));
+    }
+
+    #[test]
+    fn shadowed_names_are_flagged() {
+        // `POW` (exact ASCII operator spelling) and `Nat` (case variant of
+        // the case-insensitive ℕ token) warn; `Dom`, `pow`, `OR` are ordinary
+        // identifiers and stay silent. The §2.2 reserved words never reach
+        // the lint — the parser rejects their declarations outright.
+        let mut c = Context::new("C".into());
+        c.constants = vec![nv("POW"), nv("Dom"), nv("pow"), nv("OR"), nv("price")];
+        c.sets = vec![rossi::SetDeclaration::Deferred {
+            name: "Nat".into(),
+            comment: None,
+        }];
+        c.axioms = vec![lp("ax1", eq_pred(ident("price"), Expression::Integer(0)))];
+
+        let diags = run(&proj(vec![pc("C.buc", Component::Context(c))]));
+        let shadowed: Vec<_> = diags
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::ShadowedName))
+            .collect();
+        assert_eq!(shadowed.len(), 2, "{shadowed:?}");
+        assert!(shadowed.iter().any(|d| d.origin == "C.POW"));
+        assert!(shadowed.iter().any(|d| d.origin == "C.Nat"));
+    }
+
+    #[test]
+    fn shadowed_machine_names_are_flagged() {
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("or"), nv("count")];
+        let mut e = Event::new("evt".into());
+        e.parameters = vec![nv("circ"), nv("p")];
+        m.events = vec![e];
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        let shadowed: Vec<_> = diags
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::ShadowedName))
+            .collect();
+        assert_eq!(shadowed.len(), 2, "{shadowed:?}");
+        assert!(shadowed.iter().any(|d| d.origin == "M.or"));
+        assert!(shadowed.iter().any(|d| d.origin == "M.evt.circ"));
     }
 
     #[test]

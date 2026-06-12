@@ -35,7 +35,8 @@ pub struct ValidateArgs {
     no_semantic: bool,
 
     /// Skip rossi-build advisory lint passes (dead variable, unmodified
-    /// variable, dead constant, incomplete INIT, duplicate component).
+    /// variable, dead constant, incomplete INIT, duplicate component,
+    /// shadowed name).
     #[arg(long)]
     no_lints: bool,
 
@@ -163,10 +164,10 @@ fn validate_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
         return validate_zip_file(file, cli);
     }
 
-    validate_text_file(file)
+    validate_text_file(file, cli)
 }
 
-fn validate_text_file(file: &Path) -> Vec<ValidationResult> {
+fn validate_text_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
     let source = match fs::read_to_string(file) {
         Ok(s) => s,
         Err(e) => {
@@ -178,14 +179,14 @@ fn validate_text_file(file: &Path) -> Vec<ValidationResult> {
             )];
         }
     };
-    validate_text_source(file, &source)
+    validate_text_source(file, &source, cli)
 }
 
 /// Validate Event-B `-` (stdin) text, reported under `--stdin-filename`.
 fn validate_stdin(cli: &ValidateArgs) -> Vec<ValidationResult> {
     let display = Path::new(cli.stdin_filename.as_deref().unwrap_or("<stdin>"));
     match eventb_io::read_stdin_to_string() {
-        Ok(source) => validate_text_source(display, &source),
+        Ok(source) => validate_text_source(display, &source, cli),
         Err(e) => vec![error_result(
             display,
             None,
@@ -196,12 +197,25 @@ fn validate_stdin(cli: &ValidateArgs) -> Vec<ValidationResult> {
 }
 
 /// Validate Event-B text from any source, reporting rows under `display`.
-fn validate_text_source(display: &Path, source: &str) -> Vec<ValidationResult> {
+/// Loose text has no project (its SEES/EXTENDS parents are usually absent),
+/// so only the component-local lints run here — the reference-based ones
+/// need the project paths (directories, zip archives).
+fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec<ValidationResult> {
     match parse_components(source) {
-        Ok(components) => components
-            .iter()
-            .map(|c| success_result(display, None, c))
-            .collect(),
+        Ok(components) => {
+            let mut results: Vec<ValidationResult> = components
+                .iter()
+                .map(|c| success_result(display, None, c))
+                .collect();
+            if !cli.no_lints {
+                for component in &components {
+                    for diag in rossi_build::lint::run_component(component) {
+                        results.push(fold_diagnostic(display, diag));
+                    }
+                }
+            }
+            results
+        }
         // Loose `.eventb` text → Camille / formula parse failure (EB005).
         Err(e) => vec![error_result(
             display,
