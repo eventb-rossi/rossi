@@ -964,71 +964,41 @@ impl RossiLanguageServer {
     fn parse_error_to_diagnostic(&self, error: &rossi::ParseError) -> Diagnostic {
         use rossi::ParseError;
 
-        match error {
+        // Variants that carry a source position (1-indexed) anchor the
+        // diagnostic there; everything else lands at the top of the file.
+        let (line, column, message) = match error {
             ParseError::RecoverableError {
                 line,
                 column,
                 message,
                 ..
-            } => Diagnostic {
-                range: Range {
-                    start: Position::new(
-                        line.saturating_sub(1) as u32,
-                        column.saturating_sub(1) as u32,
-                    ),
-                    end: Position::new(
-                        line.saturating_sub(1) as u32,
-                        column.saturating_sub(1) as u32 + 10,
-                    ),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
-                source: Some("rossi".to_string()),
-                message: message.clone(),
-                related_information: None,
-                tags: None,
-                code_description: None,
-                data: None,
-            },
-            ParseError::ClauseError {
+            }
+            | ParseError::ClauseError {
                 line,
                 column,
                 message,
                 ..
-            } => Diagnostic {
-                range: Range {
-                    start: Position::new(
-                        line.saturating_sub(1) as u32,
-                        column.saturating_sub(1) as u32,
-                    ),
-                    end: Position::new(
-                        line.saturating_sub(1) as u32,
-                        column.saturating_sub(1) as u32 + 10,
-                    ),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
-                source: Some("rossi".to_string()),
-                message: message.clone(),
-                related_information: None,
-                tags: None,
-                code_description: None,
-                data: None,
+            } => (*line, *column, message.clone()),
+            ParseError::NestingTooDeep { line, column, .. } => (*line, *column, error.to_string()),
+            _ => (1, 1, error.to_string()),
+        };
+        let start = Position::new(
+            line.saturating_sub(1) as u32,
+            column.saturating_sub(1) as u32,
+        );
+        Diagnostic {
+            range: Range {
+                start,
+                end: Position::new(start.line, start.character + 10),
             },
-            _ => Diagnostic {
-                range: Range {
-                    start: Position::new(0, 0),
-                    end: Position::new(0, 10),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
-                source: Some("rossi".to_string()),
-                message: error.to_string(),
-                related_information: None,
-                tags: None,
-                code_description: None,
-                data: None,
-            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: None,
+            source: Some("rossi".to_string()),
+            message,
+            related_information: None,
+            tags: None,
+            code_description: None,
+            data: None,
         }
     }
 

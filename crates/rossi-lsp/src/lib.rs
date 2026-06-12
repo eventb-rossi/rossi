@@ -37,6 +37,27 @@ pub mod workspace;
 // Re-export the server implementation
 pub mod server;
 
+/// Stack size for the runtime threads LSP handlers run on.
+///
+/// Handlers walk ASTs whose formula nesting can legitimately reach
+/// [`rossi::MAX_NESTING_DEPTH`]; in debug builds such walks need more than
+/// tokio's default 2 MiB worker stacks. 16 MiB gives the same headroom the
+/// CLI gets from the main thread (8 MiB) with margin to spare.
+pub const HANDLER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// Run the language server on a dedicated multi-thread runtime whose worker
+/// threads have [`HANDLER_THREAD_STACK_SIZE`] stacks.
+///
+/// Both server binaries (`rossi-language-server` and `rossi lsp`) must enter
+/// through here so the stack policy stays in one place.
+pub fn run_stdio_blocking() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(HANDLER_THREAD_STACK_SIZE)
+        .build()?
+        .block_on(run_stdio())
+}
+
 /// Run the Rossi language server over stdin/stdout using the LSP stdio transport.
 pub async fn run_stdio() -> Result<()> {
     tracing_subscriber::fmt()

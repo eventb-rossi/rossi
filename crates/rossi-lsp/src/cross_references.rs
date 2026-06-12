@@ -239,9 +239,13 @@ impl CrossReferenceManager {
 
         let mut count = 0;
 
-        // Recursively find all Event-B source files
+        // Recursively find all Event-B source files. Symlinks are followed
+        // (Rodin workspaces commonly link shared model directories), so cap
+        // the depth to keep linked runaway trees bounded; walkdir's loop
+        // detection handles cycles.
         for entry in walkdir::WalkDir::new(root_path)
             .follow_links(true)
+            .max_depth(64)
             .into_iter()
             .filter_map(|e| e.ok())
         {
@@ -422,6 +426,41 @@ END
         assert!(manager.find_component_uri("eventb_ctx").is_some());
         assert!(manager.find_component_uri("rossi_ctx").is_none());
         assert!(manager.find_component_uri("ignored").is_none());
+    }
+
+    /// Regression test: a single pathological file used to overflow the
+    /// stack inside `rossi::parse` and abort the whole server during the
+    /// post-initialize workspace scan (originally hit via a fuzz artifact
+    /// with thousands of nested parens left in /tmp).
+    #[test]
+    fn test_scan_workspace_survives_deeply_nested_file() {
+        let root = std::env::temp_dir().join(format!(
+            "rossi-lsp-deep-scan-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("good_ctx.eventb"), "CONTEXT good_ctx\nEND\n").unwrap();
+        let pathological = format!(
+            "context deep_ctx axioms @a {}x{} = 1 end",
+            "(".repeat(5000),
+            ")".repeat(5000)
+        );
+        std::fs::write(root.join("deep_ctx.eventb"), pathological).unwrap();
+
+        let manager = CrossReferenceManager::new();
+        let count = manager.scan_workspace(&root).unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+
+        // Both files are visited; the good one is indexed, the over-deep one
+        // is rejected by the parser's nesting guard instead of crashing.
+        assert_eq!(count, 2);
+        assert!(manager.find_component_uri("good_ctx").is_some());
+        assert!(manager.find_component_uri("deep_ctx").is_none());
     }
 
     #[test]

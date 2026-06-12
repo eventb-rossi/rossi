@@ -51,8 +51,7 @@ enum Command {
     Lsp,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Validate(args) => commands::validate::run(args),
         Command::Import(args) => commands::import::run(args),
@@ -60,7 +59,9 @@ async fn main() -> ExitCode {
         Command::Fmt(args) => commands::fmt::run(args),
         Command::Build(args) => commands::build::run_build_command(args),
         Command::GenGrammars(args) => commands::gen_grammars::run(args),
-        Command::Lsp => match rossi_lsp::run_stdio().await {
+        // The LSP brings its own runtime (with sized handler stacks); the
+        // other commands are fully synchronous.
+        Command::Lsp => match rossi_lsp::run_stdio_blocking() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("rossi lsp: {e}");

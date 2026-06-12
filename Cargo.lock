@@ -1315,7 +1315,6 @@ dependencies = [
  "rossi-lsp",
  "serde",
  "serde_json",
- "tokio",
  "walkdir",
  "zip",
 ]

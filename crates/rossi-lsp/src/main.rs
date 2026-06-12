@@ -14,8 +14,7 @@ use clap::Parser;
 )]
 struct Args;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     Args::parse();
-    rossi_lsp::run_stdio().await
+    rossi_lsp::run_stdio_blocking()
 }
