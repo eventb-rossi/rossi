@@ -42,6 +42,7 @@
 
 pub mod ast;
 pub mod builtins;
+pub(crate) mod comment_attach;
 pub mod comments;
 pub mod deps;
 pub mod error;

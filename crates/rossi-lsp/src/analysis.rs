@@ -320,10 +320,12 @@ mod tests {
             rossi::SetDeclaration::Deferred {
                 name: "SET1".to_string(),
                 comment: None,
+                span: None,
             },
             rossi::SetDeclaration::Deferred {
                 name: "SET2".to_string(),
                 comment: None,
+                span: None,
             },
         ];
         ctx.constants = vec![

@@ -166,8 +166,41 @@ fn collect_identifiers_from_clause(
     Ok(identifiers)
 }
 
+/// Extract declared elements from a clause pair, keeping per-identifier
+/// spans so trailing comments can attach to them (constants, variables,
+/// event parameters).
+///
+/// These clauses all *declare* identifiers, so each name is routed through
+/// [`declared_name`] to reject kernel_lang §2.2 reserved words, exactly as
+/// the `String`-only [`collect_identifiers_from_clause`] does.
+fn collect_named_elements_from_clause(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<Vec<NamedElement>, ParseError> {
+    let mut elements = Vec::new();
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::identifier => elements.push(NamedElement {
+                name: declared_name(&p)?,
+                comment: None,
+                span: Some(Span::from_pest(p.as_span())),
+            }),
+            Rule::comma => {} // optional comma separator
+            // Skip the leading clause keyword (varies by call site)
+            Rule::kw_constants | Rule::kw_variables | Rule::kw_any => {}
+            _ => {
+                return Err(ParseError::UnexpectedRule {
+                    expected: "identifier or comma".to_string(),
+                    found: format!("{:?}", p.as_rule()),
+                });
+            }
+        }
+    }
+    Ok(elements)
+}
+
 /// Parse a set declaration (deferred or enumerated)
 fn parse_set_declaration(pair: pest::iterators::Pair<Rule>) -> Result<SetDeclaration, ParseError> {
+    let span = Some(Span::from_pest(pair.as_span()));
     let mut inner = pair.into_inner();
     let name_pair = inner.next().ok_or(ParseError::MissingVariable)?;
     let name = declared_name(&name_pair)?;
@@ -198,11 +231,13 @@ fn parse_set_declaration(pair: pest::iterators::Pair<Rule>) -> Result<SetDeclara
             name,
             elements,
             comment: None,
+            span,
         })
     } else {
         Ok(SetDeclaration::Deferred {
             name,
             comment: None,
+            span,
         })
     }
 }
@@ -348,14 +383,18 @@ fn parse_unguarded(input: &str) -> Result<Component, ParseError> {
             found: "empty component".to_string(),
         })?;
 
-    match inner.as_rule() {
-        Rule::context => parse_context(inner),
-        Rule::machine => parse_machine(inner),
-        _ => Err(ParseError::UnexpectedRule {
-            expected: "context or machine".to_string(),
-            found: format!("{:?}", inner.as_rule()),
-        }),
-    }
+    let mut component = match inner.as_rule() {
+        Rule::context => parse_context(inner)?,
+        Rule::machine => parse_machine(inner)?,
+        _ => {
+            return Err(ParseError::UnexpectedRule {
+                expected: "context or machine".to_string(),
+                found: format!("{:?}", inner.as_rule()),
+            });
+        }
+    };
+    crate::comment_attach::attach_comments(input, std::slice::from_mut(&mut component));
+    Ok(component)
 }
 
 /// Parse one or more Event-B components (Contexts and/or Machines) from source text.
@@ -399,6 +438,7 @@ fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError>
         }
     }
 
+    crate::comment_attach::attach_comments(input, &mut result);
     Ok(result)
 }
 
@@ -507,11 +547,9 @@ fn parse_context(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                     context.sets.extend(collect_set_declarations(pair)?);
                 }
                 Rule::context_clause_constants => {
-                    context.constants.extend(
-                        collect_identifiers_from_clause(pair)?
-                            .into_iter()
-                            .map(NamedElement::new),
-                    );
+                    context
+                        .constants
+                        .extend(collect_named_elements_from_clause(pair)?);
                 }
                 Rule::context_clause_axioms => {
                     context
@@ -588,11 +626,9 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                     machine.sees.extend(collect_identifiers_from_clause(pair)?);
                 }
                 Rule::machine_clause_variables => {
-                    machine.variables.extend(
-                        collect_identifiers_from_clause(pair)?
-                            .into_iter()
-                            .map(NamedElement::new),
-                    );
+                    machine
+                        .variables
+                        .extend(collect_named_elements_from_clause(pair)?);
                 }
                 Rule::machine_clause_invariants => {
                     machine
@@ -774,11 +810,9 @@ fn parse_event(pair: pest::iterators::Pair<Rule>) -> Result<Event, ParseError> {
                     event.refines = collect_identifiers_from_clause(pair)?.into_iter().next();
                 }
                 Rule::event_any => {
-                    event.parameters.extend(
-                        collect_identifiers_from_clause(pair)?
-                            .into_iter()
-                            .map(NamedElement::new),
-                    );
+                    event
+                        .parameters
+                        .extend(collect_named_elements_from_clause(pair)?);
                 }
                 Rule::event_where => {
                     for labeled_pred_pair in pair.into_inner() {
@@ -843,6 +877,7 @@ fn parse_event(pair: pest::iterators::Pair<Rule>) -> Result<Event, ParseError> {
 fn parse_initialisation_event(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<InitialisationEvent, ParseError> {
+    let span = Some(Span::from_pest(pair.as_span()));
     let mut actions = Vec::new();
     let mut extended = false;
 
@@ -870,6 +905,7 @@ fn parse_initialisation_event(
         extended,
         with: Vec::new(),
         witnesses: Vec::new(),
+        span,
     })
 }
 
@@ -2396,6 +2432,12 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
         Component::Context(ctx) => {
             shift(&mut ctx.span, delta);
             shift(&mut ctx.name_span, delta);
+            for set in &mut ctx.sets {
+                shift(set.span_mut(), delta);
+            }
+            for constant in &mut ctx.constants {
+                shift(&mut constant.span, delta);
+            }
             for axiom in &mut ctx.axioms {
                 shift(&mut axiom.span, delta);
             }
@@ -2403,10 +2445,14 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
         Component::Machine(machine) => {
             shift(&mut machine.span, delta);
             shift(&mut machine.name_span, delta);
+            for variable in &mut machine.variables {
+                shift(&mut variable.span, delta);
+            }
             for invariant in &mut machine.invariants {
                 shift(&mut invariant.span, delta);
             }
             if let Some(init) = &mut machine.initialisation {
+                shift(&mut init.span, delta);
                 for action in &mut init.actions {
                     shift(&mut action.span, delta);
                 }
@@ -2417,6 +2463,9 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             for event in &mut machine.events {
                 shift(&mut event.span, delta);
                 shift(&mut event.name_span, delta);
+                for parameter in &mut event.parameters {
+                    shift(&mut parameter.span, delta);
+                }
                 for predicate in event
                     .guards
                     .iter_mut()
@@ -2519,6 +2568,7 @@ fn parse_context_with_recovery(
             .map(|name| SetDeclaration::Deferred {
                 name,
                 comment: None,
+                span: None,
             }),
     );
     context.constants = recover_identifiers(text, "CONSTANTS", bound)

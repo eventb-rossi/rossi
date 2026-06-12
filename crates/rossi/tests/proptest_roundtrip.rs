@@ -520,7 +520,8 @@ fn arb_set_declaration() -> impl Strategy<Value = SetDeclaration> {
     prop_oneof![
         set_name.clone().prop_map(|name| SetDeclaration::Deferred {
             name,
-            comment: None
+            comment: None,
+            span: None,
         }),
         (
             set_name,
@@ -538,6 +539,7 @@ fn arb_set_declaration() -> impl Strategy<Value = SetDeclaration> {
                 name,
                 elements,
                 comment: None,
+                span: None,
             }),
     ]
 }
@@ -656,6 +658,7 @@ fn arb_initialisation() -> impl Strategy<Value = InitialisationEvent> {
         extended: false,
         with: Vec::new(),
         witnesses: Vec::new(),
+        span: None,
     })
 }
 

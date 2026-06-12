@@ -50,6 +50,30 @@ impl LexicalSpans {
         // and blanking them cannot split a multi-byte character.
         String::from_utf8(bytes).expect("masking comments preserves UTF-8 validity")
     }
+
+    /// Position-preserving copy of `source` with every comment **char**
+    /// replaced by a space.
+    ///
+    /// Unlike [`LexicalSpans::mask_comments`] (one space per *byte*, for
+    /// byte-offset consumers like the recovery parser and semantic tokens),
+    /// this keeps the char count of every line: a multi-byte char inside a
+    /// comment becomes a single space, so (line, char-column) positions
+    /// computed on the masked text are valid in the original. This is the
+    /// mask for the LSP's char-column line scanners.
+    pub fn mask_comments_chars(&self, source: &str) -> String {
+        let mut out = String::with_capacity(source.len());
+        let mut spans = self.comments.iter().peekable();
+        for (i, c) in source.char_indices() {
+            while spans.next_if(|s| s.end <= i).is_some() {}
+            let in_comment = spans.peek().is_some_and(|s| s.contains(i));
+            if in_comment && c != '\n' && c != '\r' {
+                out.push(' ');
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
 }
 
 /// Lexically scan `source` for comments and labels.
@@ -132,11 +156,103 @@ pub fn mask_comments(source: &str) -> String {
     lexical_spans(source).mask_comments(source)
 }
 
+/// Position-preserving copy of `source` with every comment **char** replaced
+/// by a space. See [`LexicalSpans::mask_comments_chars`].
+pub fn mask_comments_chars(source: &str) -> String {
+    lexical_spans(source).mask_comments_chars(source)
+}
+
 /// The span in `spans` (sorted and disjoint) containing byte `offset`,
 /// if any. Binary search.
 pub fn span_containing(spans: &[Span], offset: usize) -> Option<Span> {
     let i = spans.partition_point(|s| s.end <= offset);
     spans.get(i).copied().filter(|s| s.contains(offset))
+}
+
+/// Whether byte `offset` falls inside a `//` or `/* */` comment in `source`.
+///
+/// Convenience for the LSP providers that suppress a feature when the cursor
+/// is in a comment (hover, completion). Callers that already hold a
+/// [`LexicalSpans`] should reuse it via [`span_containing`] instead of
+/// re-lexing here.
+pub fn offset_in_comment(source: &str, offset: usize) -> bool {
+    span_containing(&comment_spans(source), offset).is_some()
+}
+
+/// Normalize comment text for storage in an AST `comment` field.
+///
+/// Each line is trimmed, leading and trailing blank lines are dropped, and
+/// the rest are rejoined with `\n`. Returns `None` when nothing remains
+/// (whitespace-only comments — Rodin models in the wild carry `" "` comment
+/// attributes — are not worth a `//` in the output). The printer applies
+/// the same normalization before emitting, so parse → print is idempotent
+/// even for ragged XML-sourced comments.
+pub fn normalize_comment(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').map(str::trim).collect();
+    let first = lines.iter().position(|l| !l.is_empty())?;
+    let last = lines.iter().rposition(|l| !l.is_empty())?;
+    Some(lines[first..=last].join("\n"))
+}
+
+/// The normalized text of one raw comment token (delimiters included), or
+/// `None` if it is blank.
+///
+/// `raw` is a `//...` line comment or a `/*...*/` block comment exactly as
+/// sliced from a [`comment_spans`] span; an unterminated block comment (no
+/// closing `*/`) is tolerated.
+pub fn comment_text(raw: &str) -> Option<String> {
+    let inner = if let Some(rest) = raw.strip_prefix("//") {
+        rest
+    } else if let Some(rest) = raw.strip_prefix("/*") {
+        rest.strip_suffix("*/").unwrap_or(rest)
+    } else {
+        raw
+    };
+    normalize_comment(inner)
+}
+
+/// Apply `f` to the code between comments, leaving comment text untouched.
+///
+/// The transformed code segments and the verbatim comments are reassembled
+/// in order. Used by rewrites that must never alter comment prose, e.g. the
+/// LSP's ASCII ⇄ Unicode operator conversion.
+pub fn map_code_segments(source: &str, f: impl Fn(&str) -> String) -> String {
+    map_code_segments_in_range(source, 0, source.len(), f)
+}
+
+/// Like [`map_code_segments`] but transforms only the byte range
+/// `[start, end)` of `source`, using the comment spans of the **whole**
+/// `source`.
+///
+/// Because comment extents come from the full text, a range that begins or
+/// ends inside a comment is still treated as comment text — essential when
+/// transforming an editor selection whose `/*` or `//` opener lies outside
+/// the selected range. `start` and `end` must be char boundaries.
+pub fn map_code_segments_in_range(
+    source: &str,
+    start: usize,
+    end: usize,
+    f: impl Fn(&str) -> String,
+) -> String {
+    let mut out = String::with_capacity(end.saturating_sub(start));
+    let mut pos = start;
+    for span in comment_spans(source) {
+        // Intersect this comment with the requested range.
+        let c_lo = span.start.max(start);
+        let c_hi = span.end.min(end);
+        if c_lo >= c_hi {
+            continue; // no overlap
+        }
+        if pos < c_lo {
+            out.push_str(&f(&source[pos..c_lo]));
+        }
+        out.push_str(&source[c_lo..c_hi]);
+        pos = c_hi;
+    }
+    if pos < end {
+        out.push_str(&f(&source[pos..end]));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -252,6 +368,67 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].end, src.len());
         assert_eq!(mask_comments(src), "a                 \n    ");
+    }
+
+    #[test]
+    fn char_mask_keeps_char_columns() {
+        // One space per char (not byte): the masked line has the same char
+        // count as the original, so char-column scans stay aligned.
+        let src = "x /* тип */ ∈ S // ℕ\n";
+        let masked = mask_comments_chars(src);
+        assert_eq!(masked.chars().count(), src.chars().count());
+        assert_eq!(masked, "x           ∈ S     \n");
+    }
+
+    #[test]
+    fn char_mask_keeps_newlines_in_block_comments() {
+        let src = "a /* первая\nвторая */ b\n";
+        let masked = mask_comments_chars(src);
+        assert_eq!(masked.lines().count(), src.lines().count());
+        assert_eq!(masked, "a          \n          b\n");
+    }
+
+    #[test]
+    fn normalize_trims_and_drops_blank_edges() {
+        assert_eq!(normalize_comment(" a "), Some("a".to_string()));
+        assert_eq!(
+            normalize_comment("\n  first\n   second  \n\n"),
+            Some("first\nsecond".to_string())
+        );
+        assert_eq!(normalize_comment("a\n\nb"), Some("a\n\nb".to_string()));
+        assert_eq!(normalize_comment("   "), None);
+        assert_eq!(normalize_comment("\n \n"), None);
+        assert_eq!(normalize_comment(""), None);
+    }
+
+    #[test]
+    fn comment_text_strips_delimiters() {
+        assert_eq!(comment_text("// note"), Some("note".to_string()));
+        assert_eq!(comment_text("//"), None);
+        assert_eq!(comment_text("/* a\n   b */"), Some("a\nb".to_string()));
+        assert_eq!(comment_text("/* open"), Some("open".to_string()));
+        assert_eq!(comment_text("/*   */"), None);
+    }
+
+    #[test]
+    fn map_code_segments_leaves_comments_verbatim() {
+        let src = "x <= 1 // keep <= as is\ny <= 2 /* and <= here */\n";
+        let out = map_code_segments(src, |code| code.replace("<=", "≤"));
+        assert_eq!(out, "x ≤ 1 // keep <= as is\ny ≤ 2 /* and <= here */\n");
+    }
+
+    #[test]
+    fn map_code_segments_in_range_respects_comments_opened_outside_range() {
+        // A range starting inside a block comment whose `/*` is before the
+        // range: the in-range prose must stay verbatim, only trailing code
+        // is transformed.
+        let src = "a <= b /* note <= here */ c <= d";
+        //         0123456789...
+        // Select from inside the comment ("note <=...") to the end.
+        let start = src.find("note").unwrap();
+        let out = map_code_segments_in_range(src, start, src.len(), |code| code.replace("<=", "≤"));
+        // The `<=` inside the comment is untouched; the `<=` in `c <= d` is converted.
+        assert_eq!(out, "note <= here */ c ≤ d");
     }
 
     #[test]

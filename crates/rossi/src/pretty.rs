@@ -45,6 +45,7 @@ use crate::ast::context::SetDeclaration;
 use crate::ast::expression::{BinaryOp, IdentPattern, UnaryOp};
 use crate::ast::predicate::{ComparisonOp, LogicalOp};
 use crate::ast::*;
+use crate::comments;
 use crate::operators::{self, OperatorId};
 use std::fmt::Write;
 
@@ -117,12 +118,58 @@ impl PrettyPrinter {
         output
     }
 
+    /// Print one element line followed by its comment, Camille style.
+    ///
+    /// `line` is the complete element line without the trailing newline and
+    /// `indent` is the element's own indentation. A single-line comment
+    /// trails the element (`line // text`); a multiline comment becomes a
+    /// `/* ... */` block on the following lines, one level deeper, with
+    /// continuation lines aligned under the first — the same layout Rodin's
+    /// Camille editor prints. Comments are normalized first, so a blank
+    /// comment emits nothing and parse → print is idempotent.
+    fn writeln_commented(
+        &self,
+        output: &mut String,
+        line: &str,
+        comment: Option<&str>,
+        indent: &str,
+    ) {
+        let Some(text) = comment.and_then(comments::normalize_comment) else {
+            writeln!(output, "{line}").unwrap();
+            return;
+        };
+        if !text.contains('\n') {
+            writeln!(output, "{line} // {text}").unwrap();
+            return;
+        }
+        // `*/` inside the text (possible only via Rodin XML) would close the
+        // block early; break it up, losing one byte of fidelity.
+        let text = text.replace("*/", "* /");
+        writeln!(output, "{line}").unwrap();
+        let block_indent = format!("{indent}{}", self.indent);
+        let mut lines = text.split('\n');
+        let first = lines.next().unwrap();
+        write!(output, "{block_indent}/* {first}").unwrap();
+        for cont in lines {
+            writeln!(output).unwrap();
+            if !cont.is_empty() {
+                write!(output, "{block_indent}   {cont}").unwrap();
+            }
+        }
+        writeln!(output, " */").unwrap();
+    }
+
     /// Convert a Context to formatted text
     pub fn print_context(&self, context: &Context) -> String {
         let mut output = String::new();
 
         debug_assert_component_name(&context.name, "context name");
-        writeln!(output, "CONTEXT {}", context.name).unwrap();
+        self.writeln_commented(
+            &mut output,
+            &format!("CONTEXT {}", context.name),
+            context.comment.as_deref(),
+            "",
+        );
 
         if !context.extends.is_empty() {
             writeln!(output, "EXTENDS").unwrap();
@@ -135,28 +182,27 @@ impl PrettyPrinter {
         if !context.sets.is_empty() {
             writeln!(output, "SETS").unwrap();
             for set in &context.sets {
-                match set {
+                let line = match set {
                     SetDeclaration::Deferred { name, .. } => {
-                        writeln!(output, "{}{}", self.indent, name).unwrap();
+                        format!("{}{}", self.indent, name)
                     }
                     SetDeclaration::Enumerated { name, elements, .. } => {
-                        writeln!(
-                            output,
-                            "{}{} = {{{}}}",
-                            self.indent,
-                            name,
-                            elements.join(", ")
-                        )
-                        .unwrap();
+                        format!("{}{} = {{{}}}", self.indent, name, elements.join(", "))
                     }
-                }
+                };
+                self.writeln_commented(&mut output, &line, set.comment(), &self.indent);
             }
         }
 
         if !context.constants.is_empty() {
             writeln!(output, "CONSTANTS").unwrap();
             for constant in &context.constants {
-                writeln!(output, "{}{}", self.indent, constant.name).unwrap();
+                self.writeln_commented(
+                    &mut output,
+                    &format!("{}{}", self.indent, constant.name),
+                    constant.comment.as_deref(),
+                    &self.indent,
+                );
             }
         }
 
@@ -176,7 +222,12 @@ impl PrettyPrinter {
         let mut output = String::new();
 
         debug_assert_component_name(&machine.name, "machine name");
-        writeln!(output, "MACHINE {}", machine.name).unwrap();
+        self.writeln_commented(
+            &mut output,
+            &format!("MACHINE {}", machine.name),
+            machine.comment.as_deref(),
+            "",
+        );
 
         if let Some(ref refines) = machine.refines {
             debug_assert_component_name(refines, "refines target");
@@ -195,7 +246,12 @@ impl PrettyPrinter {
         if !machine.variables.is_empty() {
             writeln!(output, "VARIABLES").unwrap();
             for var in &machine.variables {
-                writeln!(output, "{}{}", self.indent, var.name).unwrap();
+                self.writeln_commented(
+                    &mut output,
+                    &format!("{}{}", self.indent, var.name),
+                    var.comment.as_deref(),
+                    &self.indent,
+                );
             }
         }
 
@@ -237,42 +293,33 @@ impl PrettyPrinter {
     /// Parsing a `THEOREMS` section is therefore normalized to inline on output.
     fn print_labeled_predicate(&self, output: &mut String, lp: &LabeledPredicate, indent: &str) {
         let theorem_str = if lp.is_theorem { "theorem " } else { "" };
-        if let Some(label) = &lp.label {
-            writeln!(
-                output,
+        let line = if let Some(label) = &lp.label {
+            format!(
                 "{}{}@{} {}",
                 indent,
                 theorem_str,
                 label,
                 self.print_predicate(&lp.predicate)
             )
-            .unwrap();
         } else {
-            writeln!(
-                output,
+            format!(
                 "{}{}{}",
                 indent,
                 theorem_str,
                 self.print_predicate(&lp.predicate)
             )
-            .unwrap();
-        }
+        };
+        self.writeln_commented(output, &line, lp.comment.as_deref(), indent);
     }
 
     /// Print a labeled action
     fn print_labeled_action(&self, output: &mut String, la: &LabeledAction, indent: &str) {
-        if let Some(label) = &la.label {
-            writeln!(
-                output,
-                "{}@{} {}",
-                indent,
-                label,
-                self.print_action(&la.action)
-            )
-            .unwrap();
+        let line = if let Some(label) = &la.label {
+            format!("{}@{} {}", indent, label, self.print_action(&la.action))
         } else {
-            writeln!(output, "{}{}", indent, self.print_action(&la.action)).unwrap();
-        }
+            format!("{}{}", indent, self.print_action(&la.action))
+        };
+        self.writeln_commented(output, &line, la.comment.as_deref(), indent);
     }
 
     /// Print an action list (one action per line, no separators).
@@ -285,16 +332,12 @@ impl PrettyPrinter {
     /// Print an initialisation event
     fn print_initialisation(&self, output: &mut String, init: &InitialisationEvent) {
         let double_indent = format!("{}{}", self.indent, self.indent);
-        if init.extended {
-            writeln!(
-                output,
-                "{}EVENT INITIALISATION extends INITIALISATION",
-                self.indent
-            )
-            .unwrap();
+        let header = if init.extended {
+            format!("{}EVENT INITIALISATION extends INITIALISATION", self.indent)
         } else {
-            writeln!(output, "{}EVENT INITIALISATION", self.indent).unwrap();
-        }
+            format!("{}EVENT INITIALISATION", self.indent)
+        };
+        self.writeln_commented(output, &header, init.comment.as_deref(), &self.indent);
         if !init.actions.is_empty() {
             writeln!(output, "{}THEN", self.indent).unwrap();
             self.print_action_list(output, &init.actions, &double_indent);
@@ -321,30 +364,14 @@ impl PrettyPrinter {
 
         // When `extended` is true and there is a refines target, use
         // `EVENT name extends parent` syntax (Rodin extension mechanism).
-        if event.extended {
-            if let Some(ref parent) = event.refines {
-                writeln!(
-                    output,
-                    "{}{}EVENT {} extends {}",
-                    self.indent, status_prefix, event.name, parent
-                )
-                .unwrap();
-            } else {
-                writeln!(
-                    output,
-                    "{}{}EVENT {}",
-                    self.indent, status_prefix, event.name
-                )
-                .unwrap();
-            }
-        } else {
-            writeln!(
-                output,
-                "{}{}EVENT {}",
-                self.indent, status_prefix, event.name
-            )
-            .unwrap();
-        }
+        let header = match &event.refines {
+            Some(parent) if event.extended => format!(
+                "{}{}EVENT {} extends {}",
+                self.indent, status_prefix, event.name, parent
+            ),
+            _ => format!("{}{}EVENT {}", self.indent, status_prefix, event.name),
+        };
+        self.writeln_commented(output, &header, event.comment.as_deref(), &self.indent);
 
         // Print REFINES clause when not extended
         if !event.extended
@@ -356,8 +383,22 @@ impl PrettyPrinter {
 
         if !event.parameters.is_empty() {
             writeln!(output, "{}ANY", self.indent).unwrap();
-            let param_names: Vec<&str> = event.parameters.iter().map(|p| p.name.as_str()).collect();
-            writeln!(output, "{}{}", double_indent, param_names.join(", ")).unwrap();
+            if event.parameters.iter().any(|p| p.comment.is_some()) {
+                // A commented parameter needs its own line for the trailing
+                // comment to re-attach to it on reparse.
+                for param in &event.parameters {
+                    self.writeln_commented(
+                        output,
+                        &format!("{}{}", double_indent, param.name),
+                        param.comment.as_deref(),
+                        &double_indent,
+                    );
+                }
+            } else {
+                let param_names: Vec<&str> =
+                    event.parameters.iter().map(|p| p.name.as_str()).collect();
+                writeln!(output, "{}{}", double_indent, param_names.join(", ")).unwrap();
+            }
         }
 
         if !event.guards.is_empty() {

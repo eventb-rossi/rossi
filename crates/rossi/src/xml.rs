@@ -504,6 +504,7 @@ fn parse_context_xml_with_name(
                             sets.push(SetDeclaration::Deferred {
                                 name: set_name,
                                 comment,
+                                span: None,
                             });
                         }
                     }
@@ -706,6 +707,7 @@ fn parse_machine_xml_with_name(
                                 extended,
                                 with: Vec::new(),
                                 witnesses: Vec::new(),
+                                span: None,
                             });
                         } else {
                             let event_name = validate_component_name(
@@ -902,6 +904,7 @@ fn parse_machine_xml_with_name(
                                 extended: event_builder.extended,
                                 with: event_builder.with,
                                 witnesses: event_builder.witnesses,
+                                span: None,
                             });
                         } else {
                             let event_name = validate_component_name(
@@ -1241,7 +1244,7 @@ pub fn parse_zip_file_with_recovery<P: AsRef<std::path::Path>>(
 /// use rossi::{Context, Component, SetDeclaration, to_xml};
 ///
 /// let mut ctx = Context::new("test_ctx".to_string());
-/// ctx.sets.push(SetDeclaration::Deferred { name: "STATUS".to_string(), comment: None });
+/// ctx.sets.push(SetDeclaration::Deferred { name: "STATUS".to_string(), comment: None, span: None });
 ///
 /// let xml = to_xml(&Component::Context(ctx));
 /// assert!(xml.contains("<org.eventb.core.contextFile"));
@@ -1897,10 +1900,12 @@ mod tests {
                 SetDeclaration::Deferred {
                     name: "STATUS".to_string(),
                     comment: None,
+                    span: None,
                 },
                 SetDeclaration::Deferred {
                     name: "PERSON".to_string(),
                     comment: None,
+                    span: None,
                 },
             ],
             constants: vec![],
@@ -2026,6 +2031,7 @@ mod tests {
                 extended: false,
                 with: Vec::new(),
                 witnesses: Vec::new(),
+                span: None,
             }),
             events: vec![],
             span: None,

@@ -12,6 +12,12 @@ pub fn clear_spans(component: &mut Component) {
         Component::Context(ctx) => {
             ctx.span = None;
             ctx.name_span = None;
+            for set in &mut ctx.sets {
+                *set.span_mut() = None;
+            }
+            for constant in &mut ctx.constants {
+                constant.span = None;
+            }
             for axiom in &mut ctx.axioms {
                 axiom.span = None;
             }
@@ -19,17 +25,27 @@ pub fn clear_spans(component: &mut Component) {
         Component::Machine(machine) => {
             machine.span = None;
             machine.name_span = None;
+            for var in &mut machine.variables {
+                var.span = None;
+            }
             for inv in &mut machine.invariants {
                 inv.span = None;
             }
             if let Some(init) = &mut machine.initialisation {
+                init.span = None;
                 for action in &mut init.actions {
                     action.span = None;
+                }
+                for lp in init.with.iter_mut().chain(&mut init.witnesses) {
+                    lp.span = None;
                 }
             }
             for event in &mut machine.events {
                 event.span = None;
                 event.name_span = None;
+                for param in &mut event.parameters {
+                    param.span = None;
+                }
                 for guard in &mut event.guards {
                     guard.span = None;
                 }
