@@ -29,10 +29,15 @@
 //! - **Longest-first.** Symbol groups are sorted by descending byte length so an
 //!   ordered-alternation engine (Oniguruma `|`, Vim `\|`) matches `<=>` before
 //!   `<`, `|->` before `|`, `:=` before `:`.
-//! - **Case-insensitive words.** Event-B reserves its words case-insensitively
-//!   (`grammar.pest` uses `^"…"`, [`rossi::builtins::is_builtin`] folds case), so
-//!   word groups are emitted lowercased and matched case-insensitively. This also
-//!   folds the `TRUE`/`true`, `BOOL`/`bool`, `POW`/`pow` spelling pairs into one.
+//! - **Per-group case sensitivity, mirroring `grammar.pest`.** Structural
+//!   keywords, the literal atoms (`true`/`bool`/`nat`/…) and the
+//!   `UNION`/`INTER` quantifier words are case-insensitive tokens (`^"…"`
+//!   rules) and are matched case-insensitively. The mathematical operator
+//!   words (`dom`, `ran`, `mod`, `or`, …), the builtins (`card`, `finite`, …)
+//!   and `POW`/`POW1` are exact-case tokens — `DOM`, `Card`, `pow` are
+//!   ordinary identifiers ([`rossi::builtins::RESERVED_OPERATOR_WORDS`] is
+//!   exact-case, Rodin parity) — so their groups match exactly, in the
+//!   canonical spelling from the tables.
 //! - **One operator colour.** The six semantic operator sub-scopes the old
 //!   hand-written grammars used were cosmetic (themes rarely distinguish them)
 //!   and a frequent source of cross-category shadowing bugs. We collapse every
@@ -52,7 +57,7 @@ pub mod zed;
 
 use rossi::builtins::BUILTIN_WORDS;
 use rossi::keywords::{KEYWORDS, KeywordGroup};
-use rossi::operators::{OPERATOR_SPELLINGS, OperatorCategory};
+use rossi::operators::{OPERATOR_SPELLINGS, OperatorCategory, OperatorId};
 
 /// How a token group is matched in the generated regex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,15 +99,20 @@ impl Scope {
 pub struct TokenGroup {
     pub scope: Scope,
     pub kind: MatchKind,
-    /// Members, already deduplicated and ordered (lowercased for `Word`,
+    /// `Word` groups only: whether `grammar.pest` lexes these spellings
+    /// case-insensitively (`^"…"` rules). Exact-case groups carry the
+    /// canonical spelling (`POW`, `dom`) and must not fold — `DOM`, `Card`,
+    /// `pow` are ordinary identifiers. Always `false` for `Symbol` groups.
+    pub case_insensitive: bool,
+    /// Members, already deduplicated and ordered (sorted for `Word`,
     /// longest-first for `Symbol`).
     pub members: Vec<String>,
 }
 
 impl TokenGroup {
     /// Build this group's match regex for an Oniguruma engine (TextMate, Sublime).
-    /// Word groups get case-insensitive word boundaries; symbol groups are a bare
-    /// longest-first alternation.
+    /// Word groups get word boundaries (case-insensitive only when the grammar's
+    /// tokens are); symbol groups are a bare longest-first alternation.
     pub fn regex_oniguruma(&self) -> String {
         let alts = self
             .members
@@ -110,9 +120,10 @@ impl TokenGroup {
             .map(|m| escape_oniguruma(m))
             .collect::<Vec<_>>()
             .join("|");
-        match self.kind {
-            MatchKind::Word => format!("(?i)\\b({alts})\\b"),
-            MatchKind::Symbol => format!("({alts})"),
+        match (self.kind, self.case_insensitive) {
+            (MatchKind::Word, true) => format!("(?i)\\b({alts})\\b"),
+            (MatchKind::Word, false) => format!("\\b({alts})\\b"),
+            (MatchKind::Symbol, _) => format!("({alts})"),
         }
     }
 }
@@ -138,6 +149,7 @@ impl Model {
     pub fn build() -> Model {
         let mut keyword_control: Vec<String> = Vec::new();
         let mut keyword_other: Vec<String> = Vec::new();
+        let mut operator_words_ci: Vec<String> = Vec::new();
         let mut operator_words: Vec<String> = Vec::new();
         let mut operator_symbols: Vec<String> = Vec::new();
         let mut constant_words: Vec<String> = Vec::new();
@@ -145,6 +157,7 @@ impl Model {
         let mut builtins: Vec<String> = Vec::new();
 
         // Structural keywords: section/event headers vs status/inline modifiers.
+        // All case-insensitive in the grammar (`^"context"` …).
         for kw in KEYWORDS {
             let bucket = match kw.group {
                 KeywordGroup::Status | KeywordGroup::Inline => &mut keyword_other,
@@ -155,25 +168,44 @@ impl Model {
             }
         }
 
-        // Operators: atoms (∅, ℕ, ℤ …) read as constants; every other spelling
-        // is split per-spelling so e.g. Or contributes `∨` (symbol) and `or`
-        // (word), PowerSet contributes `ℙ` (symbol) and `POW` (word).
+        // Operators: atoms (∅, ℕ, NAT …) read as constants and are
+        // case-insensitive tokens (`^"nat"` …). Every other spelling is split
+        // per-spelling so e.g. Or contributes `∨` (symbol) and `or` (word).
+        // The quantifier words `UNION`/`INTER` are the only case-insensitive
+        // operator words (`kw_UNION = ^"UNION"`); all other operator words are
+        // exact-case tokens kept in their canonical spelling (`dom`, `POW`).
         for op in OPERATOR_SPELLINGS {
-            if op.category == OperatorCategory::ExpressionAtom {
-                push_spelling(&mut constant_words, &mut constant_symbols, op.unicode);
-                push_spelling(&mut constant_words, &mut constant_symbols, op.ascii);
+            let is_atom = op.category == OperatorCategory::ExpressionAtom;
+            let is_ci_quantifier = matches!(
+                op.id,
+                OperatorId::QuantifiedUnion | OperatorId::QuantifiedIntersection
+            );
+            let (words, symbols) = if is_atom {
+                (&mut constant_words, &mut constant_symbols)
+            } else if is_ci_quantifier {
+                (&mut operator_words_ci, &mut operator_symbols)
             } else {
-                push_spelling(&mut operator_words, &mut operator_symbols, op.unicode);
-                push_spelling(&mut operator_words, &mut operator_symbols, op.ascii);
-            }
+                (&mut operator_words, &mut operator_symbols)
+            };
+            // Case-insensitive groups fold to lowercase (case is cosmetic
+            // there); the exact group keeps the canonical spelling.
+            let fold = is_atom || is_ci_quantifier;
+            push_spelling(words, symbols, op.unicode, fold);
+            push_spelling(words, symbols, op.ascii, fold);
         }
 
-        // Built-ins: skip words already covered as operators (dom, ran, mod …) or
-        // constants (nat, int …); booleans read as constants; the rest are
-        // support functions/predicates (card, finite, partition …).
+        // Built-ins: skip words already covered as operators (dom, ran, POW …)
+        // or constants (nat, int …); booleans read as constants (their tokens
+        // are case-insensitive); the rest are support functions/predicates
+        // (card, finite, partition …), exact-case like their grammar tokens.
         for word in BUILTIN_WORDS {
             let w = word.to_lowercase();
-            if operator_words.contains(&w) || constant_words.contains(&w) {
+            let covered = operator_words
+                .iter()
+                .chain(&operator_words_ci)
+                .any(|o| o.eq_ignore_ascii_case(&w))
+                || constant_words.contains(&w);
+            if covered {
                 continue;
             }
             if BOOLEAN_WORDS.contains(&w.as_str()) {
@@ -184,35 +216,43 @@ impl Model {
         }
 
         let groups = vec![
-            word_group(Scope::KeywordControl, keyword_control),
-            word_group(Scope::KeywordOther, keyword_other),
+            word_group(Scope::KeywordControl, keyword_control, true),
+            word_group(Scope::KeywordOther, keyword_other, true),
             symbol_group(Scope::ConstantLanguage, constant_symbols),
-            word_group(Scope::ConstantLanguage, constant_words),
-            word_group(Scope::SupportFunction, builtins),
+            word_group(Scope::ConstantLanguage, constant_words, true),
+            word_group(Scope::SupportFunction, builtins, false),
             symbol_group(Scope::KeywordOperator, operator_symbols),
-            word_group(Scope::KeywordOperator, operator_words),
+            word_group(Scope::KeywordOperator, operator_words_ci, true),
+            word_group(Scope::KeywordOperator, operator_words, false),
         ];
 
         Model { groups }
     }
 }
 
-/// Route a spelling to its word or symbol bucket.
-fn push_spelling(words: &mut Vec<String>, symbols: &mut Vec<String>, spelling: &str) {
+/// Route a spelling to its word or symbol bucket. `fold` lowercases word
+/// spellings (case-insensitive groups, where case is cosmetic); exact-case
+/// groups keep the canonical spelling (`POW` must not become `pow`).
+fn push_spelling(words: &mut Vec<String>, symbols: &mut Vec<String>, spelling: &str, fold: bool) {
     if is_word(spelling) {
-        words.push(spelling.to_lowercase());
+        words.push(if fold {
+            spelling.to_lowercase()
+        } else {
+            spelling.to_string()
+        });
     } else {
         symbols.push(spelling.to_string());
     }
 }
 
 /// Sorted, deduplicated word group (order is cosmetic; sorted for determinism).
-fn word_group(scope: Scope, mut members: Vec<String>) -> TokenGroup {
+fn word_group(scope: Scope, mut members: Vec<String>, case_insensitive: bool) -> TokenGroup {
     members.sort();
     members.dedup();
     TokenGroup {
         scope,
         kind: MatchKind::Word,
+        case_insensitive,
         members,
     }
 }
@@ -234,6 +274,7 @@ fn symbol_group(scope: Scope, mut members: Vec<String>) -> TokenGroup {
     TokenGroup {
         scope,
         kind: MatchKind::Symbol,
+        case_insensitive: false,
         members,
     }
 }
@@ -388,9 +429,39 @@ mod tests {
         assert!(all.iter().any(|m| m == "|->"));
         assert!(all.iter().any(|m| m == "∈"));
         assert!(all.iter().any(|m| m == "ℙ"));
-        assert!(all.contains(&"pow".to_string()));
+        // Exact-case groups keep the canonical spelling from the tables.
+        assert!(all.contains(&"POW".to_string()));
+        assert!(!all.contains(&"pow".to_string()));
         assert!(all.contains(&"card".to_string()));
         assert!(all.contains(&"partition".to_string()));
+    }
+
+    #[test]
+    fn word_case_policy_mirrors_the_grammar() {
+        // Case-insensitive tokens in grammar.pest (`^"…"`): structural
+        // keywords, literal atoms, and the UNION/INTER quantifier words.
+        // Exact-case tokens: the math operator words, builtins, POW/POW1.
+        let model = Model::build();
+        let find = |member: &str| {
+            model
+                .groups
+                .iter()
+                .find(|g| g.members.iter().any(|m| m == member))
+                .unwrap_or_else(|| panic!("{member:?} not classified"))
+        };
+        for ci in ["context", "true", "nat1", "union", "inter"] {
+            assert!(find(ci).case_insensitive, "{ci:?} must match (?i)");
+        }
+        for exact in ["dom", "ran", "mod", "or", "POW", "POW1", "card", "finite"] {
+            assert!(
+                !find(exact).case_insensitive,
+                "{exact:?} must match exact-case (Rodin reserves exact spellings; \
+                 `DOM`, `Card`, `pow` are ordinary identifiers)"
+            );
+        }
+        // The (?i) regex carries the flag; the exact regex must not.
+        assert!(find("dom").regex_oniguruma().starts_with("\\b("));
+        assert!(find("context").regex_oniguruma().starts_with("(?i)"));
     }
 
     #[test]

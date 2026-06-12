@@ -29,8 +29,9 @@
 //! `context` (keyword) vs `context` (identifier) — the grammar declares
 //! `word: $ => $.identifier`, enabling tree-sitter's keyword extraction, which
 //! resolves a whole-word match to the keyword. Keyword extraction only applies
-//! to *pure word* tokens, so each class is split into a `*_word` node (a
-//! case-insensitive regex, extractable) and a `*_sym` node (exact string
+//! to *pure word* tokens, so each class is split into a `*_word` node (a word
+//! regex, extractable; case-insensitive only where the grammar's tokens are)
+//! and a `*_sym` node (exact string
 //! literals that never collide with identifiers). Within one word regex JS
 //! alternation is leftmost — not longest — so the spellings are sorted
 //! longest-first (`events` before `event`). Symbol literals need no ordering
@@ -59,14 +60,17 @@ pub const MARKERS_SCM: Markers = Markers {
 /// stay free of identifier collisions. The hand-maintained `_token` rule in
 /// `grammar.js` lists exactly these names, and [`render_highlights_region`]
 /// captures them — so a new [`Scope`] variant breaks this `match` until it is
-/// handled.
-pub fn node_name(scope: Scope, kind: MatchKind) -> &'static str {
-    match (scope, kind) {
+/// handled. Operator words split by case policy: the case-insensitive
+/// quantifier words (`UNION`/`INTER`) get their own node so the exact-case
+/// `operator_word` rule never folds (`DOM`, `pow` are ordinary identifiers).
+pub fn node_name(group: &TokenGroup) -> &'static str {
+    match (group.scope, group.kind) {
         (Scope::KeywordControl, _) => "keyword",
         (Scope::KeywordOther, _) => "status_keyword",
         (Scope::SupportFunction, _) => "builtin",
         (Scope::ConstantLanguage, MatchKind::Word) => "constant_word",
         (Scope::ConstantLanguage, MatchKind::Symbol) => "constant_sym",
+        (Scope::KeywordOperator, MatchKind::Word) if group.case_insensitive => "quantifier_word",
         (Scope::KeywordOperator, MatchKind::Word) => "operator_word",
         (Scope::KeywordOperator, MatchKind::Symbol) => "operator_sym",
     }
@@ -97,7 +101,7 @@ pub fn render_grammar_region(model: &Model) -> String {
         if group.members.is_empty() {
             continue;
         }
-        let name = node_name(group.scope, group.kind);
+        let name = node_name(group);
         out.push_str(&format!("    {name}: $ => {},\n", token_expr(group)));
     }
     out.push_str("    ");
@@ -118,7 +122,7 @@ pub fn render_highlights_region(model: &Model) -> String {
         if group.members.is_empty() {
             continue;
         }
-        let name = node_name(group.scope, group.kind);
+        let name = node_name(group);
         out.push_str(&format!("({}) @{}\n", name, capture_name(group.scope)));
     }
     out.push_str(
@@ -150,16 +154,17 @@ pub fn tokens_manifest(model: &Model) -> String {
         if group.members.is_empty() {
             continue;
         }
-        map.insert(node_name(group.scope, group.kind), &group.members);
+        map.insert(node_name(group), &group.members);
     }
     let mut out = serde_json::to_string_pretty(&map).expect("serialize token manifest");
     out.push('\n');
     out
 }
 
-/// The tree-sitter token expression for one group: a case-insensitive,
-/// longest-first regex for a word group, or a `choice` of exact string literals
-/// for a symbol group. Both are wrapped in `token(…)` so the node is one leaf.
+/// The tree-sitter token expression for one group: a longest-first regex for a
+/// word group (with the `i` flag only when the grammar's tokens fold case), or
+/// a `choice` of exact string literals for a symbol group. Both are wrapped in
+/// `token(…)` so the node is one leaf.
 fn token_expr(group: &TokenGroup) -> String {
     match group.kind {
         MatchKind::Word => {
@@ -167,13 +172,14 @@ fn token_expr(group: &TokenGroup) -> String {
             // `event` (see `super::longest_first`).
             let mut words: Vec<&str> = group.members.iter().map(String::as_str).collect();
             words.sort_by(|a, b| super::longest_first(a, b));
-            // Escape regex metacharacters before splicing into the `/(?:…)/i`
+            // Escape regex metacharacters before splicing into the `/(?:…)/`
             // literal. The metacharacter set is identical for Oniguruma and JS
             // RegExp, so we reuse `escape_oniguruma`. Every word member is
             // alphanumeric today (so this is a no-op), but it keeps the word path
             // as safe as the symbol path, which escapes via `js_string`.
             let alts: Vec<String> = words.iter().map(|w| super::escape_oniguruma(w)).collect();
-            format!("token(/(?:{})/i)", alts.join("|"))
+            let flag = if group.case_insensitive { "i" } else { "" };
+            format!("token(/(?:{})/{flag})", alts.join("|"))
         }
         MatchKind::Symbol => {
             let lits: Vec<String> = group.members.iter().map(|s| js_string(s)).collect();
@@ -225,7 +231,7 @@ mod tests {
             if group.members.is_empty() {
                 continue;
             }
-            let name = node_name(group.scope, group.kind);
+            let name = node_name(group);
             assert!(
                 grammar.contains(&format!("$.{name},")),
                 "grammar.js `_token` is missing `$.{name}` (generated node has no place in the tree)"
@@ -241,7 +247,7 @@ mod tests {
             if group.members.is_empty() {
                 continue;
             }
-            let name = node_name(group.scope, group.kind);
+            let name = node_name(group);
             let capture = capture_name(group.scope);
             assert!(
                 scm.contains(&format!("({name}) @{capture}\n")),
@@ -270,7 +276,7 @@ mod tests {
             if group.members.is_empty() {
                 continue;
             }
-            let name = node_name(group.scope, group.kind);
+            let name = node_name(group);
             let arr = obj
                 .get(name)
                 .unwrap_or_else(|| panic!("manifest missing node `{name}`"))
@@ -308,7 +314,8 @@ mod tests {
         );
     }
 
-    /// Extract the `|`-separated alternatives from a `token(/(?:…)/i)` rule line.
+    /// Extract the `|`-separated alternatives from a `token(/(?:…)/…)` rule line
+    /// (with or without the `i` flag).
     fn word_alternatives(region: &str, rule: &str) -> Vec<String> {
         let line = region
             .lines()
@@ -316,9 +323,9 @@ mod tests {
             .unwrap_or_else(|| panic!("missing rule {rule}"));
         let body = line
             .split_once("(?:")
-            .and_then(|(_, rest)| rest.split_once(")/i)"))
+            .and_then(|(_, rest)| rest.split_once(")/"))
             .map(|(body, _)| body)
-            .unwrap_or_else(|| panic!("rule {rule} is not a `token(/(?:…)/i)` regex: {line}"));
+            .unwrap_or_else(|| panic!("rule {rule} is not a `token(/(?:…)/…)` regex: {line}"));
         body.split('|').map(str::to_string).collect()
     }
 
@@ -335,7 +342,7 @@ mod tests {
             if !matches!(group.kind, MatchKind::Word) || group.members.is_empty() {
                 continue;
             }
-            let rule = node_name(group.scope, group.kind);
+            let rule = node_name(group);
             let alts = word_alternatives(&region, rule);
             for (i, a) in alts.iter().enumerate() {
                 for (j, b) in alts.iter().enumerate() {
@@ -349,7 +356,7 @@ mod tests {
                 }
             }
         }
-        // events/event, nat/nat1, pow/pow1 all exist, so the loop must have
+        // events/event, nat/nat1, POW/POW1 all exist, so the loop must have
         // exercised the ordering — guard against the check silently going dark.
         assert!(
             pairs_checked > 0,

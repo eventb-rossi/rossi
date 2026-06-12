@@ -34,15 +34,25 @@ fn vim_group(scope: Scope) -> (&'static str, &'static str) {
 pub fn render(model: &Model) -> String {
     let mut out = String::new();
 
-    // Word groups: `syn keyword`, case-insensitive.
+    // Word groups: `syn keyword`, under the case mode of their grammar
+    // tokens — `syn case ignore` for the `^"…"` tokens (structural keywords,
+    // literals, UNION/INTER), `syn case match` for the exact-case math words
+    // (`DOM`, `Card`, `pow` are ordinary identifiers and must not light up).
     out.push_str("syn case ignore\n");
     for group in &model.groups {
-        if group.kind == MatchKind::Word {
+        if group.kind == MatchKind::Word && group.case_insensitive {
             let (name, _) = vim_group(group.scope);
             out.push_str(&format!("syn keyword {name} {}\n", group.members.join(" ")));
         }
     }
-    out.push_str("syn case match\n\n");
+    out.push_str("syn case match\n");
+    for group in &model.groups {
+        if group.kind == MatchKind::Word && !group.case_insensitive {
+            let (name, _) = vim_group(group.scope);
+            out.push_str(&format!("syn keyword {name} {}\n", group.members.join(" ")));
+        }
+    }
+    out.push('\n');
 
     // Symbol groups: one `syn match` per group, longest-first alternation.
     for group in &model.groups {

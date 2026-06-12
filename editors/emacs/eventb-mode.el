@@ -86,25 +86,29 @@ with `eventb-toggle-input-method'."
 ;;; Syntax highlighting
 
 ;; >>> rossi gen-grammars (generated, do not edit)
-(defconst eventb-keywords
-  '("any" "axioms" "begin" "constants" "context" "end" "event" "events" "extends" "initialisation" "invariants" "machine" "refines" "sees" "sets" "status" "then" "theorems" "variables" "variant" "when" "where" "with" "witness")
-  "Event-B section and event keywords.")
+(defconst eventb-keywords-regexp
+  "\\<\\(?:[Ii][Nn][Ii][Tt][Ii][Aa][Ll][Ii][Ss][Aa][Tt][Ii][Oo][Nn]\\|[Ii][Nn][Vv][Aa][Rr][Ii][Aa][Nn][Tt][Ss]\\|[Cc][Oo][Nn][Ss][Tt][Aa][Nn][Tt][Ss]\\|[Vv][Aa][Rr][Ii][Aa][Bb][Ll][Ee][Ss]\\|[Tt][Hh][Ee][Oo][Rr][Ee][Mm][Ss]\\|[Cc][Oo][Nn][Tt][Ee][Xx][Tt]\\|[Ee][Xx][Tt][Ee][Nn][Dd][Ss]\\|[Mm][Aa][Cc][Hh][Ii][Nn][Ee]\\|[Rr][Ee][Ff][Ii][Nn][Ee][Ss]\\|[Vv][Aa][Rr][Ii][Aa][Nn][Tt]\\|[Ww][Ii][Tt][Nn][Ee][Ss][Ss]\\|[Aa][Xx][Ii][Oo][Mm][Ss]\\|[Ee][Vv][Ee][Nn][Tt][Ss]\\|[Ss][Tt][Aa][Tt][Uu][Ss]\\|[Bb][Ee][Gg][Ii][Nn]\\|[Ee][Vv][Ee][Nn][Tt]\\|[Ww][Hh][Ee][Rr][Ee]\\|[Ss][Ee][Ee][Ss]\\|[Ss][Ee][Tt][Ss]\\|[Tt][Hh][Ee][Nn]\\|[Ww][Hh][Ee][Nn]\\|[Ww][Ii][Tt][Hh]\\|[Aa][Nn][Yy]\\|[Ee][Nn][Dd]\\)\\>"
+  "Event-B section and event keywords (any case).")
 
-(defconst eventb-status-keywords
-  '("anticipated" "convergent" "ordinary" "skip" "theorem")
-  "Event-B status and inline modifiers.")
+(defconst eventb-status-keywords-regexp
+  "\\<\\(?:[Aa][Nn][Tt][Ii][Cc][Ii][Pp][Aa][Tt][Ee][Dd]\\|[Cc][Oo][Nn][Vv][Ee][Rr][Gg][Ee][Nn][Tt]\\|[Oo][Rr][Dd][Ii][Nn][Aa][Rr][Yy]\\|[Tt][Hh][Ee][Oo][Rr][Ee][Mm]\\|[Ss][Kk][Ii][Pp]\\)\\>"
+  "Event-B status and inline modifiers (any case).")
 
-(defconst eventb-constants
-  '("bool" "false" "int" "nat" "nat1" "true")
-  "Event-B literal constants and number sets.")
+(defconst eventb-constants-regexp
+  "\\<\\(?:[Ff][Aa][Ll][Ss][Ee]\\|[Bb][Oo][Oo][Ll]\\|[Nn][Aa][Tt]1\\|[Tt][Rr][Uu][Ee]\\|[Ii][Nn][Tt]\\|[Nn][Aa][Tt]\\)\\>"
+  "Event-B literal constants and number sets (any case).")
 
-(defconst eventb-builtins
-  '("card" "finite" "id" "max" "min" "partition" "pred" "prj1" "prj2" "succ")
-  "Event-B built-in functions and predicates.")
+(defconst eventb-builtins-regexp
+  "\\<\\(?:partition\\|finite\\|card\\|pred\\|prj1\\|prj2\\|succ\\|max\\|min\\|id\\)\\>"
+  "Event-B built-in functions and predicates (exact case).")
 
-(defconst eventb-operator-words
-  '("circ" "dom" "inter" "mod" "not" "oftype" "or" "pow" "pow1" "ran" "union")
-  "Event-B alphabetic operators.")
+(defconst eventb-quantifier-words-regexp
+  "\\<\\(?:[Ii][Nn][Tt][Ee][Rr]\\|[Uu][Nn][Ii][Oo][Nn]\\)\\>"
+  "Event-B quantifier words UNION/INTER (any case).")
+
+(defconst eventb-operator-words-regexp
+  "\\<\\(?:oftype\\|POW1\\|circ\\|POW\\|dom\\|mod\\|not\\|ran\\|or\\)\\>"
+  "Event-B alphabetic operators (exact case).")
 
 (defconst eventb-constant-symbols
   '("ℕ1" "ℕ" "ℤ" "∅" "{}")
@@ -115,18 +119,21 @@ with `eventb-toggle-input-method'."
   "Event-B symbolic operators.")
 
 (defvar eventb-font-lock-keywords
-  `((,(regexp-opt eventb-keywords 'words) . font-lock-keyword-face)
-    (,(regexp-opt eventb-status-keywords 'words) . font-lock-keyword-face)
-    ("\\<EVENT\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-function-name-face)
-    ("\\<\\(CONTEXT\\|MACHINE\\)\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 2 font-lock-type-face)
-    (,(regexp-opt eventb-constants 'words) . font-lock-constant-face)
+  `((,eventb-keywords-regexp . font-lock-keyword-face)
+    (,eventb-status-keywords-regexp . font-lock-keyword-face)
+    ("\\<[Ee][Vv][Ee][Nn][Tt]\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-function-name-face)
+    ("\\<\\(?:[Cc][Oo][Nn][Tt][Ee][Xx][Tt]\\|[Mm][Aa][Cc][Hh][Ii][Nn][Ee]\\)\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-type-face)
+    (,eventb-constants-regexp . font-lock-constant-face)
     (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
-    (,(regexp-opt eventb-builtins 'words) . font-lock-function-name-face)
-    (,(regexp-opt eventb-operator-words 'words) . font-lock-builtin-face)
+    (,eventb-builtins-regexp . font-lock-function-name-face)
+    (,eventb-quantifier-words-regexp . font-lock-builtin-face)
+    (,eventb-operator-words-regexp . font-lock-builtin-face)
     (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
     ("\\<[0-9]+\\>" . font-lock-constant-face)
     ("@[A-Za-z0-9_]+" . font-lock-preprocessor-face))
-  "Font lock keywords for Event-B mode (comments and strings come from the syntax table).")
+  "Font lock keywords for Event-B mode (comments and strings come from the syntax table).
+Word patterns carry their own case folding; `font-lock-keywords-case-fold-search'
+must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
 ;; <<< rossi gen-grammars
 
 ;;; Syntax table
@@ -337,9 +344,10 @@ used in safety-critical systems and formal verification.
 
   ;; Font lock
   (setq font-lock-defaults '(eventb-font-lock-keywords))
-  ;; Event-B reserves its vocabulary case-insensitively; the generated word
-  ;; lists are lowercased, so fold case when matching them.
-  (setq-local font-lock-keywords-case-fold-search t)
+  ;; The generated word patterns carry their own case folding (structural
+  ;; keywords fold; the math words dom/card/POW/… are exact-case tokens, and
+  ;; DOM/Card/pow are ordinary identifiers), so matching must not fold here.
+  (setq-local font-lock-keywords-case-fold-search nil)
 
   ;; Comments
   (setq-local comment-start "// ")

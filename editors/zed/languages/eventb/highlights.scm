@@ -15,6 +15,7 @@
 (constant_word) @constant.builtin
 (builtin) @function.builtin
 (operator_sym) @operator
+(quantifier_word) @operator
 (operator_word) @operator
 
 (comment) @comment

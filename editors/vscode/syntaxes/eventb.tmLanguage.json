@@ -33,6 +33,9 @@
       "include": "#tokens_6"
     },
     {
+      "include": "#tokens_7"
+    },
+    {
       "include": "#numbers"
     },
     {
@@ -112,7 +115,7 @@
       "name": "constant.language.eventb"
     },
     "tokens_4": {
-      "match": "(?i)\\b(card|finite|id|max|min|partition|pred|prj1|prj2|succ)\\b",
+      "match": "\\b(card|finite|id|max|min|partition|pred|prj1|prj2|succ)\\b",
       "name": "support.function.eventb"
     },
     "tokens_5": {
@@ -120,7 +123,11 @@
       "name": "keyword.operator.eventb"
     },
     "tokens_6": {
-      "match": "(?i)\\b(circ|dom|inter|mod|not|oftype|or|pow|pow1|ran|union)\\b",
+      "match": "(?i)\\b(inter|union)\\b",
+      "name": "keyword.operator.eventb"
+    },
+    "tokens_7": {
+      "match": "\\b(POW|POW1|circ|dom|mod|not|oftype|or|ran)\\b",
       "name": "keyword.operator.eventb"
     }
   },

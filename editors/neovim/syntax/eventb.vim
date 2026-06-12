@@ -12,9 +12,10 @@ syn case ignore
 syn keyword eventbKeyword any axioms begin constants context end event events extends initialisation invariants machine refines sees sets status then theorems variables variant when where with witness
 syn keyword eventbStatusKeyword anticipated convergent ordinary skip theorem
 syn keyword eventbConstant bool false int nat nat1 true
-syn keyword eventbBuiltin card finite id max min partition pred prj1 prj2 succ
-syn keyword eventbOperator circ dom inter mod not oftype or pow pow1 ran union
+syn keyword eventbOperator inter union
 syn case match
+syn keyword eventbBuiltin card finite id max min partition pred prj1 prj2 succ
+syn keyword eventbOperator POW POW1 circ dom mod not oftype or ran
 
 syn match eventbConstant "ℕ1\|ℕ\|ℤ\|∅\|{}"
 syn match eventbOperator "<<->>\|/<<:\|:∈\|:∣\|<->>\|<<->\|>->>\|ℙ1\|+->\|+>>\|-->\|->>\|/<:\|<->\|<<:\|<<|\|<=>\|>+>\|>->\||->\||>>\|‥\|ℙ\|→\|↔\|↠\|↣\|↦\|⇒\|⇔\|⇸\|∀\|∃\|∈\|∉\|−\|∖\|∗\|∘\|∣\|∥\|∧\|∨\|∩\|∪\|∼\|≔\|≠\|≤\|≥\|⊂\|⊄\|⊆\|⊈\|⊗\|⋂\|⋃\|▷\|◁\|⤀\|⤔\|⤖\|⦂\|⩤\|⩥\|\|\|\|\|\*\*\|\.\.\|/:\|/=\|/\\\|::\|:=\|:|\|<+\|<:\|<=\|<|\|=>\|><\|>=\|\\/\||>\|||\|¬\|·\|×\|÷\|λ\|!\|#\|%\|&\|\*\|+\|-\|\.\|/\|:\|;\|<\|=\|>\|\\\|\^\||\|\~"
