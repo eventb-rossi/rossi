@@ -231,7 +231,7 @@ pub fn load_machines(tsv: &Path) -> Option<BTreeMap<String, String>> {
 
 /// The corpus `model_flags.tsv` (model, flag, notes; one row per model+flag),
 /// loaded into a `model -> set of flags` map. Known flags: `defective`,
-/// `nondeterministic`, `lsp_suite`.
+/// `unsupported`, `rodin_rejected`, `nondeterministic`, `lsp_suite`.
 pub fn load_flags(tsv: &Path) -> Option<BTreeMap<String, BTreeSet<String>>> {
     let s = std::fs::read_to_string(tsv).ok()?;
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

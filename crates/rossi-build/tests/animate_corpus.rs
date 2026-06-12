@@ -29,7 +29,9 @@
 //!
 //! Verdicts:
 //!   match   — actual outcome matches the reference TSV
-//!   known   — mismatch on a model flagged `defective` in the corpus
+//!   known   — mismatch on a model flagged `defective` (broken source) or
+//!             `unsupported` (needs an Event-B extension rossi doesn't
+//!             support yet, e.g. the theory plugin) in the corpus
 //!             `model_flags.tsv` (does not fail)
 //!   flaky   — success ↔ invariant_violation drift on a model flagged
 //!             `nondeterministic` (does not fail)
@@ -124,7 +126,7 @@ fn animate_regenerated_corpus_matches_reference() {
         let matches = actual_str == expected_outcome;
         let verdict = if matches {
             "match"
-        } else if has_flag(&model, "defective") {
+        } else if has_flag(&model, "defective") || has_flag(&model, "unsupported") {
             "known"
         } else if has_flag(&model, "nondeterministic")
             && is_invariant_drift(&expected_outcome, actual_str)

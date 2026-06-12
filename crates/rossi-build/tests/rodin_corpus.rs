@@ -48,9 +48,11 @@
 //!   match    — reference `valid` and Rodin built it accurately, or reference
 //!              `invalid` and Rodin did not build it cleanly
 //!   known    — a model flagged `defective` (broken source that cannot
-//!              regenerate) or `rodin_rejected` (Rodin's static checker has
-//!              never accepted the pristine archive, so the failure predates
-//!              rossi) in the corpus `model_flags.tsv`
+//!              regenerate), `unsupported` (needs an Event-B extension rossi
+//!              doesn't support yet, e.g. the theory plugin), or
+//!              `rodin_rejected` (Rodin's static checker has never accepted
+//!              the pristine archive, so the failure predates rossi) in the
+//!              corpus `model_flags.tsv`
 //!   diverge  — reference `invalid` but Rodin built it cleanly (checker/Rodin
 //!              disagreement; not a rossi regression)
 //!   untested — reference `invalid` but the harness never got a Rodin verdict
@@ -129,7 +131,9 @@ fn rodin_builds_regenerated_corpus() {
 
     let known: std::collections::BTreeSet<&str> = flags
         .iter()
-        .filter(|(_, f)| f.contains("defective") || f.contains("rodin_rejected"))
+        .filter(|(_, f)| {
+            f.contains("defective") || f.contains("unsupported") || f.contains("rodin_rejected")
+        })
         .map(|(m, _)| m.as_str())
         .collect();
     let mut rows = Vec::<Row>::new();
