@@ -5,6 +5,22 @@
 
 use rossi::{Component, parse_with_recovery};
 
+/// Unwrap the recovered component as a context, failing the test otherwise.
+fn expect_context(result: &rossi::ParseResult<Component>) -> &rossi::ast::Context {
+    match &result.component {
+        Some(Component::Context(ctx)) => ctx,
+        other => panic!("Expected a Context component, got {other:?}"),
+    }
+}
+
+/// Unwrap the recovered component as a machine, failing the test otherwise.
+fn expect_machine(result: &rossi::ParseResult<Component>) -> &rossi::ast::Machine {
+    match &result.component {
+        Some(Component::Machine(m)) => m,
+        other => panic!("Expected a Machine component, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_recovery_context_with_invalid_axiom() {
     let source = r#"
@@ -27,17 +43,14 @@ fn test_recovery_context_with_invalid_axiom() {
     assert!(!result.errors.is_empty(), "Expected at least one error");
 
     // Should have a partial component
-    if let Some(Component::Context(ctx)) = result.component {
-        assert_eq!(ctx.name, "test");
-        assert_eq!(ctx.sets.len(), 1);
-        assert_eq!(ctx.sets[0].name(), "MySet");
-        assert_eq!(ctx.constants.len(), 1);
-        assert_eq!(ctx.constants[0].name, "c1");
-        // Should have recovered the valid axioms
-        assert!(!ctx.axioms.is_empty(), "Should have at least some axioms");
-    } else {
-        panic!("Expected a Context component");
-    }
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.name, "test");
+    assert_eq!(ctx.sets.len(), 1);
+    assert_eq!(ctx.sets[0].name(), "MySet");
+    assert_eq!(ctx.constants.len(), 1);
+    assert_eq!(ctx.constants[0].name, "c1");
+    // Should have recovered the valid axioms
+    assert!(!ctx.axioms.is_empty(), "Should have at least some axioms");
 }
 
 #[test]
@@ -58,19 +71,16 @@ fn test_recovery_machine_with_invalid_invariant() {
     // Should have recovered
     assert!(result.has_recovered(), "Expected recovery with errors");
 
-    if let Some(Component::Machine(m)) = result.component {
-        assert_eq!(m.name, "test");
-        assert_eq!(m.variables.len(), 2);
-        assert_eq!(m.variables[0].name, "x");
-        assert_eq!(m.variables[1].name, "y");
-        // Should have recovered some invariants
-        assert!(
-            !m.invariants.is_empty(),
-            "Should have at least some invariants"
-        );
-    } else {
-        panic!("Expected a Machine component");
-    }
+    let m = expect_machine(&result);
+    assert_eq!(m.name, "test");
+    assert_eq!(m.variables.len(), 2);
+    assert_eq!(m.variables[0].name, "x");
+    assert_eq!(m.variables[1].name, "y");
+    // Should have recovered some invariants
+    assert!(
+        !m.invariants.is_empty(),
+        "Should have at least some invariants"
+    );
 }
 
 #[test]
@@ -89,11 +99,10 @@ fn test_recovery_context_missing_end() {
     assert!(!result.errors.is_empty());
 
     // Should still recover what it can
-    if let Some(Component::Context(ctx)) = result.component {
-        assert_eq!(ctx.name, "test");
-        assert_eq!(ctx.sets.len(), 1);
-        assert_eq!(ctx.constants.len(), 1);
-    }
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.name, "test");
+    assert_eq!(ctx.sets.len(), 1);
+    assert_eq!(ctx.constants.len(), 1);
 }
 
 #[test]
@@ -119,13 +128,12 @@ fn test_recovery_context_with_multiple_errors() {
     assert!(result.errors.len() >= 2, "Expected multiple errors");
 
     // Should still have a component
-    if let Some(Component::Context(ctx)) = result.component {
-        assert_eq!(ctx.name, "multi_error");
-        // Should recover the valid sets
-        assert!(!ctx.sets.is_empty());
-        // Should recover some constants
-        assert!(!ctx.constants.is_empty());
-    }
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.name, "multi_error");
+    // Should recover the valid sets
+    assert!(!ctx.sets.is_empty());
+    // Should recover some constants
+    assert!(!ctx.constants.is_empty());
 }
 
 #[test]
@@ -147,13 +155,12 @@ fn test_recovery_machine_with_valid_clauses() {
 
     let result = parse_with_recovery(source);
 
-    if let Some(Component::Machine(m)) = result.component {
-        assert_eq!(m.name, "valid_parts");
-        assert_eq!(m.refines, Some("abstract_machine".to_string()));
-        assert_eq!(m.sees.len(), 1);
-        assert_eq!(m.sees[0], "some_context");
-        assert_eq!(m.variables.len(), 3);
-    }
+    let m = expect_machine(&result);
+    assert_eq!(m.name, "valid_parts");
+    assert_eq!(m.refines, Some("abstract_machine".to_string()));
+    assert_eq!(m.sees.len(), 1);
+    assert_eq!(m.sees[0], "some_context");
+    assert_eq!(m.variables.len(), 3);
 }
 
 #[test]
@@ -198,17 +205,16 @@ fn test_recovery_preserves_valid_data() {
 
     let result = parse_with_recovery(source);
 
-    if let Some(Component::Context(ctx)) = result.component {
-        // Check that valid data is preserved
-        assert_eq!(ctx.name, "recovery_test");
-        assert_eq!(ctx.extends.len(), 2);
-        assert!(ctx.extends.contains(&"parent1".to_string()));
-        assert!(ctx.extends.contains(&"parent2".to_string()));
-        assert_eq!(ctx.sets.len(), 3);
-        assert_eq!(ctx.constants.len(), 3);
-        // Should have recovered some axioms (at least the valid ones)
-        assert!(!ctx.axioms.is_empty());
-    }
+    let ctx = expect_context(&result);
+    // Check that valid data is preserved
+    assert_eq!(ctx.name, "recovery_test");
+    assert_eq!(ctx.extends.len(), 2);
+    assert!(ctx.extends.contains(&"parent1".to_string()));
+    assert!(ctx.extends.contains(&"parent2".to_string()));
+    assert_eq!(ctx.sets.len(), 3);
+    assert_eq!(ctx.constants.len(), 3);
+    // Should have recovered some axioms (at least the valid ones)
+    assert!(!ctx.axioms.is_empty());
 }
 
 #[test]
@@ -250,14 +256,13 @@ fn test_recovery_with_commas_in_lists() {
     let result = parse_with_recovery(source);
 
     // This should parse successfully
-    if let Some(Component::Context(ctx)) = result.component {
-        assert_eq!(ctx.name, "comma_test");
-        assert!(ctx.sets.len() >= 2, "Should recover multiple sets");
-        assert!(
-            ctx.constants.len() >= 2,
-            "Should recover multiple constants"
-        );
-    }
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.name, "comma_test");
+    assert!(ctx.sets.len() >= 2, "Should recover multiple sets");
+    assert!(
+        ctx.constants.len() >= 2,
+        "Should recover multiple constants"
+    );
 }
 
 #[test]
@@ -273,4 +278,566 @@ fn test_recovery_unknown_component_type() {
 
     // Should fail completely since we can't determine the component type
     assert!(result.is_err(), "Expected complete failure");
+}
+
+// ============================================================================
+// Issue #24: a colon inside a comment must not derail recovery.
+//
+// The LSP runs `parse_with_recovery` on every edit; each test below plants one
+// unrelated syntax error (a stray `+` in CONSTANTS) to force the recovery path,
+// then checks that comments never produce spurious "Failed to parse" errors.
+// ============================================================================
+
+/// Errors other than the initial strict-parse error (always `errors[0]`).
+fn recovery_errors(result: &rossi::ParseResult<Component>) -> Vec<String> {
+    result.errors[1..].iter().map(|e| e.to_string()).collect()
+}
+
+#[test]
+fn test_recovery_colon_in_comment_axiom_not_flagged() {
+    let source = r#"
+    CONTEXT issue24
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        @axm1 c1 = 1 // note: positive
+        @axm2 c1 = 1 // plain comment without it
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    assert!(result.has_recovered(), "Expected recovery with errors");
+    let extra = recovery_errors(&result);
+    assert!(
+        extra.is_empty(),
+        "Colon in comment must not flag valid axioms, got: {extra:?}"
+    );
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 2);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+    assert_eq!(ctx.axioms[1].label.as_deref(), Some("axm2"));
+}
+
+#[test]
+fn test_recovery_ascii_membership_with_at_label() {
+    // The ASCII spelling of ∈ is `:`; it must not act as a label separator.
+    let source = r#"
+    CONTEXT issue24_membership
+    SETS
+        S
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        @axm1 c1 : S
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(
+        extra.is_empty(),
+        "ASCII membership colon must not flag the axiom, got: {extra:?}"
+    );
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+}
+
+#[test]
+fn test_recovery_comment_only_lines_no_errors() {
+    let source = r#"
+    MACHINE issue24_comment_lines
+    VARIABLES
+        x
+        +
+    INVARIANTS
+        // TODO: tighten this bound
+        @inv1 x >= 0
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(
+        extra.is_empty(),
+        "Comment-only lines must not produce errors, got: {extra:?}"
+    );
+
+    let m = expect_machine(&result);
+    assert_eq!(m.invariants.len(), 1);
+    assert_eq!(m.invariants[0].label.as_deref(), Some("inv1"));
+}
+
+#[test]
+fn test_recovery_block_comment_with_colon() {
+    let source = r#"
+    CONTEXT issue24_block
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        /* background: this constant
+           is the answer: to everything */
+        @axm1 c1 = 42
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(
+        extra.is_empty(),
+        "Block comment must not produce errors, got: {extra:?}"
+    );
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+}
+
+#[test]
+fn test_recovery_colon_label_syntax_still_works() {
+    // The undocumented `label: predicate` form must keep working, including
+    // with a trailing colon comment.
+    let source = r#"
+    CONTEXT issue24_colon_label
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        axm1: c1 = 1 // note: colon label form
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(extra.is_empty(), "Expected no extra errors, got: {extra:?}");
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+}
+
+#[test]
+fn test_recovery_bare_membership_line_not_mislabeled() {
+    // `c1 : S` is a membership predicate, not label `c1` + predicate `S`.
+    let source = r#"
+    CONTEXT issue24_bare_membership
+    SETS
+        S
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        c1 : S
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(extra.is_empty(), "Expected no extra errors, got: {extra:?}");
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label, None, "must not mistake c1 for a label");
+}
+
+#[test]
+fn test_recovery_identifiers_ignore_comment_text() {
+    let source = r#"
+    CONTEXT issue24_identifier_leak
+    CONSTANTS
+        c1, c2 // alias: c3, c4
+        +
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    let names: Vec<&str> = ctx.constants.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["c1", "c2"], "comment text must not leak constants");
+}
+
+#[test]
+fn test_recovery_clause_keyword_in_comment_does_not_truncate() {
+    let source = r#"
+    MACHINE issue24_keyword_in_comment
+    VARIABLES
+        x, // see INVARIANTS: below
+        y
+        +
+    INVARIANTS
+        @inv1 x >= 0
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    let names: Vec<&str> = m.variables.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["x", "y"],
+        "clause keyword in a comment must not end the VARIABLES clause"
+    );
+    assert_eq!(m.invariants.len(), 1);
+}
+
+#[test]
+fn test_recovery_dispatch_ignores_component_keyword_in_comment() {
+    // "CONTEXT" appearing only inside a comment must not flip a broken
+    // machine into context recovery.
+    let source = r#"
+    MACHINE issue24_dispatch // refines the CONTEXT: below
+    VARIABLES
+        x
+        +
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    assert!(
+        matches!(result.component, Some(Component::Machine(_))),
+        "Expected machine recovery, got {:?}",
+        result.component
+    );
+}
+
+#[test]
+fn test_recovery_keyword_inside_identifier_does_not_truncate_clause() {
+    // `trend` contains END and `offsets` contains SETS; neither may end
+    // or start a clause.
+    let source = r#"
+    MACHINE issue24_trend
+    VARIABLES
+        x,
+        trend,
+        offsets
+        +
+    INVARIANTS
+        @inv1 x >= 0
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    let names: Vec<&str> = m.variables.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["x", "trend", "offsets"]);
+    assert_eq!(m.invariants.len(), 1);
+}
+
+#[test]
+fn test_recovery_dispatch_ignores_keyword_inside_identifier() {
+    // `context_defs` contains CONTEXT; the broken machine must still be
+    // recovered as a machine.
+    let source = r#"
+    MACHINE issue24_sees
+    SEES
+        context_defs
+    VARIABLES
+        x
+        +
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    assert_eq!(m.sees, ["context_defs"]);
+    assert_eq!(m.variables.len(), 1);
+}
+
+#[test]
+fn test_recovery_trailing_colon_label_matches_strict_parser() {
+    // `@axm1: P` is the eventb-to-txt label spelling: the strict parser
+    // strips the trailing colon (label "axm1"), and recovery must agree.
+    let source = r#"
+    CONTEXT issue24_label_colon
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        @axm1: c1 = 1
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(extra.is_empty(), "Expected no extra errors, got: {extra:?}");
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+}
+
+#[test]
+fn test_recovery_inline_theorem_forms() {
+    // The grammar allows `theorem @label P` and `@label theorem P` inline;
+    // recovery must parse both, set the flag, and report no errors.
+    let source = r#"
+    CONTEXT issue24_theorem
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        @axm1 c1 = 1
+        theorem @thm1 c1 > 0
+        @thm2 theorem c1 < 2
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(extra.is_empty(), "Expected no extra errors, got: {extra:?}");
+
+    let ctx = expect_context(&result);
+    let flags: Vec<(Option<&str>, bool)> = ctx
+        .axioms
+        .iter()
+        .map(|a| (a.label.as_deref(), a.is_theorem))
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            (Some("axm1"), false),
+            (Some("thm1"), true),
+            (Some("thm2"), true),
+        ]
+    );
+}
+
+#[test]
+fn test_recovery_error_quotes_original_line_with_position() {
+    let source = "CONTEXT issue24_position\nAXIOMS\n    @axm1 ### // why: broken\nEND\n";
+
+    let result = parse_with_recovery(source);
+
+    let error = result.errors[1..]
+        .iter()
+        .find_map(|e| match e {
+            rossi::ParseError::RecoverableError {
+                line,
+                column,
+                message,
+                ..
+            } => Some((*line, *column, message.clone())),
+            _ => None,
+        })
+        .expect("the broken axiom must be reported");
+
+    let (line, column, message) = error;
+    assert_eq!(line, 3, "1-indexed line of the broken axiom");
+    assert_eq!(column, 5, "1-indexed column of the axiom text");
+    assert!(
+        message.contains("@axm1 ### // why: broken"),
+        "error must quote the original line, got: {message}"
+    );
+}
+
+#[test]
+fn test_recovery_survives_bom_before_header() {
+    // A UTF-8 BOM (not whitespace, common in Windows-saved files) before
+    // MACHINE must not defeat recovery dispatch.
+    let source =
+        "\u{feff}MACHINE bom_machine\nVARIABLES\n    x\n    +\nINVARIANTS\n    @inv1 x >= 0\nEND\n";
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    assert_eq!(m.name, "bom_machine");
+    assert_eq!(m.variables.len(), 1);
+    assert_eq!(m.invariants.len(), 1);
+}
+
+#[test]
+fn test_recovery_context_identifier_does_not_flip_dispatch() {
+    // A SEES target named `context` must not flip a broken machine into
+    // context recovery: the machine header comes first in the text.
+    let source = r#"
+    MACHINE flip_machine
+    SEES
+        context
+    VARIABLES
+        x
+        +
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    assert_eq!(m.name, "flip_machine");
+    assert_eq!(m.sees, ["context"]);
+    assert_eq!(m.variables.len(), 1);
+}
+
+#[test]
+fn test_recovery_colon_label_accepts_unicode() {
+    // The legacy `label: P` colon form permits Unicode labels (Rodin does).
+    let source = r#"
+    CONTEXT unicode_label
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        метка: c1 = 1
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("метка"));
+    assert!(
+        recovery_errors(&result).is_empty(),
+        "no spurious error for the Unicode colon label: {:?}",
+        recovery_errors(&result)
+    );
+}
+
+#[test]
+fn test_recovery_inline_clause_content() {
+    // Identifiers and predicates written on the clause keyword's own line
+    // must be recovered like any other.
+    let source = r#"
+    CONTEXT inline_clauses
+    CONSTANTS c1, c2
+        +
+    AXIOMS @axm1 c1 = 1
+        @axm2 c2 = 2
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    let names: Vec<&str> = ctx.constants.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["c1", "c2"]);
+    let labels: Vec<&str> = ctx
+        .axioms
+        .iter()
+        .filter_map(|a| a.label.as_deref())
+        .collect();
+    assert_eq!(labels, ["axm1", "axm2"]);
+}
+
+#[test]
+fn test_recovery_event_refines_is_not_machine_refines() {
+    // An event-level REFINES must not be recovered as the machine's
+    // refinement target (the machine here refines nothing).
+    let source = r#"
+    MACHINE event_refines
+    VARIABLES
+        x
+        +
+    EVENTS
+        EVENT inc REFINES inc_abs
+        WHERE
+            @grd1 x > 0
+        THEN
+            @act1 x := x + 1
+        END
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    assert_eq!(
+        m.refines, None,
+        "event-level REFINES leaked into the machine header"
+    );
+    assert_eq!(m.variables.len(), 1);
+}
+
+#[test]
+fn test_recovery_keyword_inside_label_does_not_truncate_clause() {
+    // `@safety-END` is one label (any non-whitespace after `@`); the END
+    // inside it must not terminate the INVARIANTS clause scan.
+    let source = r#"
+    MACHINE label_keyword
+    VARIABLES
+        x
+        +
+    INVARIANTS
+        @safety-END x > 0
+        @inv2 x < 10
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    let labels: Vec<&str> = m
+        .invariants
+        .iter()
+        .filter_map(|i| i.label.as_deref())
+        .collect();
+    assert_eq!(labels, ["safety-END", "inv2"]);
+    assert!(
+        recovery_errors(&result).is_empty(),
+        "no spurious error for the keyword-bearing label: {:?}",
+        recovery_errors(&result)
+    );
+}
+
+#[test]
+fn test_recovery_comment_markers_in_label_no_spurious_error() {
+    // `@axm1//note` is a complete label per the grammar; masking must not
+    // truncate it into an unparseable `@axm1` stub.
+    let source = r#"
+    CONTEXT label_slashes
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        @axm1//note c1 = 1
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1//note"));
+    assert!(
+        recovery_errors(&result).is_empty(),
+        "no spurious error for the slash-bearing label: {:?}",
+        recovery_errors(&result)
+    );
+}
+
+#[test]
+fn test_recovery_multiline_string_does_not_swallow_later_clauses() {
+    // A `/*` inside a multi-line string used to open a phantom comment that
+    // masked everything to end of input; axioms after it must survive.
+    let source = "CONTEXT phantom\nCONSTANTS\n    c1\n    +\nAXIOMS\n    @axm1 s = \"a\n/* b\"\n    @axm2 c1 = 1\nEND\n";
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    let labels: Vec<&str> = ctx
+        .axioms
+        .iter()
+        .filter_map(|a| a.label.as_deref())
+        .collect();
+    assert!(
+        labels.contains(&"axm2"),
+        "the axiom after the multi-line string must be recovered, got {labels:?}"
+    );
 }

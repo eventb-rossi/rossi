@@ -385,6 +385,26 @@ pub fn is_clause_boundary(word: &str) -> bool {
     lookup(word).is_some_and(|k| !matches!(k.group, Grp::Status | Grp::Inline))
 }
 
+/// Whether a char can be part of an identifier, i.e. must not directly
+/// follow or precede a whole-word keyword match. Mirrors the grammar's
+/// `!(ASCII_ALPHANUMERIC | "_")` keyword guards plus `'` from identifiers.
+pub fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '\''
+}
+
+/// Whether the match of `len` bytes at byte `offset` in `text` is a whole
+/// word: neither neighboring char is a word char. Shared by the recovery
+/// parser's keyword scan and the LSP's semantic-token search so the two
+/// can never disagree on word boundaries.
+pub fn is_word_bounded(text: &str, offset: usize, len: usize) -> bool {
+    let before_ok = !text[..offset].chars().next_back().is_some_and(is_word_char);
+    let after_ok = !text[offset + len..]
+        .chars()
+        .next()
+        .is_some_and(is_word_char);
+    before_ok && after_ok
+}
+
 /// Uppercase spellings of all recovery-boundary keywords, for the parser's
 /// offset scan over an uppercased component body.
 pub fn recovery_boundary_spellings() -> impl Iterator<Item = &'static str> {

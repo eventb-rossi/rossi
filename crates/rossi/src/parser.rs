@@ -278,8 +278,8 @@ pub fn parse(input: &str) -> Result<Component, ParseError> {
 /// Body of [`parse`]. Only callable through the guarded entry point — see
 /// the invariant on [`RossiParser`].
 fn parse_unguarded(input: &str) -> Result<Component, ParseError> {
-    let pairs = RossiParser::parse(Rule::component, input)
-        .map_err(|e| ParseError::PestError(e.to_string()))?;
+    let pairs =
+        RossiParser::parse(Rule::component, input).map_err(|e| ParseError::from(Box::new(e)))?;
 
     let component_pair = pairs
         .into_iter()
@@ -321,8 +321,8 @@ pub fn parse_components(input: &str) -> Result<Vec<Component>, ParseError> {
 /// Body of [`parse_components`]. Only callable through the guarded entry
 /// point — see the invariant on [`RossiParser`].
 fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError> {
-    let pairs = RossiParser::parse(Rule::components, input)
-        .map_err(|e| ParseError::PestError(e.to_string()))?;
+    let pairs =
+        RossiParser::parse(Rule::components, input).map_err(|e| ParseError::from(Box::new(e)))?;
 
     let components_pair = pairs
         .into_iter()
@@ -1906,7 +1906,7 @@ pub fn parse_predicate_str(input: &str) -> Result<Predicate, ParseError> {
     let depth = nesting::check_nesting(input)?;
     with_parser_stack(depth, || {
         let pairs = RossiParser::parse(Rule::predicate_complete, input)
-            .map_err(|e| ParseError::PestError(e.to_string()))?;
+            .map_err(|e| ParseError::from(Box::new(e)))?;
 
         let predicate_pair = pairs.into_iter().next().ok_or(ParseError::EmptyPredicate)?;
         parse_predicate(predicate_pair)
@@ -1920,7 +1920,7 @@ pub fn parse_expression_str(input: &str) -> Result<Expression, ParseError> {
     let depth = nesting::check_nesting(input)?;
     with_parser_stack(depth, || {
         let pairs = RossiParser::parse(Rule::expression_complete, input)
-            .map_err(|e| ParseError::PestError(e.to_string()))?;
+            .map_err(|e| ParseError::from(Box::new(e)))?;
 
         let expression_pair = pairs
             .into_iter()
@@ -1937,7 +1937,7 @@ pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
     let depth = nesting::check_nesting(input)?;
     with_parser_stack(depth, || {
         let pairs = RossiParser::parse(Rule::action_complete, input)
-            .map_err(|e| ParseError::PestError(e.to_string()))?;
+            .map_err(|e| ParseError::from(Box::new(e)))?;
 
         let action_pair = pairs.into_iter().next().ok_or(ParseError::MissingAction)?;
         parse_action(action_pair)
@@ -1949,6 +1949,7 @@ pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
 // ============================================================================
 
 use crate::error::ParseResult;
+use crate::keywords::{KeywordId, is_word_bounded};
 
 /// Compute (line, column) from a byte offset in the source text, both 1-indexed.
 ///
@@ -1965,59 +1966,94 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     (line + 1, col + 1)
 }
 
-/// Find the byte offset of a substring in the source, searching from a given start position
-fn find_line_offset(source: &str, line_content: &str, search_from: usize) -> Option<usize> {
-    source[search_from..]
-        .find(line_content)
-        .map(|pos| search_from + pos)
+/// The text views the recovery scanner works on. ASCII masking and ASCII
+/// uppercasing both preserve byte layout, so offsets are interchangeable
+/// across all three.
+struct RecoveryText<'a> {
+    /// The source as written — only ever quoted in error messages.
+    original: &'a str,
+    /// Comment-masked copy: all structural scanning runs on this, so comment
+    /// text cannot influence any structural decision (issue #24).
+    masked: String,
+    /// ASCII-uppercased `masked`, for case-insensitive keyword search.
+    masked_upper: String,
+    /// `@`-label spans (valid in all views): keyword scans skip them, so a
+    /// keyword spelled inside a label (`@safety-END`) is never structural.
+    labels: Vec<Span>,
 }
 
-/// Extract identifiers from a clause during error recovery
-fn recover_identifiers(input: &str, keyword: &str) -> Vec<String> {
+impl<'a> RecoveryText<'a> {
+    fn new(original: &'a str) -> Self {
+        let spans = crate::comments::lexical_spans(original);
+        let masked = spans.mask_comments(original);
+        let masked_upper = masked.to_ascii_uppercase();
+        Self {
+            original,
+            masked,
+            masked_upper,
+            labels: spans.labels,
+        }
+    }
+}
+
+/// Extract identifiers from a clause during error recovery.
+///
+/// Content written inline after the clause keyword (`VARIABLES x, y`) counts
+/// like any other line.
+fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<String> {
     let mut result = Vec::new();
-    if let Some(content) = extract_clause_content(input, keyword) {
-        for line in content.lines() {
+    if let Some(span) = extract_clause_content(text, keyword, bound) {
+        for line in text.masked[span.start..span.end].lines() {
             let line = line.trim();
-            if !line.is_empty() && !line.to_uppercase().starts_with(keyword) {
-                result.extend(extract_identifiers(line));
+            let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
+            if !content.is_empty() {
+                result.extend(extract_identifiers(content));
             }
         }
     }
     result
 }
 
-/// Extract labeled predicates from a clause during error recovery
+/// Extract labeled predicates from a clause during error recovery.
+///
+/// Comment-only lines are skipped (they mask to whitespace), and a predicate
+/// written inline after the clause keyword (`AXIOMS @axm1 P`) is recovered
+/// like any other. Error positions are byte-exact; error messages quote the
+/// original line, comment included.
 fn recover_labeled_predicates(
-    input: &str,
+    text: &RecoveryText,
     keyword: &str,
     label: &str,
+    bound: usize,
     errors: &mut Vec<ParseError>,
 ) -> Vec<LabeledPredicate> {
     let mut result = Vec::new();
-    if let Some(content) = extract_clause_content(input, keyword) {
-        let mut search_pos = 0;
-        for line in content.lines() {
+    if let Some(span) = extract_clause_content(text, keyword, bound) {
+        let mut line_start = span.start;
+        for line in text.masked[span.start..span.end].split_inclusive('\n') {
             let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.to_uppercase().starts_with(keyword) {
-                match try_parse_labeled_predicate_from_text(trimmed) {
+            let content = strip_keyword_prefix(trimmed, keyword).unwrap_or(trimmed);
+            if !content.is_empty() {
+                match try_parse_labeled_predicate_from_text(content) {
                     Ok(pred) => result.push(pred),
                     Err(e) => {
-                        let (err_line, err_col) =
-                            if let Some(offset) = find_line_offset(input, trimmed, search_pos) {
-                                search_pos = offset + trimmed.len();
-                                offset_to_line_col(input, offset)
-                            } else {
-                                (0, 0)
-                            };
+                        // `content` is a subslice of `line`; its offset within
+                        // the line maps to the same offset in the original.
+                        let content_offset = content.as_ptr() as usize - line.as_ptr() as usize;
+                        let offset = line_start + content_offset;
+                        let (err_line, err_col) = offset_to_line_col(text.original, offset);
+                        let original_content =
+                            text.original[offset..line_start + line.len()].trim();
                         errors.push(ParseError::RecoverableError {
                             line: err_line,
                             column: err_col,
-                            message: format!("Failed to parse {}: {}", label, trimmed),
+                            message: format!("Failed to parse {}: {}", label, original_content),
                             source: Some(Box::new(e)),
                         });
                     }
                 }
             }
+            line_start += line.len();
         }
     }
     result
@@ -2026,8 +2062,12 @@ fn recover_labeled_predicates(
 /// Recover a `THEOREMS` clause, forcing `is_theorem = true` on each predicate.
 /// Mirrors the strict parser, which lowers THEOREMS into the axioms/invariants vec
 /// with the flag set (a theorem is a flagged axiom/invariant in Rodin's model).
-fn recover_theorem_predicates(input: &str, errors: &mut Vec<ParseError>) -> Vec<LabeledPredicate> {
-    let mut result = recover_labeled_predicates(input, "THEOREMS", "theorem", errors);
+fn recover_theorem_predicates(
+    text: &RecoveryText,
+    bound: usize,
+    errors: &mut Vec<ParseError>,
+) -> Vec<LabeledPredicate> {
+    let mut result = recover_labeled_predicates(text, "THEOREMS", "theorem", bound, errors);
     for p in &mut result {
         p.is_theorem = true;
     }
@@ -2072,73 +2112,100 @@ pub fn parse_with_recovery(input: &str) -> ParseResult<Component> {
         // would just re-trigger it line by line, so fail fast.
         Err(first_error @ ParseError::NestingTooDeep { .. }) => ParseResult::err(first_error),
         Err(first_error) => {
-            // Parsing failed, try to recover
-            // Determine if it's a context or machine by looking for keywords
-            if input.to_uppercase().contains("CONTEXT") {
-                parse_context_with_recovery(input, first_error)
-            } else if input.to_uppercase().contains("MACHINE") {
-                parse_machine_with_recovery(input, first_error)
-            } else {
+            // Parsing failed, try to recover. Dispatch on the EARLIEST
+            // whole-word CONTEXT/MACHINE in the comment-masked text: the
+            // header keyword always precedes any identifier that happens to
+            // spell the other keyword (so a variable named `context` cannot
+            // flip a machine into context recovery), and junk the grammar
+            // rejects before the header (a UTF-8 BOM, stray tokens) does
+            // not defeat recovery.
+            let text = RecoveryText::new(input);
+            let end = text.masked.len();
+            let context_pos = find_keyword_word(&text, "CONTEXT", 0, end);
+            let machine_pos = find_keyword_word(&text, "MACHINE", 0, end);
+            match (context_pos, machine_pos) {
+                (Some(ctx), Some(mch)) if mch < ctx => {
+                    parse_machine_with_recovery(&text, mch, first_error)
+                }
+                (Some(ctx), _) => parse_context_with_recovery(&text, ctx, first_error),
+                (None, Some(mch)) => parse_machine_with_recovery(&text, mch, first_error),
                 // Can't determine type, return original error
-                ParseResult::err(first_error)
+                (None, None) => ParseResult::err(first_error),
             }
         }
     }
 }
 
 /// Attempt to parse a context with error recovery
-fn parse_context_with_recovery(input: &str, initial_error: ParseError) -> ParseResult<Component> {
+fn parse_context_with_recovery(
+    text: &RecoveryText,
+    header_pos: usize,
+    initial_error: ParseError,
+) -> ParseResult<Component> {
     let mut errors = vec![initial_error];
     let mut context = Context::new(String::from("unknown"));
 
     // Try to extract the context name
-    if let Some(name) = extract_component_name(input, "CONTEXT") {
+    if let Some(name) = component_name_after(text, header_pos, "CONTEXT") {
         context.name = name;
     }
 
-    // Try to parse each clause independently
-    context.extends = recover_identifiers(input, "EXTENDS");
-    context
-        .sets
-        .extend(recover_identifiers(input, "SETS").into_iter().map(|name| {
-            SetDeclaration::Deferred {
+    // Try to parse each clause independently. Contexts have no event
+    // section, so the clause scan is unbounded.
+    let bound = text.masked.len();
+    context.extends = recover_identifiers(text, "EXTENDS", bound);
+    context.sets.extend(
+        recover_identifiers(text, "SETS", bound)
+            .into_iter()
+            .map(|name| SetDeclaration::Deferred {
                 name,
                 comment: None,
-            }
-        }));
-    context.constants = recover_identifiers(input, "CONSTANTS")
+            }),
+    );
+    context.constants = recover_identifiers(text, "CONSTANTS", bound)
         .into_iter()
         .map(NamedElement::new)
         .collect();
-    context.axioms = recover_labeled_predicates(input, "AXIOMS", "axiom", &mut errors);
+    context.axioms = recover_labeled_predicates(text, "AXIOMS", "axiom", bound, &mut errors);
     context
         .axioms
-        .extend(recover_theorem_predicates(input, &mut errors));
+        .extend(recover_theorem_predicates(text, bound, &mut errors));
 
     ParseResult::with_errors(Some(Component::Context(context)), errors)
 }
 
 /// Attempt to parse a machine with error recovery
-fn parse_machine_with_recovery(input: &str, initial_error: ParseError) -> ParseResult<Component> {
+fn parse_machine_with_recovery(
+    text: &RecoveryText,
+    header_pos: usize,
+    initial_error: ParseError,
+) -> ParseResult<Component> {
     let mut errors = vec![initial_error];
     let mut machine = Machine::new(String::from("unknown"));
 
     // Try to extract the machine name
-    if let Some(name) = extract_component_name(input, "MACHINE") {
+    if let Some(name) = component_name_after(text, header_pos, "MACHINE") {
         machine.name = name;
     }
 
-    // Try to parse each clause independently
-    machine.refines = recover_identifiers(input, "REFINES").into_iter().next();
-    machine.sees = recover_identifiers(input, "SEES");
-    machine.variables = recover_identifiers(input, "VARIABLES")
+    // Try to parse each clause independently. Machine-level clauses all
+    // precede the event section, so bound the scan by its start: an
+    // event-level REFINES (or a guard that parses like an invariant) must
+    // not be recovered as machine-level data.
+    let bound = first_event_region_start(text);
+    machine.refines = recover_identifiers(text, "REFINES", bound)
+        .into_iter()
+        .next();
+    machine.sees = recover_identifiers(text, "SEES", bound);
+    machine.variables = recover_identifiers(text, "VARIABLES", bound)
         .into_iter()
         .map(NamedElement::new)
         .collect();
-    machine.invariants = recover_labeled_predicates(input, "INVARIANTS", "invariant", &mut errors);
+    machine.invariants =
+        recover_labeled_predicates(text, "INVARIANTS", "invariant", bound, &mut errors);
     machine
         .invariants
-        .extend(recover_theorem_predicates(input, &mut errors));
+        .extend(recover_theorem_predicates(text, bound, &mut errors));
 
     // Note: VARIANT and EVENTS are more complex and would need specialized recovery
     // For now, we'll skip them if they fail to parse
@@ -2146,42 +2213,98 @@ fn parse_machine_with_recovery(input: &str, initial_error: ParseError) -> ParseR
     ParseResult::with_errors(Some(Component::Machine(machine)), errors)
 }
 
-/// Helper function to extract a component name from source
-fn extract_component_name(input: &str, keyword: &str) -> Option<String> {
-    for line in input.lines() {
-        let line = line.trim();
-        if line.to_uppercase().starts_with(keyword) {
-            // Extract the identifier after the keyword
-            let rest = &line[keyword.len()..].trim();
-            return extract_identifier(rest).ok();
+/// Byte offset where the event section begins: the first whole-word
+/// `EVENTS`/`EVENT`/`INITIALISATION`, or the end of the text if there is none.
+fn first_event_region_start(text: &RecoveryText) -> usize {
+    [
+        KeywordId::Events,
+        KeywordId::Event,
+        KeywordId::Initialisation,
+    ]
+    .iter()
+    .flat_map(|&id| crate::keywords::keyword(id).spellings)
+    .filter_map(|spelling| find_keyword_word(text, spelling, 0, text.masked.len()))
+    .min()
+    .unwrap_or(text.masked.len())
+}
+
+/// Find `needle_upper` (an ASCII-uppercase keyword) in the uppercased
+/// masked text, starting at `from` and strictly before `to`, only as a
+/// whole word — `END` must not match inside `TREND` or `ENDPOINTS` — and
+/// never inside a label (the spans precomputed in [`RecoveryText`]).
+fn find_keyword_word(
+    text: &RecoveryText,
+    needle_upper: &str,
+    from: usize,
+    to: usize,
+) -> Option<usize> {
+    debug_assert!(
+        !needle_upper.chars().any(|c| c.is_ascii_lowercase()),
+        "needle must be ASCII-uppercase: {needle_upper}"
+    );
+    let upper = &text.masked_upper;
+    let mut search = from;
+    while let Some(pos) = upper[search..].find(needle_upper) {
+        let offset = search + pos;
+        if offset >= to {
+            return None;
+        }
+        if let Some(label) = crate::comments::span_containing(&text.labels, offset) {
+            search = label.end;
+        } else if is_word_bounded(upper, offset, needle_upper.len()) {
+            return Some(offset);
+        } else {
+            // The needle is ASCII, so offset + 1 stays on a char boundary.
+            search = offset + 1;
         }
     }
     None
 }
 
-/// Extract the content between a clause keyword and the next clause or END
-fn extract_clause_content(input: &str, clause_keyword: &str) -> Option<String> {
-    let upper_input = input.to_uppercase();
-    let keyword_upper = clause_keyword.to_uppercase();
+/// If `line` starts with `keyword` as a whole word (case-insensitive),
+/// return the rest of the line, trimmed.
+fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = line.get(..keyword.len())?;
+    if !rest.eq_ignore_ascii_case(keyword) || !is_word_bounded(line, 0, keyword.len()) {
+        return None;
+    }
+    Some(line[keyword.len()..].trim())
+}
 
+/// Extract the component name following its header keyword at `keyword_pos`
+/// (a whole-word match in the masked text): the first identifier on the
+/// rest of that line.
+fn component_name_after(text: &RecoveryText, keyword_pos: usize, keyword: &str) -> Option<String> {
+    let rest = text.masked[keyword_pos + keyword.len()..].lines().next()?;
+    extract_identifier(rest).ok()
+}
+
+/// Find the span between a clause keyword and the next clause or END,
+/// looking only before `bound` (the event-region start for machine-level
+/// clauses, end of text otherwise).
+///
+/// The offsets are valid in all three [`RecoveryText`] views (shared byte
+/// layout). Clause keywords (both parameters and the boundary spellings from
+/// the keyword table) are uppercase by convention, so no case mapping happens
+/// here — which is also what keeps the offsets valid: Unicode `to_uppercase`
+/// could change byte length (ß → SS).
+fn extract_clause_content(text: &RecoveryText, clause_keyword: &str, bound: usize) -> Option<Span> {
     // Find the start of this clause
-    let start = upper_input.find(&keyword_upper)?;
+    let start = find_keyword_word(text, clause_keyword, 0, bound)?;
 
     // Find the end of this clause: the next clause keyword, THEOREMS, or END.
-    let mut end = input.len();
+    // Each scan is capped at the best end found so far.
+    let mut end = bound;
     for keyword in crate::keywords::recovery_boundary_spellings() {
         if keyword.eq_ignore_ascii_case(clause_keyword) {
             continue;
         }
-        if let Some(pos) = upper_input[start + keyword_upper.len()..].find(keyword) {
-            let absolute_pos = start + keyword_upper.len() + pos;
-            if absolute_pos > start && absolute_pos < end {
-                end = absolute_pos;
-            }
+        if let Some(pos) = find_keyword_word(text, keyword, start + clause_keyword.len(), end) {
+            end = pos;
         }
     }
 
-    Some(input[start..end].to_string())
+    Some(Span { start, end })
 }
 
 /// Extract an identifier from a string (handles commas and whitespace)
@@ -2221,45 +2344,65 @@ fn extract_identifiers(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a labeled predicate from a single line of text (used by error recovery)
+///
+/// Uses `labeled_predicate_complete` (with SOI/EOI) to ensure the entire input
+/// is consumed. The span is cleared: it would be relative to the line, not
+/// the document.
+fn parse_labeled_predicate_str(input: &str) -> Result<LabeledPredicate, ParseError> {
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || {
+        let pairs = RossiParser::parse(Rule::labeled_predicate_complete, input)
+            .map_err(|e| ParseError::from(Box::new(e)))?;
+
+        let pair = pairs
+            .into_iter()
+            .next()
+            .ok_or(ParseError::MissingPredicate)?;
+        let mut result = parse_labeled_predicate(pair)?;
+        result.span = None;
+        Ok(result)
+    })
+}
+
 /// Try to parse a labeled predicate from a single line of text
+///
+/// All grammar-defined forms (`@label P`, `theorem @label P`,
+/// `@label theorem P`, bare `P` — including ASCII membership `c : S`) go
+/// through the strict `labeled_predicate` rule, so recovery cannot drift
+/// from the grammar (issue #24; this includes the trailing-colon label
+/// spelling `@axm1: P`, where the colon belongs to the label). Only the
+/// grammar-external `label: P` colon form is handled heuristically on top.
 fn try_parse_labeled_predicate_from_text(text: &str) -> Result<LabeledPredicate, ParseError> {
-    // Look for label (either "@label" or "label:")
     let text = text.trim();
-    let (label, predicate_text) = if let Some(colon_pos) = text.find(':') {
-        let potential_label = text[..colon_pos].trim();
-        // Check if it looks like a label (not an operator like ":")
-        if potential_label
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_')
-            && !potential_label.is_empty()
-        {
-            (
-                Some(potential_label.to_string()),
-                text[colon_pos + 1..].trim(),
-            )
-        } else {
-            (None, text)
-        }
-    } else if let Some(stripped) = text.strip_prefix('@') {
-        let parts: Vec<&str> = stripped.splitn(2, char::is_whitespace).collect();
-        if parts.len() == 2 {
-            (Some(parts[0].to_string()), parts[1].trim())
-        } else {
-            (None, text)
-        }
-    } else {
-        (None, text)
+    let strict_error = match parse_labeled_predicate_str(text) {
+        Ok(result) => return Ok(result),
+        Err(e) => e,
     };
 
-    // Try to parse the predicate part
-    match parse_predicate_str(predicate_text) {
-        Ok(predicate) => Ok(LabeledPredicate {
-            label,
-            is_theorem: false,
-            predicate,
-            span: None,
-            comment: None,
-        }),
-        Err(e) => Err(e),
+    // "label:" form. Only reached for lines the grammar rejects outright:
+    // a colon that is ASCII membership already parsed above.
+    if !text.starts_with('@')
+        && let Some(colon_pos) = text.find(':')
+    {
+        let potential_label = text[..colon_pos].trim();
+        if !potential_label.is_empty()
+            // Unicode labels are fine here (Rodin permits them); the ASCII
+            // `is_word_char` predicate is only for keyword boundaries.
+            && potential_label
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+            && let Ok(predicate) = parse_predicate_str(text[colon_pos + 1..].trim())
+        {
+            return Ok(LabeledPredicate {
+                label: Some(potential_label.to_string()),
+                is_theorem: false,
+                predicate,
+                span: None,
+                comment: None,
+            });
+        }
     }
+
+    Err(strict_error)
 }

@@ -666,6 +666,7 @@ machine = {
 expression_complete = _{ SOI ~ expression ~ EOI }
 predicate_complete = _{ SOI ~ predicate ~ EOI }
 action_complete = _{ SOI ~ action ~ EOI }
+labeled_predicate_complete = _{ SOI ~ labeled_predicate ~ EOI }
 
 // ==========================
 // Root

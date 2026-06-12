@@ -956,50 +956,8 @@ impl RossiLanguageServer {
         parse_result
             .errors
             .iter()
-            .map(|error| self.parse_error_to_diagnostic(error))
+            .map(parse_error_to_diagnostic)
             .collect()
-    }
-
-    /// Convert a parse error to an LSP diagnostic
-    fn parse_error_to_diagnostic(&self, error: &rossi::ParseError) -> Diagnostic {
-        use rossi::ParseError;
-
-        // Variants that carry a source position (1-indexed) anchor the
-        // diagnostic there; everything else lands at the top of the file.
-        let (line, column, message) = match error {
-            ParseError::RecoverableError {
-                line,
-                column,
-                message,
-                ..
-            }
-            | ParseError::ClauseError {
-                line,
-                column,
-                message,
-                ..
-            } => (*line, *column, message.clone()),
-            ParseError::NestingTooDeep { line, column, .. } => (*line, *column, error.to_string()),
-            _ => (1, 1, error.to_string()),
-        };
-        let start = Position::new(
-            line.saturating_sub(1) as u32,
-            column.saturating_sub(1) as u32,
-        );
-        Diagnostic {
-            range: Range {
-                start,
-                end: Position::new(start.line, start.character + 10),
-            },
-            severity: Some(DiagnosticSeverity::ERROR),
-            code: None,
-            source: Some("rossi".to_string()),
-            message,
-            related_information: None,
-            tags: None,
-            code_description: None,
-            data: None,
-        }
     }
 
     /// Execute ProB animation command
@@ -1199,9 +1157,67 @@ impl RossiLanguageServer {
     }
 }
 
+/// Convert a parse error to an LSP diagnostic
+fn parse_error_to_diagnostic(error: &rossi::ParseError) -> Diagnostic {
+    use rossi::ParseError;
+
+    // Build an ERROR diagnostic from a 1-indexed (line, column) position.
+    let diagnostic_at = |line: usize, column: usize, message: String| Diagnostic {
+        range: Range {
+            start: Position::new(
+                line.saturating_sub(1) as u32,
+                column.saturating_sub(1) as u32,
+            ),
+            end: Position::new(
+                line.saturating_sub(1) as u32,
+                column.saturating_sub(1) as u32 + 10,
+            ),
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: None,
+        source: Some("rossi".to_string()),
+        message,
+        related_information: None,
+        tags: None,
+        code_description: None,
+        data: None,
+    };
+
+    match error {
+        ParseError::RecoverableError {
+            line,
+            column,
+            message,
+            ..
+        }
+        | ParseError::ClauseError {
+            line,
+            column,
+            message,
+            ..
+        } => diagnostic_at(*line, *column, message.clone()),
+        ParseError::PestError { line, column, .. }
+        | ParseError::NestingTooDeep { line, column, .. } => {
+            diagnostic_at(*line, *column, error.to_string())
+        }
+        _ => diagnostic_at(1, 1, error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::operator_rows;
+    use super::{operator_rows, parse_error_to_diagnostic};
+    use crate::lsp_types::Position;
+
+    #[test]
+    fn pest_diagnostic_uses_real_position() {
+        // End-to-end through the real parser: the strict-parse error must
+        // carry pest's structured position, not 0:0.
+        let error = rossi::parse("CONTEXT c\nCONSTANTS\n    c1\n    +\nEND\n")
+            .expect_err("the stray `+` must fail strict parsing");
+        let diagnostic = parse_error_to_diagnostic(&error);
+        assert_eq!(diagnostic.range.start, Position::new(3, 4));
+    }
 
     #[test]
     fn operator_rows_are_well_formed() {

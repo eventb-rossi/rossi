@@ -386,11 +386,12 @@ impl CodeActionProvider {
         text: &str,
     ) -> Option<CodeAction> {
         let lines: Vec<&str> = text.lines().collect();
-        let line_idx = diagnostic.range.start.line as usize;
-
-        if line_idx >= lines.len() {
+        if lines.is_empty() {
             return None;
         }
+        // A missing END is reported at end-of-file — one line past the last
+        // line — so clamp instead of bailing on positions beyond the text.
+        let line_idx = (diagnostic.range.start.line as usize).min(lines.len() - 1);
 
         let line = lines[line_idx];
 
