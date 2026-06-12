@@ -8,7 +8,10 @@ use crate::lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SemanticTokensParams, SemanticTokensResult,
 };
-use rossi::ast::{Component, Context, Event, LabeledAction, LabeledPredicate, Machine, Predicate};
+use rossi::ast::{
+    Component, Context, Event, LabeledAction, LabeledPredicate, Machine, Predicate, Span,
+};
+use rossi::comments::comment_spans;
 use rossi::keywords::{self, KeywordId};
 use tracing::debug;
 
@@ -58,13 +61,16 @@ impl SemanticTokensProvider {
         _params: &SemanticTokensParams,
         text: &str,
     ) -> Option<SemanticTokensResult> {
-        // Parse the document
-        let component = match rossi::parse(text) {
-            Ok(comp) => comp,
-            Err(e) => {
-                debug!("Failed to parse document for semantic tokens: {}", e);
-                return None;
-            }
+        // Parse the document, falling back to error recovery: highlighting
+        // must not vanish (and flicker back to the TextMate grammar with the
+        // issue-#24 comment bug) on every mid-edit keystroke.
+        let parsed = rossi::parse_with_recovery(text);
+        let Some(component) = parsed.component else {
+            debug!(
+                "Failed to parse document for semantic tokens: {:?}",
+                parsed.errors.first()
+            );
+            return None;
         };
 
         // Extract semantic tokens from the AST
@@ -74,6 +80,8 @@ impl SemanticTokensProvider {
             Component::Context(ctx) => builder.visit_context(ctx),
             Component::Machine(mch) => builder.visit_machine(mch),
         }
+
+        builder.emit_comment_tokens();
 
         let tokens = builder.build();
 
@@ -95,6 +103,9 @@ struct SemanticTokensBuilder<'a> {
     text_lower: String,
     /// Line offsets for quick position calculation
     line_offsets: Vec<usize>,
+    /// Byte spans of all comments, sorted and disjoint. Keyword/identifier
+    /// searches must never match inside these (issue #24).
+    comment_spans: Vec<Span>,
     /// Collected semantic tokens
     tokens: Vec<SemanticTokenData>,
     /// Declared variables for tracking
@@ -131,6 +142,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             text,
             text_lower: text.to_ascii_lowercase(),
             line_offsets,
+            comment_spans: comment_spans(text),
             tokens: Vec::new(),
             variables: Vec::new(),
             constants: Vec::new(),
@@ -139,21 +151,45 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
     }
 
-    /// Find position (line, column) from byte offset
+    /// If `offset` falls inside a comment, the offset just past that comment
+    /// (where a search should resume).
+    fn comment_end_after(&self, offset: usize) -> Option<usize> {
+        rossi::comments::span_containing(&self.comment_spans, offset).map(|s| s.end)
+    }
+
+    /// Find position (line, column) from byte offset.
+    ///
+    /// The column is in characters, not bytes — the convention used by the
+    /// rest of this crate, and equal to UTF-16 code units (the LSP default
+    /// encoding) for all of Event-B's BMP symbols. Byte columns would place
+    /// tokens after a Unicode operator (`x ∈ ℕ // note`) too far right.
     fn position_from_offset(&self, offset: usize) -> (u32, u32) {
-        for (line_num, &line_start) in self.line_offsets.iter().enumerate() {
-            if offset < line_start {
-                let prev_line = line_num.saturating_sub(1);
-                let prev_start = self.line_offsets[prev_line];
-                let column = offset - prev_start;
-                return (prev_line as u32, column as u32);
+        // line_offsets[0] == 0 <= offset, so the partition point is >= 1.
+        let line = self.line_offsets.partition_point(|&start| start <= offset) - 1;
+        let column = self.text[self.line_offsets[line]..offset].chars().count();
+        (line as u32, column as u32)
+    }
+
+    /// Find `needle` in `haystack` (a same-length view of the source, byte
+    /// offsets interchangeable) starting at `start_offset`, skipping matches
+    /// inside comments and matches that are part of a longer word
+    /// (e.g. `end` inside `extended`).
+    fn find_word(&self, haystack: &str, needle: &str, start_offset: usize) -> Option<usize> {
+        // A needle may start with a non-ASCII char (`label_text` accepts any
+        // non-whitespace), so advance by whole chars to stay on boundaries.
+        let step = needle.chars().next().map_or(1, char::len_utf8);
+        let mut from = start_offset;
+        while let Some(pos) = haystack[from..].find(needle) {
+            let offset = from + pos;
+            if let Some(end) = self.comment_end_after(offset) {
+                from = end;
+            } else if !keywords::is_word_bounded(self.text, offset, needle.len()) {
+                from = offset + step;
+            } else {
+                return Some(offset);
             }
         }
-        // Last line
-        let last_line = self.line_offsets.len().saturating_sub(1);
-        let last_start = self.line_offsets[last_line];
-        let column = offset - last_start;
-        (last_line as u32, column as u32)
+        None
     }
 
     /// Find the position of a keyword in the text (case-insensitive).
@@ -163,9 +199,8 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// equals `keyword.len()`.
     fn find_keyword(&self, keyword: &str, start_offset: usize) -> Option<(usize, usize)> {
         let needle = keyword.to_ascii_lowercase();
-        self.text_lower[start_offset..]
-            .find(&needle)
-            .map(|pos| (start_offset + pos, keyword.len()))
+        self.find_word(&self.text_lower, &needle, start_offset)
+            .map(|offset| (offset, keyword.len()))
     }
 
     /// Find the keyword identified by `id` from `current_offset`, emit a token
@@ -210,19 +245,14 @@ impl<'a> SemanticTokensBuilder<'a> {
         from
     }
 
-    /// Find the position of an identifier in the text
+    /// Find the position of an identifier in the text, as a whole word and
+    /// never inside a comment.
     fn find_identifier(&self, identifier: &str, start_offset: usize) -> Option<(usize, usize)> {
-        // Look for the identifier as a whole word
-        let search_text = &self.text[start_offset..];
-        if let Some(pos) = search_text.find(identifier) {
-            let offset = start_offset + pos;
-            Some((offset, identifier.len()))
-        } else {
-            None
-        }
+        self.find_word(self.text, identifier, start_offset)
+            .map(|offset| (offset, identifier.len()))
     }
 
-    /// Add a keyword token
+    /// Add a keyword token (keywords are ASCII, so byte length == char length)
     fn add_keyword(&mut self, keyword: &str, offset: usize) {
         let (line, start) = self.position_from_offset(offset);
         self.tokens.push(SemanticTokenData {
@@ -254,7 +284,9 @@ impl<'a> SemanticTokensBuilder<'a> {
         self.tokens.push(SemanticTokenData {
             line,
             start,
-            length: identifier.len() as u32,
+            // In characters: identifiers are ASCII, but labels accept any
+            // non-whitespace char.
+            length: identifier.chars().count() as u32,
             token_type: token_type as u32,
             token_modifiers: modifiers,
         });
@@ -586,6 +618,34 @@ impl<'a> SemanticTokensBuilder<'a> {
         // Simplified implementation for the action itself
         // A full implementation would traverse the action AST to mark variables
         current_offset
+    }
+
+    /// Emit one COMMENT token per source line covered by each comment span.
+    ///
+    /// Splitting per line keeps us independent of the client's
+    /// `multilineTokenSupport` capability. Comment matches are excluded from
+    /// every other token search, so these tokens never overlap.
+    fn emit_comment_tokens(&mut self) {
+        for span in &self.comment_spans {
+            let mut start = span.start;
+            while start < span.end {
+                let line_end = self.text[start..span.end]
+                    .find('\n')
+                    .map_or(span.end, |pos| start + pos);
+                let segment = self.text[start..line_end].trim_end_matches('\r');
+                if !segment.is_empty() {
+                    let (line, col) = self.position_from_offset(start);
+                    self.tokens.push(SemanticTokenData {
+                        line,
+                        start: col,
+                        length: segment.chars().count() as u32,
+                        token_type: TokenType::Comment as u32,
+                        token_modifiers: 0,
+                    });
+                }
+                start = line_end + 1;
+            }
+        }
     }
 
     /// Build the final semantic tokens

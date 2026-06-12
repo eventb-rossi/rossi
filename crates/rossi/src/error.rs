@@ -5,8 +5,13 @@ use thiserror::Error;
 /// Errors that can occur during parsing
 #[derive(Error, Debug, Clone)]
 pub enum ParseError {
-    #[error("Pest parsing error: {0}")]
-    PestError(String),
+    #[error("Pest parsing error: {message}")]
+    PestError {
+        message: String,
+        /// 1-indexed error position, from pest's structured location.
+        line: usize,
+        column: usize,
+    },
 
     #[error("Unexpected rule: expected {expected}, found {found}")]
     UnexpectedRule { expected: String, found: String },
@@ -122,7 +127,15 @@ impl From<std::io::Error> for ParseError {
 
 impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
     fn from(error: Box<pest::error::Error<crate::parser::Rule>>) -> Self {
-        ParseError::PestError(error.to_string())
+        let (line, column) = match error.line_col {
+            pest::error::LineColLocation::Pos(pos) => pos,
+            pest::error::LineColLocation::Span(start, _) => start,
+        };
+        ParseError::PestError {
+            message: error.to_string(),
+            line,
+            column,
+        }
     }
 }
 

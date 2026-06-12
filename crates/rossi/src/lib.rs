@@ -42,6 +42,7 @@
 
 pub mod ast;
 pub mod builtins;
+pub mod comments;
 pub mod deps;
 pub mod error;
 pub mod keywords;

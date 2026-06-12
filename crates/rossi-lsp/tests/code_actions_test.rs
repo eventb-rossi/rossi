@@ -561,3 +561,35 @@ fn test_diagnostic_based_action() {
 
     assert!(has_end, "Should suggest adding missing END");
 }
+
+#[test]
+fn test_add_missing_end_offered_for_eof_diagnostic() {
+    // A missing END is reported by the parser one line PAST the last line
+    // (pest's end-of-input position); the quick fix must still be offered.
+    use rossi_lsp::lsp_types::Diagnostic;
+
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES\n    x\n"; // 3 lines, no END
+    let eof = Range {
+        start: Position::new(3, 0),
+        end: Position::new(3, 0),
+    };
+    let mut params = create_test_params("file:///test.eventb", eof);
+    params.context.diagnostics = vec![Diagnostic {
+        range: eof,
+        message: "Pest parsing error: expected machine_clause or END".to_string(),
+        ..Default::default()
+    }];
+
+    let actions = provider
+        .provide_code_actions(&params, text)
+        .unwrap_or_default();
+
+    assert!(
+        actions.iter().any(|a| matches!(
+            a,
+            CodeActionOrCommand::CodeAction(action) if action.title.contains("Add missing END")
+        )),
+        "the Add-missing-END quick fix must be offered for an EOF diagnostic, got {actions:?}"
+    );
+}
