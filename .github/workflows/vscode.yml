@@ -37,11 +37,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile TypeScript
+      - name: Type check
         run: npm run compile
 
       - name: Lint
         run: npm run lint
 
+      - name: Test symbol matcher
+        run: npm run test:matcher
+
       - name: Package VSIX
         run: npm run package -- --out /tmp/rossi-eventb.vsix
+
+      - name: Verify packaged VSIX
+        run: npm run check:vsix -- /tmp/rossi-eventb.vsix

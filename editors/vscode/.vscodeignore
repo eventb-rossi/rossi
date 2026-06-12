@@ -3,10 +3,12 @@
 src/**
 rodin/**
 .gitignore
-.prettierrc
-.eslintrc.json
+eslint.config.cjs
 **/*.map
 **/*.ts
+**/.*.sw?
 tsconfig.json
 node_modules/**
+out/**
+scripts/**
 *.vsix

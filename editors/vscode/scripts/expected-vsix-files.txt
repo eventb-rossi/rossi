@@ -1,0 +1,17 @@
+[Content_Types].xml
+extension.vsixmanifest
+extension/INSTALL.md
+extension/LICENSE-MIT
+extension/LICENSE.txt
+extension/dist/extension.js
+extension/icons/eventb-icon.png
+extension/icons/eventb-icon.svg
+extension/language-configuration.json
+extension/package.json
+extension/readme.md
+extension/snippets/eventb.json
+extension/syntaxes/eventb.tmLanguage.json
+extension/walkthroughs/check-toolchain.md
+extension/walkthroughs/create-model.md
+extension/walkthroughs/export-rodin.md
+extension/walkthroughs/write-eventb.md
