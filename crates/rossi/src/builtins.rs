@@ -1,9 +1,12 @@
 //! Built-in Event-B identifiers (reserved words of the mathematical language).
 //!
-//! This is the single source of truth for the built-in type/constant, function,
-//! and predicate identifiers that may not be used as user identifiers. The word
-//! list is taken from *The Event-B Mathematical Language* (`docs/kernel_lang.pdf`,
-//! §2.2, p.4) and the alphabetic spellings of operator words.
+//! This is the single source of truth for the identifier-shaped vocabulary of
+//! the mathematical language: the kernel_lang §2.2 reserved words
+//! ([`RESERVED_OPERATOR_WORDS`] / [`RESERVED_ATOM_WORDS`], exact-case, used by
+//! the parser to reject them as user identifiers) and the case-folded
+//! [`BUILTIN_WORDS`] vocabulary consumed by the editor-grammar generator.
+//! [`is_reserved_name`] composes the per-word case rules into the blocklist
+//! tools use when *introducing* a name (rename).
 //!
 //! The non-ASCII symbol atoms (`ℕ ℕ1 ℙ ℙ1 ℤ` …) are operator spellings handled by
 //! [`crate::operators`]; only identifier-shaped words live here.
@@ -12,7 +15,11 @@
 //! sources used during parsing; the `builtins_cover_parsed_vocabulary` test keeps
 //! this list from drifting away from them and from the operator words.
 
-/// Reserved built-in identifiers, lowercase. Membership is case-insensitive.
+/// Built-in identifier-shaped vocabulary, lowercase; membership is
+/// case-insensitive. This is the *vocabulary* list (editor-grammar generator,
+/// coarse membership tests) — it deliberately folds case and so over-matches
+/// the grammar's tokens. For "can this string name a user identifier?" use
+/// [`is_reserved_name`], which applies each word's own case rule.
 pub const BUILTIN_WORDS: &[&str] = &[
     // Built-in types and boolean constants (kernel_lang §2.2)
     "bool",
@@ -94,6 +101,42 @@ pub fn is_reserved_word(word: &str) -> bool {
 /// formula (exact-case).
 pub fn is_reserved_operator_word(word: &str) -> bool {
     RESERVED_OPERATOR_WORDS.contains(&word)
+}
+
+/// Words whose grammar tokens are case-insensitive (`^"…"` rules in
+/// `grammar.pest`): every spelling of these lexes as a token (`Nat`, `TRUE`,
+/// `Union`), so no case variant can ever be an identifier. Structural
+/// keywords are covered separately by [`crate::keywords::is_keyword`].
+const CASE_INSENSITIVE_TOKEN_WORDS: &[&str] = &[
+    "bool", "true", "false", "nat", "nat1", "int", "union", "inter",
+];
+
+/// ASCII operator spellings that are tokens only in rossi's *textual syntax*
+/// (its documented ASCII extension); the official language is Unicode-only
+/// (`∨ ¬ ∘ ⦂ ℙ`), so Rodin accepts these words as ordinary identifiers and
+/// rossi's parser does too. Bare uses even round-trip — but in applied or
+/// operator position the spelling lexes as the operator and the formula
+/// *silently changes meaning*: a user function `POW` applied as `POW(S)`
+/// parses as the powerset `ℙ(S)`, `not(x) = 1` as `¬(x = 1)`. Exact-case,
+/// like the tokens: `OR`, `Circ`, `pow` are unaffected identifiers.
+const ASCII_OPERATOR_WORDS: &[&str] = &["circ", "not", "oftype", "or", "POW", "POW1"];
+
+/// Whether `word` cannot (or cannot safely) *name* a user identifier in
+/// rossi's textual syntax — the blocklist for tools that introduce names,
+/// e.g. rename. Composes each word's own case rule:
+/// - kernel_lang §2.2 reserved words: exact-case ([`is_reserved_word`];
+///   `Dom`, `Card` stay usable, matching the parser);
+/// - case-insensitive token words: any spelling;
+/// - rossi's ASCII operator spellings: exact-case.
+///
+/// Callers should also reject structural keywords via
+/// [`crate::keywords::is_keyword`] (case-insensitive, like their tokens).
+pub fn is_reserved_name(word: &str) -> bool {
+    is_reserved_word(word)
+        || CASE_INSENSITIVE_TOKEN_WORDS
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(word))
+        || ASCII_OPERATOR_WORDS.contains(&word)
 }
 
 #[cfg(test)]
@@ -188,6 +231,45 @@ mod tests {
         assert!(!is_reserved_operator_word("id"));
         assert!(!is_reserved_operator_word("pred"));
         assert!(!is_reserved_operator_word("succ"));
+    }
+
+    #[test]
+    fn reserved_name_follows_each_words_token_case_rule() {
+        // §2.2 reserved words: exact-case only.
+        assert!(is_reserved_name("dom"));
+        assert!(is_reserved_name("card"));
+        assert!(is_reserved_name("pred"));
+        assert!(!is_reserved_name("Dom"));
+        assert!(!is_reserved_name("CARD"));
+        // Case-insensitive token words: any spelling lexes as a token.
+        for w in [
+            "TRUE", "True", "true", "Nat", "NAT1", "Int", "Union", "INTER",
+        ] {
+            assert!(is_reserved_name(w), "{w:?} always lexes as a token");
+        }
+        // ASCII operator spellings: exact-case only.
+        assert!(is_reserved_name("or"));
+        assert!(is_reserved_name("circ"));
+        assert!(is_reserved_name("POW"));
+        assert!(!is_reserved_name("OR"));
+        assert!(!is_reserved_name("Circ"));
+        assert!(!is_reserved_name("pow"));
+        // Ordinary identifiers pass.
+        assert!(!is_reserved_name("count"));
+        assert!(!is_reserved_name("domain"));
+    }
+
+    #[test]
+    fn reserved_name_covers_the_grammars_word_vocabulary() {
+        // Every word the (case-folded) vocabulary list knows is blocked in at
+        // least its canonical spelling — is_reserved_name must never be more
+        // permissive than the grammar's own tokens.
+        for w in BUILTIN_WORDS {
+            assert!(
+                is_reserved_name(w) || is_reserved_name(&w.to_uppercase()),
+                "vocabulary word {w:?} unblocked in every spelling"
+            );
+        }
     }
 
     #[test]

@@ -249,10 +249,14 @@ fn is_valid_identifier(s: &str) -> bool {
     chars.iter().all(|&c| text_utils::is_identifier_char(c))
 }
 
-/// Check if a string is a reserved Event-B keyword or built-in identifier
-/// (case-insensitive). Such names cannot be renamed.
+/// Check if a string is reserved vocabulary that cannot name an identifier:
+/// structural keywords (case-insensitive, like their grammar tokens) plus the
+/// mathematical-language words under each word's own case rule
+/// ([`rossi::builtins::is_reserved_name`]) — `dom`/`card`/`POW`/`TRUE` are
+/// blocked, while `Dom`, `Card`, `pow` are ordinary identifiers the parser
+/// accepts and rename must not refuse.
 fn is_keyword(s: &str) -> bool {
-    rossi::keywords::is_keyword(s) || rossi::builtins::is_builtin(s)
+    rossi::keywords::is_keyword(s) || rossi::builtins::is_reserved_name(s)
 }
 
 /// Find all references to an identifier in the text, skipping comments.
@@ -343,18 +347,16 @@ mod tests {
         assert!(is_keyword("NAT1"));
         assert!(is_keyword("INT"));
 
-        // Function operators
+        // Function operators (exact-case tokens — see the exact-case test
+        // below for the case variants that stay renameable).
         assert!(is_keyword("dom"));
-        assert!(is_keyword("DOM"));
         assert!(is_keyword("ran"));
-        assert!(is_keyword("pow"));
         assert!(is_keyword("POW"));
         assert!(is_keyword("POW1"));
         assert!(is_keyword("mod"));
 
         // Built-in functions
         assert!(is_keyword("finite"));
-        assert!(is_keyword("FINITE"));
         assert!(is_keyword("partition"));
         assert!(is_keyword("card"));
         assert!(is_keyword("min"));
@@ -363,11 +365,28 @@ mod tests {
         assert!(is_keyword("prj1"));
         assert!(is_keyword("prj2"));
 
-        // Quantified
+        // Quantified (case-insensitive tokens — any spelling lexes as one)
         assert!(is_keyword("UNION"));
         assert!(is_keyword("INTER"));
         assert!(is_keyword("union"));
         assert!(is_keyword("inter"));
+    }
+
+    #[test]
+    fn test_is_keyword_math_words_are_exact_case() {
+        // The parser reserves the math words exact-case (Rodin parity):
+        // `Dom`, `Card`, `pow` parse as ordinary identifiers, so rename must
+        // allow them — both as rename targets and as new names.
+        for ok in [
+            "Dom", "DOM", "Card", "FINITE", "Ran", "pow", "Pow", "OR", "Circ",
+        ] {
+            assert!(!is_keyword(ok), "{ok:?} is an ordinary identifier");
+        }
+        // The exact token spellings stay blocked, including the rossi-only
+        // ASCII operator words that would shadow in operator position.
+        for blocked in ["dom", "card", "or", "not", "circ", "oftype", "POW"] {
+            assert!(is_keyword(blocked), "{blocked:?} must stay blocked");
+        }
     }
 
     #[test]
