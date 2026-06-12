@@ -41,7 +41,7 @@
     "onCommand:rossi.checkToolchain",
     "onCommand:rossi.newProject"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
@@ -439,12 +439,15 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run compile && npm run bundle:prod",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "bundle": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --target=node20 --sourcemap",
+    "bundle:prod": "npm run bundle -- --minify",
+    "watch": "npm run bundle -- --watch",
     "lint": "eslint src --ext ts",
     "test:matcher": "tsc -p ./ && node out/symbolMatcher.test.js",
-    "package": "vsce package"
+    "package": "vsce package",
+    "check:vsix": "node scripts/check-vsix.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -453,6 +456,7 @@
     "@typescript-eslint/eslint-plugin": "^8.60.1",
     "@typescript-eslint/parser": "^8.60.0",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.27.7",
     "eslint": "^10.4.1",
     "typescript": "^6.0.3"
   },
