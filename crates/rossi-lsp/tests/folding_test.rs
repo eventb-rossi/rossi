@@ -215,3 +215,52 @@ fn test_all_clause_types() {
     assert!(has_constants, "Should detect CONSTANTS clause");
     assert!(has_axioms, "Should detect AXIOMS clause");
 }
+
+#[test]
+fn test_keywords_in_comments_do_not_affect_folds() {
+    let provider = FoldingRangeProvider::new();
+    let params = create_test_params("file:///test.eventb");
+
+    // `// END` must not close the event fold early; the `/* EVENT ghost */`
+    // block must not open one.
+    let text = "\
+MACHINE test
+EVENTS
+    EVENT evt1 // not the END
+    THEN
+        x := 1 /* EVENT ghost */
+    END
+END";
+    let ranges = provider.folding_ranges(&params, text).unwrap();
+    assert!(
+        ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
+        "event fold must span lines 2..5 despite comment keywords; got {ranges:?}"
+    );
+    assert!(
+        !ranges.iter().any(|r| r.start_line == 4),
+        "no fold may open on the commented line; got {ranges:?}"
+    );
+}
+
+#[test]
+fn test_comment_only_line_does_not_end_clause_fold() {
+    let provider = FoldingRangeProvider::new();
+    let params = create_test_params("file:///test.eventb");
+
+    // The Camille-style block comment between invariants is clause content;
+    // the INVARIANTS fold must reach past it to the last invariant.
+    let text = "\
+MACHINE test
+VARIABLES x
+INVARIANTS
+    @inv1 x > 0
+    // explains inv2
+    @inv2 x < 100
+EVENTS
+END";
+    let ranges = provider.folding_ranges(&params, text).unwrap();
+    assert!(
+        ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
+        "INVARIANTS fold must span lines 2..5 across the comment line; got {ranges:?}"
+    );
+}

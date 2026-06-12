@@ -593,3 +593,87 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
         "the Add-missing-END quick fix must be offered for an EOF diagnostic, got {actions:?}"
     );
 }
+
+#[test]
+fn test_operator_conversion_leaves_comments_alone() {
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE test\nVARIABLES x\nINVARIANTS\n  @inv1 x : NAT & x <= 10 // prose: x <= 10 and & stay ASCII\nEND";
+
+    let converted = provider.convert_to_unicode(text);
+
+    // Code is converted...
+    assert!(converted.contains("x ∈ ℕ ∧ x ≤ 10 //"));
+    // ...comment prose is untouched.
+    assert!(converted.contains("// prose: x <= 10 and & stay ASCII"));
+}
+
+#[test]
+fn test_selection_conversion_preserves_comment_opened_before_selection() {
+    // A selection that begins INSIDE a `/* */` block comment (the `/*` is
+    // outside the selection) must not have the comment prose's operator
+    // spellings rewritten — only the code after the comment closes.
+    let provider = CodeActionProvider::new();
+    // Line 2: `  @inv1 a /* note <= keep */ b <= c`
+    //          col 13 is `note` (inside the comment); col 35 is end of line.
+    let text = "MACHINE m\nINVARIANTS\n  @inv1 a /* note <= keep */ b <= c\nEND";
+
+    let params = create_test_params(
+        "file:///test.eventb",
+        Range {
+            start: Position::new(2, 13),
+            end: Position::new(2, 35),
+        },
+    );
+    let actions = provider.provide_code_actions(&params, text).unwrap();
+
+    let edit_text = actions
+        .iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(action)
+                if action.title == "Convert selection to Unicode" =>
+            {
+                let changes = action.edit.as_ref()?.changes.as_ref()?;
+                Some(changes.values().next()?[0].new_text.clone())
+            }
+            _ => None,
+        })
+        .expect("expected a 'Convert selection to Unicode' action");
+
+    // `<=` inside the comment stays ASCII; `<=` in the trailing code converts.
+    assert!(
+        edit_text.contains("note <= keep"),
+        "comment prose must be untouched, got: {edit_text:?}"
+    );
+    assert!(
+        edit_text.contains("b ≤ c"),
+        "trailing code must be converted, got: {edit_text:?}"
+    );
+}
+
+#[test]
+fn test_ascii_operators_in_comments_do_not_offer_conversion() {
+    let provider = CodeActionProvider::new();
+    // The only ASCII operator spellings are inside the comment.
+    let text = "MACHINE test\nVARIABLES x\nINVARIANTS\n  @inv1 x ∈ ℕ // note: x <= 10\nEND";
+
+    let params = create_test_params(
+        "file:///test.eventb",
+        Range {
+            start: Position::new(0, 0),
+            end: Position::new(0, 0),
+        },
+    );
+    let actions = provider.provide_code_actions(&params, text);
+
+    let offers_unicode_conversion = actions.iter().flatten().any(|action| {
+        if let CodeActionOrCommand::CodeAction(action) = action {
+            action.title.contains("Unicode")
+        } else {
+            false
+        }
+    });
+    assert!(
+        !offers_unicode_conversion,
+        "ASCII operators inside comments must not trigger the conversion action"
+    );
+}

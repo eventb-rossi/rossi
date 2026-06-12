@@ -109,52 +109,72 @@ impl CodeActionProvider {
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
 
-        // Check if we can convert just the selection
+        // Check if we can convert just the selection. Operator detection and
+        // conversion use the FULL document's comment spans (via byte offsets),
+        // so a selection that opens inside a `/* */` or `//` comment keeps its
+        // prose intact instead of having operator spellings rewritten.
         if params.range.start != params.range.end
-            && let Some(selected_text) = self.get_text_in_range(text, &params.range)
+            && let (Some(start), Some(end)) = (
+                crate::identifier_utils::position_to_offset(text, params.range.start),
+                crate::identifier_utils::position_to_offset(text, params.range.end),
+            )
+            && start < end
         {
-            if self.has_ascii_operators(&selected_text)
-                && let Some(action) = self.create_convert_selection_to_unicode_action(
-                    &params.text_document.uri,
-                    &selected_text,
-                    &params.range,
-                )
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
+            let masked = rossi::comments::mask_comments(text);
+            let selected = &text[start..end];
 
-            if self.has_unicode_operators(&selected_text)
-                && let Some(action) = self.create_convert_selection_to_ascii_action(
-                    &params.text_document.uri,
-                    &selected_text,
-                    &params.range,
-                )
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
+            let conversions = [
+                (
+                    operators::has_ascii_operators as fn(&str) -> bool,
+                    operators::convert_to_unicode as fn(&str) -> String,
+                    "Convert selection to Unicode",
+                ),
+                (
+                    operators::has_unicode_operators,
+                    operators::convert_to_ascii,
+                    "Convert selection to ASCII",
+                ),
+            ];
+            for (has_operators, convert, title) in conversions {
+                if has_operators(&masked[start..end]) {
+                    let converted =
+                        rossi::comments::map_code_segments_in_range(text, start, end, convert);
+                    if let Some(action) = self.create_convert_selection_action(
+                        &params.text_document.uri,
+                        title,
+                        converted,
+                        selected,
+                        &params.range,
+                    ) {
+                        actions.push(CodeActionOrCommand::CodeAction(action));
+                    }
+                }
             }
         }
 
         actions
     }
 
-    /// Check if text contains ASCII operators
+    /// Check if the code (comments excluded) contains ASCII operators
     fn has_ascii_operators(&self, text: &str) -> bool {
-        operators::has_ascii_operators(text)
+        operators::has_ascii_operators(&rossi::comments::mask_comments(text))
     }
 
-    /// Check if text contains Unicode operators
+    /// Check if the code (comments excluded) contains Unicode operators
     fn has_unicode_operators(&self, text: &str) -> bool {
-        operators::has_unicode_operators(text)
+        operators::has_unicode_operators(&rossi::comments::mask_comments(text))
     }
 
-    /// Convert ASCII operators to Unicode in the given text
+    /// Convert ASCII operators to Unicode in the given text.
+    /// Comment text is never rewritten — `<=` in prose stays `<=`.
     pub fn convert_to_unicode(&self, text: &str) -> String {
-        operators::convert_to_unicode(text)
+        rossi::comments::map_code_segments(text, operators::convert_to_unicode)
     }
 
-    /// Convert Unicode operators to ASCII in the given text
+    /// Convert Unicode operators to ASCII in the given text.
+    /// Comment text is never rewritten.
     pub fn convert_to_ascii(&self, text: &str) -> String {
-        operators::convert_to_ascii(text)
+        rossi::comments::map_code_segments(text, operators::convert_to_ascii)
     }
 
     /// Create action to convert entire document to Unicode
@@ -227,15 +247,18 @@ impl CodeActionProvider {
         })
     }
 
-    /// Create action to convert selection to Unicode
-    fn create_convert_selection_to_unicode_action(
+    /// Build a "Convert selection" refactor action that replaces `range` with
+    /// `new_text`, or `None` when conversion changed nothing (`new_text`
+    /// equals the `original` selected slice).
+    fn create_convert_selection_action(
         &self,
         uri: &Url,
-        selected_text: &str,
+        title: &str,
+        new_text: String,
+        original: &str,
         range: &Range,
     ) -> Option<CodeAction> {
-        let converted = self.convert_to_unicode(selected_text);
-        if converted == selected_text {
+        if new_text == original {
             return None;
         }
 
@@ -244,49 +267,12 @@ impl CodeActionProvider {
             uri.clone(),
             vec![TextEdit {
                 range: *range,
-                new_text: converted,
+                new_text,
             }],
         );
 
         Some(CodeAction {
-            title: "Convert selection to Unicode".to_string(),
-            kind: Some(CodeActionKind::REFACTOR),
-            diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
-            is_preferred: Some(true),
-            disabled: None,
-            data: None,
-        })
-    }
-
-    /// Create action to convert selection to ASCII
-    fn create_convert_selection_to_ascii_action(
-        &self,
-        uri: &Url,
-        selected_text: &str,
-        range: &Range,
-    ) -> Option<CodeAction> {
-        let converted = self.convert_to_ascii(selected_text);
-        if converted == selected_text {
-            return None;
-        }
-
-        let mut changes = HashMap::new();
-        changes.insert(
-            uri.clone(),
-            vec![TextEdit {
-                range: *range,
-                new_text: converted,
-            }],
-        );
-
-        Some(CodeAction {
-            title: "Convert selection to ASCII".to_string(),
+            title: title.to_string(),
             kind: Some(CodeActionKind::REFACTOR),
             diagnostics: None,
             edit: Some(WorkspaceEdit {
@@ -385,7 +371,9 @@ impl CodeActionProvider {
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
-        let lines: Vec<&str> = text.lines().collect();
+        // Keyword sniffing below must not match words inside comments.
+        let masked = rossi::comments::mask_comments_chars(text);
+        let lines: Vec<&str> = masked.lines().collect();
         if lines.is_empty() {
             return None;
         }
@@ -441,6 +429,12 @@ impl CodeActionProvider {
         text: &str,
     ) -> Vec<CodeActionOrCommand> {
         let mut actions = Vec::new();
+
+        // Detect if we're in a MACHINE or CONTEXT — on comment-masked text,
+        // so clause keywords mentioned in comments neither suppress nor
+        // trigger these actions.
+        let masked = rossi::comments::mask_comments(text);
+        let text = masked.as_str();
 
         // Detect if we're in a MACHINE or CONTEXT
         let is_machine = text.contains("MACHINE");

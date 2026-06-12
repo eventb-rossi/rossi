@@ -50,10 +50,14 @@ impl DocumentLinkProvider {
         let cross_ref_manager = self.cross_ref_manager.as_ref()?;
         let mut links = Vec::new();
 
+        // Scan comment-masked text (char columns preserved): clause keywords
+        // and component names inside comments must not produce links.
+        let masked = rossi::comments::mask_comments_chars(text);
+
         // Find all SEES, REFINES, and EXTENDS clauses
-        links.extend(self.find_clause_links(text, "SEES", cross_ref_manager));
-        links.extend(self.find_clause_links(text, "REFINES", cross_ref_manager));
-        links.extend(self.find_clause_links(text, "EXTENDS", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, "SEES", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, "REFINES", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, "EXTENDS", cross_ref_manager));
 
         debug!("Found {} document links", links.len());
 
@@ -205,7 +209,7 @@ fn tokenize_identifier_positions(
 
     while col < chars.len() {
         let ch = chars[col];
-        if matches!(ch, '/' | '\n') {
+        if ch == '\n' {
             break;
         }
 
@@ -590,6 +594,33 @@ END
         assert!(targets.contains(&"file:///ctx1.eventb"));
         assert!(targets.contains(&"file:///ctx2.eventb"));
         assert!(targets.contains(&"file:///ctx3.eventb"));
+    }
+
+    #[test]
+    fn test_document_links_ignore_comments() {
+        let cross_ref_manager = Arc::new(CrossReferenceManager::new());
+        cross_ref_manager.update_component(
+            "file:///test_ctx.eventb".to_string(),
+            "CONTEXT test_ctx\nEND",
+        );
+        cross_ref_manager.update_component("file:///ctx2.eventb".to_string(), "CONTEXT ctx2\nEND");
+
+        // A SEES clause spelled in comments must produce no link, and a
+        // component name in a trailing comment must not become a link.
+        let machine = "MACHINE test_mch\n// SEES ctx2\nSEES test_ctx // also: ctx2\nVARIABLES\n    count /* SEES ctx2 */\nEND\n";
+
+        let mut provider = DocumentLinkProvider::new();
+        provider.set_cross_reference_manager(cross_ref_manager);
+
+        let links = provider
+            .document_links(&make_params("test_mch.eventb"), machine)
+            .unwrap();
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].target.as_ref().unwrap().as_str(),
+            "file:///test_ctx.eventb"
+        );
     }
 
     #[test]

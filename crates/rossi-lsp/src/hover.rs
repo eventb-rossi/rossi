@@ -180,6 +180,14 @@ impl HoverProvider {
             .to_string();
         let position = params.text_document_position_params.position;
 
+        // No hover inside comments: `:=` or a keyword in prose is not the
+        // operator/keyword it spells.
+        if let Some(offset) = position_to_offset(text, position)
+            && rossi::comments::offset_in_comment(text, offset)
+        {
+            return None;
+        }
+
         // Get hover context from the cached component under the cursor
         let hover_ctx = self
             .component_cache
@@ -1073,6 +1081,18 @@ mod tests {
     fn test_hover_provider_creation() {
         let provider = HoverProvider::new();
         assert!(provider.component_cache.is_empty());
+    }
+
+    #[test]
+    fn test_no_hover_inside_comment() {
+        let provider = HoverProvider::new();
+        let source = "MACHINE m // the := and MACHINE here are prose\nEND\n";
+
+        // Cursor on `:=` inside the comment (col 18) and on `MACHINE` in the
+        // comment (col 24): no hover. The real MACHINE keyword still hovers.
+        assert!(hover_at(&provider, source, 0, 18).is_none());
+        assert!(hover_at(&provider, source, 0, 24).is_none());
+        assert!(hover_at(&provider, source, 0, 2).is_some());
     }
 
     #[test]

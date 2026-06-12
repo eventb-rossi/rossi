@@ -130,9 +130,11 @@ impl ReferenceProvider {
         identifier: &str,
         line_range: Option<(usize, usize)>,
     ) -> Vec<Location> {
+        // Mask once for the whole filter rather than re-masking per location.
+        let masked = rossi::comments::mask_comments_chars(text);
         self.find_references_in_text_range(text, uri, identifier, line_range)
             .into_iter()
-            .filter(|location| !is_component_reference_position(text, location.range.start))
+            .filter(|location| !is_component_reference_position(&masked, location.range.start))
             .collect()
     }
 
@@ -148,7 +150,12 @@ impl ReferenceProvider {
         };
         let is_component_name = manager.find_component_uri(identifier).is_some();
 
-        if is_component_name && is_component_reference_position(text, position) {
+        if is_component_name
+            && is_component_reference_position(
+                &rossi::comments::mask_comments_chars(text),
+                position,
+            )
+        {
             return self.find_references_in_workspace(identifier);
         }
 
@@ -464,7 +471,10 @@ fn non_empty(locations: Vec<Location>) -> Option<Vec<Location>> {
 }
 
 fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
-    let lines: Vec<&str> = text.lines().collect();
+    // Scan comment-masked lines: an `EVENT foo` or `END` inside a comment
+    // must not open or close the event's line range.
+    let masked = rossi::comments::mask_comments_chars(text);
+    let lines: Vec<&str> = masked.lines().collect();
     let start_line = lines
         .iter()
         .position(|line| text_utils::event_name_from_line(line).as_deref() == Some(event_name))?;
@@ -484,8 +494,11 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     Some((start_line, end_line))
 }
 
-fn is_component_reference_position(text: &str, position: Position) -> bool {
-    let lines: Vec<&str> = text.lines().collect();
+/// Whether `position` sits in a SEES/REFINES/EXTENDS clause. `masked` is the
+/// comment-masked document text, so keywords spelled inside comments are
+/// already blanked out and cannot be mistaken for clause boundaries.
+fn is_component_reference_position(masked: &str, position: Position) -> bool {
+    let lines: Vec<&str> = masked.lines().collect();
     if position.line as usize >= lines.len() {
         return false;
     }
@@ -525,9 +538,11 @@ fn is_component_reference_position(text: &str, position: Position) -> bool {
     current_clause.is_some()
 }
 
-/// Get the identifier at the given position in the text
+/// Get the identifier at the given position in the text.
+/// Comment-masked: a cursor inside a comment is not on an identifier.
 fn get_identifier_at_position(text: &str, position: Position) -> Option<String> {
-    identifier_utils::identifier_at_position(text, position).map(|(identifier, _)| identifier)
+    let masked = rossi::comments::mask_comments_chars(text);
+    identifier_utils::identifier_at_position(&masked, position).map(|(identifier, _)| identifier)
 }
 
 /// Find a whole word match in a line and return its column index (in characters, not bytes)
@@ -834,5 +849,34 @@ END
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].range.start.character, 0);
         assert_eq!(refs[1].range.start.character, 25);
+    }
+
+    #[test]
+    fn test_event_line_range_ignores_comment_keywords() {
+        // `// END here` and `/* EVENT ghost */` must not terminate or open
+        // the event's line range.
+        let source = "\
+MACHINE m
+EVENTS
+    EVENT step // END here
+    WHERE
+        @grd1 x > 0 /* EVENT ghost */
+    THEN
+        @act1 x ≔ 1
+    END
+END";
+        assert_eq!(event_line_range(source, "step"), Some((2, 7)));
+        assert_eq!(event_line_range(source, "ghost"), None);
+    }
+
+    #[test]
+    fn test_cursor_in_comment_finds_no_identifier() {
+        // `count` inside the comment is prose; references from there resolve
+        // to nothing.
+        let source = "count := 0 // count is reset";
+        assert_eq!(
+            get_identifier_at_position(source, Position::new(0, 14)),
+            None
+        );
     }
 }

@@ -155,12 +155,17 @@ impl DefinitionProvider {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
+        // All structural scans run on comment-masked text (char columns are
+        // preserved). A cursor inside a comment then finds no identifier and
+        // the request resolves to nothing, as it should.
+        let masked = rossi::comments::mask_comments_chars(text);
+
         // Definitions are only ever named by identifiers, so resolve the
         // cursor straight to one (operators and punctuation have none).
-        let (word, _) = identifier_at_position(text, position)?;
+        let (word, _) = identifier_at_position(&masked, position)?;
 
         // Stage 1: Check if this is a cross-file reference (SEES, REFINES, EXTENDS clause name)
-        if let Some(cross_ref_location) = self.find_cross_file_reference(text, position, &word) {
+        if let Some(cross_ref_location) = self.find_cross_file_reference(&masked, position, &word) {
             return Some(GotoDefinitionResponse::Scalar(cross_ref_location));
         }
 
@@ -175,17 +180,18 @@ impl DefinitionProvider {
         None
     }
 
-    /// Find cross-file reference location (SEES, REFINES, EXTENDS)
+    /// Find cross-file reference location (SEES, REFINES, EXTENDS).
+    /// `masked` is the comment-masked document text.
     fn find_cross_file_reference(
         &self,
-        text: &str,
+        masked: &str,
         position: Position,
         word: &str,
     ) -> Option<Location> {
         let cross_ref_manager = self.cross_ref_manager.as_ref()?;
 
         // Check if cursor is in a SEES, REFINES, or EXTENDS clause
-        if !is_in_cross_reference_clause(text, position) {
+        if !is_in_cross_reference_clause(masked, position) {
             return None;
         }
 
@@ -256,6 +262,12 @@ impl DefinitionProvider {
             Ok(u) => u,
             Err(_) => return definitions, // Return empty if URI parsing fails
         };
+
+        // Mask comments once for all clause/event scans below: a declaration
+        // name or keyword mentioned in a comment must never become the
+        // definition site (char columns are unchanged by the mask).
+        let masked = rossi::comments::mask_comments_chars(text);
+        let text = masked.as_str();
 
         let def_info = |name: &str, kind: SymbolKind, pos: Position| DefinitionInfo {
             name: name.to_string(),
@@ -598,9 +610,11 @@ fn is_in_cross_reference_clause(text: &str, position: Position) -> bool {
     matches!(current_clause, Some("SEES" | "REFINES" | "EXTENDS"))
 }
 
-/// Find the position of a component name (CONTEXT or MACHINE) in source text
+/// Find the position of a component name (CONTEXT or MACHINE) in source text.
+/// Scans comment-masked text so a header spelled in a comment never matches.
 fn find_component_name_position(text: &str, component_name: &str) -> Option<Position> {
-    let lines: Vec<&str> = text.lines().collect();
+    let masked = rossi::comments::mask_comments_chars(text);
+    let lines: Vec<&str> = masked.lines().collect();
     let context_kw: Vec<char> = "CONTEXT".chars().collect();
     let machine_kw: Vec<char> = "MACHINE".chars().collect();
     let name_chars: Vec<char> = component_name.chars().collect();
@@ -660,6 +674,24 @@ mod tests {
         let total_def = cache.find_definition("total");
         assert!(total_def.is_some());
         assert_eq!(total_def.unwrap().kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_definition_site_ignores_comment_mentions() {
+        let provider = DefinitionProvider::new();
+        // `count` is mentioned in the machine-header comment before its real
+        // declaration; the definition must point at the VARIABLES clause.
+        let source = "MACHINE test // count of VARIABLES\nVARIABLES\n    count // count again\nEND";
+
+        provider.update_definitions("file:///test.eventb".to_string(), source);
+
+        let cache = provider
+            .definition_cache
+            .get("file:///test.eventb")
+            .unwrap();
+        let count_def = cache.find_definition("count").unwrap();
+        assert_eq!(count_def.location.range.start.line, 2);
+        assert_eq!(count_def.location.range.start.character, 4);
     }
 
     #[test]
