@@ -157,6 +157,15 @@ fn event_name_attr(e: &quick_xml::events::BytesStart) -> Result<String> {
     Ok(raw.trim().to_string())
 }
 
+/// Trim a label read from Event-B XML, treating a whitespace-only value as
+/// absent. Labels are not identifiers (Rodin allows arbitrary text), so they
+/// are not validated — but surrounding whitespace would not survive a text
+/// round-trip, so it is cleaned the same way identifiers are.
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Format a source label like "S1.bum" or "XML input" for error messages.
 fn source_label(source_file: Option<&str>) -> String {
     source_file.unwrap_or("XML input").to_string()
@@ -253,7 +262,10 @@ fn parse_xml_labeled_predicate(
 
         let key = key.strip_prefix("org.eventb.core.").unwrap_or(key);
         match key {
-            "label" => label = Some(value.to_string()),
+            // Trimmed like identifiers: Rodin tolerates stray whitespace
+            // around labels, but the text format's label rule cannot carry
+            // it, so a padded label would not survive a text round-trip.
+            "label" => label = non_empty_trimmed(&value),
             "predicate" => predicate_str = value.to_string(),
             "theorem" => is_theorem = &*value == "true",
             "comment" => comment = Some(value.to_string()),
@@ -718,7 +730,20 @@ fn parse_machine_xml_with_name(
                     }
                     "org.eventb.core.witness" => {
                         if let Some(ref mut event) = current_event {
-                            let label = get_xml_attr(&e, b"label")?;
+                            // A witness label is an identifier position: it names
+                            // the witnessed abstract parameter or variable (e.g.
+                            // `x'`), so it must stay consistent with the trimmed
+                            // declarations.
+                            let label = match get_xml_attr(&e, b"label")? {
+                                Some(l) => Some(validate_identifier(
+                                    &l,
+                                    &format!(
+                                        "witness label in event {:?} of {}",
+                                        event.name, origin
+                                    ),
+                                )?),
+                                None => None,
+                            };
                             let predicate_str = get_xml_attr(&e, b"predicate")?.unwrap_or_default();
                             let kind = get_xml_attr(&e, b"rossi.kind")?;
 
@@ -786,7 +811,8 @@ fn parse_machine_xml_with_name(
                     }
                     "org.eventb.core.action" => {
                         if let Some(ref mut event) = current_event {
-                            let label = get_xml_attr(&e, b"label")?;
+                            let label =
+                                get_xml_attr(&e, b"label")?.and_then(|l| non_empty_trimmed(&l));
                             let assignment_str =
                                 get_xml_attr(&e, b"assignment")?.unwrap_or_default();
                             let comment = get_xml_attr(&e, b"comment")?;
