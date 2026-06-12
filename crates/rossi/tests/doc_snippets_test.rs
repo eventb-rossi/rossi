@@ -9,6 +9,10 @@
 //! all of them at the source. Doc blocks that intentionally show errors or UI
 //! annotations (←, ⮟, ▶, "<- ") and fragments that don't start with
 //! CONTEXT/MACHINE are skipped.
+//!
+//! The VS Code extension's New Event-B Project starter files are the one piece
+//! of user-facing Event-B text not rendered from the snippet table, so they are
+//! extracted from the TypeScript source and parsed here as well.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -241,4 +245,44 @@ fn canonical_snippets_expand_to_valid_eventb() {
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+/// Validates the starter files the VS Code New Event-B Project command writes
+/// (`starterContext()`/`starterMachine()` in rossiCommands.ts). Each file must
+/// hold a single valid component — `rossi::parse` is the same entry point the
+/// language server runs per document. Extraction failures are reported
+/// explicitly so a refactor of the TypeScript file can't silently drop this
+/// coverage.
+#[test]
+fn vscode_starter_project_files_parse() {
+    let Some(root) = git_repo_root() else {
+        eprintln!("skipping: not inside a rossi git checkout");
+        return;
+    };
+    let ts_path = root.join("editors/vscode/src/rossiCommands.ts");
+    let source = std::fs::read_to_string(&ts_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", ts_path.display()));
+
+    for function_name in ["starterContext", "starterMachine"] {
+        let function = source
+            .split_once(&format!("function {function_name}"))
+            .unwrap_or_else(|| {
+                panic!("rossiCommands.ts no longer defines {function_name} — update this test")
+            })
+            .1;
+        let template = function
+            .split_once('`')
+            .and_then(|(_, rest)| rest.split_once("`;"))
+            .unwrap_or_else(|| {
+                panic!("{function_name} no longer returns a template literal — update this test")
+            })
+            .0;
+        let component = template.replace("${name}", "my_model");
+
+        if let Err(e) = rossi::parse(&component) {
+            panic!(
+                "VS Code starter file from {function_name}() is invalid Event-B:\n{e}\n--- component ---\n{component}"
+            );
+        }
+    }
 }

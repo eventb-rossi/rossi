@@ -613,7 +613,8 @@ export class RossiCommandController {
         }
 
         await fs.mkdir(projectDir, { recursive: true });
-        await fs.writeFile(path.join(projectDir, `${name}.eventb`), starterModel(name), 'utf8');
+        await fs.writeFile(path.join(projectDir, `${name}_ctx.eventb`), starterContext(name), 'utf8');
+        await fs.writeFile(path.join(projectDir, `${name}.eventb`), starterMachine(name), 'utf8');
         await fs.writeFile(path.join(projectDir, 'README.md'), starterReadme(name), 'utf8');
         await fs.writeFile(path.join(projectDir, '.gitignore'), STARTER_GITIGNORE, 'utf8');
         this.output.appendLine(`Created Event-B project at ${projectDir}`);
@@ -794,36 +795,45 @@ export function registerRossiCommands(
     );
 }
 
-/** Starter `.eventb` model written by the New Event-B Project command. */
-function starterModel(name: string): string {
+// The starter project keeps one component per .eventb file, matching the
+// layout `rossi import` produces and the language server's one-component-per-
+// document analysis (a file holding both would get a parse diagnostic at the
+// second component).
+
+/** Starter context written by the New Event-B Project command. */
+function starterContext(name: string): string {
     return `CONTEXT ${name}_ctx
 SETS
     S
 CONSTANTS
     c
 AXIOMS
-    axm1: c ∈ ℕ
+    @axm1 c ∈ ℕ
 END
+`;
+}
 
-MACHINE ${name}
+/** Starter machine written by the New Event-B Project command. */
+function starterMachine(name: string): string {
+    return `MACHINE ${name}
 SEES
     ${name}_ctx
 VARIABLES
     v
 INVARIANTS
-    inv1: v ∈ ℕ
-    inv2: v ≤ c
+    @inv1 v ∈ ℕ
+    @inv2 v ≤ c
 EVENTS
-    INITIALISATION
+    EVENT INITIALISATION
     BEGIN
-        act1: v := 0
+        @act1 v := 0
     END
 
     EVENT step
     WHERE
-        grd1: v < c
+        @grd1 v < c
     THEN
-        act1: v := v + 1
+        @act1 v := v + 1
     END
 END
 `;
@@ -837,7 +847,8 @@ An Event-B project edited with the Rossi Event-B extension.
 
 ## Getting started
 
-1. Open \`${name}.eventb\` and edit the context and machine. Type \`context\`,
+1. Open \`${name}.eventb\` (the machine) and \`${name}_ctx.eventb\` (the
+   context it sees) — one component per file, as in Rodin. Type \`context\`,
    \`machine\`, \`event\`, … and accept the snippet to scaffold a block.
 2. Errors are reported live as you type by the Rossi language server.
 3. Run **Rossi: Validate Current File** to validate on demand.
