@@ -785,9 +785,9 @@ END
 SETS
     STATUS
 CONSTANTS
-    max
+    maximum
 AXIOMS
-    @axm1 max = 100
+    @axm1 maximum = 100
 END
 "# ; "simple_context")]
 #[test_case(r#"MACHINE counter

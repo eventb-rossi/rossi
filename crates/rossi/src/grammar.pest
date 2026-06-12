@@ -259,13 +259,25 @@ lambda_expr = {
 //              Lowered by the parser to the same AST as the explicit ⊕ form
 //              so consumers don't need to handle a separate variant.
 // r∼         postfix inverse
+// `dom`/`ran` are closed unary applications: the operand is exactly the
+// parenthesized expression, matching Rodin (UnaryExpressionParser mandates
+// the paren) and kernel_lang §3.3.6 (⟨unary-op⟩ '(' E ')'). Two consequences:
+// - `dom end` no longer greedily swallows a following structural keyword
+//   (issue #30): a bare `dom`/`ran` falls through to `identifier`, where the
+//   AST builder rejects it as a reserved word, the same way the other
+//   builtin words (card, min, …) are handled when not applied.
+// - sitting at the function_application base, postfix operators bind to the
+//   whole application like in Rodin: `dom(f)(x) = (dom(f))(x)`,
+//   `dom(f)∼ = (dom(f))∼`, `dom(f)[S] = (dom(f))[S]`.
+closed_unary_expr = { (op_domain | op_range) ~ lparen ~ expression ~ rparen }
+
 function_application = {
-    primary_expr ~ (lparen ~ expression ~ (comma ~ expression)* ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
+    (closed_unary_expr | primary_expr) ~ (lparen ~ expression ~ (comma ~ expression)* ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
 }
 
 // Unary Expressions
 unary_expr = {
-    (op_minus | op_powerset1 | op_powerset | op_domain | op_range) ~ unary_expr
+    (op_minus | op_powerset1 | op_powerset) ~ unary_expr
   | function_application
 }
 

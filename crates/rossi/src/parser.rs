@@ -35,16 +35,46 @@ pub(crate) fn with_parser_stack<T>(depth: usize, f: impl FnOnce() -> T) -> T {
     stacker::maybe_grow(parser_stack_red_zone(depth), PARSER_STACK_SIZE, f)
 }
 
+/// Build the located error for a kernel_lang §2.2 reserved word misused as
+/// an ordinary identifier.
+fn reserved_word_error(word: &str, span: pest::Span<'_>) -> ParseError {
+    let (line, column) = span.start_pos().line_col();
+    ParseError::ReservedWord {
+        word: word.to_string(),
+        line,
+        column,
+    }
+}
+
+/// Extract an identifier that *names* a user identifier — a declaration
+/// (constant, variable, carrier set or element, event parameter, binder) or
+/// an assignment target — rejecting the kernel_lang §2.2 reserved words
+/// ([`crate::builtins::is_reserved_word`]). All declared names must come
+/// through here.
+fn declared_name(pair: &pest::iterators::Pair<Rule>) -> Result<String, ParseError> {
+    if crate::builtins::is_reserved_word(pair.as_str()) {
+        return Err(reserved_word_error(pair.as_str(), pair.as_span()));
+    }
+    Ok(pair.as_str().to_string())
+}
+
+/// Reject reserved operator words (`card`, `dom`, `mod`, …) standing as a
+/// plain identifier in formula position. The generic atoms (`id`, `pred`, …)
+/// pass — they are legal bare expressions.
+fn reject_reserved_operator_word(pair: &pest::iterators::Pair<Rule>) -> Result<(), ParseError> {
+    if crate::builtins::is_reserved_operator_word(pair.as_str()) {
+        return Err(reserved_word_error(pair.as_str(), pair.as_span()));
+    }
+    Ok(())
+}
+
 /// Parse a typed_identifier rule into a TypedIdentifier
 fn parse_typed_identifier(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<TypedIdentifier, ParseError> {
     let mut inner = pair.into_inner();
-    let name = inner
-        .next()
-        .ok_or(ParseError::MissingVariable)?
-        .as_str()
-        .to_string();
+    let name_pair = inner.next().ok_or(ParseError::MissingVariable)?;
+    let name = declared_name(&name_pair)?;
     // Skip op_oftype if present, then parse the type expression
     let mut type_expr = None;
     for p in inner {
@@ -87,14 +117,31 @@ fn collect_typed_identifiers_and_predicate(
     Err(ParseError::MissingPredicate)
 }
 
-/// Extract all identifiers from a clause pair, skipping the keyword
+/// Extract all identifiers from a clause pair, skipping the keyword.
+///
+/// Clauses that *declare* mathematical identifiers (CONSTANTS, VARIABLES,
+/// event ANY) reject kernel_lang §2.2 reserved words; the declaring role is
+/// derived from the clause's own leading keyword. Component-reference
+/// clauses (EXTENDS, REFINES, SEES) stay permissive: component names are
+/// structural labels, not formula identifiers (Camille's eventbstruct lexer
+/// doesn't reserve these words there either).
 fn collect_identifiers_from_clause(
     pair: pest::iterators::Pair<Rule>,
 ) -> Result<Vec<String>, ParseError> {
+    let declares = matches!(
+        pair.as_rule(),
+        Rule::context_clause_constants | Rule::machine_clause_variables | Rule::event_any
+    );
     let mut identifiers = Vec::new();
     for p in pair.into_inner() {
         match p.as_rule() {
-            Rule::identifier => identifiers.push(p.as_str().to_string()),
+            Rule::identifier => {
+                identifiers.push(if declares {
+                    declared_name(&p)?
+                } else {
+                    p.as_str().to_string()
+                });
+            }
             Rule::comma => {} // optional comma separator
             // Skip the leading clause keyword (varies by call site)
             Rule::kw_extends
@@ -118,7 +165,7 @@ fn collect_identifiers_from_clause(
 fn parse_set_declaration(pair: pest::iterators::Pair<Rule>) -> Result<SetDeclaration, ParseError> {
     let mut inner = pair.into_inner();
     let name_pair = inner.next().ok_or(ParseError::MissingVariable)?;
-    let name = name_pair.as_str().to_string();
+    let name = declared_name(&name_pair)?;
 
     // Check if there's an '=' followed by enumerated elements
     let mut elements = Vec::new();
@@ -129,7 +176,7 @@ fn parse_set_declaration(pair: pest::iterators::Pair<Rule>) -> Result<SetDeclara
                 has_eq = true;
             }
             Rule::identifier => {
-                elements.push(p.as_str().to_string());
+                elements.push(declared_name(&p)?);
             }
             Rule::lbrace | Rule::rbrace | Rule::comma => {}
             _ => {
@@ -860,7 +907,10 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
     for p in inner {
         match p.as_rule() {
             Rule::identifier if op.is_none() && !is_func_override => {
-                variables.push(p.as_str().to_string());
+                // Assignment targets are uses of *declared* variables, so no
+                // reserved word can name one: `pred ≔ 0` is as invalid as
+                // `dom ≔ 0`.
+                variables.push(declared_name(&p)?);
             }
             Rule::comma if op.is_none() => {} // separator between LHS identifiers/arguments
             Rule::lparen if op.is_none() => {
@@ -1212,6 +1262,21 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                 operand: Box::new(operand),
             })
         }
+        Rule::closed_unary_expr => {
+            // Fixed layout: op ~ lparen ~ expression ~ rparen.
+            let mut inner = pair.into_inner();
+            let op_pair = inner.next().ok_or(ParseError::MissingOperator)?;
+            let op =
+                rule_to_unary_op(op_pair.as_rule()).ok_or_else(|| ParseError::UnexpectedRule {
+                    expected: "dom or ran".to_string(),
+                    found: format!("{:?}", op_pair.as_rule()),
+                })?;
+            let operand_pair = inner.nth(1).ok_or(ParseError::EmptyExpression)?;
+            Ok(Expression::Unary {
+                op,
+                operand: Box::new(parse_expression(operand_pair)?),
+            })
+        }
         Rule::lambda_expr | Rule::lambda_expr_no_semi => {
             // Lambda expression: λ pattern · P ∣ E
             // Grammar: ("λ" | "%") ~ ident_pattern ~ dot ~ predicate ~ pipe ~ expression
@@ -1261,10 +1326,32 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
             let mut inner = pair.into_inner();
 
             // Parse the base expression (function)
-            let base = parse_expression(inner.next().ok_or(ParseError::EmptyExpression)?)?;
+            let base_pair = inner.next().ok_or(ParseError::EmptyExpression)?;
+            let base_span = base_pair.as_span();
+            let base = parse_expression(base_pair)?;
 
             // Check if there are any function applications or relational images
             let remaining: Vec<_> = inner.collect();
+
+            // A reserved operator word is only legal where the
+            // `BuiltinFunction::from_name` resolution below consumes it.
+            // Anywhere else — bare, under postfix `∼`, image `[…]`, or an
+            // unresolvable application like `mod(x)` — it is an invalid
+            // identifier (see `builtins::RESERVED_OPERATOR_WORDS`). This is
+            // the expression-position check; predicate applications,
+            // assignment targets, and declarations have sibling checks.
+            if let Expression::Identifier(ref name) = base
+                && crate::builtins::is_reserved_operator_word(name)
+            {
+                let resolves = remaining
+                    .first()
+                    .is_some_and(|p| p.as_rule() == Rule::lparen)
+                    && crate::ast::expression::BuiltinFunction::from_name(name).is_some();
+                if !resolves {
+                    return Err(reserved_word_error(name, base_span));
+                }
+            }
+
             if remaining.is_empty() {
                 return Ok(base);
             }
@@ -1594,7 +1681,13 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                 }),
             }
         }
-        Rule::identifier => Ok(Expression::Identifier(pair.as_str().to_string())),
+        Rule::identifier => {
+            // Defensive: only reachable if a caller hands parse_expression a
+            // raw identifier pair (formula identifiers arrive wrapped in
+            // function_application, which carries the position-aware check).
+            reject_reserved_operator_word(&pair)?;
+            Ok(Expression::Identifier(pair.as_str().to_string()))
+        }
         Rule::integer => {
             let value = pair
                 .as_str()
@@ -1612,11 +1705,9 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
 /// Parse a predicate application (e.g., finite(S), partition(A, B, C))
 fn parse_predicate_application(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, ParseError> {
     let mut inner = pair.into_inner();
-    let function = inner
-        .next()
-        .ok_or(ParseError::MissingVariable)?
-        .as_str()
-        .to_string();
+    let function_pair = inner.next().ok_or(ParseError::MissingVariable)?;
+    let function_span = function_pair.as_span();
+    let function = function_pair.as_str().to_string();
     let mut arguments = Vec::new();
     for p in inner {
         match p.as_rule() {
@@ -1647,6 +1738,13 @@ fn parse_predicate_application(pair: pest::iterators::Pair<Rule>) -> Result<Pred
             predicate: builtin,
             arguments,
         })
+    } else if crate::builtins::is_reserved_word(&function) {
+        // A reserved word applied where no builtin predicate resolves it:
+        // the expression-only forms (`dom(x)`, `mod(x)`) and the generic
+        // atoms (`pred(x)`, `id(x)` — expressions, never predicates).
+        // Reject like Rodin instead of fabricating a user-defined predicate
+        // application named by a reserved word.
+        Err(reserved_word_error(&function, function_span))
     } else {
         Ok(Predicate::Application {
             function,
@@ -2003,15 +2101,24 @@ impl<'a> RecoveryText<'a> {
 /// Extract identifiers from a clause during error recovery.
 ///
 /// Content written inline after the clause keyword (`VARIABLES x, y`) counts
-/// like any other line.
+/// like any other line. Declaring clauses (keyed off `keyword`, mirroring
+/// `collect_identifiers_from_clause` on the strict path) drop reserved words:
+/// the strict parse already reported them as ReservedWord errors, and keeping
+/// them would hand downstream consumers (LSP completion, rename) a
+/// declaration the parser itself forbids.
 fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<String> {
+    let declares = matches!(keyword, "SETS" | "CONSTANTS" | "VARIABLES");
     let mut result = Vec::new();
     if let Some(span) = extract_clause_content(text, keyword, bound) {
         for line in text.masked[span.start..span.end].lines() {
             let line = line.trim();
             let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
             if !content.is_empty() {
-                result.extend(extract_identifiers(content));
+                result.extend(
+                    extract_identifiers(content)
+                        .into_iter()
+                        .filter(|name| !declares || !crate::builtins::is_reserved_word(name)),
+                );
             }
         }
     }

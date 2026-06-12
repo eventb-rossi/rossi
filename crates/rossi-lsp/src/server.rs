@@ -1204,6 +1204,13 @@ fn parse_error_to_diagnostic(error: &rossi::ParseError) -> Diagnostic {
         | ParseError::NestingTooDeep { line, column, .. } => {
             diagnostic_at(*line, *column, error.to_string())
         }
+        ParseError::ReservedWord { word, line, column } => {
+            // The offending word's exact extent is known — size the range to
+            // it (reserved words are ASCII, so bytes == columns).
+            let mut diagnostic = diagnostic_at(*line, *column, error.to_string());
+            diagnostic.range.end.character = diagnostic.range.start.character + word.len() as u32;
+            diagnostic
+        }
         _ => diagnostic_at(1, 1, error.to_string()),
     }
 }

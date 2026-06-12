@@ -1600,8 +1600,8 @@ mod tests {
     #[test]
     fn infer_const_equal_to_integer() {
         let env = TypeEnv::new();
-        let p = parse_predicate_str("max = 100").unwrap();
-        let ty = infer_constant_from_predicate(&env, &p, "max");
+        let p = parse_predicate_str("maximum = 100").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "maximum");
         assert_eq!(ty, Some(Type::Integer));
     }
 

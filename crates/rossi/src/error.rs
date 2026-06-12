@@ -29,6 +29,19 @@ pub enum ParseError {
         column: usize,
     },
 
+    /// A kernel_lang §2.2 reserved word was used as an ordinary identifier.
+    /// See [`crate::builtins::RESERVED_OPERATOR_WORDS`] /
+    /// [`crate::builtins::RESERVED_ATOM_WORDS`] for the policy (exact-case,
+    /// Rodin parity). `line` and `column` are 1-indexed.
+    #[error(
+        "reserved word `{word}` cannot be used as an identifier at line {line}, column {column}"
+    )]
+    ReservedWord {
+        word: String,
+        line: usize,
+        column: usize,
+    },
+
     #[error("Empty expression")]
     EmptyExpression,
 

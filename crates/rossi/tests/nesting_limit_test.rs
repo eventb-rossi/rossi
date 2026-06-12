@@ -179,9 +179,17 @@ fn at_limit_every_driver_construct_parses() {
     );
     parse(&ite).expect("at-limit if-then-else");
 
-    // Unary keyword chains (dom/ran/ℙ) and unary minus.
-    let dom = "dom ".repeat(n);
-    parse(&format!("context C constants r axioms @a x = {dom}r end")).expect("at-limit dom chain");
+    // Unary keyword chains (dom/ran/ℙ) and unary minus. dom/ran require the
+    // parenthesized form, so each level costs 2 (prefix word + bracket); the
+    // chain only sits exactly at the limit while the limit is even.
+    assert_eq!(n % 2, 0, "dom chain no longer exercises the exact limit");
+    let k = n / 2;
+    let dom = "dom(".repeat(k);
+    parse(&format!(
+        "context C constants r axioms @a x = {dom}r{} end",
+        ")".repeat(k)
+    ))
+    .expect("at-limit dom chain");
     let pow = "ℙ".repeat(n);
     parse(&format!("context C constants S axioms @a T = {pow}S end")).expect("at-limit ℙ chain");
     let minus = "−".repeat(n);

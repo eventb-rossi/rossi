@@ -116,10 +116,12 @@ fn required_attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Result<String
 ///   `CTX-1`); those names only appear in opaque attribute positions
 ///   (refines target, sees target) so the text grammar never has to lex
 ///   them.
-/// - Keyword-named identifiers (`end`, `events`, `extends`, ...) are
-///   accepted: Rodin permits them and our expression-position grammar
+/// - *Structural* keyword-named identifiers (`end`, `events`, `extends`, ...)
+///   are accepted: Rodin permits them and our expression-position grammar
 ///   parses them as identifiers (the `kw_*` rules fire only in their
-///   specific structural positions, not as a general reservation).
+///   specific structural positions, not as a general reservation). The
+///   mathematical reserved words (`dom`, `card`, ...) are a different story —
+///   see [`validate_declared_identifier`].
 fn validate_identifier(name: &str, origin: &str) -> Result<String> {
     let err = |reason: String| ParseError::UnsupportedIdentifier {
         name: name.to_string(),
@@ -143,6 +145,26 @@ fn validate_identifier(name: &str, origin: &str) -> Result<String> {
         }
     }
     Ok(trimmed.to_string())
+}
+
+/// [`validate_identifier`] plus the kernel_lang §2.2 reserved-word check, for
+/// *mathematical declarations* (carrier sets, constants, variables, event
+/// parameters). Rodin's own `isValidIdentifierName` rejects these names, so
+/// no Rodin-exported XML contains them; a hand-crafted file that does would
+/// otherwise import into an AST the text grammar can no longer express
+/// (pretty-print → re-parse fails on the declaration). Structural names
+/// (component/event names, refines/sees targets) stay on the permissive
+/// [`validate_identifier`].
+fn validate_declared_identifier(name: &str, origin: &str) -> Result<String> {
+    let validated = validate_identifier(name, origin)?;
+    if crate::builtins::is_reserved_word(&validated) {
+        return Err(ParseError::UnsupportedIdentifier {
+            name: name.to_string(),
+            origin: origin.to_string(),
+            reason: "reserved word of the Event-B mathematical language".to_string(),
+        });
+    }
+    Ok(validated)
 }
 
 /// Read an event's name from its XML element. In real Rodin XML, `name` is
@@ -467,7 +489,7 @@ fn parse_context_xml_with_name(
                     }
                     "org.eventb.core.carrierSet" => {
                         if let Some(set_name) = get_xml_attr(&e, b"identifier")? {
-                            let set_name = validate_identifier(
+                            let set_name = validate_declared_identifier(
                                 &set_name,
                                 &format!("carrier set in {}", origin),
                             )?;
@@ -480,7 +502,7 @@ fn parse_context_xml_with_name(
                     }
                     "org.eventb.core.constant" => {
                         if let Some(const_name) = get_xml_attr(&e, b"identifier")? {
-                            let const_name = validate_identifier(
+                            let const_name = validate_declared_identifier(
                                 &const_name,
                                 &format!("constant in {}", origin),
                             )?;
@@ -613,8 +635,10 @@ fn parse_machine_xml_with_name(
                     }
                     "org.eventb.core.variable" => {
                         if let Some(var_name) = get_xml_attr(&e, b"identifier")? {
-                            let var_name =
-                                validate_identifier(&var_name, &format!("variable in {}", origin))?;
+                            let var_name = validate_declared_identifier(
+                                &var_name,
+                                &format!("variable in {}", origin),
+                            )?;
                             let comment = get_xml_attr(&e, b"comment")?;
                             variables.push(NamedElement::with_comment(var_name, comment));
                         }
@@ -708,7 +732,7 @@ fn parse_machine_xml_with_name(
                         if let Some(ref mut event) = current_event
                             && let Some(param) = get_xml_attr(&e, b"identifier")?
                         {
-                            let param = validate_identifier(
+                            let param = validate_declared_identifier(
                                 &param,
                                 &format!("parameter in event {:?} of {}", event.name, origin),
                             )?;
