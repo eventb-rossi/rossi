@@ -7,10 +7,33 @@ use pest_derive::Parser;
 
 use crate::ast::*;
 use crate::error::ParseError;
+use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
 
+/// The pest-generated parser.
+///
+/// INVARIANT: never call `RossiParser::parse` directly. Every parse must go
+/// through an entry point that first runs `nesting::check_nesting` (rejects
+/// input deep enough to overflow the stack) and then wraps the pest parse +
+/// AST build in `with_parser_stack`. Bypassing the guard reintroduces a
+/// process-aborting stack overflow on adversarial input.
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 pub struct RossiParser;
+
+/// Run a parse (pest + AST build) with guaranteed stack headroom.
+///
+/// Both pest's generated parser and the AST builder recurse on nested formula
+/// constructs; inputs near [`nesting::MAX_NESTING_DEPTH`] need more stack
+/// than debug builds or 2 MB worker threads provide. `stacker::maybe_grow`
+/// moves execution to a heap-allocated segment when the remaining stack drops
+/// below a red zone sized from `depth` — the metric [`nesting::check_nesting`]
+/// measured for this input — so shallow formulas (the per-XML-attribute
+/// import path, per-keystroke LSP parses) skip the segment allocation on
+/// ordinary stacks. Inputs deeper than the limit never get here — the
+/// pre-scan rejects them first.
+pub(crate) fn with_parser_stack<T>(depth: usize, f: impl FnOnce() -> T) -> T {
+    stacker::maybe_grow(parser_stack_red_zone(depth), PARSER_STACK_SIZE, f)
+}
 
 /// Parse a typed_identifier rule into a TypedIdentifier
 fn parse_typed_identifier(
@@ -248,6 +271,13 @@ fn extract_label(pair: pest::iterators::Pair<Rule>) -> Option<String> {
 
 /// Parse an Event-B component (Context or Machine) from source text
 pub fn parse(input: &str) -> Result<Component, ParseError> {
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || parse_unguarded(input))
+}
+
+/// Body of [`parse`]. Only callable through the guarded entry point — see
+/// the invariant on [`RossiParser`].
+fn parse_unguarded(input: &str) -> Result<Component, ParseError> {
     let pairs = RossiParser::parse(Rule::component, input)
         .map_err(|e| ParseError::PestError(e.to_string()))?;
 
@@ -284,6 +314,13 @@ pub fn parse(input: &str) -> Result<Component, ParseError> {
 ///
 /// Returns `Ok(Vec<Component>)` with one entry per parsed component.
 pub fn parse_components(input: &str) -> Result<Vec<Component>, ParseError> {
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || parse_components_unguarded(input))
+}
+
+/// Body of [`parse_components`]. Only callable through the guarded entry
+/// point — see the invariant on [`RossiParser`].
+fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError> {
     let pairs = RossiParser::parse(Rule::components, input)
         .map_err(|e| ParseError::PestError(e.to_string()))?;
 
@@ -1866,36 +1903,45 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
 ///
 /// Uses `predicate_complete` (with SOI/EOI) to ensure the entire input is consumed.
 pub fn parse_predicate_str(input: &str) -> Result<Predicate, ParseError> {
-    let pairs = RossiParser::parse(Rule::predicate_complete, input)
-        .map_err(|e| ParseError::PestError(e.to_string()))?;
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || {
+        let pairs = RossiParser::parse(Rule::predicate_complete, input)
+            .map_err(|e| ParseError::PestError(e.to_string()))?;
 
-    let predicate_pair = pairs.into_iter().next().ok_or(ParseError::EmptyPredicate)?;
-    parse_predicate(predicate_pair)
+        let predicate_pair = pairs.into_iter().next().ok_or(ParseError::EmptyPredicate)?;
+        parse_predicate(predicate_pair)
+    })
 }
 
 /// Parse an expression from a string (used by XML parser)
 ///
 /// Uses `expression_complete` (with SOI/EOI) to ensure the entire input is consumed.
 pub fn parse_expression_str(input: &str) -> Result<Expression, ParseError> {
-    let pairs = RossiParser::parse(Rule::expression_complete, input)
-        .map_err(|e| ParseError::PestError(e.to_string()))?;
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || {
+        let pairs = RossiParser::parse(Rule::expression_complete, input)
+            .map_err(|e| ParseError::PestError(e.to_string()))?;
 
-    let expression_pair = pairs
-        .into_iter()
-        .next()
-        .ok_or(ParseError::EmptyExpression)?;
-    parse_expression(expression_pair)
+        let expression_pair = pairs
+            .into_iter()
+            .next()
+            .ok_or(ParseError::EmptyExpression)?;
+        parse_expression(expression_pair)
+    })
 }
 
 /// Parse an action from a string (used by XML parser)
 ///
 /// Uses `action_complete` (with SOI/EOI) to ensure the entire input is consumed.
 pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
-    let pairs = RossiParser::parse(Rule::action_complete, input)
-        .map_err(|e| ParseError::PestError(e.to_string()))?;
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || {
+        let pairs = RossiParser::parse(Rule::action_complete, input)
+            .map_err(|e| ParseError::PestError(e.to_string()))?;
 
-    let action_pair = pairs.into_iter().next().ok_or(ParseError::MissingAction)?;
-    parse_action(action_pair)
+        let action_pair = pairs.into_iter().next().ok_or(ParseError::MissingAction)?;
+        parse_action(action_pair)
+    })
 }
 
 // ============================================================================
@@ -2022,6 +2068,9 @@ pub fn parse_with_recovery(input: &str) -> ParseResult<Component> {
     // First, try normal parsing
     match parse(input) {
         Ok(component) => ParseResult::ok(component),
+        // A depth rejection applies to the whole input — clause recovery
+        // would just re-trigger it line by line, so fail fast.
+        Err(first_error @ ParseError::NestingTooDeep { .. }) => ParseResult::err(first_error),
         Err(first_error) => {
             // Parsing failed, try to recover
             // Determine if it's a context or machine by looking for keywords

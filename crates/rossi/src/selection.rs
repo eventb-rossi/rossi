@@ -14,7 +14,8 @@
 use pest::Parser;
 
 use crate::ast::Span;
-use crate::parser::{RossiParser, Rule};
+use crate::nesting;
+use crate::parser::{RossiParser, Rule, with_parser_stack};
 
 /// Return the source spans enclosing `offset`, ordered outermost → innermost.
 ///
@@ -29,19 +30,27 @@ use crate::parser::{RossiParser, Rule};
 /// boundary the cursor binds to the token on its right, not the (whitespace-
 /// padded) token on its left.
 pub fn enclosing_spans(text: &str, offset: usize) -> Vec<Span> {
-    let Ok(pairs) = RossiParser::parse(Rule::component, text) else {
+    // Both the pest parse and `collect_path` recurse on formula nesting;
+    // refuse over-deep inputs (like the parser proper) and give the rest the
+    // same stack headroom.
+    let Ok(depth) = nesting::check_nesting(text) else {
         return Vec::new();
     };
+    with_parser_stack(depth, || {
+        let Ok(pairs) = RossiParser::parse(Rule::component, text) else {
+            return Vec::new();
+        };
 
-    let mut spans = Vec::new();
-    if let Some(pair) = pairs.into_iter().find(|p| encloses(p.as_span(), offset)) {
-        collect_path(pair, offset, text, &mut spans);
-    }
+        let mut spans = Vec::new();
+        if let Some(pair) = pairs.into_iter().find(|p| encloses(p.as_span(), offset)) {
+            collect_path(pair, offset, text, &mut spans);
+        }
 
-    // Collapse the runs of identical spans left by passthrough wrappers
-    // (and by whitespace trimming making neighbours coincide).
-    spans.dedup();
-    spans
+        // Collapse the runs of identical spans left by passthrough wrappers
+        // (and by whitespace trimming making neighbours coincide).
+        spans.dedup();
+        spans
+    })
 }
 
 /// Half-open containment (`start <= offset < end`) that ignores zero-width spans

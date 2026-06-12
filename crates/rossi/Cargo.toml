@@ -12,6 +12,7 @@ categories = ["parsing", "development-tools"]
 [dependencies]
 pest.workspace = true
 pest_derive.workspace = true
+stacker.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
 quick-xml.workspace = true

@@ -14,6 +14,16 @@ pub enum ParseError {
     #[error("Invalid integer: {0}")]
     InvalidInteger(String),
 
+    /// The nesting-depth pre-scan ([`crate::nesting`]) refused the input:
+    /// parsing it could overflow the stack and abort the process. `line` and
+    /// `column` are 1-indexed.
+    #[error("formula nesting exceeds the maximum depth of {limit} at line {line}, column {column}")]
+    NestingTooDeep {
+        limit: usize,
+        line: usize,
+        column: usize,
+    },
+
     #[error("Empty expression")]
     EmptyExpression,
 

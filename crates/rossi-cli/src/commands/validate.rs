@@ -362,6 +362,9 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
     match inner {
         ParseError::UnexpectedXmlRoot { .. } => RuleId::XmlRootError,
         ParseError::MissingXmlAttribute { .. } => RuleId::XmlAttributeError,
+        // A formula inside an XML attribute exceeded the nesting limit —
+        // that's a formula problem (EB005), not a malformed-XML one.
+        ParseError::NestingTooDeep { .. } => RuleId::FormulaParseError,
         _ => RuleId::XmlParseError,
     }
 }

@@ -158,6 +158,12 @@ fn wrap_attr_error(
     value: &str,
     err: ParseError,
 ) -> ParseError {
+    // A nesting rejection is a property of the formula, not of the XML
+    // envelope — keep the variant intact so consumers classify it as a
+    // formula error (EB005) rather than a malformed-XML one (EB001).
+    if matches!(err, ParseError::NestingTooDeep { .. }) {
+        return err;
+    }
     let label_part = match label {
         Some(l) => format!(" (label={:?})", l),
         None => String::new(),
@@ -1649,6 +1655,60 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("{prefix}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn wrap_attr_error_preserves_nesting_rejections() {
+        // NestingTooDeep must survive attribute wrapping so the validate CLI
+        // classifies it as a formula error (EB005), not malformed XML (EB001).
+        let nesting = ParseError::NestingTooDeep {
+            limit: crate::nesting::MAX_NESTING_DEPTH,
+            line: 1,
+            column: 7,
+        };
+        assert!(matches!(
+            wrap_attr_error(
+                "ctx.buc",
+                "axiom",
+                Some("a1"),
+                "predicate",
+                "((…))",
+                nesting
+            ),
+            ParseError::NestingTooDeep { .. }
+        ));
+        // Other parse errors still get the attribute envelope.
+        assert!(matches!(
+            wrap_attr_error(
+                "ctx.buc",
+                "axiom",
+                Some("a1"),
+                "predicate",
+                "x =",
+                ParseError::EmptyPredicate
+            ),
+            ParseError::MalformedAttribute { .. }
+        ));
+    }
+
+    #[test]
+    fn over_deep_attribute_surfaces_nesting_error_from_xml() {
+        let deep = format!(
+            "{}x{} = 1",
+            "(".repeat(crate::nesting::MAX_NESTING_DEPTH + 1),
+            ")".repeat(crate::nesting::MAX_NESTING_DEPTH + 1)
+        );
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+<org.eventb.core.axiom name="a" org.eventb.core.label="axm1" org.eventb.core.predicate="{}"/>
+</org.eventb.core.contextFile>"#,
+            escape_xml(&deep)
+        );
+        match parse_xml(&xml) {
+            Err(ParseError::NestingTooDeep { .. }) => {}
+            other => panic!("expected NestingTooDeep, got {other:?}"),
+        }
     }
 
     #[test]

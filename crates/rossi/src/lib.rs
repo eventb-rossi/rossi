@@ -45,6 +45,7 @@ pub mod builtins;
 pub mod deps;
 pub mod error;
 pub mod keywords;
+pub mod nesting;
 pub mod operators;
 pub mod parser;
 pub mod pretty;
@@ -60,6 +61,7 @@ pub use ast::{
 };
 pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
 pub use error::{ParseError, ParseResult, Result};
+pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{
     parse, parse_action_str, parse_components, parse_expression_str, parse_predicate_str,
     parse_with_recovery,
