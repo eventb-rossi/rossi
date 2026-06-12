@@ -8,5 +8,5 @@ SETS
 CONSTANTS
     ${3:const_name}
 AXIOMS
-    ${4:axm1}: ${5:predicate}
+    @${4:axm1} ${5:predicate}
 END

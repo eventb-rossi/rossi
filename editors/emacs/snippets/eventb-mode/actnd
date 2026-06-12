@@ -2,4 +2,4 @@
 # name: Action (Non-deterministic)
 # key: actnd
 # --
-${1:act1}: ${2:var} :∈ ${3:set}
+@${1:act1} ${2:var} :∈ ${3:set}

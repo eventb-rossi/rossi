@@ -2,4 +2,4 @@
 # name: Action (Assignment)
 # key: act
 # --
-${1:act1}: ${2:var} := ${3:expression}
+@${1:act1} ${2:var} := ${3:expression}

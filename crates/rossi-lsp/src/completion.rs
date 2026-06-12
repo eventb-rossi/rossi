@@ -369,7 +369,7 @@ impl CompletionProvider {
                     kind: MarkupKind::Markdown,
                     value: "Insert a complete event template with guards and actions".to_string(),
                 })),
-                insert_text: Some("EVENT ${1:event_name}\nWHERE\n    ${2:grd1}: ${3:condition}\nTHEN\n    ${4:act1}: ${5:action}\nEND".to_string()),
+                insert_text: Some("EVENT ${1:event_name}\nWHERE\n    @${2:grd1} ${3:condition}\nTHEN\n    @${4:act1} ${5:action}\nEND".to_string()),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
             });
@@ -385,7 +385,7 @@ impl CompletionProvider {
                     kind: MarkupKind::Markdown,
                     value: "Insert a labeled predicate for axioms or invariants".to_string(),
                 })),
-                insert_text: Some("${1:label}: ${2:predicate}".to_string()),
+                insert_text: Some("@${1:label} ${2:predicate}".to_string()),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
             });

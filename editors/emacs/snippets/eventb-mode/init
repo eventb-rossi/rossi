@@ -2,7 +2,7 @@
 # name: Event-B Initialisation
 # key: init
 # --
-INITIALISATION
+EVENT INITIALISATION
 BEGIN
     ${1:var} := ${2:value}
 END

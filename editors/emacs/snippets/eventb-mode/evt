@@ -4,7 +4,7 @@
 # --
 EVENT ${1:event_name}
 WHERE
-    ${2:grd1}: ${3:guard}
+    @${2:grd1} ${3:guard}
 THEN
-    ${4:act1}: ${5:action}
+    @${4:act1} ${5:action}
 END

@@ -2,4 +2,4 @@
 # name: Axiom
 # key: axm
 # --
-${1:axm1}: ${2:predicate}
+@${1:axm1} ${2:predicate}

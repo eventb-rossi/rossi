@@ -2,4 +2,4 @@
 # name: Action (Such That)
 # key: actst
 # --
-${1:act1}: ${2:var} :| ${3:predicate}
+@${1:act1} ${2:var} :| ${3:predicate}

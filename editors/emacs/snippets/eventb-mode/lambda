@@ -2,4 +2,4 @@
 # name: Lambda Abstraction
 # key: lambda
 # --
-λ${1:x}·(${2:x} ∈ ${3:domain} | ${4:expression})
+λ${1:x}·${2:x} ∈ ${3:domain} | ${4:expression}

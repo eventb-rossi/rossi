@@ -131,8 +131,8 @@ SETS
 CONSTANTS
     max_value
 AXIOMS
-    axm1: max_value = 100
-    axm2: max_value > 0
+    @axm1 max_value = 100
+    @axm2 max_value > 0
 END
 ```
 
@@ -143,19 +143,19 @@ MACHINE counter
 VARIABLES
     count
 INVARIANTS
-    inv1: count >= 0
-    inv2: count <= 100
+    @inv1 count >= 0
+    @inv2 count <= 100
 EVENTS
-    INITIALISATION
+    EVENT INITIALISATION
     BEGIN
         count := 0
     END
 
     EVENT increment
     WHERE
-        grd1: count < 100
+        @grd1 count < 100
     THEN
-        act1: count := count + 1
+        @act1 count := count + 1
     END
 END
 ```

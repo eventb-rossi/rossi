@@ -7,9 +7,9 @@ REFINES ${2:abstract_event}
 ANY
     ${3:new_param}
 WHERE
-    ${4:grd1}: ${5:guard}
+    @${4:grd1} ${5:guard}
 WITH
-    ${6:abs_param}: ${7:witness}
+    @${6:abs_param} ${7:witness}
 THEN
-    ${8:act1}: ${9:action}
+    @${8:act1} ${9:action}
 END

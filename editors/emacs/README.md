@@ -141,7 +141,7 @@ Ensure you have `lsp-mode` installed. Using `use-package`:
    CONSTANTS
        x
    AXIOMS
-       axm1: x = 42
+       @axm1 x = 42
    END
    ```
 3. Check LSP status: `M-x lsp-describe-session`

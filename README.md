@@ -80,7 +80,7 @@ fn main() {
         CONSTANTS
             max_value
         AXIOMS
-            axm1: max_value = 100
+            @axm1 max_value = 100
         END
     "#;
 
@@ -193,8 +193,8 @@ SETS
 CONSTANTS
     max_loans
 AXIOMS
-    axm1: max_loans = 5
-    axm2: max_loans > 0
+    @axm1 max_loans = 5
+    @axm2 max_loans > 0
 END
 ```
 
@@ -209,17 +209,17 @@ SEES
 VARIABLES
     count
 INVARIANTS
-    inv1: count >= 0
-    inv2: count <= max_value
+    @inv1 count >= 0
+    @inv2 count <= max_value
 EVENTS
-    INITIALISATION
+    EVENT INITIALISATION
     BEGIN
         count := 0
     END
 
     EVENT increment
     WHERE
-        grd1: count < max_value
+        @grd1 count < max_value
     THEN
         count := count + 1
     END

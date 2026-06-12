@@ -304,8 +304,8 @@ CONTEXT counter_ctx
 CONSTANTS
     MAX_VALUE
 AXIOMS
-    axm1: MAX_VALUE = 100
-    axm2: MAX_VALUE > 0
+    @axm1 MAX_VALUE = 100
+    @axm2 MAX_VALUE > 0
 END
 ```
 
@@ -317,26 +317,26 @@ SEES counter_ctx
 VARIABLES
     count
 INVARIANTS
-    inv1: count ∈ ℕ
-    inv2: count ≤ MAX_VALUE
+    @inv1 count ∈ ℕ
+    @inv2 count ≤ MAX_VALUE
 EVENTS
-    INITIALISATION
+    EVENT INITIALISATION
     BEGIN
         count := 0
     END
 
     EVENT increment
     WHERE
-        grd1: count < MAX_VALUE
+        @grd1 count < MAX_VALUE
     THEN
-        act1: count := count + 1
+        @act1 count := count + 1
     END
 
     EVENT decrement
     WHERE
-        grd1: count > 0
+        @grd1 count > 0
     THEN
-        act1: count := count - 1
+        @act1 count := count - 1
     END
 END
 ```

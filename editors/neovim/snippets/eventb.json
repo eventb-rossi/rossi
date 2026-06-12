@@ -8,7 +8,7 @@
       "CONSTANTS",
       "    ${3:const_name}",
       "AXIOMS",
-      "    ${4:axm1}: ${5:predicate}",
+      "    @${4:axm1} ${5:predicate}",
       "END"
     ],
     "description": "Create an Event-B context"
@@ -20,9 +20,9 @@
       "VARIABLES",
       "    ${2:var_name}",
       "INVARIANTS",
-      "    ${3:inv1}: ${4:predicate}",
+      "    @${3:inv1} ${4:predicate}",
       "EVENTS",
-      "    INITIALISATION",
+      "    EVENT INITIALISATION",
       "    BEGIN",
       "        ${5:var_name} := ${6:value}",
       "    END",
@@ -35,9 +35,9 @@
     "body": [
       "EVENT ${1:event_name}",
       "WHERE",
-      "    ${2:grd1}: ${3:guard}",
+      "    @${2:grd1} ${3:guard}",
       "THEN",
-      "    ${4:act1}: ${5:action}",
+      "    @${4:act1} ${5:action}",
       "END"
     ],
     "description": "Create an Event-B event"
@@ -45,7 +45,7 @@
   "Event-B Initialisation": {
     "prefix": "init",
     "body": [
-      "INITIALISATION",
+      "EVENT INITIALISATION",
       "BEGIN",
       "    ${1:var} := ${2:value}",
       "END"
@@ -55,42 +55,42 @@
   "Axiom": {
     "prefix": "axm",
     "body": [
-      "${1:axm1}: ${2:predicate}"
+      "@${1:axm1} ${2:predicate}"
     ],
     "description": "Create a labeled axiom"
   },
   "Invariant": {
     "prefix": "inv",
     "body": [
-      "${1:inv1}: ${2:predicate}"
+      "@${1:inv1} ${2:predicate}"
     ],
     "description": "Create a labeled invariant"
   },
   "Guard": {
     "prefix": "grd",
     "body": [
-      "${1:grd1}: ${2:condition}"
+      "@${1:grd1} ${2:condition}"
     ],
     "description": "Create a labeled guard"
   },
   "Action (Assignment)": {
     "prefix": "act",
     "body": [
-      "${1:act1}: ${2:var} := ${3:expression}"
+      "@${1:act1} ${2:var} := ${3:expression}"
     ],
     "description": "Create a labeled deterministic assignment"
   },
   "Action (Non-deterministic)": {
     "prefix": "actnd",
     "body": [
-      "${1:act1}: ${2:var} :∈ ${3:set}"
+      "@${1:act1} ${2:var} :∈ ${3:set}"
     ],
     "description": "Create a labeled non-deterministic assignment"
   },
   "Action (Such That)": {
     "prefix": "actst",
     "body": [
-      "${1:act1}: ${2:var} :| ${3:predicate}"
+      "@${1:act1} ${2:var} :| ${3:predicate}"
     ],
     "description": "Create a labeled assignment with predicate"
   },
@@ -111,14 +111,14 @@
   "Lambda Abstraction": {
     "prefix": "lambda",
     "body": [
-      "λ${1:x}·(${2:x} ∈ ${3:domain} | ${4:expression})"
+      "λ${1:x}·${2:x} ∈ ${3:domain} | ${4:expression}"
     ],
     "description": "Lambda abstraction"
   },
   "Set Comprehension": {
     "prefix": "setcomp",
     "body": [
-      "{${1:x} · ${2:x} ∈ ${3:set} ∧ ${4:predicate}}"
+      "{${1:x} · ${2:x} ∈ ${3:set} ∧ ${4:predicate} | ${5:expression}}"
     ],
     "description": "Set comprehension"
   },
@@ -130,11 +130,11 @@
       "ANY",
       "    ${3:new_param}",
       "WHERE",
-      "    ${4:grd1}: ${5:guard}",
+      "    @${4:grd1} ${5:guard}",
       "WITH",
-      "    ${6:abs_param}: ${7:witness}",
+      "    @${6:abs_param} ${7:witness}",
       "THEN",
-      "    ${8:act1}: ${9:action}",
+      "    @${8:act1} ${9:action}",
       "END"
     ],
     "description": "Create an event that refines an abstract event"
