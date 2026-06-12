@@ -89,6 +89,64 @@ fn leading_hyphen_identifier_rejected() {
 }
 
 #[test]
+fn surrounding_whitespace_in_event_label_trimmed() {
+    // Rodin tolerates stray whitespace around names — a real-world corpus
+    // model carries an event label with a trailing space. We trim instead
+    // of rejecting, and the refinesEvent target is trimmed the same way so
+    // the refinement link stays consistent.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="'" org.eventb.core.label="stop " org.eventb.core.convergence="0" org.eventb.core.extended="false">
+        <org.eventb.core.refinesEvent name="'" org.eventb.core.target="stop "/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let comp = parse_xml(xml).expect("should accept event label with trailing space");
+    if let rossi::Component::Machine(m) = comp {
+        assert_eq!(m.events[0].name, "stop");
+        assert_eq!(m.events[0].refines.as_deref(), Some("stop"));
+    } else {
+        panic!("expected Machine");
+    }
+}
+
+#[test]
+fn whitespace_padded_initialisation_label_recognised() {
+    // The trim happens before the INITIALISATION check, so a padded label
+    // still lands in the initialisation slot rather than becoming a
+    // misnamed ordinary event.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="'" org.eventb.core.label="INITIALISATION " org.eventb.core.convergence="0" org.eventb.core.extended="false"/>
+</org.eventb.core.machineFile>"#;
+
+    let comp = parse_xml(xml).expect("should accept padded INITIALISATION label");
+    if let rossi::Component::Machine(m) = comp {
+        assert!(m.initialisation.is_some());
+        assert!(m.events.is_empty());
+    } else {
+        panic!("expected Machine");
+    }
+}
+
+#[test]
+fn whitespace_only_identifier_rejected() {
+    // Trimming must not let an all-whitespace name slip through as empty.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.constant name="int1" org.eventb.core.identifier="   "/>
+</org.eventb.core.contextFile>"#;
+
+    let err = parse_xml(xml).expect_err("should reject whitespace-only identifier");
+    match err {
+        ParseError::UnsupportedIdentifier { reason, .. } => {
+            assert_eq!(reason, "empty");
+        }
+        other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+    }
+}
+
+#[test]
 fn malformed_predicate_attribute_wraps_pest_error() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3">

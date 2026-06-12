@@ -97,10 +97,16 @@ fn required_attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Result<String
     }
 }
 
-/// Reject identifiers that our Event-B XML loader can't honestly handle.
+/// Validate an identifier read from Event-B XML and return the form we
+/// store: surrounding whitespace is trimmed away. Rodin tolerates stray
+/// whitespace around names (a real-world corpus model carries an event
+/// label with a trailing space), so we clean rather than reject — every
+/// identifier-position read goes through here, keeping cross-references
+/// (refines targets, etc.) consistent with the trimmed declarations.
 ///
-/// We deliberately mirror Rodin's permissive XML naming rather than the
-/// stricter text-grammar identifier rule:
+/// Beyond trimming, reject identifiers that our Event-B XML loader can't
+/// honestly handle. We deliberately mirror Rodin's permissive XML naming
+/// rather than the stricter text-grammar identifier rule:
 ///
 /// - First character must be an ASCII letter or `_`. (Leading digits or
 ///   leading hyphens would confuse the text-grammar lexer if the name ever
@@ -114,32 +120,41 @@ fn required_attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Result<String
 ///   accepted: Rodin permits them and our expression-position grammar
 ///   parses them as identifiers (the `kw_*` rules fire only in their
 ///   specific structural positions, not as a general reservation).
-fn validate_identifier(name: &str, origin: &str) -> Result<()> {
-    if name.is_empty() {
-        return Err(ParseError::UnsupportedIdentifier {
-            name: name.to_string(),
-            origin: origin.to_string(),
-            reason: "empty".to_string(),
-        });
+fn validate_identifier(name: &str, origin: &str) -> Result<String> {
+    let err = |reason: String| ParseError::UnsupportedIdentifier {
+        name: name.to_string(),
+        origin: origin.to_string(),
+        reason,
+    };
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(err("empty".to_string()));
     }
-    let first = name.chars().next().unwrap();
+    let first = trimmed.chars().next().unwrap();
     if !(first.is_ascii_alphabetic() || first == '_') {
-        return Err(ParseError::UnsupportedIdentifier {
-            name: name.to_string(),
-            origin: origin.to_string(),
-            reason: format!("must start with ASCII letter or '_', got {:?}", first),
-        });
+        return Err(err(format!(
+            "must start with ASCII letter or '_', got {:?}",
+            first
+        )));
     }
-    for c in name.chars() {
+    for c in trimmed.chars() {
         if !(c.is_ascii_alphanumeric() || c == '_' || c == '\'' || c == '-') {
-            return Err(ParseError::UnsupportedIdentifier {
-                name: name.to_string(),
-                origin: origin.to_string(),
-                reason: format!("contains unsupported character {:?}", c),
-            });
+            return Err(err(format!("contains unsupported character {:?}", c)));
         }
     }
-    Ok(())
+    Ok(trimmed.to_string())
+}
+
+/// Read an event's name from its XML element. In real Rodin XML, `name` is
+/// an internal id (e.g. `'`) and `org.eventb.core.label` holds the
+/// human-readable name; fall back to `name` for hand-crafted files that
+/// lack `label`. Trimmed here (not just in `validate_identifier`) so the
+/// INITIALISATION check at the call sites sees the cleaned name.
+fn event_name_attr(e: &quick_xml::events::BytesStart) -> Result<String> {
+    let raw = get_xml_attr(e, b"label")?
+        .or(get_xml_attr(e, b"name")?)
+        .unwrap_or_default();
+    Ok(raw.trim().to_string())
 }
 
 /// Format a source label like "S1.bum" or "XML input" for error messages.
@@ -434,12 +449,16 @@ fn parse_context_xml_with_name(
                 match tag_name.as_str() {
                     "org.eventb.core.extendsContext" => {
                         let target = required_attr(&e, b"target")?;
-                        validate_identifier(&target, &format!("extends target in {}", origin))?;
+                        let target =
+                            validate_identifier(&target, &format!("extends target in {}", origin))?;
                         extends.push(target);
                     }
                     "org.eventb.core.carrierSet" => {
                         if let Some(set_name) = get_xml_attr(&e, b"identifier")? {
-                            validate_identifier(&set_name, &format!("carrier set in {}", origin))?;
+                            let set_name = validate_identifier(
+                                &set_name,
+                                &format!("carrier set in {}", origin),
+                            )?;
                             let comment = get_xml_attr(&e, b"comment")?;
                             sets.push(SetDeclaration::Deferred {
                                 name: set_name,
@@ -449,7 +468,10 @@ fn parse_context_xml_with_name(
                     }
                     "org.eventb.core.constant" => {
                         if let Some(const_name) = get_xml_attr(&e, b"identifier")? {
-                            validate_identifier(&const_name, &format!("constant in {}", origin))?;
+                            let const_name = validate_identifier(
+                                &const_name,
+                                &format!("constant in {}", origin),
+                            )?;
                             let comment = get_xml_attr(&e, b"comment")?;
                             constants.push(NamedElement::with_comment(const_name, comment));
                         }
@@ -476,7 +498,7 @@ fn parse_context_xml_with_name(
     if context_name.is_empty() {
         context_name = "unnamed_context".to_string();
     } else {
-        validate_identifier(&context_name, &format!("context name in {}", origin))?;
+        context_name = validate_identifier(&context_name, &format!("context name in {}", origin))?;
     }
 
     Ok(Context {
@@ -537,12 +559,7 @@ fn parse_machine_xml_with_name(
                     });
                     machine_comment = get_xml_attr(&e, b"org.eventb.core.comment")?;
                 } else if tag_name == "org.eventb.core.event" {
-                    // In real Rodin XML, `name` is an internal id (e.g. `'`)
-                    // and `org.eventb.core.label` holds the human-readable name.
-                    // Fall back to `name` for hand-crafted files that lack `label`.
-                    let event_name = get_xml_attr(&e, b"label")?
-                        .or(get_xml_attr(&e, b"name")?)
-                        .unwrap_or_default();
+                    let event_name = event_name_attr(&e)?;
                     let convergence = get_xml_attr(&e, b"convergence")?;
                     let event_comment = get_xml_attr(&e, b"comment")?;
                     let extended = get_xml_attr(&e, b"extended")?
@@ -572,17 +589,20 @@ fn parse_machine_xml_with_name(
                 match tag_name.as_str() {
                     "org.eventb.core.refinesMachine" => {
                         let target = required_attr(&e, b"target")?;
-                        validate_identifier(&target, &format!("refines target in {}", origin))?;
+                        let target =
+                            validate_identifier(&target, &format!("refines target in {}", origin))?;
                         refines = Some(target);
                     }
                     "org.eventb.core.seesContext" => {
                         let target = required_attr(&e, b"target")?;
-                        validate_identifier(&target, &format!("sees target in {}", origin))?;
+                        let target =
+                            validate_identifier(&target, &format!("sees target in {}", origin))?;
                         sees.push(target);
                     }
                     "org.eventb.core.variable" => {
                         if let Some(var_name) = get_xml_attr(&e, b"identifier")? {
-                            validate_identifier(&var_name, &format!("variable in {}", origin))?;
+                            let var_name =
+                                validate_identifier(&var_name, &format!("variable in {}", origin))?;
                             let comment = get_xml_attr(&e, b"comment")?;
                             variables.push(NamedElement::with_comment(var_name, comment));
                         }
@@ -612,9 +632,7 @@ fn parse_machine_xml_with_name(
                     // writes these as XmlEvent::Empty; the Start/End
                     // handler for `org.eventb.core.event` doesn't fire.
                     "org.eventb.core.event" => {
-                        let event_name = get_xml_attr(&e, b"label")?
-                            .or(get_xml_attr(&e, b"name")?)
-                            .unwrap_or_default();
+                        let event_name = event_name_attr(&e)?;
                         let convergence = get_xml_attr(&e, b"convergence")?;
                         let event_comment = get_xml_attr(&e, b"comment")?;
                         let extended = get_xml_attr(&e, b"extended")?
@@ -642,7 +660,10 @@ fn parse_machine_xml_with_name(
                                 witnesses: Vec::new(),
                             });
                         } else {
-                            validate_identifier(&event_name, &format!("event name in {}", origin))?;
+                            let event_name = validate_identifier(
+                                &event_name,
+                                &format!("event name in {}", origin),
+                            )?;
                             events.push(Event {
                                 name: event_name,
                                 status,
@@ -664,6 +685,10 @@ fn parse_machine_xml_with_name(
                         if let Some(ref mut event) = current_event
                             && let Some(target) = get_xml_attr(&e, b"target")?
                         {
+                            let target = validate_identifier(
+                                &target,
+                                &format!("refines target in event {:?} of {}", event.name, origin),
+                            )?;
                             event.refines = Some(target);
                         }
                     }
@@ -671,7 +696,7 @@ fn parse_machine_xml_with_name(
                         if let Some(ref mut event) = current_event
                             && let Some(param) = get_xml_attr(&e, b"identifier")?
                         {
-                            validate_identifier(
+                            let param = validate_identifier(
                                 &param,
                                 &format!("parameter in event {:?} of {}", event.name, origin),
                             )?;
@@ -728,7 +753,7 @@ fn parse_machine_xml_with_name(
                                 get_xml_attr(&e, b"expression")?.unwrap_or_default();
 
                             if !expression_str.is_empty() && !identifier.is_empty() {
-                                validate_identifier(
+                                let identifier = validate_identifier(
                                     &identifier,
                                     &format!(
                                         "withBinding identifier in event {:?} of {}",
@@ -817,12 +842,12 @@ fn parse_machine_xml_with_name(
                                 witnesses: event_builder.witnesses,
                             });
                         } else {
-                            validate_identifier(
+                            let event_name = validate_identifier(
                                 &event_builder.name,
                                 &format!("event name in {}", origin),
                             )?;
                             events.push(Event {
-                                name: event_builder.name,
+                                name: event_name,
                                 status,
                                 refines: event_builder.refines,
                                 parameters: event_builder.parameters,
@@ -850,7 +875,7 @@ fn parse_machine_xml_with_name(
     if machine_name.is_empty() {
         machine_name = "unnamed_machine".to_string();
     } else {
-        validate_identifier(&machine_name, &format!("machine name in {}", origin))?;
+        machine_name = validate_identifier(&machine_name, &format!("machine name in {}", origin))?;
     }
 
     Ok(Machine {
