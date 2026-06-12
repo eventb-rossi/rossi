@@ -145,6 +145,16 @@ pub enum Component {
     Machine(Machine),
 }
 
+impl Component {
+    /// The component's name, whichever kind it is.
+    pub fn name(&self) -> &str {
+        match self {
+            Component::Context(ctx) => &ctx.name,
+            Component::Machine(m) => &m.name,
+        }
+    }
+}
+
 /// Source location information for error reporting and LSP features
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

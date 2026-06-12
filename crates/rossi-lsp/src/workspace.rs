@@ -199,10 +199,7 @@ impl WorkspaceSymbolProvider {
         debug!(
             "Extracted {} symbols from {} ({})",
             symbols.len(),
-            match component {
-                Component::Context(c) => &c.name,
-                Component::Machine(m) => &m.name,
-            },
+            component.name(),
             uri
         );
 
