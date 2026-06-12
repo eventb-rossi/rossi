@@ -190,27 +190,21 @@ impl HoverProvider {
             })
             .unwrap_or_else(HoverContext::new);
 
-        // Get the word at cursor
-        let word = get_word_at_position(text, position)?;
+        // Get the token at cursor — an identifier or a whole (possibly
+        // multi-character) operator like `:=`.
+        let (word, range) = word_at_position(text, position)?;
 
         // Try different hover providers in order
-        if let Some(hover) = self.hover_keyword(&word) {
-            return Some(hover);
-        }
+        let mut hover = self
+            .hover_keyword(&word)
+            .or_else(|| self.hover_operator(&word))
+            .or_else(|| self.hover_identifier(&word, &hover_ctx))
+            .or_else(|| self.hover_builtin(&word))?;
 
-        if let Some(hover) = self.hover_operator(&word) {
-            return Some(hover);
-        }
-
-        if let Some(hover) = self.hover_identifier(&word, &hover_ctx) {
-            return Some(hover);
-        }
-
-        if let Some(hover) = self.hover_builtin(&word) {
-            return Some(hover);
-        }
-
-        None
+        // Report the token's span so the client highlights all of `:=`, not
+        // whatever its own word pattern guesses.
+        hover.range = Some(range);
+        Some(hover)
     }
 
     /// Get hover information for keywords
@@ -554,7 +548,7 @@ fn create_hover(title: &str, description: &str) -> Hover {
     }
 }
 
-use crate::identifier_utils::get_word_at_position;
+use crate::identifier_utils::word_at_position;
 
 /// Documentation entry: `(keys, title, markdown description)`.
 type DocEntry = (&'static [&'static str], &'static str, &'static str);
@@ -1043,7 +1037,31 @@ const BUILTIN_OPERATOR_DOCS: &[DocEntry] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp_types::{Position, Url};
+    use crate::lsp_types::{Position, Range, Url};
+
+    fn word_at(text: &str, position: Position) -> Option<String> {
+        word_at_position(text, position).map(|(word, _)| word)
+    }
+
+    fn hover_at(
+        provider: &HoverProvider,
+        source: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<Hover> {
+        provider.hover(
+            &HoverParams {
+                text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                    text_document: crate::lsp_types::TextDocumentIdentifier {
+                        uri: Url::parse("file:///test.eventb").unwrap(),
+                    },
+                    position: Position::new(line, character),
+                },
+                work_done_progress_params: Default::default(),
+            },
+            source,
+        )
+    }
 
     #[test]
     fn test_hover_provider_creation() {
@@ -1153,43 +1171,116 @@ mod tests {
     }
 
     #[test]
-    fn test_get_word_at_position() {
+    fn test_word_at_position() {
         let text = "CONTEXT test_context";
 
         // Position at 'C' (start of CONTEXT)
-        let word = get_word_at_position(text, Position::new(0, 0));
+        let word = word_at(text, Position::new(0, 0));
         assert_eq!(word, Some("CONTEXT".to_string()));
 
         // Position at 't' (in test_context)
-        let word = get_word_at_position(text, Position::new(0, 8));
+        let word = word_at(text, Position::new(0, 8));
         assert_eq!(word, Some("test_context".to_string()));
     }
 
     #[test]
-    fn test_get_word_at_position_unicode() {
+    fn test_word_at_position_unicode() {
         // Line with Unicode operators — previously panicked due to byte slicing
         let text = "    @inv1 count ∈ ℕ";
 
         // Hovering on 'count' (char index 10)
-        let word = get_word_at_position(text, Position::new(0, 10));
+        let word = word_at(text, Position::new(0, 10));
         assert_eq!(word, Some("count".to_string()));
 
         // Hovering on 'inv1' (char index 5)
-        let word = get_word_at_position(text, Position::new(0, 5));
+        let word = word_at(text, Position::new(0, 5));
         assert_eq!(word, Some("inv1".to_string()));
     }
 
     #[test]
-    fn test_get_word_at_position_unicode_operator() {
-        // Hovering on '∈' should return it as single char (operator fallback)
+    fn test_word_at_position_unicode_operator() {
+        // Hovering on '∈' should return it as a single-char operator
         let text = "    @inv1 count ∈ ℕ";
         // '∈' is at char index 16
-        let word = get_word_at_position(text, Position::new(0, 16));
+        let word = word_at(text, Position::new(0, 16));
         assert_eq!(word, Some("∈".to_string()));
 
         // 'ℕ' is at char index 18
-        let word = get_word_at_position(text, Position::new(0, 18));
+        let word = word_at(text, Position::new(0, 18));
         assert_eq!(word, Some("ℕ".to_string()));
+    }
+
+    #[test]
+    fn test_hover_multichar_operator_assignment() {
+        let provider = HoverProvider::new();
+        let source = "        count := count + 1";
+
+        // `:=` spans chars 14..16; either character yields the assignment docs.
+        for character in [14, 15] {
+            let hover = hover_at(&provider, source, 0, character).expect("hover on `:=`");
+            if let HoverContents::Markup(content) = &hover.contents {
+                assert!(
+                    content.value.contains("Assigns a specific value"),
+                    "expected assignment docs, got: {}",
+                    content.value
+                );
+            } else {
+                panic!("Expected markup content");
+            }
+            assert_eq!(
+                hover.range,
+                Some(Range::new(Position::new(0, 14), Position::new(0, 16))),
+            );
+        }
+    }
+
+    #[test]
+    fn test_hover_multichar_operator_unspaced() {
+        let provider = HoverProvider::new();
+        let source = "count:=count+1";
+
+        // `:=` glued to the identifier (chars 5..7) — the operator must win
+        // over the trailing edge of `count` (issue #34 for unspaced sources).
+        for character in [5, 6] {
+            let hover = hover_at(&provider, source, 0, character).expect("hover on `:=`");
+            if let HoverContents::Markup(content) = &hover.contents {
+                assert!(
+                    content.value.contains("Assigns a specific value"),
+                    "expected assignment docs, got: {}",
+                    content.value
+                );
+            } else {
+                panic!("Expected markup content");
+            }
+            assert_eq!(
+                hover.range,
+                Some(Range::new(Position::new(0, 5), Position::new(0, 7))),
+            );
+        }
+    }
+
+    #[test]
+    fn test_hover_multichar_operator_equivalence() {
+        let provider = HoverProvider::new();
+        let source = "    @inv1 a <=> b";
+
+        // `<=>` spans chars 12..15; the middle `=` must not hover as `<=`/`=>`.
+        for character in [12, 13, 14] {
+            let hover = hover_at(&provider, source, 0, character).expect("hover on `<=>`");
+            if let HoverContents::Markup(content) = &hover.contents {
+                assert!(
+                    content.value.contains("if and only if"),
+                    "expected equivalence docs, got: {}",
+                    content.value
+                );
+            } else {
+                panic!("Expected markup content");
+            }
+            assert_eq!(
+                hover.range,
+                Some(Range::new(Position::new(0, 12), Position::new(0, 15))),
+            );
+        }
     }
 
     #[test]

@@ -44,26 +44,49 @@ pub fn identifier_at_position(text: &str, position: Position) -> Option<(String,
     }
 }
 
-/// Return the word (identifier) that contains `position`.
+/// Return the token that contains `position`, together with its range.
 ///
-/// A word is a maximal run of identifier characters (alphanumeric plus `_`).
-/// If `position` is not inside a word, the single character at `position` is
-/// returned instead — callers doing identifier lookup will simply get no hit,
-/// but providers that dispatch on punctuation (e.g. hover on operators) can
-/// still use it.
+/// A cursor on an identifier character belongs to that identifier. Any other
+/// cursor targets the character under it: first as an operator from the
+/// canonical `rossi::operators` table (maximal munch, so multi-character
+/// operators like `:=` come back whole no matter which of their characters
+/// the cursor sits on), then as the trailing edge of the identifier ending
+/// just before the cursor, and finally as the bare character.
 ///
 /// Returns `None` when the line or character position is out of bounds.
-pub fn get_word_at_position(text: &str, position: Position) -> Option<String> {
-    if let Some((identifier, _)) = identifier_at_position(text, position) {
-        return Some(identifier);
+pub fn word_at_position(text: &str, position: Position) -> Option<(String, Range)> {
+    let line = text.lines().nth(position.line as usize)?;
+    let char_pos = position.character as usize;
+
+    // The operator must be tried before `identifier_at_position`'s
+    // trailing-edge rule, or an operator glued to an identifier would lose
+    // its first character to the word on its left (`count:=1`, cursor on `:`).
+    let on_identifier = line
+        .chars()
+        .nth(char_pos)
+        .is_some_and(text_utils::is_identifier_char);
+    if on_identifier {
+        return identifier_at_position(text, position);
     }
 
-    // Not on an identifier — fall back to the single character at `position`
-    // for callers that dispatch on punctuation (e.g. hover on operators).
-    let line = text.lines().nth(position.line as usize)?;
-    line.chars()
-        .nth(position.character as usize)
-        .map(|c| c.to_string())
+    let char_range = |start: usize, end: usize| {
+        Range::new(
+            Position::new(position.line, start as u32),
+            Position::new(position.line, end as u32),
+        )
+    };
+
+    if let Some((operator, range)) = rossi::operators::operator_at(line, char_pos) {
+        return Some((operator.to_string(), char_range(range.start, range.end)));
+    }
+
+    // Cursor just past a word (trailing edge) keeps resolving to that word.
+    if let Some(hit) = identifier_at_position(text, position) {
+        return Some(hit);
+    }
+
+    let ch = line.chars().nth(char_pos)?;
+    Some((ch.to_string(), char_range(char_pos, char_pos + 1)))
 }
 
 /// Convert an LSP [`Position`] to a byte offset into `text`.
@@ -189,56 +212,81 @@ mod tests {
         Position { line, character }
     }
 
+    fn word_at(text: &str, position: Position) -> Option<String> {
+        word_at_position(text, position).map(|(word, _)| word)
+    }
+
     #[test]
     fn word_in_middle_of_identifier() {
-        assert_eq!(
-            get_word_at_position("count := 0", pos(0, 2)).as_deref(),
-            Some("count")
-        );
+        assert_eq!(word_at("count := 0", pos(0, 2)).as_deref(), Some("count"));
     }
 
     #[test]
     fn word_at_start_of_identifier() {
-        assert_eq!(
-            get_word_at_position("count := 0", pos(0, 0)).as_deref(),
-            Some("count")
-        );
+        assert_eq!(word_at("count := 0", pos(0, 0)).as_deref(), Some("count"));
     }
 
     #[test]
-    fn single_char_fallback_on_operator() {
-        // cursor on `:` — not a word char
-        assert_eq!(
-            get_word_at_position("count := 0", pos(0, 6)).as_deref(),
-            Some(":"),
-        );
+    fn multichar_operator_at_position() {
+        // cursor on `:` or `=` of `:=` — the whole operator comes back
+        assert_eq!(word_at("count := 0", pos(0, 6)).as_deref(), Some(":="));
+        assert_eq!(word_at("count := 0", pos(0, 7)).as_deref(), Some(":="));
+    }
+
+    #[test]
+    fn unspaced_operator_beats_trailing_identifier() {
+        // `:=` glued to `count` — the cursor on `:` targets the operator, not
+        // the trailing edge of the identifier (issue #34 for unspaced sources).
+        assert_eq!(word_at("count:=1", pos(0, 5)).as_deref(), Some(":="));
+        assert_eq!(word_at("count:=1", pos(0, 6)).as_deref(), Some(":="));
+    }
+
+    #[test]
+    fn lone_colon_is_an_operator_token() {
+        // ASCII set membership; pins the single-char operator path.
+        assert_eq!(word_at("x : S", pos(0, 2)).as_deref(), Some(":"));
+    }
+
+    #[test]
+    fn trailing_edge_still_resolves_identifier() {
+        // Cursor on the space right after `count` — no operator there, so
+        // the trailing-edge rule keeps the identifier.
+        assert_eq!(word_at("count := 0", pos(0, 5)).as_deref(), Some("count"));
+    }
+
+    #[test]
+    fn operator_range_at_position() {
+        let (word, range) = word_at_position("count := 0", pos(0, 7)).unwrap();
+        assert_eq!(word, ":=");
+        assert_eq!(range, Range::new(pos(0, 6), pos(0, 8)));
+    }
+
+    #[test]
+    fn single_char_fallback_on_non_operator_punctuation() {
+        let (word, range) = word_at_position("f (x)", pos(0, 2)).unwrap();
+        assert_eq!(word, "(");
+        assert_eq!(range, Range::new(pos(0, 2), pos(0, 3)));
     }
 
     #[test]
     fn underscored_identifier() {
-        assert_eq!(
-            get_word_at_position("my_var := 0", pos(0, 3)).as_deref(),
-            Some("my_var")
-        );
+        assert_eq!(word_at("my_var := 0", pos(0, 3)).as_deref(), Some("my_var"));
     }
 
     #[test]
     fn out_of_bounds_line() {
-        assert!(get_word_at_position("x", pos(5, 0)).is_none());
+        assert!(word_at("x", pos(5, 0)).is_none());
     }
 
     #[test]
     fn out_of_bounds_char() {
-        assert!(get_word_at_position("x", pos(0, 99)).is_none());
+        assert!(word_at("x", pos(0, 99)).is_none());
     }
 
     #[test]
     fn multibyte_identifier() {
         // chars (not bytes) are counted
-        assert_eq!(
-            get_word_at_position("α_name := 0", pos(0, 3)).as_deref(),
-            Some("α_name")
-        );
+        assert_eq!(word_at("α_name := 0", pos(0, 3)).as_deref(), Some("α_name"));
     }
 
     #[test]

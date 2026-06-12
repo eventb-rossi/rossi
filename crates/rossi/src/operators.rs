@@ -5,6 +5,7 @@
 
 use crate::ast::expression::{BinaryOp, UnaryOp};
 use crate::ast::predicate::{ComparisonOp, LogicalOp, Quantifier};
+use crate::keywords::is_word_char;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OperatorCategory {
@@ -885,6 +886,49 @@ pub fn has_unicode_operators(text: &str) -> bool {
         .any(|entry| text.contains(entry.unicode))
 }
 
+/// Every spelling (the Unicode and ASCII form of each entry) paired with its
+/// character length, sorted by descending length so longer operators match
+/// before their prefixes and substrings (`:=` before `:` and `=`).
+static SPELLINGS_BY_LENGTH: std::sync::LazyLock<Vec<(&'static str, usize)>> =
+    std::sync::LazyLock::new(|| {
+        let mut entries: Vec<(&'static str, usize)> = OPERATOR_SPELLINGS
+            .iter()
+            .flat_map(|entry| [entry.unicode, entry.ascii])
+            .map(|text| (text, text.chars().count()))
+            .collect();
+        entries.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
+        entries
+    });
+
+/// Maximal munch at a cursor: the longest operator spelling whose occurrence in
+/// `line` contains the character at `char_pos`, together with its character
+/// range. The cursor may sit on any character of the operator, so hovering the
+/// `=` of `:=` still yields `:=`. Alphabetic spellings (`mod`, `NAT`, …) only
+/// match between identifier word boundaries, never inside words like `model`.
+pub fn operator_at(line: &str, char_pos: usize) -> Option<(&'static str, std::ops::Range<usize>)> {
+    let chars: Vec<char> = line.chars().collect();
+    if char_pos >= chars.len() {
+        return None;
+    }
+
+    for &(text, len) in SPELLINGS_BY_LENGTH.iter() {
+        for start in (char_pos + 1).saturating_sub(len)..=char_pos {
+            if start + len > chars.len()
+                || !chars[start..start + len].iter().copied().eq(text.chars())
+            {
+                continue;
+            }
+            let blocked = is_alphabetic_op(text)
+                && ((start > 0 && is_word_char(chars[start - 1]))
+                    || chars.get(start + len).copied().is_some_and(is_word_char));
+            if !blocked {
+                return Some((text, start..start + len));
+            }
+        }
+    }
+    None
+}
+
 pub fn binary_op_id(op: BinaryOp) -> OperatorId {
     match op {
         BinaryOp::Add => OperatorId::Add,
@@ -1045,6 +1089,50 @@ mod tests {
         assert!(!spelling(OperatorId::Dot).is_eager_input()); // bare "." (decimals)
         assert!(!spelling(OperatorId::Union).is_eager_input()); // "\/" contains the leader
         assert!(!spelling(OperatorId::Naturals).is_eager_input()); // alphabetic
+    }
+
+    #[test]
+    fn operator_at_returns_whole_multichar_operator() {
+        // Cursor on either character of `:=` yields the whole operator.
+        assert_eq!(operator_at("count := 0", 6), Some((":=", 6..8)));
+        assert_eq!(operator_at("count := 0", 7), Some((":=", 6..8)));
+        assert_eq!(operator_at("x :: S", 2), Some(("::", 2..4)));
+        assert_eq!(operator_at("x :| P", 3), Some((":|", 2..4)));
+        assert_eq!(operator_at("x :∈ S", 3), Some((":∈", 2..4)));
+    }
+
+    #[test]
+    fn operator_at_prefers_longest_match() {
+        // The middle of `<=>` also matches `<=` and `=>`; maximal munch wins.
+        for pos in 2..5 {
+            assert_eq!(operator_at("a <=> b", pos), Some(("<=>", 2..5)));
+        }
+        assert_eq!(operator_at("x /= y", 2), Some(("/=", 2..4)));
+    }
+
+    #[test]
+    fn operator_at_single_char_operators() {
+        assert_eq!(operator_at("a = b", 2), Some(("=", 2..3)));
+        assert_eq!(operator_at("a ∈ S", 2), Some(("∈", 2..3)));
+        assert_eq!(operator_at("x ≔ 1", 2), Some(("≔", 2..3)));
+    }
+
+    #[test]
+    fn operator_at_alphabetic_needs_word_boundaries() {
+        assert_eq!(operator_at("a mod b", 3), Some(("mod", 2..5)));
+        assert_eq!(operator_at("model", 2), None);
+        // `'` continues an identifier (primed variables), so no `mod` here.
+        assert_eq!(operator_at("a mod' b", 3), None);
+    }
+
+    #[test]
+    fn operator_at_misses() {
+        // Identifier characters and plain punctuation are not operators.
+        assert_eq!(operator_at("abc", 1), None);
+        assert_eq!(operator_at("f(x)", 1), None);
+        // Out of bounds.
+        assert_eq!(operator_at("a = b", 99), None);
+        assert_eq!(operator_at("", 0), None);
     }
 
     /// Extract and un-escape every `"…"` literal on a line, handling the pest

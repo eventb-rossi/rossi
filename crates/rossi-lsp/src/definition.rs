@@ -106,8 +106,9 @@ impl DefinitionProvider {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        // Get the word at cursor
-        let word = get_word_at_position(text, position)?;
+        // Definitions are only ever named by identifiers, so resolve the
+        // cursor straight to one (operators and punctuation have none).
+        let (word, _) = identifier_at_position(text, position)?;
 
         // Stage 1: Check if this is a cross-file reference (SEES, REFINES, EXTENDS clause name)
         if let Some(cross_ref_location) = self.find_cross_file_reference(text, position, &word) {
@@ -367,7 +368,7 @@ impl Default for DefinitionProvider {
 
 // Helper functions
 
-use crate::identifier_utils::get_word_at_position;
+use crate::identifier_utils::identifier_at_position;
 
 /// Find the first occurrence of `needle` (as chars) in `haystack` starting at `from`.
 /// Returns the char index of the match, or `None`.
@@ -733,31 +734,31 @@ mod tests {
     }
 
     #[test]
-    fn test_get_word_at_position() {
+    fn test_identifier_at_position() {
         let text = "MACHINE test_machine";
 
         // At 't' in test_machine
-        let word = get_word_at_position(text, Position::new(0, 8));
+        let word = identifier_at_position(text, Position::new(0, 8)).map(|(word, _)| word);
         assert_eq!(word, Some("test_machine".to_string()));
 
         // At 'M' in MACHINE
-        let word = get_word_at_position(text, Position::new(0, 0));
+        let word = identifier_at_position(text, Position::new(0, 0)).map(|(word, _)| word);
         assert_eq!(word, Some("MACHINE".to_string()));
     }
 
     #[test]
-    fn test_get_word_at_position_unicode() {
+    fn test_identifier_at_position_unicode() {
         // Line with Unicode operators before the target word
         let text = "    @inv1 count ∈ ℕ";
         //  chars: 0123456789...
         //  '∈' is at char index 16, 'ℕ' is at char index 18
 
         // Hovering on 'count' (char index 10)
-        let word = get_word_at_position(text, Position::new(0, 10));
+        let word = identifier_at_position(text, Position::new(0, 10)).map(|(word, _)| word);
         assert_eq!(word, Some("count".to_string()));
 
         // Hovering on 'inv1' (char index 5)
-        let word = get_word_at_position(text, Position::new(0, 5));
+        let word = identifier_at_position(text, Position::new(0, 5)).map(|(word, _)| word);
         assert_eq!(word, Some("inv1".to_string()));
     }
 
