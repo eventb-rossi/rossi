@@ -192,6 +192,17 @@ impl CompletionProvider {
             return None;
         }
 
+        // No completions inside a comment — it's prose, not Event-B.
+        let lexical = rossi::comments::lexical_spans(text);
+        if let Some(offset) = position_to_offset(text, position)
+            && rossi::comments::span_containing(&lexical.comments, offset).is_some()
+        {
+            return None;
+        }
+        // Structural context detection scans the comment-masked line, so an
+        // `EVENT` mentioned in a trailing comment cannot change the scope.
+        let masked = lexical.mask_comments_chars(text);
+
         // Get completion context from the cached component under the cursor
         let completion_ctx = self
             .component_cache
@@ -212,7 +223,7 @@ impl CompletionProvider {
         let mut items = Vec::new();
 
         // Analyze the text to determine context
-        let line_text = get_line_text(text, position);
+        let line_text = get_line_text(&masked, position);
         let word_at_cursor = get_word_at_position(&line_text, position.character as usize);
 
         // Add keyword completions
@@ -611,7 +622,10 @@ fn get_line_text(text: &str, position: Position) -> String {
 }
 
 fn get_word_at_position(line: &str, char_pos: usize) -> String {
-    let before_cursor = &line[..char_pos.min(line.len())];
+    // `char_pos` is a character column, not a byte offset — slice by chars so a
+    // multi-byte operator (e.g. `∈`, `≤`) before the cursor can't land mid-char
+    // and panic.
+    let before_cursor: String = line.chars().take(char_pos).collect();
     before_cursor
         .split_whitespace()
         .last()
@@ -622,8 +636,9 @@ fn get_word_at_position(line: &str, char_pos: usize) -> String {
 // Context detection functions
 
 fn is_top_level_context(line_text: &str) -> bool {
-    let trimmed = line_text.trim();
-    trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*")
+    // Callers pass comment-masked lines, so a comment-only line is blank
+    // here (and a cursor inside a comment never reaches completion at all).
+    line_text.trim().is_empty()
 }
 
 fn is_inside_context(_line_text: &str) -> bool {
@@ -683,6 +698,25 @@ mod tests {
         // Should include top-level keywords
         assert!(items.iter().any(|item| item.label == "CONTEXT"));
         assert!(items.iter().any(|item| item.label == "MACHINE"));
+    }
+
+    #[test]
+    fn test_no_completions_inside_comment() {
+        let provider = CompletionProvider::new();
+        let text = "MACHINE m // type EVENT here\nEND\n";
+        let params = CompletionParams {
+            text_document_position: crate::lsp_types::TextDocumentPositionParams {
+                text_document: crate::lsp_types::TextDocumentIdentifier {
+                    uri: crate::lsp_types::Url::parse("file:///test.eventb").unwrap(),
+                },
+                position: Position::new(0, 20), // inside the comment
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        assert!(provider.complete(&params, text).is_none());
     }
 
     #[test]

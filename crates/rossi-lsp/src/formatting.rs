@@ -244,6 +244,18 @@ mod tests {
     }
 
     #[test]
+    fn test_format_preserves_comments() {
+        // Issue #31: Format Document must not destroy documentation.
+        let provider = FormattingProvider::new();
+
+        let source = "CONTEXT c\n// important: do not change\nAXIOMS\n    @axm1 1 = 1 // why: invariant base\nEND\n";
+        let formatted = provider.format(source).unwrap()[0].new_text.clone();
+
+        assert!(formatted.contains("// important: do not change"));
+        assert!(formatted.contains("// why: invariant base"));
+    }
+
+    #[test]
     fn test_config_update() {
         let provider = FormattingProvider::new();
 

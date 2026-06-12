@@ -36,16 +36,23 @@ impl FoldingRangeProvider {
     /// Detect all folding ranges in the document
     fn detect_folding_ranges(&self, text: &str) -> Vec<FoldingRange> {
         let mut ranges = Vec::new();
+
+        // Keyword detection runs on comment-masked lines so `END` or `EVENT`
+        // spelled inside a `//` or `/* */` comment never opens or closes a
+        // fold. The original lines ride along for the one check that must
+        // see comments: a comment-only line is content, not a blank line.
+        let masked = rossi::comments::mask_comments_chars(text);
+        let masked_lines: Vec<&str> = masked.lines().collect();
         let lines: Vec<&str> = text.lines().collect();
 
         // Detect component blocks (CONTEXT...END, MACHINE...END)
-        ranges.extend(self.detect_component_blocks(&lines));
+        ranges.extend(self.detect_component_blocks(&masked_lines));
 
         // Detect event blocks
-        ranges.extend(self.detect_event_blocks(&lines));
+        ranges.extend(self.detect_event_blocks(&masked_lines));
 
         // Detect clause sections
-        ranges.extend(self.detect_clause_sections(&lines));
+        ranges.extend(self.detect_clause_sections(&masked_lines, &lines));
 
         ranges
     }
@@ -126,25 +133,34 @@ impl FoldingRangeProvider {
     }
 
     /// Detect clause sections (SETS, CONSTANTS, VARIABLES, etc.)
-    fn detect_clause_sections(&self, lines: &[&str]) -> Vec<FoldingRange> {
+    fn detect_clause_sections(&self, masked_lines: &[&str], lines: &[&str]) -> Vec<FoldingRange> {
         let mut ranges = Vec::new();
 
         // Context and machine clause keywords, from the single source of truth.
         for clause in keywords::iter_group(KeywordGroup::ContextClause)
             .chain(keywords::iter_group(KeywordGroup::MachineClause))
         {
-            ranges.extend(self.detect_single_clause_section(lines, clause.text()));
+            ranges.extend(self.detect_single_clause_section(masked_lines, lines, clause.text()));
         }
 
         ranges
     }
 
-    /// Detect a single clause section
-    fn detect_single_clause_section(&self, lines: &[&str], clause_name: &str) -> Vec<FoldingRange> {
+    /// Detect a single clause section.
+    ///
+    /// Keyword checks use `masked_lines`; the blank-line terminator checks
+    /// the original `lines`, because a comment-only line masks to blank but
+    /// is clause content (Camille-style block comments sit inside clauses).
+    fn detect_single_clause_section(
+        &self,
+        masked_lines: &[&str],
+        lines: &[&str],
+        clause_name: &str,
+    ) -> Vec<FoldingRange> {
         let mut ranges = Vec::new();
         let mut clause_start: Option<usize> = None;
 
-        for (idx, line) in lines.iter().enumerate() {
+        for (idx, line) in masked_lines.iter().enumerate() {
             let trimmed = line.trim();
 
             // Check if this line is the clause keyword
@@ -156,7 +172,7 @@ impl FoldingRangeProvider {
             // If we're in a clause, check if we've reached the end
             if let Some(start) = clause_start {
                 // Check if this line starts a new clause or is END
-                let is_end_of_clause = trimmed.is_empty()
+                let is_end_of_clause = lines[idx].trim().is_empty()
                     || trimmed == "END"
                     || trimmed.starts_with("CONTEXT")
                     || trimmed.starts_with("MACHINE")

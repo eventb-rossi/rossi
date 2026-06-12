@@ -304,11 +304,12 @@ impl WordBoundary {
 /// Find every whole-word occurrence of `identifier` in `text`, skipping comments,
 /// and return them as LSP `Location`s in `uri`.
 ///
-/// Matching is comment-aware (via `text_utils::CommentTracker`) and respects
-/// identifier word boundaries under the given [`WordBoundary`] rule. When
+/// Matching is comment-aware: the text is masked through
+/// [`rossi::comments::mask_comments_chars`] (one space per comment char, so
+/// char columns are unchanged) and only the masked code is searched. Word
+/// boundaries follow the given [`WordBoundary`] rule on both sides. When
 /// `line_range` is `Some((start, end))`, only lines in that inclusive range
-/// contribute matches (the tracker still advances over skipped lines so
-/// block-comment state stays correct).
+/// contribute matches.
 pub fn find_whole_word_locations(
     text: &str,
     identifier: &str,
@@ -322,38 +323,34 @@ pub fn find_whole_word_locations(
     };
     let mut locations = Vec::new();
     let id_chars: Vec<char> = identifier.chars().collect();
-    let mut tracker = text_utils::CommentTracker::new();
+    if id_chars.is_empty() {
+        return locations;
+    }
+    let masked = rossi::comments::mask_comments_chars(text);
 
-    for (line_idx, line) in text.lines().enumerate() {
-        let chars: Vec<char> = line.chars().collect();
-        let code_spans = tracker.code_spans(&chars);
-
+    for (line_idx, line) in masked.lines().enumerate() {
         if let Some((start_line, end_line)) = line_range
             && (line_idx < start_line || line_idx > end_line)
         {
             continue;
         }
 
-        for span in &code_spans {
-            let mut col = span.start;
-            while col + id_chars.len() <= span.end {
-                let matches = chars[col..col + id_chars.len()] == id_chars;
-                if matches {
-                    let before_ok = col == 0 || !boundary_char(chars[col - 1]);
-                    let after_ok = col + id_chars.len() >= chars.len()
-                        || !boundary_char(chars[col + id_chars.len()]);
-
-                    if before_ok && after_ok {
-                        locations.push(Location::new(
-                            uri.clone(),
-                            Range::new(
-                                Position::new(line_idx as u32, col as u32),
-                                Position::new(line_idx as u32, (col + id_chars.len()) as u32),
-                            ),
-                        ));
-                    }
-                }
-                col += 1;
+        let chars: Vec<char> = line.chars().collect();
+        for col in 0..chars.len().saturating_sub(id_chars.len() - 1) {
+            if chars[col..col + id_chars.len()] != id_chars {
+                continue;
+            }
+            let before_ok = col == 0 || !boundary_char(chars[col - 1]);
+            let after_ok =
+                col + id_chars.len() >= chars.len() || !boundary_char(chars[col + id_chars.len()]);
+            if before_ok && after_ok {
+                locations.push(Location::new(
+                    uri.clone(),
+                    Range::new(
+                        Position::new(line_idx as u32, col as u32),
+                        Position::new(line_idx as u32, (col + id_chars.len()) as u32),
+                    ),
+                ));
             }
         }
     }
