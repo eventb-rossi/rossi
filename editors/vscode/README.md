@@ -36,6 +36,28 @@ This extension provides comprehensive language support for Event-B formal modeli
 - Keyboard shortcuts:
   - Format Document: `Shift+Alt+F` (Windows/Linux) or `Shift+Option+F` (Mac)
 
+### 📋 Code Snippets
+
+Type a prefix and press Tab:
+
+| Prefix | Description |
+|--------|-------------|
+| `ctx` | Context template |
+| `mch` | Machine template |
+| `evt` | Event with guards and actions |
+| `init` | Initialisation event |
+| `refines` | Event refining an abstract event |
+| `axm` | Labeled axiom |
+| `inv` | Labeled invariant |
+| `grd` | Labeled guard |
+| `act` | Labeled deterministic assignment |
+| `actnd` | Labeled non-deterministic assignment (`:∈`) |
+| `actst` | Labeled assignment with predicate (`:|`) |
+| `forall` | Universal quantification |
+| `exists` | Existential quantification |
+| `lambda` | Lambda abstraction |
+| `setcomp` | Set comprehension |
+
 ### ⌨️ Symbol Input (type ASCII, get Unicode)
 - Convert ASCII to Unicode math symbols **as you type** — no special keyboard needed
 - **Eager combos** convert on the fly: `=>` → ⇒, `<=>` → ⇔, `&` → ∧, `|->` → ↦, `:=` → ≔, `<:` → ⊆
@@ -63,10 +85,11 @@ From the project root:
 
 ```bash
 cargo build --release --bin rossi-language-server --bin rossi
-# Binaries available at: target/release/rossi-language-server and target/release/rossi
 ```
 
-Add both binaries to your PATH or specify their full paths in settings.
+Add both binaries (in `target/release/`) to your PATH or specify their full
+paths in settings. See [INSTALL.md](INSTALL.md) for step-by-step installation,
+verification, and troubleshooting.
 
 ## Extension Settings
 
