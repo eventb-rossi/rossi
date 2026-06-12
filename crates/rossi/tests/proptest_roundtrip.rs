@@ -393,13 +393,11 @@ fn arb_builtin_predicate_application() -> impl Strategy<Value = Predicate> {
 // Action strategy
 // =============================================================================
 
-/// Expression strategy excluding semicolon operator (safe for action RHS).
-/// Semicolons in action context are action separators, not forward composition.
+/// Expression strategy for action RHS. Forward composition `;` is included:
+/// the printer parenthesizes any action sub-part containing a top-level `;`,
+/// so it round-trips through the text format's `;`-free action grammar.
 fn arb_action_expression() -> impl Strategy<Value = Expression> {
-    let no_semi = arb_binary_op()
-        .prop_filter("exclude semicolon", |op| *op != BinaryOp::Semicolon)
-        .boxed();
-    arb_expression_with(no_semi, 3, 32)
+    arb_expression_with(arb_binary_op().boxed(), 3, 32)
 }
 
 /// Predicate strategy for action RHS (BecomesSuchThat) — uses action expressions.
@@ -827,6 +825,20 @@ proptest! {
     fn action_roundtrip_ascii((action, vars) in arb_action()) {
         let component = wrap_action_in_machine(&action, &vars);
         assert_component_roundtrip(&component, &PrettyPrinter::ascii());
+    }
+
+    // Standalone-action roundtrip: guards the `action ⊆ standalone_action`
+    // superset property (a new action form added to the text grammar but
+    // forgotten in `standalone_action` would fail here, not first in a
+    // Rodin-import regression) and gives parse_action_str + the printer's
+    // `;`-guard generative coverage.
+    #[test]
+    fn action_roundtrip_standalone((action, _vars) in arb_action()) {
+        let printed = PrettyPrinter::new().print_action(&action);
+        let reparsed = rossi::parse_action_str(&printed).unwrap_or_else(|e| {
+            panic!("Failed to parse printed action:\n{e}\n\nPrinted:\n{printed}\n\nOriginal AST:\n{action:#?}")
+        });
+        prop_assert_eq!(&action, &reparsed, "standalone roundtrip mismatch.\nPrinted:\n{}", printed);
     }
 }
 

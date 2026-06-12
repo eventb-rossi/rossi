@@ -1,6 +1,7 @@
 //! Integration tests for XML parsing (native Event-B format)
 
-use rossi::{Component, parse_xml};
+use rossi::ast::expression::BinaryOp;
+use rossi::{Action, Component, Expression, parse_xml};
 
 #[test]
 fn test_parse_context_xml_from_file() {
@@ -176,6 +177,42 @@ fn test_parse_event_with_parameters_xml() {
         assert_eq!(m.events[0].parameters[0].name, "v");
         assert_eq!(m.events[0].guards.len(), 1);
         assert_eq!(m.events[0].actions.len(), 1);
+    } else {
+        panic!("Expected Machine component");
+    }
+}
+
+#[test]
+fn test_parse_action_with_forward_composition_xml() {
+    // Rodin stores one action per attribute, where a bare semicolon is
+    // forward composition (no parentheses required, unlike the text format).
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.variable identifier="g"/>
+    <org.eventb.core.event name="compose">
+        <org.eventb.core.action label="act1" assignment="g ≔ p;f"/>
+        <org.eventb.core.action label="act2" assignment="next ≔ r∼;(({0} ⩤ f) ∪ {m − 1 ↦ m});r"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let result = parse_xml(xml);
+    assert!(result.is_ok(), "Parse error: {:?}", result.err());
+
+    if let Component::Machine(m) = result.unwrap() {
+        let actions = &m.events[0].actions;
+        assert_eq!(actions.len(), 2);
+        for labeled in actions {
+            let Action::Assignment { expressions, .. } = &labeled.action else {
+                panic!("Expected Assignment, got {:?}", labeled.action);
+            };
+            assert!(matches!(
+                &expressions[0],
+                Expression::Binary {
+                    op: BinaryOp::Semicolon,
+                    ..
+                }
+            ));
+        }
     } else {
         panic!("Expected Machine component");
     }

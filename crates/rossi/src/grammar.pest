@@ -183,7 +183,6 @@ op_becomes_such = { ":∣" | ":|" }
 dot = { "." | "·" }
 comma = { "," }
 colon = { ":" }
-semicolon = { ";" }
 lparen = { "(" }
 rparen = { ")" }
 lbrace = { "{" }
@@ -495,6 +494,20 @@ action = {
   | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate_no_semi   // Non-deterministic assignment (becomes such that)
 }
 
+// Standalone action: the same alternatives as `action`, but with the full
+// (semicolon-including) expression/predicate rules. Used for single-action
+// strings (e.g. Rodin XML assignment attributes), where there is no
+// following action for a bare ";" (forward composition) to swallow. The
+// `action` rule above keeps its _no_semi variants because actions in a
+// THEN block are juxtaposed.
+standalone_action = {
+    kw_skip                                                                      // Skip (no-op)
+  | identifier ~ lparen ~ expression ~ (comma ~ expression)* ~ rparen ~ op_becomes_equal ~ expression  // Function override: f(x) ≔ E
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ expression ~ (comma ~ expression)*  // Deterministic (parallel) assignment
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ expression            // Non-deterministic assignment (becomes member of)
+  | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate           // Non-deterministic assignment (becomes such that)
+}
+
 labeled_action = {
     label? ~ action
 }
@@ -665,7 +678,7 @@ machine = {
 // standalone expressions, predicates, or actions from XML attributes.
 expression_complete = _{ SOI ~ expression ~ EOI }
 predicate_complete = _{ SOI ~ predicate ~ EOI }
-action_complete = _{ SOI ~ action ~ EOI }
+action_complete = _{ SOI ~ standalone_action ~ EOI }
 labeled_predicate_complete = _{ SOI ~ labeled_predicate ~ EOI }
 
 // ==========================

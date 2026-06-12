@@ -268,6 +268,89 @@ fn test_forward_composition_parenthesized_in_action() {
     }
 }
 
+#[test]
+fn test_standalone_action_forward_composition_unparenthesized() {
+    // A standalone action string (one action, as in a Rodin XML assignment
+    // attribute) has no following action to separate, so a bare semicolon
+    // is forward composition.
+    let action = rossi::parse_action_str("x ≔ f;g").expect("standalone action parses");
+    let Action::Assignment {
+        variables,
+        expressions,
+    } = &action
+    else {
+        panic!("Expected Assignment, got {:?}", action);
+    };
+    assert_eq!(variables, &["x"]);
+    assert_eq!(expressions.len(), 1);
+    let Expression::Binary { op, left, right } = &expressions[0] else {
+        panic!("Expected Binary, got {:?}", expressions[0]);
+    };
+    assert_eq!(*op, BinaryOp::Semicolon);
+    assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "f"));
+    assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "g"));
+}
+
+#[test]
+fn test_standalone_action_chained_composition_with_inverse() {
+    // Left-associative chain mixing inverse and a parenthesized set
+    // expression: h∼;(s ∪ t);h parses as (h∼;(s ∪ t));h.
+    let action = rossi::parse_action_str("x ≔ h∼;(s ∪ t);h").expect("standalone action parses");
+    let Action::Assignment { expressions, .. } = &action else {
+        panic!("Expected Assignment, got {:?}", action);
+    };
+    let Expression::Binary { op, left, right } = &expressions[0] else {
+        panic!("Expected Binary, got {:?}", expressions[0]);
+    };
+    assert_eq!(*op, BinaryOp::Semicolon);
+    assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "h"));
+    let Expression::Binary { op, left, .. } = left.as_ref() else {
+        panic!("Expected nested Binary, got {:?}", left);
+    };
+    assert_eq!(*op, BinaryOp::Semicolon);
+    assert!(matches!(
+        left.as_ref(),
+        Expression::Unary {
+            op: UnaryOp::Inverse,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_printed_composition_after_string_literal_reparses_in_machine() {
+    // The printer guards a bare `;` in an action by parenthesizing; the scan
+    // must not be thrown off by delimiter characters inside string literals
+    // (here an unbalanced `(`), or the printed machine text fails to parse.
+    let action = rossi::parse_action_str(r#"x ≔ "(" ; g"#).expect("standalone action parses");
+    let printed = rossi::PrettyPrinter::new().print_action(&action);
+    let source = format!(
+        "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        {printed}\n    END\nEND\n"
+    );
+    let m = common::parse_machine(&source);
+    let init = m.initialisation.as_ref().unwrap();
+    assert_eq!(init.actions.len(), 1);
+    assert_eq!(init.actions[0].action, action);
+}
+
+#[test]
+fn test_standalone_becomes_such_that_with_composition() {
+    let action = rossi::parse_action_str("x :∣ x' = f;g").expect("standalone action parses");
+    let Action::BecomesSuchThat { predicate, .. } = &action else {
+        panic!("Expected BecomesSuchThat, got {:?}", action);
+    };
+    let Predicate::Comparison { right, .. } = predicate else {
+        panic!("Expected Comparison, got {:?}", predicate);
+    };
+    assert!(matches!(
+        right,
+        Expression::Binary {
+            op: BinaryOp::Semicolon,
+            ..
+        }
+    ));
+}
+
 // ============================================================================
 // HIGH priority: EventStatus::Anticipated
 // ============================================================================

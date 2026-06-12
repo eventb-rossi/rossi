@@ -982,6 +982,55 @@ impl PrettyPrinter {
         self.op(operators::logical_op_id(op))
     }
 
+    /// True if `s` contains a `;` outside all (), [], {} delimiters and
+    /// string literals — i.e. a top-level forward composition (the printer
+    /// emits `;` for nothing else).
+    fn has_bare_semicolon(s: &str) -> bool {
+        let mut depth = 0usize;
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                // Skip string-literal content: a stray delimiter or `;`
+                // inside it must not affect the scan. The printer escapes
+                // only `\` and `"` (see Expression::StringLiteral).
+                '"' => {
+                    while let Some(c) = chars.next() {
+                        match c {
+                            '\\' => {
+                                chars.next();
+                            }
+                            '"' => break,
+                            _ => {}
+                        }
+                    }
+                }
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ';' if depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Wrap `s` in parentheses iff it has a bare `;`, so the text-format
+    /// `action` rule (whose `_no_semi` expression variants reserve `;` for
+    /// action boundaries) can re-parse printed actions. Parentheses are
+    /// precedence-derived, not AST nodes, so the round-tripped AST is
+    /// identical.
+    fn guard_action_part(s: String) -> String {
+        if Self::has_bare_semicolon(&s) {
+            format!("({})", s)
+        } else {
+            s
+        }
+    }
+
+    /// Print an expression in an action position, guarding bare `;`.
+    fn print_action_expr(&self, expr: &Expression) -> String {
+        Self::guard_action_part(self.print_expression(expr))
+    }
+
     /// Convert an Action to text
     pub fn print_action(&self, action: &Action) -> String {
         let assign = self.op(OperatorId::Assignment);
@@ -994,14 +1043,14 @@ impl PrettyPrinter {
                 let vars = variables.join(", ");
                 let exprs: Vec<String> = expressions
                     .iter()
-                    .map(|e| self.print_expression(e))
+                    .map(|e| self.print_action_expr(e))
                     .collect();
                 format!("{} {} {}", vars, assign, exprs.join(", "))
             }
             Action::BecomesIn { variables, set } => {
                 let vars = variables.join(", ");
                 let op = self.op(OperatorId::BecomesIn);
-                format!("{} {} {}", vars, op, self.print_expression(set))
+                format!("{} {} {}", vars, op, self.print_action_expr(set))
             }
             Action::BecomesSuchThat {
                 variables,
@@ -1009,21 +1058,28 @@ impl PrettyPrinter {
             } => {
                 let vars = variables.join(", ");
                 let op = self.op(OperatorId::BecomesSuchThat);
-                format!("{} {} {}", vars, op, self.print_predicate(predicate))
+                format!(
+                    "{} {} {}",
+                    vars,
+                    op,
+                    Self::guard_action_part(self.print_predicate(predicate))
+                )
             }
             Action::FunctionOverride {
                 function,
                 arguments,
                 expression,
             } => {
-                let args: Vec<String> =
-                    arguments.iter().map(|e| self.print_expression(e)).collect();
+                let args: Vec<String> = arguments
+                    .iter()
+                    .map(|e| self.print_action_expr(e))
+                    .collect();
                 format!(
                     "{}({}) {} {}",
                     function,
                     args.join(", "),
                     assign,
-                    self.print_expression(expression)
+                    self.print_action_expr(expression)
                 )
             }
         }

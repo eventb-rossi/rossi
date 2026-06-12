@@ -1932,7 +1932,11 @@ pub fn parse_expression_str(input: &str) -> Result<Expression, ParseError> {
 
 /// Parse an action from a string (used by XML parser)
 ///
-/// Uses `action_complete` (with SOI/EOI) to ensure the entire input is consumed.
+/// Uses `action_complete` (with SOI/EOI) to ensure the entire input is
+/// consumed. The input holds exactly one action, so unlike actions in a
+/// THEN block it is parsed with the full expression grammar
+/// (`standalone_action`): a bare `;` is forward composition, not an
+/// action boundary.
 pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
     let depth = nesting::check_nesting(input)?;
     with_parser_stack(depth, || {
