@@ -2444,6 +2444,11 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
             line: line + line_delta,
             column,
         },
+        ParseError::ReservedWord { word, line, column } => ParseError::ReservedWord {
+            word,
+            line: line + line_delta,
+            column,
+        },
         ParseError::ClauseError {
             clause_type,
             line,

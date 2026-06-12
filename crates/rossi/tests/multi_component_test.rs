@@ -124,7 +124,8 @@ fn error_line(error: &ParseError) -> Option<usize> {
         ParseError::PestError { line, .. }
         | ParseError::NestingTooDeep { line, .. }
         | ParseError::ClauseError { line, .. }
-        | ParseError::RecoverableError { line, .. } => Some(*line),
+        | ParseError::RecoverableError { line, .. }
+        | ParseError::ReservedWord { line, .. } => Some(*line),
         _ => None,
     }
 }
@@ -191,6 +192,34 @@ fn recovery_middle_component_broken() {
     let m2_span = components[2].span().expect("strict span");
     assert!(source[m2_span.start..].starts_with("MACHINE M2"));
     assert!(m1_span.end <= m2_span.start, "regions must not overlap");
+}
+
+#[test]
+fn recovery_shifts_reserved_word_errors_to_absolute_lines() {
+    // The ReservedWord error from a later component's region must be
+    // reported at its file-absolute line, like every other located error.
+    let source = indoc! {"
+        CONTEXT C0
+        END
+
+        MACHINE M1
+        VARIABLES
+            dom
+        INVARIANTS
+            @inv1 1 = 1
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    assert!(result.has_recovered());
+
+    let reserved: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e, ParseError::ReservedWord { word, .. } if word == "dom"))
+        .collect();
+    assert_eq!(reserved.len(), 1, "errors: {:?}", result.errors);
+    // `dom` is declared on (1-indexed) line 6 of the full input.
+    assert_eq!(error_line(reserved[0]), Some(6));
 }
 
 #[test]
