@@ -75,6 +75,8 @@ impl PartialEq<str> for TypedIdentifier {
 pub struct NamedElement {
     pub name: String,
     pub comment: Option<String>,
+    /// Source location of the identifier (textual parse only)
+    pub span: Option<Span>,
 }
 
 impl NamedElement {
@@ -83,12 +85,17 @@ impl NamedElement {
         Self {
             name,
             comment: None,
+            span: None,
         }
     }
 
     /// Create a new named element with a comment
     pub fn with_comment(name: String, comment: Option<String>) -> Self {
-        Self { name, comment }
+        Self {
+            name,
+            comment,
+            span: None,
+        }
     }
 }
 

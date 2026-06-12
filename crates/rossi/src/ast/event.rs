@@ -91,4 +91,6 @@ pub struct InitialisationEvent {
     pub with: Vec<LabeledPredicate>,
     /// WITNESS clause — labeled predicates witnessing abstract parameters
     pub witnesses: Vec<LabeledPredicate>,
+    /// Source location of the whole INITIALISATION event (textual parse only)
+    pub span: Option<Span>,
 }

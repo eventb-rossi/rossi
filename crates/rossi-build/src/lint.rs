@@ -594,6 +594,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -652,6 +653,7 @@ mod tests {
         c.sets = vec![rossi::SetDeclaration::Deferred {
             name: "Nat".into(),
             comment: None,
+            span: None,
         }];
         c.axioms = vec![lp("ax1", eq_pred(ident("price"), Expression::Integer(0)))];
 
@@ -708,6 +710,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -732,6 +735,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -759,6 +763,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -850,6 +855,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
         let mut m2 = Machine::new("M2".into());
         m2.refines = Some("M1".into());
@@ -1000,6 +1006,7 @@ mod tests {
             extended: false,
             with: Vec::new(),
             witnesses: Vec::new(),
+            span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));

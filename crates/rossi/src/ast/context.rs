@@ -13,12 +13,16 @@ pub enum SetDeclaration {
     Deferred {
         name: String,
         comment: Option<String>,
+        /// Source location of the declaration (textual parse only)
+        span: Option<Span>,
     },
     /// Enumerated set: name with explicit elements, e.g. `S = {a, b, c}`
     Enumerated {
         name: String,
         elements: Vec<String>,
         comment: Option<String>,
+        /// Source location of the declaration (textual parse only)
+        span: Option<Span>,
     },
 }
 
@@ -36,6 +40,30 @@ impl SetDeclaration {
         match self {
             SetDeclaration::Deferred { comment, .. } => comment.as_deref(),
             SetDeclaration::Enumerated { comment, .. } => comment.as_deref(),
+        }
+    }
+
+    /// Get the source span of this set declaration
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            SetDeclaration::Deferred { span, .. } => *span,
+            SetDeclaration::Enumerated { span, .. } => *span,
+        }
+    }
+
+    /// Mutable access to the source span of this set declaration
+    pub fn span_mut(&mut self) -> &mut Option<Span> {
+        match self {
+            SetDeclaration::Deferred { span, .. } => span,
+            SetDeclaration::Enumerated { span, .. } => span,
+        }
+    }
+
+    /// Mutable access to the comment on this set declaration
+    pub fn comment_mut(&mut self) -> &mut Option<String> {
+        match self {
+            SetDeclaration::Deferred { comment, .. } => comment,
+            SetDeclaration::Enumerated { comment, .. } => comment,
         }
     }
 }
