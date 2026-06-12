@@ -37,7 +37,10 @@ pub fn enclosing_spans(text: &str, offset: usize) -> Vec<Span> {
         return Vec::new();
     };
     with_parser_stack(depth, || {
-        let Ok(pairs) = RossiParser::parse(Rule::component, text) else {
+        // `components` accepts both single- and multi-component files; for a
+        // single component its trimmed span coincides with the component's,
+        // so `dedup` collapses the extra outermost entry.
+        let Ok(pairs) = RossiParser::parse(Rule::components, text) else {
             return Vec::new();
         };
 

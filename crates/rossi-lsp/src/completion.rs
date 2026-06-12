@@ -12,7 +12,10 @@ use crate::lsp_types::{
 };
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use rossi::{Component, keywords, operators, parse};
+use rossi::{Component, keywords, operators};
+
+use crate::component_util::{component_at_offset, parse_all, parse_named};
+use crate::identifier_utils::position_to_offset;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -133,7 +136,7 @@ impl CompletionContext {
 pub struct CompletionProvider {
     config: Arc<RwLock<CompletionConfig>>,
     /// Cache of parsed components for quick completion
-    component_cache: Arc<DashMap<String, Component>>,
+    component_cache: Arc<DashMap<String, Vec<Component>>>,
     /// Cross-reference manager for workspace-wide navigation
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
     /// Document manager to access open documents
@@ -169,10 +172,11 @@ impl CompletionProvider {
         self.config.read().clone()
     }
 
-    /// Update the cached component for a document
+    /// Update the cached components for a document
     pub fn update_component(&self, uri: String, text: &str) {
-        if let Ok(component) = parse(text) {
-            self.component_cache.insert(uri, component);
+        let components = parse_all(text);
+        if !components.is_empty() {
+            self.component_cache.insert(uri, components);
         } else {
             // Remove from cache if parsing fails
             self.component_cache.remove(&uri);
@@ -188,16 +192,19 @@ impl CompletionProvider {
             return None;
         }
 
-        // Get completion context from cached component
+        // Get completion context from the cached component under the cursor
         let completion_ctx = self
             .component_cache
             .get(&uri)
-            .map(|entry| {
-                CompletionContext::from_component_with_refs(
-                    &entry,
-                    self.cross_ref_manager.as_deref(),
-                    self.document_manager.as_deref(),
-                )
+            .and_then(|entry| {
+                let offset = position_to_offset(text, position).unwrap_or(text.len());
+                component_at_offset(&entry, offset).map(|component| {
+                    CompletionContext::from_component_with_refs(
+                        component,
+                        self.cross_ref_manager.as_deref(),
+                        self.document_manager.as_deref(),
+                    )
+                })
             })
             .unwrap_or_else(CompletionContext::new);
 
@@ -467,9 +474,9 @@ fn resolve_context_symbols(
         None => return,
     };
 
-    let component = match parse(&text) {
-        Ok(c) => c,
-        Err(_) => return,
+    let component = match parse_named(&text, context_name) {
+        Some(c) => c,
+        None => return,
     };
 
     if let Component::Context(ctx) = &component {
@@ -510,9 +517,9 @@ fn resolve_machine_symbols(
         None => return,
     };
 
-    let component = match parse(&text) {
-        Ok(c) => c,
-        Err(_) => return,
+    let component = match parse_named(&text, machine_name) {
+        Some(c) => c,
+        None => return,
     };
 
     if let Component::Machine(m) = &component {
@@ -811,7 +818,7 @@ mod tests {
             .get("file:///concrete_mch.eventb")
             .map(|entry| {
                 CompletionContext::from_component_with_refs(
-                    &entry,
+                    &entry[0],
                     provider.cross_ref_manager.as_deref(),
                     provider.document_manager.as_deref(),
                 )

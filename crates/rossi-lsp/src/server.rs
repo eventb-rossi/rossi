@@ -426,9 +426,10 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Parse the document
-        let component = match rossi::parse(&text) {
-            Ok(comp) => comp,
+        // Parse the document; a multi-component file yields one root symbol
+        // per component
+        let components = match rossi::parse_components(&text) {
+            Ok(comps) => comps,
             Err(e) => {
                 debug!("Failed to parse document for symbols: {}", e);
                 return Ok(None);
@@ -436,7 +437,10 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Extract symbols with source text for accurate span information
-        let symbols = analysis::extract_symbols(&component, &text);
+        let symbols = components
+            .iter()
+            .flat_map(|component| analysis::extract_symbols(component, &text))
+            .collect();
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
@@ -948,9 +952,9 @@ impl RossiLanguageServer {
 
     /// Analyze a document and return diagnostics
     fn analyze_document(&self, text: &str) -> Vec<Diagnostic> {
-        use rossi::parse_with_recovery;
+        use rossi::parse_components_with_recovery;
 
-        let parse_result = parse_with_recovery(text);
+        let parse_result = parse_components_with_recovery(text);
 
         // Convert parse errors to LSP diagnostics
         parse_result

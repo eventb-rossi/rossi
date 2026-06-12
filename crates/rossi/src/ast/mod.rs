@@ -153,6 +153,17 @@ impl Component {
             Component::Machine(m) => &m.name,
         }
     }
+
+    /// The component's source span, whichever kind it is.
+    ///
+    /// `None` for components built without location info (Rodin XML import,
+    /// error recovery).
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Component::Context(ctx) => ctx.span,
+            Component::Machine(m) => m.span,
+        }
+    }
 }
 
 /// Source location information for error reporting and LSP features

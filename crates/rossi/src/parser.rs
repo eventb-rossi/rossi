@@ -2140,6 +2140,235 @@ pub fn parse_with_recovery(input: &str) -> ParseResult<Component> {
     }
 }
 
+/// Parse one or more Event-B components with error recovery.
+///
+/// The multi-component counterpart of [`parse_with_recovery`], for files
+/// produced by `rossi import --merge` (several `CONTEXT`/`MACHINE` blocks
+/// concatenated in one file). On a strict-parse failure the input is split
+/// into per-component regions at line-anchored `CONTEXT`/`MACHINE` headers
+/// and each region recovers independently, so one broken component does not
+/// take down its siblings. All spans and error positions are absolute within
+/// the full input.
+pub fn parse_components_with_recovery(input: &str) -> ParseResult<Vec<Component>> {
+    // First, try normal parsing — spans come out file-absolute for free.
+    match parse_components(input) {
+        Ok(components) => ParseResult::ok(components),
+        // A depth rejection applies to the whole input — see parse_with_recovery.
+        Err(first_error @ ParseError::NestingTooDeep { .. }) => ParseResult::err(first_error),
+        Err(first_error) => {
+            let text = RecoveryText::new(input);
+            let headers = component_header_starts(&text);
+            if headers.len() < 2 {
+                // Zero or one component header: single-component recovery
+                // already handles this exactly (including the no-header case).
+                let result = parse_with_recovery(input);
+                return ParseResult::with_errors(result.component.map(|c| vec![c]), result.errors);
+            }
+
+            // Region i runs from its header's line start to the next header's
+            // line start; the first region is extended back to offset 0 so
+            // junk before the first header is still reported. Headers sit on
+            // distinct lines (line-anchored), so the starts stay strictly
+            // ascending even after the first is pulled back to 0.
+            let mut starts: Vec<usize> = headers
+                .iter()
+                .map(|&pos| line_start(&text.masked, pos))
+                .collect();
+            starts[0] = 0;
+
+            let mut components = Vec::new();
+            let mut errors = Vec::new();
+            // Regions begin at line boundaries, so the slice's line N is the
+            // input's line N + line_delta (columns are unchanged). Counted
+            // incrementally — regions are consecutive, so each gap between
+            // starts is scanned once.
+            let mut line_delta = 0;
+            let mut prev_start = 0;
+            for (i, &start) in starts.iter().enumerate() {
+                let end = starts.get(i + 1).copied().unwrap_or(input.len());
+                line_delta += input[prev_start..start].matches('\n').count();
+                prev_start = start;
+                let result = parse_with_recovery(&input[start..end]);
+                errors.extend(
+                    result
+                        .errors
+                        .into_iter()
+                        .map(|e| offset_error_lines(e, line_delta)),
+                );
+                if let Some(mut component) = result.component {
+                    shift_component_spans(&mut component, start);
+                    // Recovery builds span-less components; give them their
+                    // region as an approximate span so position-based
+                    // consumers (component-at-offset dispatch, semantic
+                    // tokens) still anchor to the right part of the file.
+                    if component.span().is_none() {
+                        set_component_span(&mut component, Span { start, end });
+                    }
+                    components.push(component);
+                }
+            }
+
+            if components.is_empty() {
+                return ParseResult::err(first_error);
+            }
+            if errors.is_empty() {
+                // The whole-file parse failed, so something is wrong even if
+                // every region recovered silently — keep the original error.
+                errors.push(first_error);
+            }
+            ParseResult::with_errors(Some(components), errors)
+        }
+    }
+}
+
+/// Byte offsets of every line-anchored, whole-word `CONTEXT`/`MACHINE`
+/// header in the comment-masked text, in source order. Line-anchoring (only
+/// whitespace before the keyword on its line) is what keeps a mid-line
+/// mention — an identifier in a guard, say — from splitting a region.
+fn component_header_starts(text: &RecoveryText) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let end = text.masked.len();
+    for keyword in ["CONTEXT", "MACHINE"] {
+        let mut from = 0;
+        while let Some(pos) = find_keyword_word(text, keyword, from, end) {
+            if text.masked[line_start(&text.masked, pos)..pos]
+                .chars()
+                .all(char::is_whitespace)
+            {
+                starts.push(pos);
+            }
+            from = pos + keyword.len();
+        }
+    }
+    starts.sort_unstable();
+    starts
+}
+
+/// Byte offset of the start of the line containing `pos`.
+fn line_start(s: &str, pos: usize) -> usize {
+    s[..pos].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// Set a component's top-level span (clause/event spans untouched).
+fn set_component_span(component: &mut Component, span: Span) {
+    match component {
+        Component::Context(ctx) => ctx.span = Some(span),
+        Component::Machine(machine) => machine.span = Some(span),
+    }
+}
+
+/// Shift every span in a component by `delta` bytes. Used to translate
+/// slice-relative spans from a per-region strict parse back into absolute
+/// input positions. Recovered components carry no spans, so a `None` span
+/// stays `None`.
+fn shift_component_spans(component: &mut Component, delta: usize) {
+    fn shift(span: &mut Option<Span>, delta: usize) {
+        if let Some(s) = span {
+            s.start += delta;
+            s.end += delta;
+        }
+    }
+    if delta == 0 {
+        return;
+    }
+    match component {
+        Component::Context(ctx) => {
+            shift(&mut ctx.span, delta);
+            shift(&mut ctx.name_span, delta);
+            for axiom in &mut ctx.axioms {
+                shift(&mut axiom.span, delta);
+            }
+        }
+        Component::Machine(machine) => {
+            shift(&mut machine.span, delta);
+            shift(&mut machine.name_span, delta);
+            for invariant in &mut machine.invariants {
+                shift(&mut invariant.span, delta);
+            }
+            if let Some(init) = &mut machine.initialisation {
+                for action in &mut init.actions {
+                    shift(&mut action.span, delta);
+                }
+                for predicate in init.with.iter_mut().chain(&mut init.witnesses) {
+                    shift(&mut predicate.span, delta);
+                }
+            }
+            for event in &mut machine.events {
+                shift(&mut event.span, delta);
+                shift(&mut event.name_span, delta);
+                for predicate in event
+                    .guards
+                    .iter_mut()
+                    .chain(&mut event.with)
+                    .chain(&mut event.witnesses)
+                {
+                    shift(&mut predicate.span, delta);
+                }
+                for action in &mut event.actions {
+                    shift(&mut action.span, delta);
+                }
+            }
+        }
+    }
+}
+
+/// Shift the 1-indexed line numbers in an error by `line_delta` lines.
+/// Region slices start at line boundaries, so columns are unchanged.
+fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
+    if line_delta == 0 {
+        return error;
+    }
+    match error {
+        ParseError::PestError {
+            message,
+            line,
+            column,
+        } => ParseError::PestError {
+            message,
+            line: line + line_delta,
+            column,
+        },
+        ParseError::NestingTooDeep {
+            limit,
+            line,
+            column,
+        } => ParseError::NestingTooDeep {
+            limit,
+            line: line + line_delta,
+            column,
+        },
+        ParseError::ClauseError {
+            clause_type,
+            line,
+            column,
+            message,
+        } => ParseError::ClauseError {
+            clause_type,
+            line: line + line_delta,
+            column,
+            message,
+        },
+        ParseError::RecoverableError {
+            line,
+            column,
+            message,
+            source,
+        } => ParseError::RecoverableError {
+            line: line + line_delta,
+            column,
+            message,
+            source: source.map(|e| Box::new(offset_error_lines(*e, line_delta))),
+        },
+        ParseError::MultipleErrors(errors) => ParseError::MultipleErrors(
+            errors
+                .into_iter()
+                .map(|e| offset_error_lines(e, line_delta))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// Attempt to parse a context with error recovery
 fn parse_context_with_recovery(
     text: &RecoveryText,

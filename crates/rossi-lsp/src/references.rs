@@ -5,7 +5,10 @@
 //! and across the workspace.
 
 use crate::lsp_types::*;
-use rossi::{Component, parse};
+use rossi::{Component, parse_components};
+
+use crate::component_util::{component_at_offset, parse_named};
+use crate::identifier_utils::position_to_offset;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
@@ -221,8 +224,10 @@ impl ReferenceProvider {
         identifier: &str,
         manager: &CrossReferenceManager,
     ) -> Option<SymbolIdentity> {
-        let component = parse(text).ok()?;
-        self.resolve_symbol_identity_at_position(&component, text, position, identifier, manager)
+        let components = parse_components(text).ok()?;
+        let offset = position_to_offset(text, position).unwrap_or(text.len());
+        let component = component_at_offset(&components, offset)?;
+        self.resolve_symbol_identity_at_position(component, text, position, identifier, manager)
     }
 
     fn resolve_symbol_identity_at_position(
@@ -376,7 +381,7 @@ impl ReferenceProvider {
         let uri_str = manager.find_component_uri(component_name)?;
         let uri = Url::parse(&uri_str).ok()?;
         let text = manager.load_component_text(component_name, self.document_manager.as_deref())?;
-        let component = parse(&text).ok()?;
+        let component = parse_named(&text, component_name)?;
         Some((uri, text, component))
     }
 }

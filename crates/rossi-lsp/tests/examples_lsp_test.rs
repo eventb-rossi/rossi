@@ -7,6 +7,11 @@
 //! result: exact cross-file assertions on the compact cars-on-bridge model,
 //! invariant assertions on every file of all bundled models.
 //!
+//! A second, merged pass re-runs the providers with each model concatenated
+//! into ONE multi-component document (the shape `rossi import --merge`
+//! produces), with exact assertions on the checked-in merged traffic-light
+//! fixture.
+//!
 //! The archives ship with the repo, so the suite runs on every plain
 //! `cargo test` — no environment variables, no `--ignored`.
 
@@ -27,9 +32,14 @@ use rossi_lsp::lsp_types::*;
 use rossi_lsp::references::ReferenceProvider;
 use rossi_lsp::rename::RenameProvider;
 use rossi_lsp::selection_range::SelectionRangeProvider;
+use rossi_lsp::workspace::WorkspaceSymbolProvider;
 
 mod common;
 use common::{decode_tokens, slice_range};
+
+/// The checked-in merged form of the traffic-light model (M0, C1, M1, M2 in
+/// one file) — the document shape `rossi import --merge` produces.
+const MERGED_TRAFFIC_LIGHT: &str = include_str!("../../rossi/examples/traffic-light.txt");
 
 const CARS: &str = "cars-on-bridge.zip";
 const BINARY_SEARCH: &str = "binary-search.zip";
@@ -69,11 +79,18 @@ fn examples_dir() -> PathBuf {
 
 /// One converted component: parsed once at load, printed once, with the
 /// synthetic workspace URI derived from its model and name.
+///
+/// In a merged workspace ([`Workspace::open_merged`]) every component shares
+/// one URI and `text` is the whole merged document; `start_line` then marks
+/// where this component begins, so position helpers can search within it.
 struct ModelFile {
     name: String,
     uri: Url,
     component: rossi::Component,
     text: String,
+    /// 0-indexed first line of this component within `text` (0 when the
+    /// component has its own file).
+    start_line: usize,
 }
 
 /// Convert every `.buc`/`.bum` in the archive to textual Event-B, in zip order.
@@ -90,9 +107,24 @@ fn load_model(zip_name: &str) -> Vec<ModelFile> {
                 text: rossi::to_string(&named.component),
                 component: named.component,
                 name,
+                start_line: 0,
             }
         })
         .collect()
+}
+
+/// Merge a model's converted components into one text the way
+/// `rossi import --merge` does: zip order, a blank line between components.
+fn merged_model_text(files: &[ModelFile]) -> String {
+    let mut output = String::new();
+    for (i, file) in files.iter().enumerate() {
+        if i > 0 {
+            output.push('\n');
+        }
+        output.push_str(&file.text);
+        output.push('\n');
+    }
+    output
 }
 
 /// Every file of every bundled model, tagged with its archive name.
@@ -147,6 +179,75 @@ impl Workspace {
         Self { crm, dm, files }
     }
 
+    /// Open a model with all of its components merged into ONE document, the
+    /// shape `rossi import --merge` produces.
+    fn open_merged(zip_name: &str) -> Self {
+        let model = zip_name.trim_end_matches(".zip");
+        Self::from_merged_text(model, &merged_model_text(&load_model(zip_name)))
+    }
+
+    /// Open a workspace whose single document `text` holds one or more
+    /// components. Every [`ModelFile`] shares the document's URI and text;
+    /// `start_line` locates the component within it.
+    fn from_merged_text(model: &str, text: &str) -> Self {
+        let components = rossi::parse_components(text)
+            .unwrap_or_else(|e| panic!("{model}: merged text does not parse: {e}"));
+        let uri = Url::parse(&format!("file:///{model}/merged.eventb")).unwrap();
+
+        let files: Vec<ModelFile> = components
+            .into_iter()
+            .map(|component| {
+                let span = component
+                    .span()
+                    .unwrap_or_else(|| panic!("{model}: strict parse must record spans"));
+                ModelFile {
+                    name: component.name().to_string(),
+                    uri: uri.clone(),
+                    start_line: text[..span.start].matches('\n').count(),
+                    component,
+                    text: text.to_string(),
+                }
+            })
+            .collect();
+
+        let names: HashSet<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            files.len(),
+            "{model}: duplicate component names"
+        );
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        crm.update_component(uri.to_string(), text);
+        dm.open(uri, "eventb".to_string(), 1, text.to_string());
+        assert_eq!(
+            crm.all_component_names().len(),
+            files.len(),
+            "{model}: every merged component must be indexed"
+        );
+
+        Self { crm, dm, files }
+    }
+
+    /// Register an extra standalone document (its own URI) alongside the
+    /// workspace's existing files.
+    fn add_document(&mut self, model: &str, text: &str) {
+        let component = rossi::parse(text).expect("extra document must parse");
+        let name = component.name().to_string();
+        let uri = Url::parse(&format!("file:///{model}/{name}.eventb")).unwrap();
+        self.crm.update_component(uri.to_string(), text);
+        self.dm
+            .open(uri.clone(), "eventb".to_string(), 1, text.to_string());
+        self.files.push(ModelFile {
+            name,
+            uri,
+            component,
+            text: text.to_string(),
+            start_line: 0,
+        });
+    }
+
     fn entry(&self, name: &str) -> &ModelFile {
         self.files
             .iter()
@@ -195,13 +296,34 @@ fn nth_occurrence(text: &str, word: &str, n: usize) -> Position {
         .start
 }
 
+/// Char-based start position of the first whole-word occurrence of `word` at
+/// or after 0-indexed `line`. In merged documents this anchors searches to a
+/// component's region (its [`ModelFile::start_line`]).
+fn occurrence_after_line(text: &str, word: &str, line: usize) -> Position {
+    find_whole_word_locations(text, word, &probe_uri(), None)
+        .into_iter()
+        .map(|location| location.range.start)
+        .find(|position| position.line as usize >= line)
+        .unwrap_or_else(|| panic!("`{word}` not found at or after line {line}"))
+}
+
+/// 0-indexed line of the first occurrence of `needle`.
+fn line_of(text: &str, needle: &str) -> usize {
+    let offset = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` not found"));
+    text[..offset].matches('\n').count()
+}
+
 /// Position of the first whole-word occurrence of `name` after the first
-/// whole-word occurrence of the `clause` keyword (SEES/REFINES/EXTENDS).
-/// Layout-independent (works for one-target-per-line and inline forms), but
-/// callers must pass machines/contexts that actually have the machine-level
-/// clause: the first keyword occurrence is otherwise an event-level one.
-fn pos_in_clause(text: &str, clause: &str, name: &str) -> Position {
-    let clause_pos = nth_occurrence(text, clause, 0);
+/// whole-word occurrence of the `clause` keyword (SEES/REFINES/EXTENDS) at or
+/// after `start_line` (the component's region in a merged document; 0 for a
+/// single-component file). Layout-independent (works for one-target-per-line
+/// and inline forms), but callers must pass machines/contexts that actually
+/// have the machine-level clause: the first keyword occurrence is otherwise
+/// an event-level one.
+fn pos_in_clause(text: &str, clause: &str, name: &str, start_line: usize) -> Position {
+    let clause_pos = occurrence_after_line(text, clause, start_line);
     find_whole_word_locations(text, name, &probe_uri(), None)
         .into_iter()
         .map(|location| location.range.start)
@@ -341,8 +463,12 @@ fn definition_provider(ws: &Workspace) -> DefinitionProvider {
     let mut provider = DefinitionProvider::new();
     provider.set_cross_reference_manager(Arc::clone(&ws.crm));
     provider.set_document_manager(Arc::clone(&ws.dm));
+    let mut seen = HashSet::new();
     for file in &ws.files {
-        provider.update_definitions(file.uri.to_string(), &file.text);
+        // Merged workspaces share one URI across files — update it once.
+        if seen.insert(&file.uri) {
+            provider.update_definitions(file.uri.to_string(), &file.text);
+        }
     }
     provider
 }
@@ -365,8 +491,11 @@ fn hover_provider(ws: &Workspace) -> HoverProvider {
     let mut provider = HoverProvider::new();
     provider.set_cross_reference_manager(Arc::clone(&ws.crm));
     provider.set_document_manager(Arc::clone(&ws.dm));
+    let mut seen = HashSet::new();
     for file in &ws.files {
-        provider.update_component(file.uri.to_string(), &file.text);
+        if seen.insert(&file.uri) {
+            provider.update_component(file.uri.to_string(), &file.text);
+        }
     }
     provider
 }
@@ -379,7 +508,8 @@ fn scalar_location(response: GotoDefinitionResponse) -> Location {
 }
 
 /// A cursor on `target` inside `from`'s `clause` block must resolve to the
-/// component name in `target`'s file.
+/// component name in `target`'s file (which, in a merged workspace, may be
+/// the same document).
 fn assert_goto_clause(
     ws: &Workspace,
     provider: &DefinitionProvider,
@@ -387,8 +517,9 @@ fn assert_goto_clause(
     clause: &str,
     target: &str,
 ) {
-    let text = ws.text(from);
-    let position = pos_in_clause(text, clause, target);
+    let entry = ws.entry(from);
+    let text = &entry.text;
+    let position = pos_in_clause(text, clause, target, entry.start_line);
     let location = scalar_location(
         provider
             .goto_definition(&goto_params(ws.uri(from), position), text)
@@ -896,6 +1027,315 @@ fn all_models_document_links() {
             );
         }
     }
+}
+
+// ============================================================================
+// Merged pass: every model as ONE multi-component document (`import --merge`)
+// ============================================================================
+
+#[test]
+fn all_models_merged_invariants() {
+    for &(zip_name, expected_count) in ALL_MODELS {
+        let ws = Workspace::open_merged(zip_name);
+        assert_eq!(
+            ws.files.len(),
+            expected_count,
+            "{zip_name}: component count after merge"
+        );
+        let text = &ws.files[0].text;
+        let uri = &ws.files[0].uri;
+
+        // The diagnostics path agrees with the strict parse: no errors.
+        let recovered = rossi::parse_components_with_recovery(text);
+        assert!(
+            recovered.is_ok(),
+            "{zip_name}: merged text must produce no diagnostics: {:?}",
+            recovered.errors
+        );
+
+        // Every component name resolves to the one merged URI.
+        for file in &ws.files {
+            assert_eq!(
+                ws.crm.find_component_uri(&file.name).as_deref(),
+                Some(uri.as_str()),
+                "{zip_name}: {} not indexed under the merged URI",
+                file.name
+            );
+        }
+
+        // Document symbols: one root per component, covering disjoint,
+        // strictly increasing regions of the document.
+        let roots: Vec<DocumentSymbol> = ws
+            .files
+            .iter()
+            .flat_map(|f| analysis::extract_symbols(&f.component, text))
+            .collect();
+        assert_eq!(
+            roots.len(),
+            expected_count,
+            "{zip_name}: one symbol root per component"
+        );
+        for pair in roots.windows(2) {
+            assert!(
+                pair[0].range.end <= pair[1].range.start,
+                "{zip_name}: overlapping component symbols {} / {}",
+                pair[0].name,
+                pair[1].name
+            );
+        }
+
+        // Workspace symbols are indexed from the merged document.
+        let provider = WorkspaceSymbolProvider::new();
+        provider.update_symbols(uri.to_string(), text);
+        assert!(
+            !provider.search("").is_empty(),
+            "{zip_name}: workspace symbol index is empty"
+        );
+
+        // Semantic tokens reach past the last component's header —
+        // highlighting must not stop after the first component.
+        let last_start = ws.files.last().unwrap().start_line as u32;
+        assert!(
+            decode_tokens(text)
+                .iter()
+                .any(|&(line, ..)| line > last_start),
+            "{zip_name}: no semantic tokens past the last component header"
+        );
+
+        // Folding offers a range starting at every component header.
+        let folding = FoldingRangeProvider::new()
+            .folding_ranges(&folding_params(uri.clone()), text)
+            .unwrap_or_else(|| panic!("{zip_name}: no folding ranges for merged text"));
+        for file in &ws.files {
+            assert!(
+                folding
+                    .iter()
+                    .any(|r| r.start_line as usize == file.start_line),
+                "{zip_name}: no folding range starting at component {} (line {})",
+                file.name,
+                file.start_line
+            );
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// traffic-light merged: exact assertions on the checked-in fixture
+// ----------------------------------------------------------------------------
+
+fn merged_traffic_light() -> Workspace {
+    Workspace::from_merged_text("traffic-light", MERGED_TRAFFIC_LIGHT)
+}
+
+#[test]
+fn merged_components_and_edges_are_indexed() {
+    let ws = merged_traffic_light();
+    let names: Vec<&str> = ws.files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["M0", "C1", "M1", "M2"]);
+
+    let referencing = |target: &str, kind: ReferenceKind| -> Vec<String> {
+        let mut names: Vec<String> = ws
+            .crm
+            .find_referencing_components(target, Some(kind))
+            .into_iter()
+            .map(|info| info.name)
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(referencing("C1", ReferenceKind::Sees), ["M1", "M2"]);
+    assert_eq!(referencing("M0", ReferenceKind::Refines), ["M1"]);
+    assert_eq!(referencing("M1", ReferenceKind::Refines), ["M2"]);
+}
+
+#[test]
+fn merged_goto_clause_targets_within_one_file() {
+    let ws = merged_traffic_light();
+    let provider = definition_provider(&ws);
+
+    // SEES/REFINES targets live in the same document; navigation must land
+    // on each target component's header inside it.
+    for (from, clause, target) in [
+        ("M1", "REFINES", "M0"),
+        ("M1", "SEES", "C1"),
+        ("M2", "REFINES", "M1"),
+        ("M2", "SEES", "C1"),
+    ] {
+        assert_goto_clause(&ws, &provider, from, clause, target);
+    }
+}
+
+#[test]
+fn merged_goto_definition_scopes_to_component_under_cursor() {
+    // `peds_colour` is declared in both M1 and M2 (same name, same file).
+    let ws = merged_traffic_light();
+    let provider = definition_provider(&ws);
+    let text = &ws.files[0].text;
+    let uri = ws.uri("M1");
+
+    let m1_decl = occurrence_after_line(text, "peds_colour", ws.entry("M1").start_line);
+    let m2_decl = occurrence_after_line(text, "peds_colour", ws.entry("M2").start_line);
+
+    // A use inside M1 (the @inv4 invariant) resolves to M1's declaration...
+    let m1_use = occurrence_after_line(text, "peds_colour", m1_decl.line as usize + 1);
+    assert!(
+        (m1_use.line as usize) < ws.entry("M2").start_line,
+        "use site escaped M1"
+    );
+    let location = scalar_location(
+        provider
+            .goto_definition(&goto_params(uri.clone(), m1_use), text)
+            .expect("no definition for peds_colour in M1"),
+    );
+    assert_eq!(
+        location.range.start, m1_decl,
+        "M1 use must hit M1's declaration"
+    );
+
+    // ...and a use inside M2 (push_button's guard) resolves to M2's.
+    let m2_use = occurrence_after_line(text, "peds_colour", m2_decl.line as usize + 1);
+    let location = scalar_location(
+        provider
+            .goto_definition(&goto_params(uri, m2_use), text)
+            .expect("no definition for peds_colour in M2"),
+    );
+    assert_eq!(
+        location.range.start, m2_decl,
+        "M2 use must hit M2's declaration"
+    );
+}
+
+#[test]
+fn merged_goto_definition_constant_from_seen_context_in_same_file() {
+    let ws = merged_traffic_light();
+    let provider = definition_provider(&ws);
+    let text = &ws.files[0].text;
+
+    // `green` used in M1's invariants resolves to the CONSTANTS declaration
+    // in C1 — a cross-component lookup that never leaves the file.
+    let use_site = occurrence_after_line(text, "green", ws.entry("M1").start_line);
+    let location = scalar_location(
+        provider
+            .goto_definition(&goto_params(ws.uri("M1"), use_site), text)
+            .expect("green must resolve to C1's declaration"),
+    );
+
+    assert_eq!(location.uri, ws.uri("C1"));
+    let line = location.range.start.line as usize;
+    assert!(
+        line > ws.entry("C1").start_line && line < ws.entry("M1").start_line,
+        "declaration must sit inside C1's region, got line {line}"
+    );
+}
+
+#[test]
+fn separate_file_refines_machine_inside_merged_file() {
+    // A refinement of M2 living in its own single-component file must
+    // navigate INTO the merged document.
+    let mut ws = merged_traffic_light();
+    ws.add_document(
+        "traffic-light",
+        "MACHINE M3\nREFINES\n    M2\nSEES\n    C1\nVARIABLES\n    peds_colour\n    cars_colours\n    button\nEND\n",
+    );
+    let provider = definition_provider(&ws);
+
+    assert_goto_clause(&ws, &provider, "M3", "REFINES", "M2");
+    assert_goto_clause(&ws, &provider, "M3", "SEES", "C1");
+}
+
+#[test]
+fn merged_hover_resolves_identifiers_in_later_components() {
+    let ws = merged_traffic_light();
+    let provider = hover_provider(&ws);
+    let text = &ws.files[0].text;
+
+    let hover_text = |position: Position| -> String {
+        let hover = provider
+            .hover(&hover_params(ws.uri("M0"), position), text)
+            .unwrap_or_else(|| panic!("no hover at {position:?}"));
+        match hover.contents {
+            HoverContents::Markup(markup) => markup.value,
+            other => panic!("unexpected hover contents: {other:?}"),
+        }
+    };
+
+    // `button` is declared in M2, the fourth component.
+    let button_use = occurrence_after_line(text, "button", ws.entry("M2").start_line + 1);
+    let markup = hover_text(button_use);
+    assert!(
+        markup.contains("Variable") && markup.contains("M2"),
+        "hover must describe `button` as a variable of M2, got: {markup}"
+    );
+
+    // `cars_go` keeps resolving against M0 (the first component).
+    let cars_go_use = occurrence_after_line(text, "cars_go", line_of(text, "INVARIANTS"));
+    let markup = hover_text(cars_go_use);
+    assert!(
+        markup.contains("Variable") && markup.contains("M0"),
+        "hover must describe `cars_go` as a variable of M0, got: {markup}"
+    );
+}
+
+#[test]
+fn merged_workspace_symbols_cover_every_component() {
+    let ws = merged_traffic_light();
+    let text = &ws.files[0].text;
+    let provider = WorkspaceSymbolProvider::new();
+    provider.update_symbols(ws.files[0].uri.to_string(), text);
+
+    // One symbol per (name, container) — declared in the right component,
+    // located in the right region of the document.
+    for (name, container) in [
+        ("cars_go", "M0"),
+        ("COLOURS", "C1"),
+        ("cars_colours", "M1"),
+        ("button", "M2"),
+        ("push_button", "M2"),
+    ] {
+        let results = provider.search(name);
+        let hit = results
+            .iter()
+            .find(|s| s.name == name && s.container_name.as_deref() == Some(container))
+            .unwrap_or_else(|| panic!("`{name}` not found with container {container}"));
+        assert!(
+            hit.location.range.start.line as usize >= ws.entry(container).start_line,
+            "`{name}` must be located inside {container}'s region"
+        );
+    }
+
+    // `peds_colour` is declared in both M1 and M2.
+    let peds = provider.search("peds_colour");
+    let containers: Vec<_> = peds
+        .iter()
+        .filter_map(|s| s.container_name.as_deref())
+        .collect();
+    assert!(
+        containers.contains(&"M1") && containers.contains(&"M2"),
+        "peds_colour must be indexed for both machines, got {containers:?}"
+    );
+}
+
+#[test]
+fn merged_semantic_tokens_broken_component_does_not_rescan_from_top() {
+    // M1 broken → it comes back from recovery with its region as span; its
+    // visit must start there, not at offset 0 (which would re-tokenize M0's
+    // header under M1's context).
+    let broken =
+        MERGED_TRAFFIC_LIGHT.replace("@inv5 peds_go = ⊤ ⇔ peds_colour = green", "@inv5 +++");
+    assert_ne!(
+        broken, MERGED_TRAFFIC_LIGHT,
+        "fixture drifted: M1 invariant not found"
+    );
+
+    let tokens = decode_tokens(&broken);
+    let at_m0_header = tokens
+        .iter()
+        .filter(|&&(line, col, ..)| line == 0 && col == 0)
+        .count();
+    assert_eq!(
+        at_m0_header, 1,
+        "M0's MACHINE keyword must be tokenized exactly once"
+    );
 }
 
 // ============================================================================

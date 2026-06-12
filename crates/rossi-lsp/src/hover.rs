@@ -12,13 +12,14 @@ use rossi::{
     Component, Expression, LabeledPredicate, Predicate, PrettyPrinter,
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
-    parse,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::component_util::{component_at_offset, parse_all, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::identifier_utils::position_to_offset;
 
 /// Context information extracted from a parsed component
 #[derive(Debug, Clone)]
@@ -131,8 +132,9 @@ impl HoverContext {
 
 /// Provides hover documentation for Event-B documents
 pub struct HoverProvider {
-    /// Cache of parsed components for quick hover lookup
-    component_cache: Arc<DashMap<String, Component>>,
+    /// Cache of parsed components per document for quick hover lookup (a
+    /// document may define several components)
+    component_cache: Arc<DashMap<String, Vec<Component>>>,
     /// Cross-reference manager for workspace-wide navigation
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
     /// Document manager to access open documents
@@ -158,10 +160,11 @@ impl HoverProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Update the cached component for a document
+    /// Update the cached components for a document
     pub fn update_component(&self, uri: String, text: &str) {
-        if let Ok(component) = parse(text) {
-            self.component_cache.insert(uri, component);
+        let components = parse_all(text);
+        if !components.is_empty() {
+            self.component_cache.insert(uri, components);
         } else {
             // Remove from cache if parsing fails
             self.component_cache.remove(&uri);
@@ -177,16 +180,19 @@ impl HoverProvider {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        // Get hover context from cached component
+        // Get hover context from the cached component under the cursor
         let hover_ctx = self
             .component_cache
             .get(&uri)
-            .map(|entry| {
-                HoverContext::from_component_with_refs(
-                    &entry,
-                    self.cross_ref_manager.as_deref(),
-                    self.document_manager.as_deref(),
-                )
+            .and_then(|entry| {
+                let offset = position_to_offset(text, position).unwrap_or(text.len());
+                component_at_offset(&entry, offset).map(|component| {
+                    HoverContext::from_component_with_refs(
+                        component,
+                        self.cross_ref_manager.as_deref(),
+                        self.document_manager.as_deref(),
+                    )
+                })
             })
             .unwrap_or_else(HoverContext::new);
 
@@ -339,9 +345,9 @@ fn resolve_context_symbols_with_source(
         None => return,
     };
 
-    let component = match parse(&text) {
-        Ok(c) => c,
-        Err(_) => return,
+    let component = match parse_named(&text, context_name) {
+        Some(c) => c,
+        None => return,
     };
 
     if let Component::Context(ctx) = &component {
@@ -398,9 +404,9 @@ fn resolve_machine_symbols_with_source(
         None => return,
     };
 
-    let component = match parse(&text) {
-        Ok(c) => c,
-        Err(_) => return,
+    let component = match parse_named(&text, machine_name) {
+        Some(c) => c,
+        None => return,
     };
 
     if let Component::Machine(m) = &component {

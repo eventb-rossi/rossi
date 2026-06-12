@@ -4,6 +4,7 @@
 //! It maintains an index of all symbols (variables, constants, sets, events) and supports
 //! fuzzy search for quick navigation.
 
+use crate::component_util::{component_line_window, lines_in_window};
 use crate::lsp_types::*;
 use dashmap::DashMap;
 use rossi::ast::*;
@@ -52,8 +53,8 @@ impl WorkspaceSymbolProvider {
         debug!("Updating workspace symbols for: {}", uri);
 
         // Parse the document
-        let component = match rossi::parse(text) {
-            Ok(comp) => comp,
+        let components = match rossi::parse_components(text) {
+            Ok(comps) => comps,
             Err(e) => {
                 debug!("Failed to parse document for workspace symbols: {}", e);
                 // Remove old symbols for this document
@@ -62,8 +63,11 @@ impl WorkspaceSymbolProvider {
             }
         };
 
-        // Extract symbols from the component
-        let symbols = self.extract_symbols_from_component(&component, &uri, text);
+        // Extract symbols from every component in the document
+        let symbols = components
+            .iter()
+            .flat_map(|component| self.extract_symbols_from_component(component, &uri, text))
+            .collect();
 
         // Update index
         self.symbol_index.insert(uri, symbols);
@@ -110,7 +114,9 @@ impl WorkspaceSymbolProvider {
         results
     }
 
-    /// Extract all symbols from a component
+    /// Extract all symbols from a component. Text searches are bounded to the
+    /// component's line window so symbols land in the right component of a
+    /// multi-component document.
     fn extract_symbols_from_component(
         &self,
         component: &Component,
@@ -118,6 +124,7 @@ impl WorkspaceSymbolProvider {
         text: &str,
     ) -> Vec<SymbolEntry> {
         let mut symbols = Vec::new();
+        let window = component_line_window(component, text);
 
         match component {
             Component::Context(ctx) => {
@@ -126,7 +133,9 @@ impl WorkspaceSymbolProvider {
                 // Extract sets
                 for set in &ctx.sets {
                     let set_name = set.name();
-                    if let Some(location) = self.find_symbol_location(text, uri, "SETS", set_name) {
+                    if let Some(location) =
+                        self.find_symbol_location(text, uri, "SETS", set_name, window)
+                    {
                         symbols.push(SymbolEntry {
                             name: set_name.to_string(),
                             kind: SymbolKind::ENUM,
@@ -139,7 +148,7 @@ impl WorkspaceSymbolProvider {
                 // Extract constants
                 for constant in &ctx.constants {
                     if let Some(location) =
-                        self.find_symbol_location(text, uri, "CONSTANTS", &constant.name)
+                        self.find_symbol_location(text, uri, "CONSTANTS", &constant.name, window)
                     {
                         symbols.push(SymbolEntry {
                             name: constant.name.clone(),
@@ -156,7 +165,7 @@ impl WorkspaceSymbolProvider {
                 // Extract variables
                 for variable in &mch.variables {
                     if let Some(location) =
-                        self.find_symbol_location(text, uri, "VARIABLES", &variable.name)
+                        self.find_symbol_location(text, uri, "VARIABLES", &variable.name, window)
                     {
                         symbols.push(SymbolEntry {
                             name: variable.name.clone(),
@@ -170,7 +179,7 @@ impl WorkspaceSymbolProvider {
                 // Extract events
                 for event in &mch.events {
                     if let Some(location) =
-                        self.find_event_location(text, uri, &event.name, &container)
+                        self.find_event_location(text, uri, &event.name, &container, window)
                     {
                         symbols.push(SymbolEntry {
                             name: event.name.clone(),
@@ -184,7 +193,7 @@ impl WorkspaceSymbolProvider {
                 // Extract initialisation event if present
                 if mch.initialisation.is_some()
                     && let Some(location) =
-                        self.find_event_location(text, uri, "INITIALISATION", &container)
+                        self.find_event_location(text, uri, "INITIALISATION", &container, window)
                 {
                     symbols.push(SymbolEntry {
                         name: "INITIALISATION".to_string(),
@@ -206,18 +215,18 @@ impl WorkspaceSymbolProvider {
         symbols
     }
 
-    /// Find the location of a symbol in a clause
+    /// Find the location of a symbol in a clause, within an inclusive line window
     fn find_symbol_location(
         &self,
         text: &str,
         uri: &str,
         clause: &str,
         identifier: &str,
+        window: (usize, usize),
     ) -> Option<Location> {
-        let lines: Vec<&str> = text.lines().collect();
         let mut in_clause = false;
 
-        for (line_idx, line) in lines.iter().enumerate() {
+        for (line_idx, line) in lines_in_window(text, window) {
             let trimmed = line.trim();
 
             // Check if we're entering the target clause
@@ -244,17 +253,16 @@ impl WorkspaceSymbolProvider {
         None
     }
 
-    /// Find the location of an event declaration
+    /// Find the location of an event declaration, within an inclusive line window
     fn find_event_location(
         &self,
         text: &str,
         uri: &str,
         event_name: &str,
         _container: &str,
+        window: (usize, usize),
     ) -> Option<Location> {
-        let lines: Vec<&str> = text.lines().collect();
-
-        for (line_idx, line) in lines.iter().enumerate() {
+        for (line_idx, line) in lines_in_window(text, window) {
             let trimmed = line.trim();
 
             // Look for "EVENT event_name" or "INITIALISATION"
@@ -272,29 +280,30 @@ impl WorkspaceSymbolProvider {
         None
     }
 
-    /// Find a whole word match in a line and return its column index
+    /// Find a whole word match in a line and return its CHARACTER column
+    /// (LSP positions in this crate count characters, not bytes).
     fn find_whole_word_in_line(&self, line: &str, word: &str) -> Option<usize> {
         let mut idx = 0;
         while idx < line.len() {
             if let Some(pos) = line[idx..].find(word) {
                 let abs_pos = idx + pos;
-                // Check word boundaries
-                let before_ok = abs_pos == 0
-                    || !line
-                        .chars()
-                        .nth(abs_pos.saturating_sub(1))
-                        .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                // Check word boundaries on the adjacent characters.
+                let before_ok = !line[..abs_pos]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
                 let after_idx = abs_pos + word.len();
-                let after_ok = after_idx >= line.len()
-                    || !line
-                        .chars()
-                        .nth(after_idx)
-                        .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                let after_ok = !line[after_idx..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
 
                 if before_ok && after_ok {
-                    return Some(abs_pos);
+                    return Some(line[..abs_pos].chars().count());
                 }
 
+                // Identifiers start with an ASCII character (grammar), so
+                // +1 stays on a char boundary.
                 idx = abs_pos + 1;
             } else {
                 break;

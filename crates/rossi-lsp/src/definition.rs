@@ -12,9 +12,11 @@ use crate::lsp_types::{
     GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Range, Url,
 };
 use dashmap::DashMap;
-use rossi::{Component, parse};
+use rossi::{Component, parse_components};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::component_util::{component_line_window, lines_in_window, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::symbols::SymbolKind;
@@ -28,6 +30,11 @@ struct DefinitionInfo {
     kind: SymbolKind,
     /// Location in the source file
     location: Location,
+    /// Inclusive line range (in the cached document) the definition is
+    /// visible from: the declaring component's lines for local definitions,
+    /// the requesting component's lines for cross-file resolutions. `None`
+    /// means visible from anywhere.
+    component_lines: Option<(usize, usize)>,
 }
 
 /// Context containing all definitions in a document
@@ -44,16 +51,45 @@ impl DefinitionContext {
     }
 
     /// Find definition by name, preferring local definitions over cross-file ones
+    #[cfg(test)]
     fn find_definition(&self, name: &str) -> Option<&DefinitionInfo> {
-        // Prefer local definitions (Variable, Event, Parameter) over cross-file (Constant, Set)
-        let local = self.definitions.iter().find(|d| {
-            d.name == name
-                && matches!(
+        self.find_definition_at(name, None)
+    }
+
+    /// Find definition by name. With a cursor line, definitions declared by
+    /// the component containing that line win over same-named definitions in
+    /// sibling components of a multi-component document.
+    fn find_definition_at(
+        &self,
+        name: &str,
+        cursor_line: Option<usize>,
+    ) -> Option<&DefinitionInfo> {
+        if let Some(line) = cursor_line
+            && let Some(found) = Self::prefer_local(self.definitions.iter().filter(|d| {
+                d.name == name
+                    && d.component_lines
+                        .is_some_and(|(start, end)| (start..=end).contains(&line))
+            }))
+        {
+            return Some(found);
+        }
+        Self::prefer_local(self.definitions.iter().filter(|d| d.name == name))
+    }
+
+    /// Prefer local definitions (Variable, Event, Parameter) over cross-file
+    /// ones (Constant, Set)
+    fn prefer_local<'a>(
+        candidates: impl Iterator<Item = &'a DefinitionInfo> + Clone,
+    ) -> Option<&'a DefinitionInfo> {
+        candidates
+            .clone()
+            .find(|d| {
+                matches!(
                     d.kind,
                     SymbolKind::Variable | SymbolKind::Event | SymbolKind::Parameter
                 )
-        });
-        local.or_else(|| self.definitions.iter().find(|d| d.name == name))
+            })
+            .or_else(|| candidates.into_iter().next())
     }
 }
 
@@ -88,12 +124,25 @@ impl DefinitionProvider {
 
     /// Update the definition cache for a document
     pub fn update_definitions(&self, uri: String, text: &str) {
-        if let Ok(component) = parse(text) {
-            let ctx = self.extract_definitions(&component, text, &uri);
-            self.definition_cache.insert(uri, ctx);
-        } else {
-            // Remove from cache if parsing fails
-            self.definition_cache.remove(&uri);
+        match parse_components(text) {
+            Ok(components) if !components.is_empty() => {
+                let mut ctx = DefinitionContext::new();
+                // Sibling components of a merged file typically see the same
+                // contexts/machines — extract each visible component once per
+                // update, not once per sibling.
+                let mut cross_cache = HashMap::new();
+                for component in &components {
+                    ctx.definitions.extend(
+                        self.extract_definitions(component, text, &uri, &mut cross_cache)
+                            .definitions,
+                    );
+                }
+                self.definition_cache.insert(uri, ctx);
+            }
+            _ => {
+                // Remove from cache if parsing fails
+                self.definition_cache.remove(&uri);
+            }
         }
     }
 
@@ -115,9 +164,10 @@ impl DefinitionProvider {
             return Some(GotoDefinitionResponse::Scalar(cross_ref_location));
         }
 
-        // Stage 2: Local + cross-file definitions from cache
+        // Stage 2: Local + cross-file definitions from cache. The cursor line
+        // scopes the lookup to the component under the cursor first.
         if let Some(def_ctx) = self.definition_cache.get(&uri.to_string())
-            && let Some(def_info) = def_ctx.find_definition(&word)
+            && let Some(def_info) = def_ctx.find_definition_at(&word, Some(position.line as usize))
         {
             return Some(GotoDefinitionResponse::Scalar(def_info.location.clone()));
         }
@@ -167,25 +217,39 @@ impl DefinitionProvider {
         component: &Component,
         text: &str,
         uri_str: &str,
+        cross_cache: &mut HashMap<String, Vec<DefinitionInfo>>,
     ) -> DefinitionContext {
+        let window = component_line_window(component, text);
         let mut ctx = DefinitionContext::new();
-        ctx.definitions = self.extract_local_definitions(component, text, uri_str);
+        ctx.definitions = self.extract_local_definitions(component, text, uri_str, window);
 
-        // Add cross-file definitions from SEES/EXTENDS/REFINES contexts and machines.
+        // Add cross-file definitions from SEES/EXTENDS/REFINES contexts and
+        // machines. They are scoped to the REQUESTING component's lines: that
+        // is where this component's visibility applies, so in a
+        // multi-component document the cursor picks the resolution belonging
+        // to the component it sits in.
         if let Some(crm) = &self.cross_ref_manager {
-            ctx.definitions
-                .extend(self.resolve_cross_file_definitions(component, crm));
+            let mut cross = self.resolve_cross_file_definitions(component, crm, cross_cache);
+            for definition in &mut cross {
+                definition.component_lines = Some(window);
+            }
+            ctx.definitions.extend(cross);
         }
 
         ctx
     }
 
     /// Extract definitions declared directly in `component` (no cross-file walk).
+    ///
+    /// All text searches are bounded to `window` (the component's line window)
+    /// so that in a multi-component document a sibling component's clauses
+    /// cannot shadow this component's declarations.
     fn extract_local_definitions(
         &self,
         component: &Component,
         text: &str,
         uri_str: &str,
+        window: (usize, usize),
     ) -> Vec<DefinitionInfo> {
         let mut definitions = Vec::new();
         let uri = match Url::parse(uri_str) {
@@ -193,129 +257,69 @@ impl DefinitionProvider {
             Err(_) => return definitions, // Return empty if URI parsing fails
         };
 
+        let def_info = |name: &str, kind: SymbolKind, pos: Position| DefinitionInfo {
+            name: name.to_string(),
+            kind,
+            location: Location {
+                uri: uri.clone(),
+                range: Range {
+                    start: pos,
+                    end: Position::new(pos.line, pos.character + name.len() as u32),
+                },
+            },
+            component_lines: Some(window),
+        };
+
         match component {
             Component::Context(context) => {
                 // Extract sets
                 for set in &context.sets {
                     let set_name = set.name();
-                    if let Some(pos) = find_identifier_in_clause(text, "SETS", set_name) {
-                        definitions.push(DefinitionInfo {
-                            name: set_name.to_string(),
-                            kind: SymbolKind::Set,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: Range {
-                                    start: pos,
-                                    end: Position::new(
-                                        pos.line,
-                                        pos.character + set_name.len() as u32,
-                                    ),
-                                },
-                            },
-                        });
+                    if let Some(pos) = find_identifier_in_clause(text, "SETS", set_name, window) {
+                        definitions.push(def_info(set_name, SymbolKind::Set, pos));
                     }
                 }
 
                 // Extract constants
                 for constant in &context.constants {
-                    if let Some(pos) = find_identifier_in_clause(text, "CONSTANTS", &constant.name)
+                    if let Some(pos) =
+                        find_identifier_in_clause(text, "CONSTANTS", &constant.name, window)
                     {
-                        definitions.push(DefinitionInfo {
-                            name: constant.name.clone(),
-                            kind: SymbolKind::Constant,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: Range {
-                                    start: pos,
-                                    end: Position::new(
-                                        pos.line,
-                                        pos.character + constant.name.len() as u32,
-                                    ),
-                                },
-                            },
-                        });
+                        definitions.push(def_info(&constant.name, SymbolKind::Constant, pos));
                     }
                 }
             }
             Component::Machine(machine) => {
                 // Extract variables
                 for variable in &machine.variables {
-                    if let Some(pos) = find_identifier_in_clause(text, "VARIABLES", &variable.name)
+                    if let Some(pos) =
+                        find_identifier_in_clause(text, "VARIABLES", &variable.name, window)
                     {
-                        definitions.push(DefinitionInfo {
-                            name: variable.name.clone(),
-                            kind: SymbolKind::Variable,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: Range {
-                                    start: pos,
-                                    end: Position::new(
-                                        pos.line,
-                                        pos.character + variable.name.len() as u32,
-                                    ),
-                                },
-                            },
-                        });
+                        definitions.push(def_info(&variable.name, SymbolKind::Variable, pos));
                     }
                 }
 
                 // Extract events
                 for event in &machine.events {
-                    if let Some(pos) = find_event_definition(text, &event.name) {
-                        definitions.push(DefinitionInfo {
-                            name: event.name.clone(),
-                            kind: SymbolKind::Event,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: Range {
-                                    start: pos,
-                                    end: Position::new(
-                                        pos.line,
-                                        pos.character + event.name.len() as u32,
-                                    ),
-                                },
-                            },
-                        });
+                    if let Some(pos) = find_event_definition(text, &event.name, window) {
+                        definitions.push(def_info(&event.name, SymbolKind::Event, pos));
                     }
 
                     // Extract event parameters
                     for param in &event.parameters {
                         if let Some(pos) =
-                            find_identifier_in_event(text, &event.name, "ANY", &param.name)
+                            find_identifier_in_event(text, &event.name, "ANY", &param.name, window)
                         {
-                            definitions.push(DefinitionInfo {
-                                name: param.name.clone(),
-                                kind: SymbolKind::Parameter,
-                                location: Location {
-                                    uri: uri.clone(),
-                                    range: Range {
-                                        start: pos,
-                                        end: Position::new(
-                                            pos.line,
-                                            pos.character + param.name.len() as u32,
-                                        ),
-                                    },
-                                },
-                            });
+                            definitions.push(def_info(&param.name, SymbolKind::Parameter, pos));
                         }
                     }
                 }
 
                 // Handle INITIALISATION event
                 if machine.initialisation.is_some()
-                    && let Some(pos) = find_initialisation_definition(text)
+                    && let Some(pos) = find_initialisation_definition(text, window)
                 {
-                    definitions.push(DefinitionInfo {
-                        name: "INITIALISATION".to_string(),
-                        kind: SymbolKind::Event,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: pos,
-                                end: Position::new(pos.line, pos.character + 14), // "INITIALISATION".len()
-                            },
-                        },
-                    });
+                    definitions.push(def_info("INITIALISATION", SymbolKind::Event, pos));
                 }
             }
         }
@@ -326,10 +330,15 @@ impl DefinitionProvider {
     /// Resolve definitions reachable through SEES/EXTENDS/REFINES, reusing the
     /// cross-reference manager's visibility graph and extracting each visible
     /// component's local definitions with `extract_local_definitions`.
+    ///
+    /// `cache` memoizes the extraction per visible component name for the
+    /// duration of one document update — loading and parsing a visible file
+    /// once instead of once per sibling component that sees it.
     fn resolve_cross_file_definitions(
         &self,
         component: &Component,
         cross_ref_manager: &CrossReferenceManager,
+        cache: &mut HashMap<String, Vec<DefinitionInfo>>,
     ) -> Vec<DefinitionInfo> {
         let component_names = match component {
             Component::Machine(machine) => {
@@ -342,21 +351,30 @@ impl DefinitionProvider {
 
         let mut results = Vec::new();
         for name in component_names {
-            let Some(text) =
-                cross_ref_manager.load_component_text(&name, self.document_manager.as_deref())
-            else {
-                continue;
-            };
-            let Ok(component) = parse(&text) else {
-                continue;
-            };
-            let Some(uri_str) = cross_ref_manager.find_component_uri(&name) else {
-                continue;
-            };
-            results.extend(self.extract_local_definitions(&component, &text, &uri_str));
+            let definitions = cache.entry(name).or_insert_with_key(|name| {
+                self.extract_visible_definitions(name, cross_ref_manager)
+                    .unwrap_or_default()
+            });
+            results.extend(definitions.iter().cloned());
         }
 
         results
+    }
+
+    /// Load, parse, and extract the local definitions of one visible
+    /// component. The target's own line window is overwritten by
+    /// `extract_definitions` with the requesting component's window — the
+    /// lines these definitions are visible from.
+    fn extract_visible_definitions(
+        &self,
+        name: &str,
+        cross_ref_manager: &CrossReferenceManager,
+    ) -> Option<Vec<DefinitionInfo>> {
+        let text = cross_ref_manager.load_component_text(name, self.document_manager.as_deref())?;
+        let component = parse_named(&text, name)?;
+        let uri_str = cross_ref_manager.find_component_uri(name)?;
+        let window = component_line_window(&component, &text);
+        Some(self.extract_local_definitions(&component, &text, &uri_str, window))
     }
 }
 
@@ -391,13 +409,17 @@ fn is_whole_word_at(chars: &[char], pos: usize, word_len: usize) -> bool {
 }
 
 /// Find an identifier within a clause (e.g., VARIABLES, CONSTANTS, SETS)
-fn find_identifier_in_clause(text: &str, clause: &str, identifier: &str) -> Option<Position> {
-    let lines: Vec<&str> = text.lines().collect();
+fn find_identifier_in_clause(
+    text: &str,
+    clause: &str,
+    identifier: &str,
+    window: (usize, usize),
+) -> Option<Position> {
     let id_chars: Vec<char> = identifier.chars().collect();
 
     // Find the clause line
     let mut in_clause = false;
-    for (line_num, line) in lines.iter().enumerate() {
+    for (line_num, line) in lines_in_window(text, window) {
         let trimmed = line.trim();
 
         // Check if we're entering the clause
@@ -426,12 +448,11 @@ fn find_identifier_in_clause(text: &str, clause: &str, identifier: &str) -> Opti
 }
 
 /// Find an event definition
-fn find_event_definition(text: &str, event_name: &str) -> Option<Position> {
-    let lines: Vec<&str> = text.lines().collect();
+fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -> Option<Position> {
     let event_kw: Vec<char> = "EVENT".chars().collect();
     let name_chars: Vec<char> = event_name.chars().collect();
 
-    for (line_num, line) in lines.iter().enumerate() {
+    for (line_num, line) in lines_in_window(text, window) {
         let chars: Vec<char> = line.chars().collect();
         // Look for "EVENT event_name"
         if let Some(event_pos) = char_find_substr(&chars, &event_kw, 0)
@@ -447,11 +468,10 @@ fn find_event_definition(text: &str, event_name: &str) -> Option<Position> {
 }
 
 /// Find INITIALISATION event definition
-fn find_initialisation_definition(text: &str) -> Option<Position> {
-    let lines: Vec<&str> = text.lines().collect();
+fn find_initialisation_definition(text: &str, window: (usize, usize)) -> Option<Position> {
     let kw: Vec<char> = "INITIALISATION".chars().collect();
 
-    for (line_num, line) in lines.iter().enumerate() {
+    for (line_num, line) in lines_in_window(text, window) {
         let chars: Vec<char> = line.chars().collect();
         if let Some(pos) = char_find_substr(&chars, &kw, 0) {
             return Some(Position::new(line_num as u32, pos as u32));
@@ -467,15 +487,15 @@ fn find_identifier_in_event(
     event_name: &str,
     clause: &str,
     identifier: &str,
+    window: (usize, usize),
 ) -> Option<Position> {
-    let lines: Vec<&str> = text.lines().collect();
     let id_chars: Vec<char> = identifier.chars().collect();
 
     // Find the event first
     let mut in_event = false;
     let mut in_clause = false;
 
-    for (line_num, line) in lines.iter().enumerate() {
+    for (line_num, line) in lines_in_window(text, window) {
         let trimmed = line.trim();
 
         // Check if we're entering the event
@@ -611,6 +631,9 @@ fn find_component_name_position(text: &str, component_name: &str) -> Option<Posi
 mod tests {
     use super::*;
 
+    /// Whole-file search window, the single-component default.
+    const FULL: (usize, usize) = (0, usize::MAX);
+
     #[test]
     fn test_definition_provider_creation() {
         let provider = DefinitionProvider::new();
@@ -701,13 +724,13 @@ mod tests {
     fn test_find_identifier_in_clause() {
         let text = "MACHINE test\nVARIABLES\n    count\n    total\nEND";
 
-        let pos = find_identifier_in_clause(text, "VARIABLES", "count");
+        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL);
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 2);
         assert!(pos.character >= 4); // After indentation
 
-        let pos = find_identifier_in_clause(text, "VARIABLES", "total");
+        let pos = find_identifier_in_clause(text, "VARIABLES", "total", FULL);
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 3);
@@ -717,7 +740,7 @@ mod tests {
     fn test_find_event_definition() {
         let text = "MACHINE test\nEVENTS\n    EVENT increment\n    WHERE\n        count < 10\n    END\nEND";
 
-        let pos = find_event_definition(text, "increment");
+        let pos = find_event_definition(text, "increment", FULL);
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 2);
@@ -727,7 +750,7 @@ mod tests {
     fn test_find_initialisation_definition() {
         let text = "MACHINE test\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        count := 0\n    END\nEND";
 
-        let pos = find_initialisation_definition(text);
+        let pos = find_initialisation_definition(text, FULL);
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 2);
@@ -767,7 +790,7 @@ mod tests {
         // Unicode characters on preceding lines shouldn't affect column positions
         let text = "MACHINE test\nINVARIANTS\n    @inv1 x ∈ ℕ\nVARIABLES\n    count\nEND";
 
-        let pos = find_identifier_in_clause(text, "VARIABLES", "count");
+        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL);
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 4);

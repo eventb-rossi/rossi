@@ -12,7 +12,7 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::deps::{DependencyGraph, kind_and_name};
-use rossi::parse;
+use rossi::parse_components;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
@@ -60,12 +60,14 @@ pub struct CrossReferenceManager {
     /// Structural dependency graph (SEES / REFINES / EXTENDS).
     graph: RwLock<DependencyGraph>,
 
-    /// Map from file URI to the component defined there.
-    uri_to_component: DashMap<String, ComponentLoc>,
+    /// Map from file URI to the components defined there. Most files hold a
+    /// single component, but `rossi import --merge` output concatenates
+    /// several into one file.
+    uri_to_component: DashMap<String, Vec<ComponentLoc>>,
 
     /// Map from component name to its file URI. Event-B component names are
-    /// unique within a project, so this is the 1:1 inverse of the relevant
-    /// part of `uri_to_component`.
+    /// unique within a project, so every name maps to exactly one file (a
+    /// file may own several names).
     name_to_uri: DashMap<String, String>,
 
     /// Workspace root path (if available)
@@ -100,70 +102,87 @@ impl CrossReferenceManager {
         self.workspace_root.read().clone()
     }
 
-    /// Update or add a component from a document
+    /// Update or add the components defined in a document
     pub fn update_component(&self, uri: String, text: &str) {
-        debug!("Updating component for URI: {}", uri);
+        debug!("Updating components for URI: {}", uri);
 
-        let component = match parse(text) {
-            Ok(comp) => comp,
+        let components = match parse_components(text) {
+            Ok(comps) => comps,
             Err(e) => {
-                debug!("Failed to parse component for cross-references: {}", e);
-                // Drop any previously-indexed component for this URI.
+                debug!("Failed to parse components for cross-references: {}", e);
+                // Drop any previously-indexed components for this URI.
                 self.remove_component(&uri);
                 return;
             }
         };
 
-        let (kind, name) = kind_and_name(&component);
+        // Component names are unique per project; within one file, keep the
+        // first occurrence of a duplicated name (the maps can hold only one).
+        let mut locs: Vec<ComponentLoc> = Vec::new();
+        let mut kept: Vec<&rossi::Component> = Vec::new();
+        for component in &components {
+            let (kind, name) = kind_and_name(component);
+            if locs.iter().any(|l| l.name == name) {
+                warn!("Duplicate component name `{name}` in {uri}; keeping the first occurrence");
+                continue;
+            }
+            locs.push(ComponentLoc { kind, name });
+            kept.push(component);
+        }
 
-        // Snapshot the previous occupant of this URI (clone out, drop guard).
+        // Snapshot the previous occupants of this URI (clone out, drop guard).
         let previous = self.uri_to_component.get(&uri).map(|r| r.value().clone());
 
         {
             let mut graph = self.graph.write();
-            if let Some(prev) = &previous
-                && (prev.kind != kind || prev.name != name)
-            {
-                graph.remove(prev.kind, &prev.name);
+            for prev in previous.iter().flatten() {
+                if !locs
+                    .iter()
+                    .any(|l| l.kind == prev.kind && l.name == prev.name)
+                {
+                    graph.remove(prev.kind, &prev.name);
+                }
             }
-            graph.upsert_component(&component);
+            for component in &kept {
+                graph.upsert_component(component);
+            }
         }
 
-        // If the component was renamed, drop the stale name→URI entry (only if
-        // it still points at this file).
-        if let Some(prev) = &previous
-            && prev.name != name
-            && self
-                .name_to_uri
-                .get(&prev.name)
-                .is_some_and(|u| u.value() == &uri)
-        {
-            self.name_to_uri.remove(&prev.name);
+        // Drop stale name→URI entries for components renamed or removed from
+        // this file (only if they still point at this file).
+        for prev in previous.iter().flatten() {
+            if !locs.iter().any(|l| l.name == prev.name)
+                && self
+                    .name_to_uri
+                    .get(&prev.name)
+                    .is_some_and(|u| u.value() == &uri)
+            {
+                self.name_to_uri.remove(&prev.name);
+            }
         }
 
-        self.uri_to_component.insert(
-            uri.clone(),
-            ComponentLoc {
-                kind,
-                name: name.clone(),
-            },
-        );
-        self.name_to_uri.insert(name, uri);
+        for loc in &locs {
+            self.name_to_uri.insert(loc.name.clone(), uri.clone());
+        }
+        self.uri_to_component.insert(uri, locs);
     }
 
-    /// Remove a component when its file is deleted
+    /// Remove a file's components when the file is deleted
     #[allow(dead_code)]
     pub fn remove_component(&self, uri: &str) {
-        debug!("Removing component for URI: {}", uri);
+        debug!("Removing components for URI: {}", uri);
 
-        if let Some((_uri, loc)) = self.uri_to_component.remove(uri) {
-            self.graph.write().remove(loc.kind, &loc.name);
-            if self
-                .name_to_uri
-                .get(&loc.name)
-                .is_some_and(|u| u.value().as_str() == uri)
-            {
-                self.name_to_uri.remove(&loc.name);
+        if let Some((_uri, locs)) = self.uri_to_component.remove(uri) {
+            let mut graph = self.graph.write();
+            for loc in &locs {
+                graph.remove(loc.kind, &loc.name);
+                if self
+                    .name_to_uri
+                    .get(&loc.name)
+                    .is_some_and(|u| u.value().as_str() == uri)
+                {
+                    self.name_to_uri.remove(&loc.name);
+                }
             }
         }
     }
@@ -194,12 +213,12 @@ impl CrossReferenceManager {
         })
     }
 
-    /// Get component name from URI
+    /// Get the name of the first component in a file
     #[allow(dead_code)]
     pub fn get_component_name(&self, uri: &str) -> Option<String> {
         self.uri_to_component
             .get(uri)
-            .map(|loc| loc.value().name.clone())
+            .and_then(|locs| locs.value().first().map(|loc| loc.name.clone()))
     }
 
     /// Find all components that reference a given component
@@ -400,6 +419,49 @@ END
 
         assert_eq!(manager.all_component_names().len(), 1);
         assert!(manager.find_component_uri("base_ctx").is_some());
+    }
+
+    #[test]
+    fn test_update_multi_component_file() {
+        let manager = CrossReferenceManager::new();
+        let uri = "file:///merged.eventb".to_string();
+
+        manager.update_component(
+            uri.clone(),
+            "CONTEXT ctx\nEND\n\nMACHINE mch\nSEES ctx\nEND\n",
+        );
+
+        assert_eq!(manager.all_component_names().len(), 2);
+        assert_eq!(manager.find_component_uri("ctx"), Some(uri.clone()));
+        assert_eq!(manager.find_component_uri("mch"), Some(uri.clone()));
+        let mch = manager.get_component("mch").unwrap();
+        assert_eq!(
+            mch.references.get(&ReferenceKind::Sees).unwrap(),
+            &vec!["ctx".to_string()]
+        );
+
+        // An edit that drops one component must unindex exactly that one.
+        manager.update_component(uri.clone(), "CONTEXT ctx\nEND\n");
+        assert_eq!(manager.all_component_names(), vec!["ctx".to_string()]);
+        assert!(manager.find_component_uri("mch").is_none());
+
+        manager.remove_component(&uri);
+        assert!(manager.all_component_names().is_empty());
+        assert!(manager.find_component_uri("ctx").is_none());
+    }
+
+    #[test]
+    fn test_duplicate_names_in_one_file_first_wins() {
+        let manager = CrossReferenceManager::new();
+        let uri = "file:///dup.eventb".to_string();
+
+        manager.update_component(
+            uri.clone(),
+            "MACHINE m\nVARIABLES\n    x\nEND\n\nMACHINE m\nEND\n",
+        );
+
+        assert_eq!(manager.all_component_names(), vec!["m".to_string()]);
+        assert_eq!(manager.find_component_uri("m"), Some(uri));
     }
 
     #[test]

@@ -64,8 +64,8 @@ impl SemanticTokensProvider {
         // Parse the document, falling back to error recovery: highlighting
         // must not vanish (and flicker back to the TextMate grammar with the
         // issue-#24 comment bug) on every mid-edit keystroke.
-        let parsed = rossi::parse_with_recovery(text);
-        let Some(component) = parsed.component else {
+        let parsed = rossi::parse_components_with_recovery(text);
+        let Some(components) = parsed.component else {
             debug!(
                 "Failed to parse document for semantic tokens: {:?}",
                 parsed.errors.first()
@@ -73,12 +73,14 @@ impl SemanticTokensProvider {
             return None;
         };
 
-        // Extract semantic tokens from the AST
+        // Extract semantic tokens from the AST, one component at a time
         let mut builder = SemanticTokensBuilder::new(text);
 
-        match &component {
-            Component::Context(ctx) => builder.visit_context(ctx),
-            Component::Machine(mch) => builder.visit_machine(mch),
+        for component in &components {
+            match component {
+                Component::Context(ctx) => builder.visit_context(ctx),
+                Component::Machine(mch) => builder.visit_machine(mch),
+            }
         }
 
         builder.emit_comment_tokens();
@@ -292,9 +294,22 @@ impl<'a> SemanticTokensBuilder<'a> {
         });
     }
 
+    /// Clear the per-component declared-name tracking so identifiers declared
+    /// in one component are not colored as such inside a sibling component.
+    fn reset_component_state(&mut self) {
+        self.variables.clear();
+        self.constants.clear();
+        self.sets.clear();
+        self.parameters.clear();
+    }
+
     /// Visit a context
     fn visit_context(&mut self, ctx: &Context) {
-        let mut current_offset = 0;
+        // Scope the declared-name tracking and the keyword/identifier scans
+        // to this component: in a multi-component document, searches start at
+        // the component's own header, not at the top of the file.
+        self.reset_component_state();
+        let mut current_offset = ctx.span.map_or(0, |s| s.start);
 
         // CONTEXT keyword
         self.advance_past_keyword(KeywordId::Context, &mut current_offset);
@@ -379,7 +394,9 @@ impl<'a> SemanticTokensBuilder<'a> {
 
     /// Visit a machine
     fn visit_machine(&mut self, mch: &Machine) {
-        let mut current_offset = 0;
+        // See visit_context — searches are anchored to this component.
+        self.reset_component_state();
+        let mut current_offset = mch.span.map_or(0, |s| s.start);
 
         // MACHINE keyword
         self.advance_past_keyword(KeywordId::Machine, &mut current_offset);

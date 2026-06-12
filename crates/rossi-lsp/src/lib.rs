@@ -15,6 +15,7 @@ pub use tower_lsp::lsp_types;
 pub mod analysis;
 pub mod code_actions;
 pub mod completion;
+pub mod component_util;
 pub mod config;
 pub mod cross_references;
 pub mod definition;
