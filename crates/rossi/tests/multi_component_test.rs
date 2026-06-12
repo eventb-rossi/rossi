@@ -67,13 +67,7 @@ fn test_traffic_light_file() {
     let result = parse_components(source).unwrap();
     assert_eq!(result.len(), 4);
 
-    let names: Vec<&str> = result
-        .iter()
-        .map(|c| match c {
-            Component::Context(ctx) => ctx.name.as_str(),
-            Component::Machine(m) => m.name.as_str(),
-        })
-        .collect();
+    let names: Vec<&str> = result.iter().map(|c| c.name()).collect();
     assert_eq!(names, vec!["M0", "C1", "M1", "M2"]);
 
     // Verify types
@@ -94,15 +88,7 @@ fn test_roundtrip_multi_component() {
     assert_eq!(components.len(), reparsed.len());
 
     for (orig, re) in components.iter().zip(reparsed.iter()) {
-        let orig_name = match orig {
-            Component::Context(c) => &c.name,
-            Component::Machine(m) => &m.name,
-        };
-        let re_name = match re {
-            Component::Context(c) => &c.name,
-            Component::Machine(m) => &m.name,
-        };
-        assert_eq!(orig_name, re_name);
+        assert_eq!(orig.name(), re.name());
     }
 }
 

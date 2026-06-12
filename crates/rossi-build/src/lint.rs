@@ -148,10 +148,7 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
 fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
     let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for pc in &project.components {
-        let name = match &pc.component {
-            Component::Context(c) => c.name.as_str(),
-            Component::Machine(m) => m.name.as_str(),
-        };
+        let name = pc.component.name();
         by_name.entry(name).or_default().push(pc.filename.as_str());
     }
     by_name

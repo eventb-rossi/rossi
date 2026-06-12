@@ -5,7 +5,7 @@
 //! one file per component, or a single merged file with `--merge`.
 
 use clap::Args;
-use rossi::{Component, NamedComponent, PrettyPrinter, parse_zip_file};
+use rossi::{NamedComponent, PrettyPrinter, parse_zip_file};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -108,7 +108,7 @@ fn run_inner(cli: &ImportArgs) -> CmdResult<()> {
         // Write each component to a separate file in the output directory
         fs::create_dir_all(&cli.output)?;
         for named in &all_components {
-            let filename = format!("{}.eventb", component_name(named));
+            let filename = format!("{}.eventb", named.component.name());
             let path = cli.output.join(&filename);
             let text = printer.print_component(&named.component);
             fs::write(&path, format!("{}\n", text))?;
@@ -150,19 +150,12 @@ fn parse_rodin_directory(dir: &Path) -> CmdResult<Vec<NamedComponent>> {
     Ok(components)
 }
 
-fn component_name(named: &NamedComponent) -> &str {
-    match &named.component {
-        Component::Context(c) => &c.name,
-        Component::Machine(m) => &m.name,
-    }
-}
-
 fn reorder_components(components: &mut [NamedComponent], order: &str) {
     let names: Vec<&str> = order.split(',').map(|s| s.trim()).collect();
 
     // Warn about names that don't match any component
     for name in &names {
-        if !components.iter().any(|c| component_name(c) == *name) {
+        if !components.iter().any(|c| c.component.name() == *name) {
             eprintln!("Warning: '{}' does not match any component", name);
         }
     }
@@ -171,7 +164,7 @@ fn reorder_components(components: &mut [NamedComponent], order: &str) {
     // sorted by their position in the list. Unmentioned components keep their
     // original relative order and appear after the named ones.
     let order_pos = |c: &NamedComponent| -> usize {
-        let n = component_name(c);
+        let n = c.component.name();
         names
             .iter()
             .position(|&name| name == n)
