@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 keywords = ["parser", "event-b", "formal-methods", "verification"]
 categories = ["parsing", "development-tools"]
+# Keep the published crate lean: the example .zip archives (~4.5 MB) are only
+# read at runtime by integration tests, never compiled into the library.
+exclude = ["examples/*.zip"]
 
 [dependencies]
 pest.workspace = true
