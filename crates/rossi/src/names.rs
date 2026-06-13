@@ -30,6 +30,19 @@ pub fn is_math_identifier_part(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '\''
 }
 
+/// Regex character-class *body* (the part between `[` and `]`) matching
+/// [`is_math_identifier_start`] — the first char of any identifier or
+/// component name. The canonical regex spelling of the name charset for
+/// editor-highlighter generators (consumed today by the Emacs generator),
+/// kept in step with the predicate by a parity test. A generator wraps these
+/// classes in its own regex flavor.
+pub const IDENT_START_CLASS: &str = "A-Za-z_";
+
+/// Regex character-class body matching [`is_math_identifier_part`] — the
+/// non-first chars of an identifier and the chars of a component name's
+/// `-`-joined segments. See [`IDENT_START_CLASS`].
+pub const IDENT_PART_CLASS: &str = "A-Za-z0-9_'";
+
 /// Why a name failed [`check_math_identifier`] / [`check_component_name`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameError {
@@ -157,6 +170,26 @@ mod tests {
             ("a.b", NameError::BadChar('.')),
         ] {
             assert_eq!(check_component_name(bad), Err(err), "{bad:?}");
+        }
+    }
+
+    /// Parity for the highlighter char-class consts: their literal spelling is
+    /// pinned (so the generated charset can't be edited by accident), and the
+    /// predicates are checked to accept exactly the chars that spelling
+    /// describes (so a predicate change without a matching const change fails
+    /// here). Keeps the generated grammars in step with
+    /// [`is_math_identifier_start`] / [`is_math_identifier_part`].
+    #[test]
+    fn ident_class_consts_match_predicates() {
+        assert_eq!(IDENT_START_CLASS, "A-Za-z_");
+        assert_eq!(IDENT_PART_CLASS, "A-Za-z0-9_'");
+
+        let start = |c: char| c.is_ascii_alphabetic() || c == '_';
+        let part = |c: char| start(c) || c.is_ascii_digit() || c == '\'';
+        // ASCII plus the Latin-1 supplement (covers non-ASCII letters like 'ä').
+        for c in '\0'..='\u{2ff}' {
+            assert_eq!(is_math_identifier_start(c), start(c), "start {c:?}");
+            assert_eq!(is_math_identifier_part(c), part(c), "part {c:?}");
         }
     }
 

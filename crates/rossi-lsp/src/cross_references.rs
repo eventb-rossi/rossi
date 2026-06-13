@@ -290,6 +290,13 @@ impl CrossReferenceManager {
         self.graph.read().component_names()
     }
 
+    /// Workspace component names of a single kind, in arbitrary order. Clones
+    /// only that kind's names under a single read-lock (no reference-list
+    /// cloning), unlike repeated [`Self::get_component`] calls.
+    pub fn component_names_of_kind(&self, kind: ComponentKind) -> Vec<String> {
+        self.graph.read().component_names_of_kind(kind)
+    }
+
     /// Load the source text of a component by name.
     /// Tries open documents first (via DocumentManager), falls back to disk.
     pub fn load_component_text(

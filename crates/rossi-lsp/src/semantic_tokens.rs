@@ -174,9 +174,19 @@ impl<'a> SemanticTokensBuilder<'a> {
 
     /// Find `needle` in `haystack` (a same-length view of the source, byte
     /// offsets interchangeable) starting at `start_offset`, skipping matches
-    /// inside comments and matches that are part of a longer word
-    /// (e.g. `end` inside `extended`).
-    fn find_word(&self, haystack: &str, needle: &str, start_offset: usize) -> Option<usize> {
+    /// inside comments and matches that are part of a longer word (e.g. `end`
+    /// inside `extended`). `bounded` is the word-boundary rule: the structural
+    /// rule (where `-` is part of a word) for keywords and hyphenated component
+    /// names — so the `end` of `end-update` is not a whole word — and the math
+    /// rule for plain identifiers, where `-` is the subtraction operator. This
+    /// mirrors the per-needle choice in `references.rs` (`WordBoundary::for_name`).
+    fn find_word(
+        &self,
+        haystack: &str,
+        needle: &str,
+        start_offset: usize,
+        bounded: fn(&str, usize, usize) -> bool,
+    ) -> Option<usize> {
         // A needle may start with a non-ASCII char (`label_text` accepts any
         // non-whitespace), so advance by whole chars to stay on boundaries.
         let step = needle.chars().next().map_or(1, char::len_utf8);
@@ -185,7 +195,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             let offset = from + pos;
             if let Some(end) = self.comment_end_after(offset) {
                 from = end;
-            } else if !keywords::is_word_bounded(self.text, offset, needle.len()) {
+            } else if !bounded(self.text, offset, needle.len()) {
                 from = offset + step;
             } else {
                 return Some(offset);
@@ -201,8 +211,16 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// equals `keyword.len()`.
     fn find_keyword(&self, keyword: &str, start_offset: usize) -> Option<(usize, usize)> {
         let needle = keyword.to_ascii_lowercase();
-        self.find_word(&self.text_lower, &needle, start_offset)
-            .map(|offset| (offset, keyword.len()))
+        // Keywords are structural: a `-` next to a keyword only ever occurs
+        // inside a component name (`end-update`), never as a real keyword, so
+        // the structural boundary keeps the scan off those fragments.
+        self.find_word(
+            &self.text_lower,
+            &needle,
+            start_offset,
+            keywords::is_structural_word_bounded,
+        )
+        .map(|offset| (offset, keyword.len()))
     }
 
     /// Find the keyword identified by `id` from `current_offset`, emit a token
@@ -248,10 +266,17 @@ impl<'a> SemanticTokensBuilder<'a> {
     }
 
     /// Find the position of an identifier in the text, as a whole word and
-    /// never inside a comment.
+    /// never inside a comment. The boundary rule depends on the needle: a
+    /// hyphenated component name (`do-step`) takes the structural boundary, a
+    /// plain math identifier the math boundary (see [`keywords::word_bounded_for_name`]).
     fn find_identifier(&self, identifier: &str, start_offset: usize) -> Option<(usize, usize)> {
-        self.find_word(self.text, identifier, start_offset)
-            .map(|offset| (offset, identifier.len()))
+        self.find_word(
+            self.text,
+            identifier,
+            start_offset,
+            keywords::word_bounded_for_name(identifier),
+        )
+        .map(|offset| (offset, identifier.len()))
     }
 
     /// Add a keyword token (keywords are ASCII, so byte length == char length)

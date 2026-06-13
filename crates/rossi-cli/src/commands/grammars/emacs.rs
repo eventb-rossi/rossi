@@ -57,12 +57,13 @@ pub fn render(model: &Model) -> String {
     let event_kw = fold_ascii_case("event");
     let context_kw = fold_ascii_case("context");
     let machine_kw = fold_ascii_case("machine");
+    let name = component_name_regex();
     out.push_str(&format!(
         r#"(defvar eventb-font-lock-keywords
   `((,eventb-keywords-regexp . font-lock-keyword-face)
     (,eventb-status-keywords-regexp . font-lock-keyword-face)
-    ("\\<{event_kw}\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-function-name-face)
-    ("\\<\\(?:{context_kw}\\|{machine_kw}\\)\\s-+\\([a-zA-Z_][a-zA-Z0-9_]*\\)" 1 font-lock-type-face)
+    ("\\<{event_kw}\\s-+{name}" 1 font-lock-function-name-face)
+    ("\\<\\(?:{context_kw}\\|{machine_kw}\\)\\s-+{name}" 1 font-lock-type-face)
     (,eventb-constants-regexp . font-lock-constant-face)
     (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
     (,eventb-builtins-regexp . font-lock-function-name-face)
@@ -78,6 +79,19 @@ must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
     ));
 
     out
+}
+
+/// The Emacs regex capturing a `component_name` as group 1, mirroring the
+/// grammar rule (`identifier ("-" part+)*`) so hyphenated names like
+/// `end-update` highlight whole. The charset is the single source of truth in
+/// `rossi::names`; only this Emacs regex flavor lives here. Double backslashes:
+/// the pattern is emitted inside an Elisp string literal.
+fn component_name_regex() -> String {
+    format!(
+        r"\\([{s}][{p}]*\\(?:-[{p}]+\\)*\\)",
+        s = rossi::names::IDENT_START_CLASS,
+        p = rossi::names::IDENT_PART_CLASS,
+    )
 }
 
 /// The non-empty word groups, in model order.
@@ -201,5 +215,22 @@ mod tests {
     #[test]
     fn fold_ascii_case_passes_digits() {
         assert_eq!(fold_ascii_case("nat1"), "[Nn][Aa][Tt]1");
+    }
+
+    #[test]
+    fn name_capture_spans_hyphen_segments() {
+        // The EVENT/CONTEXT/MACHINE name capture mirrors `component_name`, so it
+        // continues past `-` (issue #36) rather than stopping at the first
+        // segment, and the built regex actually lands in the rendered region.
+        let region = render(&Model::build());
+        let name = component_name_regex();
+        assert!(
+            name.contains(r"\\(?:-[A-Za-z0-9_']+\\)*"),
+            "regex must include a hyphen-segment group, got {name}"
+        );
+        assert!(
+            region.contains(&name),
+            "name capture must appear in the rendered region:\n{region}"
+        );
     }
 }
