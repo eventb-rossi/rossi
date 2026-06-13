@@ -20,6 +20,12 @@
 //! they are already broken or are eventb-checker/Rodin disagreements, not rossi
 //! regressions.
 //!
+//! `checker_results.tsv` is carried through as informational corpus metadata,
+//! not as the oracle for this test: if Rodin builds a Rossi-regenerated archive
+//! accurately, the model passes even when another checker rejects the pristine
+//! source. Expected checker/Rodin disagreements belong in `model_flags.tsv`
+//! under `checker_divergence`.
+//!
 //! `#[ignore]` by default: the corpus and the Rodin runtime live outside the
 //! repo. Run locally (after preparing a Rodin runtime — `rodin-install.sh` for
 //! native, or a pre-built Docker image; the per-model timeout does not cover a
@@ -42,24 +48,18 @@
 //! Output:
 //!   target/eventb-models-regen-rodin/<model>.zip — regenerated archives
 //!                                                  (mutated in place by Rodin)
-//!   target/rossi-build-rodin-corpus.tsv          — model | expected | actual | verdict | notes
+//!   target/rossi-build-rodin-corpus.tsv          — model | checker_status | rodin_actual | verdict | notes
 //!
 //! Verdicts:
-//!   match    — reference `valid` and Rodin built it accurately, or reference
-//!              `invalid` and Rodin did not build it cleanly
+//!   match    — Rodin built every component accurately after Rossi regeneration
 //!   known    — a model flagged `defective` (broken source that cannot
 //!              regenerate), `unsupported` (needs an Event-B extension rossi
 //!              doesn't support yet, e.g. the theory plugin), or
 //!              `rodin_rejected` (Rodin's static checker has never accepted
 //!              the pristine archive, so the failure predates rossi) in the
 //!              corpus `model_flags.tsv`
-//!   diverge  — reference `invalid` but Rodin built it cleanly (checker/Rodin
-//!              disagreement; not a rossi regression)
-//!   untested — reference `invalid` but the harness never got a Rodin verdict
-//!              (rossi could not regenerate the archive, or the build timed
-//!              out); reported, never fails
-//!   no_ref   — model has no row in the reference TSV
-//!   regress  — reference `valid` but rossi+Rodin failed to build it (fails the test)
+//!   regress  — an unflagged Rossi regeneration, Rodin launch/load, timeout, or
+//!              static-check failure (fails the test)
 
 mod common;
 
@@ -129,11 +129,16 @@ fn rodin_builds_regenerated_corpus() {
         .collect();
     zips.sort();
 
-    let known: std::collections::BTreeSet<&str> = flags
+    let known_failure: std::collections::BTreeSet<&str> = flags
         .iter()
         .filter(|(_, f)| {
             f.contains("defective") || f.contains("unsupported") || f.contains("rodin_rejected")
         })
+        .map(|(m, _)| m.as_str())
+        .collect();
+    let checker_divergence: std::collections::BTreeSet<&str> = flags
+        .iter()
+        .filter(|(_, f)| f.contains("checker_divergence"))
         .map(|(m, _)| m.as_str())
         .collect();
     let mut rows = Vec::<Row>::new();
@@ -151,49 +156,45 @@ fn rodin_builds_regenerated_corpus() {
             Err(e) => Outcome::Regen(e.to_string()),
         };
 
-        let expected_outcome = expected
+        let checker_status = expected
             .get(&model)
             .cloned()
             .unwrap_or_else(|| "?".to_string());
         let actual_str = outcome.label();
         let built = actual_str == "built";
-        let verdict = match expected_outcome.as_str() {
-            "valid" => {
-                if built {
-                    "match"
-                } else if known.contains(model.as_str()) {
-                    "known"
-                } else {
-                    regressions += 1;
-                    "regress"
-                }
-            }
-            "invalid" => {
-                if built {
-                    "diverge"
-                } else if matches!(outcome, Outcome::Regen(_) | Outcome::Timeout) {
-                    // Rodin never delivered a verdict — calling this "match"
-                    // would claim an agreement that was never tested.
-                    "untested"
-                } else {
-                    "match"
-                }
-            }
-            _ => "no_ref",
+        let verdict = if built {
+            "match"
+        } else if known_failure.contains(model.as_str()) {
+            "known"
+        } else {
+            regressions += 1;
+            "regress"
+        };
+        let notes = if built && checker_divergence.contains(model.as_str()) {
+            "checker_divergence: eventb-checker rejects this archive, but Rodin builds it cleanly"
+                .to_string()
+        } else {
+            outcome.notes().to_string()
         };
         rows.push(Row {
             model: model.clone(),
-            expected: expected_outcome,
+            expected: checker_status,
             actual: actual_str.to_string(),
             verdict: verdict.to_string(),
-            notes: outcome.notes().to_string(),
+            notes,
         });
     }
 
     let report = workspace_target().join("rossi-build-rodin-corpus.tsv");
     write_report(
         &report,
-        &["model", "expected", "actual", "verdict", "notes"],
+        &[
+            "model",
+            "checker_status",
+            "rodin_actual",
+            "verdict",
+            "notes",
+        ],
         &rows.iter().map(Row::to_fields).collect::<Vec<_>>(),
     );
     println!(
@@ -204,7 +205,7 @@ fn rodin_builds_regenerated_corpus() {
     );
     for r in rows.iter().filter(|r| r.verdict == "regress").take(20) {
         eprintln!(
-            "  REGRESS  {}: expected {}, got {} — {}",
+            "  REGRESS  {}: checker {}, rodin {} — {}",
             r.model, r.expected, r.actual, r.notes
         );
     }
