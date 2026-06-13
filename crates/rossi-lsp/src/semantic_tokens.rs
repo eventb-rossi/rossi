@@ -9,9 +9,9 @@ use crate::lsp_types::{
     SemanticTokensParams, SemanticTokensResult,
 };
 use rossi::ast::{
-    Component, Context, Event, LabeledAction, LabeledPredicate, Machine, Predicate, Span,
+    Component, Context, Event, InitialisationEvent, LabeledAction, LabeledPredicate, Machine, Span,
 };
-use rossi::comments::comment_spans;
+use rossi::comments::{LexicalSpans, lexical_spans, span_containing};
 use rossi::keywords::{self, KeywordId};
 use tracing::debug;
 
@@ -84,6 +84,7 @@ impl SemanticTokensProvider {
         }
 
         builder.emit_comment_tokens();
+        builder.emit_label_tokens();
 
         let tokens = builder.build();
 
@@ -105,19 +106,13 @@ struct SemanticTokensBuilder<'a> {
     text_lower: String,
     /// Line offsets for quick position calculation
     line_offsets: Vec<usize>,
-    /// Byte spans of all comments, sorted and disjoint. Keyword/identifier
-    /// searches must never match inside these (issue #24).
-    comment_spans: Vec<Span>,
+    /// One lexical scan of the source: the byte spans of all comments and all
+    /// `@`-labels, each sorted and disjoint. Keyword/identifier searches must
+    /// never match inside either (issue #24); label tokens are emitted directly
+    /// from `lexical.labels` rather than re-found by the AST walk.
+    lexical: LexicalSpans,
     /// Collected semantic tokens
     tokens: Vec<SemanticTokenData>,
-    /// Declared variables for tracking
-    variables: Vec<String>,
-    /// Declared constants for tracking
-    constants: Vec<String>,
-    /// Declared sets for tracking
-    sets: Vec<String>,
-    /// Event parameters for tracking
-    parameters: Vec<String>,
 }
 
 /// Internal representation of a semantic token with absolute position
@@ -144,19 +139,22 @@ impl<'a> SemanticTokensBuilder<'a> {
             text,
             text_lower: text.to_ascii_lowercase(),
             line_offsets,
-            comment_spans: comment_spans(text),
+            lexical: lexical_spans(text),
             tokens: Vec::new(),
-            variables: Vec::new(),
-            constants: Vec::new(),
-            sets: Vec::new(),
-            parameters: Vec::new(),
         }
     }
 
     /// If `offset` falls inside a comment, the offset just past that comment
     /// (where a search should resume).
     fn comment_end_after(&self, offset: usize) -> Option<usize> {
-        rossi::comments::span_containing(&self.comment_spans, offset).map(|s| s.end)
+        span_containing(&self.lexical.comments, offset).map(|s| s.end)
+    }
+
+    /// If `offset` falls inside an `@`-label, the offset just past that label.
+    /// A keyword/identifier spelled inside label text (`@where`, a constant `c`
+    /// inside `@abc`) is opaque, exactly as the recovery parser treats it.
+    fn label_end_after(&self, offset: usize) -> Option<usize> {
+        span_containing(&self.lexical.labels, offset).map(|s| s.end)
     }
 
     /// Find position (line, column) from byte offset.
@@ -174,12 +172,12 @@ impl<'a> SemanticTokensBuilder<'a> {
 
     /// Find `needle` in `haystack` (a same-length view of the source, byte
     /// offsets interchangeable) starting at `start_offset`, skipping matches
-    /// inside comments and matches that are part of a longer word (e.g. `end`
-    /// inside `extended`). `bounded` is the word-boundary rule: the structural
-    /// rule (where `-` is part of a word) for keywords and hyphenated component
-    /// names — so the `end` of `end-update` is not a whole word — and the math
-    /// rule for plain identifiers, where `-` is the subtraction operator. This
-    /// mirrors the per-needle choice in `references.rs` (`WordBoundary::for_name`).
+    /// inside comments or `@`-labels and matches that are part of a longer word
+    /// (e.g. `end` inside `extended`). `bounded` is the word-boundary rule: the
+    /// structural rule (where `-` is part of a word) for keywords and hyphenated
+    /// component names — so the `end` of `end-update` is not a whole word — and
+    /// the math rule for plain identifiers, where `-` is the subtraction
+    /// operator (mirrors `references.rs`/`keywords::word_bounded_for_name`).
     fn find_word(
         &self,
         haystack: &str,
@@ -194,6 +192,8 @@ impl<'a> SemanticTokensBuilder<'a> {
         while let Some(pos) = haystack[from..].find(needle) {
             let offset = from + pos;
             if let Some(end) = self.comment_end_after(offset) {
+                from = end;
+            } else if let Some(end) = self.label_end_after(offset) {
                 from = end;
             } else if !bounded(self.text, offset, needle.len()) {
                 from = offset + step;
@@ -223,13 +223,17 @@ impl<'a> SemanticTokensBuilder<'a> {
         .map(|offset| (offset, keyword.len()))
     }
 
-    /// Find the keyword identified by `id` from `current_offset`, emit a token
-    /// for the spelling that matched, and return the offset just past it.
+    /// Find the keyword identified by `id` from `from`, emit a token for the
+    /// spelling that matched, and return the offset just past it. Only a
+    /// spelling that ends at or before `bound` (the enclosing construct's span
+    /// end) is accepted, so a search can never cross into a sibling construct.
     /// Tries each spelling in order (so `WHERE`/`WHEN`, `THEN`/`BEGIN` are both
-    /// handled), and returns `None` if no spelling is found.
-    fn mark_keyword(&mut self, id: KeywordId, current_offset: usize) -> Option<usize> {
+    /// handled), and returns `None` if no spelling is found within `bound`.
+    fn mark_keyword(&mut self, id: KeywordId, from: usize, bound: usize) -> Option<usize> {
         for spelling in keywords::keyword(id).spellings {
-            if let Some((offset, len)) = self.find_keyword(spelling, current_offset) {
+            if let Some((offset, len)) = self.find_keyword(spelling, from)
+                && offset + len <= bound
+            {
                 self.add_keyword(spelling, offset);
                 return Some(offset + len);
             }
@@ -238,37 +242,18 @@ impl<'a> SemanticTokensBuilder<'a> {
     }
 
     /// Emit a token for keyword `id` and advance `offset` past it in place
-    /// (leaving `offset` unchanged if the keyword is not found).
-    fn advance_past_keyword(&mut self, id: KeywordId, offset: &mut usize) {
-        if let Some(next) = self.mark_keyword(id, *offset) {
+    /// (leaving `offset` unchanged if the keyword is not found within `bound`).
+    fn advance_past_keyword(&mut self, id: KeywordId, offset: &mut usize, bound: usize) {
+        if let Some(next) = self.mark_keyword(id, *offset, bound) {
             *offset = next;
         }
     }
 
-    /// Like [`Self::mark_keyword`] but only marks a spelling that ends at or before
-    /// `bound`, returning the offset just past it (or `from` unchanged if none).
-    ///
-    /// Used to color a `THEOREMS` header that sits between two predicates: a
-    /// THEOREMS section folds into the axioms/invariants vec with `is_theorem = true`
-    /// (Rodin models a theorem as a flagged axiom/invariant, so there is no THEOREMS
-    /// AST node to drive the walk). Bounding by the next predicate's start keeps the
-    /// search from grabbing a header that belongs to a later predicate.
-    fn mark_keyword_within(&mut self, id: KeywordId, from: usize, bound: usize) -> usize {
-        for spelling in keywords::keyword(id).spellings {
-            if let Some((offset, len)) = self.find_keyword(spelling, from)
-                && offset + len <= bound
-            {
-                self.add_keyword(spelling, offset);
-                return offset + len;
-            }
-        }
-        from
-    }
-
     /// Find the position of an identifier in the text, as a whole word and
-    /// never inside a comment. The boundary rule depends on the needle: a
-    /// hyphenated component name (`do-step`) takes the structural boundary, a
-    /// plain math identifier the math boundary (see [`keywords::word_bounded_for_name`]).
+    /// never inside a comment or label. The boundary rule depends on the needle:
+    /// a hyphenated component name (`do-step`) takes the structural boundary, a
+    /// plain math identifier the math boundary (see
+    /// [`keywords::word_bounded_for_name`]).
     fn find_identifier(&self, identifier: &str, start_offset: usize) -> Option<(usize, usize)> {
         self.find_word(
             self.text,
@@ -277,6 +262,18 @@ impl<'a> SemanticTokensBuilder<'a> {
             keywords::word_bounded_for_name(identifier),
         )
         .map(|offset| (offset, identifier.len()))
+    }
+
+    /// Like [`Self::find_identifier`] but only accepts a match that ends at or
+    /// before `bound`, keeping the search inside its construct's span.
+    fn find_identifier_within(
+        &self,
+        identifier: &str,
+        from: usize,
+        bound: usize,
+    ) -> Option<(usize, usize)> {
+        self.find_identifier(identifier, from)
+            .filter(|&(offset, len)| offset + len <= bound)
     }
 
     /// Add a keyword token (keywords are ASCII, so byte length == char length)
@@ -319,229 +316,315 @@ impl<'a> SemanticTokensBuilder<'a> {
         });
     }
 
-    /// Clear the per-component declared-name tracking so identifiers declared
-    /// in one component are not colored as such inside a sibling component.
-    fn reset_component_state(&mut self) {
-        self.variables.clear();
-        self.constants.clear();
-        self.sets.clear();
-        self.parameters.clear();
+    /// Emit an identifier token straight from its AST `span`, so its position
+    /// comes from the parser rather than a text re-search. Used for the
+    /// declaration names the parser already records (`name_span`,
+    /// `NamedElement.span`).
+    fn add_identifier_span(&mut self, span: Span, token_type: TokenType, is_declaration: bool) {
+        // Copy the `&str` out so the slice borrows the local, not `self`.
+        let text = self.text;
+        self.add_identifier(
+            &text[span.start..span.end],
+            span.start,
+            token_type,
+            is_declaration,
+        );
+    }
+
+    /// The `(cursor, bound)` to scan a construct with: its own span when the
+    /// parser recorded one, else the caller's fallback region (error recovery).
+    /// Centralizes the "anchor to span, degrade to a bounded text range" policy.
+    fn anchored(span: Option<Span>, fallback_from: usize, fallback_bound: usize) -> (usize, usize) {
+        (
+            span.map_or(fallback_from, |s| s.start),
+            span.map_or(fallback_bound, |s| s.end),
+        )
+    }
+
+    /// Mark a clause keyword (`SEES`/`EXTENDS`/`REFINES`) and color each of its
+    /// `names` as a non-declaration namespace reference. A no-op returning `cur`
+    /// unchanged when `names` is empty or the keyword is not found within `bound`.
+    fn mark_namespace_list(
+        &mut self,
+        id: KeywordId,
+        names: &[String],
+        mut cur: usize,
+        bound: usize,
+    ) -> usize {
+        if names.is_empty() {
+            return cur;
+        }
+        let Some(off) = self.mark_keyword(id, cur, bound) else {
+            return cur;
+        };
+        cur = off;
+        for name in names {
+            if let Some((offset, _)) = self.find_identifier_within(name, cur, bound) {
+                self.add_identifier(name, offset, TokenType::Namespace, false);
+                cur = offset + name.len();
+            }
+        }
+        cur
     }
 
     /// Visit a context
     fn visit_context(&mut self, ctx: &Context) {
-        // Scope the declared-name tracking and the keyword/identifier scans
-        // to this component: in a multi-component document, searches start at
-        // the component's own header, not at the top of the file.
-        self.reset_component_state();
-        let mut current_offset = ctx.span.map_or(0, |s| s.start);
+        // Anchor the keyword/identifier scans to this component: searches start
+        // at the component's own header and are bounded by its span end, so they
+        // can never reach a sibling component.
+        let (mut cur, bound) = Self::anchored(ctx.span, 0, self.text.len());
 
         // CONTEXT keyword
-        self.advance_past_keyword(KeywordId::Context, &mut current_offset);
+        self.advance_past_keyword(KeywordId::Context, &mut cur, bound);
 
-        // Context name
-        if let Some((offset, _)) = self.find_identifier(&ctx.name, current_offset) {
-            self.add_identifier(&ctx.name, offset, TokenType::Namespace, true);
-            current_offset = offset + ctx.name.len();
-        }
+        // Context name — straight from the parser's span when available.
+        cur = self.mark_name(
+            &ctx.name,
+            ctx.name_span,
+            cur,
+            bound,
+            TokenType::Namespace,
+            true,
+        );
 
         // EXTENDS clause
-        if !ctx.extends.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Extends, current_offset)
-        {
-            current_offset = off;
-
-            for extended in &ctx.extends {
-                if let Some((offset, _)) = self.find_identifier(extended, current_offset) {
-                    self.add_identifier(extended, offset, TokenType::Namespace, false);
-                    current_offset = offset + extended.len();
-                }
-            }
-        }
+        cur = self.mark_namespace_list(KeywordId::Extends, &ctx.extends, cur, bound);
 
         // SETS clause
         if !ctx.sets.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Sets, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Sets, cur, bound)
         {
-            current_offset = off;
-
+            cur = off;
             for set in &ctx.sets {
-                let set_name = set.name().to_string();
-                self.sets.push(set_name.clone());
-                if let Some((offset, _)) = self.find_identifier(&set_name, current_offset) {
-                    self.add_identifier(&set_name, offset, TokenType::Set, true);
-                    current_offset = offset + set_name.len();
-                }
+                // Sets carry no per-name span (only a whole-declaration one), so
+                // mark_name's bounded search locates the name — same shape as the
+                // other declaration lists.
+                cur = self.mark_name(set.name(), None, cur, bound, TokenType::Set, true);
             }
         }
 
         // CONSTANTS clause
         if !ctx.constants.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Constants, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Constants, cur, bound)
         {
-            current_offset = off;
-
+            cur = off;
             for constant in &ctx.constants {
-                self.constants.push(constant.name.clone());
-                if let Some((offset, _)) = self.find_identifier(&constant.name, current_offset) {
-                    self.add_identifier(&constant.name, offset, TokenType::Constant, true);
-                    current_offset = offset + constant.name.len();
-                }
+                cur = self.mark_name(
+                    &constant.name,
+                    constant.span,
+                    cur,
+                    bound,
+                    TokenType::Constant,
+                    true,
+                );
             }
         }
 
-        // AXIOMS clause
+        // AXIOMS clause (theorems fold into it with `is_theorem = true`)
         if !ctx.axioms.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Axioms, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Axioms, cur, bound)
         {
-            current_offset = off;
-
-            // A THEOREMS header can only sit where a predicate first becomes a
-            // theorem (theorems fold into `axioms`, so there is no node to drive the
-            // walk). Only search on that transition, not once per predicate.
-            let mut prev_is_theorem = false;
-            for axiom in &ctx.axioms {
-                if axiom.is_theorem
-                    && !prev_is_theorem
-                    && let Some(span) = &axiom.span
-                {
-                    current_offset =
-                        self.mark_keyword_within(KeywordId::Theorems, current_offset, span.start);
-                }
-                current_offset = self.visit_labeled_predicate(axiom, current_offset);
-                prev_is_theorem = axiom.is_theorem;
-            }
+            cur = self.visit_predicate_section(&ctx.axioms, off);
         }
 
         // END keyword
-        self.mark_keyword(KeywordId::End, current_offset);
+        self.mark_keyword(KeywordId::End, cur, bound);
+    }
+
+    /// Walk a section of labeled predicates (a context's axioms or a machine's
+    /// invariants), marking a THEOREMS header at the single point a predicate
+    /// first becomes a theorem. A THEOREMS section folds into the same vec with
+    /// `is_theorem = true` (Rodin models a theorem as a flagged axiom/invariant,
+    /// so there is no THEOREMS node to drive the walk); searching only on that
+    /// false→true transition, bounded by the next predicate's start, keeps the
+    /// header search from grabbing one that belongs to a later predicate.
+    fn visit_predicate_section(&mut self, preds: &[LabeledPredicate], mut cur: usize) -> usize {
+        let mut prev_is_theorem = false;
+        for pred in preds {
+            if pred.is_theorem
+                && !prev_is_theorem
+                && let Some(span) = &pred.span
+            {
+                // Bounding the THEOREMS-header search by the next predicate's
+                // start keeps it from grabbing a header for a later predicate.
+                cur = self
+                    .mark_keyword(KeywordId::Theorems, cur, span.start)
+                    .unwrap_or(cur);
+            }
+            cur = self.visit_labeled_predicate(pred, cur);
+            prev_is_theorem = pred.is_theorem;
+        }
+        cur
+    }
+
+    /// Emit a declaration/name token, preferring the parser's `span` and
+    /// falling back to a bounded text search when the parser did not record one
+    /// (error recovery). Returns the offset just past the name (unchanged when
+    /// nothing was found).
+    fn mark_name(
+        &mut self,
+        name: &str,
+        span: Option<Span>,
+        from: usize,
+        bound: usize,
+        token_type: TokenType,
+        is_declaration: bool,
+    ) -> usize {
+        if let Some(span) = span {
+            self.add_identifier_span(span, token_type, is_declaration);
+            span.end
+        } else if let Some((offset, _)) = self.find_identifier_within(name, from, bound) {
+            self.add_identifier(name, offset, token_type, is_declaration);
+            offset + name.len()
+        } else {
+            from
+        }
     }
 
     /// Visit a machine
     fn visit_machine(&mut self, mch: &Machine) {
-        // See visit_context — searches are anchored to this component.
-        self.reset_component_state();
-        let mut current_offset = mch.span.map_or(0, |s| s.start);
+        // See visit_context — searches are anchored to this component and
+        // bounded by its span end.
+        let (mut cur, bound) = Self::anchored(mch.span, 0, self.text.len());
 
         // MACHINE keyword
-        self.advance_past_keyword(KeywordId::Machine, &mut current_offset);
+        self.advance_past_keyword(KeywordId::Machine, &mut cur, bound);
 
-        // Machine name
-        if let Some((offset, _)) = self.find_identifier(&mch.name, current_offset) {
-            self.add_identifier(&mch.name, offset, TokenType::Namespace, true);
-            current_offset = offset + mch.name.len();
-        }
+        // Machine name — straight from the parser's span when available.
+        cur = self.mark_name(
+            &mch.name,
+            mch.name_span,
+            cur,
+            bound,
+            TokenType::Namespace,
+            true,
+        );
 
-        // REFINES clause
-        if let Some(ref refined) = mch.refines
-            && let Some(off) = self.mark_keyword(KeywordId::Refines, current_offset)
-        {
-            current_offset = off;
-
-            if let Some((offset, _)) = self.find_identifier(refined, current_offset) {
-                self.add_identifier(refined, offset, TokenType::Namespace, false);
-                current_offset = offset + refined.len();
-            }
+        // REFINES clause (a single namespace target)
+        if let Some(refined) = &mch.refines {
+            cur = self.mark_namespace_list(
+                KeywordId::Refines,
+                std::slice::from_ref(refined),
+                cur,
+                bound,
+            );
         }
 
         // SEES clause
-        if !mch.sees.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Sees, current_offset)
-        {
-            current_offset = off;
-
-            for seen in &mch.sees {
-                if let Some((offset, _)) = self.find_identifier(seen, current_offset) {
-                    self.add_identifier(seen, offset, TokenType::Namespace, false);
-                    current_offset = offset + seen.len();
-                }
-            }
-        }
+        cur = self.mark_namespace_list(KeywordId::Sees, &mch.sees, cur, bound);
 
         // VARIABLES clause
         if !mch.variables.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Variables, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Variables, cur, bound)
         {
-            current_offset = off;
-
+            cur = off;
             for variable in &mch.variables {
-                self.variables.push(variable.name.clone());
-                if let Some((offset, _)) = self.find_identifier(&variable.name, current_offset) {
-                    self.add_identifier(&variable.name, offset, TokenType::Variable, true);
-                    current_offset = offset + variable.name.len();
-                }
+                cur = self.mark_name(
+                    &variable.name,
+                    variable.span,
+                    cur,
+                    bound,
+                    TokenType::Variable,
+                    true,
+                );
             }
         }
 
-        // INVARIANTS clause
+        // INVARIANTS clause (theorems fold into it with `is_theorem = true`)
         if !mch.invariants.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Invariants, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Invariants, cur, bound)
         {
-            current_offset = off;
-
-            // See `visit_context`: only search for the THEOREMS header where a
-            // predicate first becomes a theorem, not once per invariant.
-            let mut prev_is_theorem = false;
-            for invariant in &mch.invariants {
-                if invariant.is_theorem
-                    && !prev_is_theorem
-                    && let Some(span) = &invariant.span
-                {
-                    current_offset =
-                        self.mark_keyword_within(KeywordId::Theorems, current_offset, span.start);
-                }
-                current_offset = self.visit_labeled_predicate(invariant, current_offset);
-                prev_is_theorem = invariant.is_theorem;
-            }
+            cur = self.visit_predicate_section(&mch.invariants, off);
         }
 
         // VARIANT clause
         if mch.variant.is_some() {
-            self.advance_past_keyword(KeywordId::Variant, &mut current_offset);
+            self.advance_past_keyword(KeywordId::Variant, &mut cur, bound);
         }
 
-        // INITIALISATION event
-        if let Some(init) = &mch.initialisation
-            && let Some(off) = self.mark_keyword(KeywordId::Initialisation, current_offset)
-        {
-            current_offset = off;
-
-            // Actions
-            for action in &init.actions {
-                current_offset = self.visit_action(action, current_offset);
-            }
-
-            self.advance_past_keyword(KeywordId::End, &mut current_offset);
+        // EVENTS header. It precedes INITIALISATION and every event in the
+        // source, so mark it *before* walking them — searching for it after
+        // INITIALISATION (which the cursor has already advanced past) would miss
+        // it and silently drop every event's highlighting.
+        if mch.initialisation.is_some() || !mch.events.is_empty() {
+            self.advance_past_keyword(KeywordId::Events, &mut cur, bound);
         }
 
-        // EVENTS clause
-        if !mch.events.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Events, current_offset)
-        {
-            current_offset = off;
-
-            for event in &mch.events {
-                current_offset = self.visit_event(event, current_offset);
-            }
+        // INITIALISATION and each event are anchored to their own spans, so a
+        // drifting machine cursor cannot drop or misplace their tokens. `cur`
+        // (just past the EVENTS header) and `bound` only anchor a construct that
+        // is itself missing a span (recovery), keeping its scan inside the
+        // machine instead of restarting at the top of the file.
+        if let Some(init) = &mch.initialisation {
+            self.visit_initialisation(init, cur, bound);
+        }
+        for event in &mch.events {
+            self.visit_event(event, cur, bound);
         }
 
-        // END keyword
-        self.mark_keyword(KeywordId::End, current_offset);
+        // Machine END — search after the rightmost walked construct (the max
+        // span end over init + events), bounded by the machine span end. Using
+        // the max rather than the last event tolerates a span-less final event.
+        let end_from = mch
+            .events
+            .iter()
+            .filter_map(|e| e.span.map(|s| s.end))
+            .chain(
+                mch.initialisation
+                    .as_ref()
+                    .and_then(|i| i.span)
+                    .map(|s| s.end),
+            )
+            .max()
+            .unwrap_or(cur);
+        self.mark_keyword(KeywordId::End, end_from, bound);
     }
 
-    /// Visit an event
-    fn visit_event(&mut self, event: &Event, mut current_offset: usize) -> usize {
-        // Clear event-specific parameters
-        self.parameters.clear();
+    /// Visit the INITIALISATION event, anchored to its own span (falling back to
+    /// `[fallback_from, fallback_bound)` — the machine's cursor and end — when
+    /// the parser recorded no span).
+    fn visit_initialisation(
+        &mut self,
+        init: &InitialisationEvent,
+        fallback_from: usize,
+        fallback_bound: usize,
+    ) {
+        let (mut cur, bound) = Self::anchored(init.span, fallback_from, fallback_bound);
+
+        // EVENT INITIALISATION
+        self.advance_past_keyword(KeywordId::Event, &mut cur, bound);
+        self.advance_past_keyword(KeywordId::Initialisation, &mut cur, bound);
+
+        // THEN/BEGIN clause (actions). Labels are emitted lexically; the action
+        // span advances the cursor so the END search lands on this event's END.
+        if !init.actions.is_empty() {
+            self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
+            for action in &init.actions {
+                cur = self.visit_action(action, cur);
+            }
+        }
+
+        self.advance_past_keyword(KeywordId::End, &mut cur, bound);
+    }
+
+    /// Visit an event, anchored to its own span so a drifting machine cursor
+    /// cannot drop or misplace its tokens (falling back to the machine's cursor
+    /// and end when the parser recorded no span).
+    fn visit_event(&mut self, event: &Event, fallback_from: usize, fallback_bound: usize) {
+        let (mut cur, bound) = Self::anchored(event.span, fallback_from, fallback_bound);
 
         // EVENT keyword
-        self.advance_past_keyword(KeywordId::Event, &mut current_offset);
+        self.advance_past_keyword(KeywordId::Event, &mut cur, bound);
 
-        // Event name
-        if let Some((offset, _)) = self.find_identifier(&event.name, current_offset) {
-            self.add_identifier(&event.name, offset, TokenType::Function, true);
-            current_offset = offset + event.name.len();
-        }
+        // Event name — straight from the parser's span when available.
+        cur = self.mark_name(
+            &event.name,
+            event.name_span,
+            cur,
+            bound,
+            TokenType::Function,
+            true,
+        );
 
         // Status value (convergent, anticipated)
         if let Some(status) = event.status {
@@ -551,115 +634,80 @@ impl<'a> SemanticTokensBuilder<'a> {
                 rossi::ast::EventStatus::Ordinary => None,
             };
             if let Some(id) = status_id {
-                self.advance_past_keyword(id, &mut current_offset);
+                self.advance_past_keyword(id, &mut cur, bound);
             }
         }
 
         // REFINES clause
         if event.refines.is_some() {
-            self.advance_past_keyword(KeywordId::Refines, &mut current_offset);
+            self.advance_past_keyword(KeywordId::Refines, &mut cur, bound);
         }
 
         // ANY clause (parameters)
         if !event.parameters.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Any, current_offset)
+            && let Some(off) = self.mark_keyword(KeywordId::Any, cur, bound)
         {
-            current_offset = off;
-
+            cur = off;
             for param in &event.parameters {
-                self.parameters.push(param.name.clone());
-                if let Some((offset, _)) = self.find_identifier(&param.name, current_offset) {
-                    self.add_identifier(&param.name, offset, TokenType::Parameter, true);
-                    current_offset = offset + param.name.len();
-                }
+                cur = self.mark_name(
+                    &param.name,
+                    param.span,
+                    cur,
+                    bound,
+                    TokenType::Parameter,
+                    true,
+                );
             }
         }
 
         // WHERE/WHEN clause (guards)
         if !event.guards.is_empty() {
-            self.advance_past_keyword(KeywordId::Where, &mut current_offset);
-
+            self.advance_past_keyword(KeywordId::Where, &mut cur, bound);
             for guard in &event.guards {
-                current_offset = self.visit_labeled_predicate(guard, current_offset);
+                cur = self.visit_labeled_predicate(guard, cur);
             }
         }
 
         // WITH clause (labeled predicates)
         if !event.with.is_empty() {
-            self.advance_past_keyword(KeywordId::With, &mut current_offset);
-
+            self.advance_past_keyword(KeywordId::With, &mut cur, bound);
             for lp in &event.with {
-                current_offset = self.visit_labeled_predicate(lp, current_offset);
+                cur = self.visit_labeled_predicate(lp, cur);
             }
         }
 
         // WITNESS clause (labeled predicates)
         if !event.witnesses.is_empty() {
-            self.advance_past_keyword(KeywordId::Witness, &mut current_offset);
-
+            self.advance_past_keyword(KeywordId::Witness, &mut cur, bound);
             for lp in &event.witnesses {
-                current_offset = self.visit_labeled_predicate(lp, current_offset);
+                cur = self.visit_labeled_predicate(lp, cur);
             }
         }
 
         // THEN/BEGIN clause (actions)
         if !event.actions.is_empty() {
-            self.advance_past_keyword(KeywordId::Then, &mut current_offset);
-
+            self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
             for action in &event.actions {
-                current_offset = self.visit_action(action, current_offset);
+                cur = self.visit_action(action, cur);
             }
         }
 
         // END keyword
-        self.advance_past_keyword(KeywordId::End, &mut current_offset);
-
-        current_offset
+        self.advance_past_keyword(KeywordId::End, &mut cur, bound);
     }
 
-    /// Visit a labeled predicate
-    fn visit_labeled_predicate(
-        &mut self,
-        lp: &LabeledPredicate,
-        mut current_offset: usize,
-    ) -> usize {
-        // Label
-        if let Some(label) = &lp.label
-            && let Some((offset, _)) = self.find_identifier(label, current_offset)
-        {
-            self.add_identifier(label, offset, TokenType::Label, false);
-            current_offset = offset + label.len();
-        }
-
-        // Predicate - we'd need to traverse it to find identifiers
-        current_offset = self.visit_predicate(&lp.predicate, current_offset);
-
-        current_offset
+    /// Advance past a labeled predicate. Its label is emitted lexically (see
+    /// [`Self::emit_label_tokens`]) and the predicate body carries no tokens
+    /// yet, so this only moves the cursor to the construct's end for a
+    /// following THEOREMS-header or keyword search.
+    fn visit_labeled_predicate(&mut self, lp: &LabeledPredicate, current_offset: usize) -> usize {
+        lp.span.map_or(current_offset, |s| s.end)
     }
 
-    /// Visit a predicate (simplified - just looks for identifiers)
-    fn visit_predicate(&mut self, _predicate: &Predicate, current_offset: usize) -> usize {
-        // This is a simplified implementation
-        // A full implementation would recursively traverse the predicate AST
-        // and mark all identifiers based on their context
-        // For now, we just return the current offset as we don't have a simple
-        // Identifier variant in the Predicate enum
-        current_offset
-    }
-
-    /// Visit a labeled action (simplified)
-    fn visit_action(&mut self, labeled_action: &LabeledAction, mut current_offset: usize) -> usize {
-        // Label
-        if let Some(label) = &labeled_action.label
-            && let Some((offset, _)) = self.find_identifier(label, current_offset)
-        {
-            self.add_identifier(label, offset, TokenType::Label, false);
-            current_offset = offset + label.len();
-        }
-
-        // Simplified implementation for the action itself
-        // A full implementation would traverse the action AST to mark variables
-        current_offset
+    /// Advance past a labeled action. Its label is emitted lexically; the
+    /// action body carries no tokens yet.
+    fn visit_action(&mut self, labeled_action: &LabeledAction, current_offset: usize) -> usize {
+        labeled_action.span.map_or(current_offset, |s| s.end)
     }
 
     /// Emit one COMMENT token per source line covered by each comment span.
@@ -668,7 +716,7 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// `multilineTokenSupport` capability. Comment matches are excluded from
     /// every other token search, so these tokens never overlap.
     fn emit_comment_tokens(&mut self) {
-        for span in &self.comment_spans {
+        for span in &self.lexical.comments {
             let mut start = span.start;
             while start < span.end {
                 let line_end = self.text[start..span.end]
@@ -687,6 +735,36 @@ impl<'a> SemanticTokensBuilder<'a> {
                 }
                 start = line_end + 1;
             }
+        }
+    }
+
+    /// Emit one MACRO (Label) token per `@`-label, excluding the leading `@`.
+    ///
+    /// Labels are placed from the single lexical scan, never re-found by the AST
+    /// walk, so a label name repeated across events (`@grd1` in two events) gets
+    /// the same token at each occurrence — the fix for the inconsistent-label
+    /// highlighting. Running here (unconditionally, after the walk) also means
+    /// labels never vanish on a broken/mid-edit document.
+    fn emit_label_tokens(&mut self) {
+        for span in &self.lexical.labels {
+            // The span covers `@name`; color the name, leaving the `@` to the
+            // TextMate `entity.name.tag` scope (matches the prior behavior). A
+            // trailing `:` is dropped to match the strict parser's `extract_label`
+            // (eventb-to-txt compat), which strips it from the label text.
+            let name_start = span.start + 1; // `@` is ASCII, one byte
+            let name = self.text[name_start..span.end].trim_end_matches(':');
+            if name.is_empty() {
+                continue; // a bare `@` (or `@:`) with no label text
+            }
+            let length = name.chars().count() as u32;
+            let (line, col) = self.position_from_offset(name_start);
+            self.tokens.push(SemanticTokenData {
+                line,
+                start: col,
+                length,
+                token_type: TokenType::Label as u32,
+                token_modifiers: 0,
+            });
         }
     }
 

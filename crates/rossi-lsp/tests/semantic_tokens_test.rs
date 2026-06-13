@@ -264,12 +264,11 @@ fn test_keyword_not_matched_inside_identifier() {
 
 #[test]
 fn test_hyphenated_name_not_split_into_keyword() {
-    // Regression for issue #36: a structural keyword scan must not latch onto
-    // the `end` fragment of the hyphenated event name `end-update`. Here the
-    // machine's END search crosses the second event (INITIALISATION is walked
-    // separately, so the EVENTS clause re-scan starts mid-document) and, under
-    // the old math word boundary, matched `end` because `-` counted as a
-    // boundary. The structural boundary treats `-` as part of the word.
+    // Regression for issue #36: no keyword scan may latch onto the `end`
+    // fragment of the hyphenated event name `end-update`. `find_keyword` uses
+    // the structural word boundary (where `-` is part of a word), so the `end`
+    // of `end-update` is never a whole keyword; the name itself is emitted from
+    // its AST span rather than text-searched.
     let text = "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\n    EVENT end-update\n    THEN\n        x := 1\n    END\nEND\n";
     assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
 
@@ -393,5 +392,82 @@ fn test_broken_document_keeps_comment_and_keyword_tokens() {
     assert!(
         tokens.iter().any(|t| t.3 == comment && t.0 == 5),
         "the comment must keep its token on a broken document, got {tokens:?}"
+    );
+}
+
+#[test]
+fn test_labels_consistent_across_events_with_initialisation() {
+    // A machine with an INITIALISATION event (the overwhelmingly common case)
+    // followed by ordinary events. The old text-search tokenizer processed
+    // INITIALISATION first, advanced its single forward cursor past it, then
+    // searched *forward* for the EVENTS keyword — which sits *before*
+    // INITIALISATION — so the search failed, the whole events loop was skipped,
+    // and every `@grd1`/`@act1` in `step`/`step2` lost its label token (falling
+    // back to the TextMate scope, a different color). Every `@`-label must now
+    // carry the same MACRO token at its own position, regardless of the walk.
+    let text = "MACHINE m\nVARIABLES\n    v\nINVARIANTS\n    @inv1 v >= 0\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act0 v := 0\n    END\n    EVENT step\n    WHERE\n        @grd1 v > 0\n    THEN\n        @act1 v := v + 1\n    END\n    EVENT step2\n    WHERE\n        @grd1 v > 0\n    THEN\n        @act1 v := v + 1\n    END\nEND\n";
+    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
+
+    let tokens = decode_tokens(text);
+    let label = token_type_index("macro"); // labels use the MACRO slot
+
+    let label_at = |line: u32, col: u32, len: u32| {
+        tokens
+            .iter()
+            .any(|&(l, c, n, t)| l == line && c == col && n == len && t == label)
+    };
+    // Label names (sans `@`) are 4 chars. Event bodies are indented 8 spaces, so
+    // each name starts at column 9; the invariant `@inv1` at column 5.
+    assert!(
+        label_at(4, 5, 4),
+        "@inv1 must be a label token, got {tokens:?}"
+    );
+    assert!(
+        label_at(8, 9, 4),
+        "@act0 (init) must be a label token, got {tokens:?}"
+    );
+    assert!(
+        label_at(12, 9, 4),
+        "step @grd1 must be a label token, got {tokens:?}"
+    );
+    assert!(
+        label_at(14, 9, 4),
+        "step @act1 must be a label token, got {tokens:?}"
+    );
+    assert!(
+        label_at(18, 9, 4),
+        "step2 @grd1 must be a label token, got {tokens:?}"
+    );
+    assert!(
+        label_at(20, 9, 4),
+        "step2 @act1 must be a label token, got {tokens:?}"
+    );
+
+    // Exactly six labels: @inv1 + @act0 + 2×@grd1 + 2×@act1. Before the fix the
+    // events loop was skipped, so only @inv1 and @act0 survived (2 of 6) — a
+    // crisp before/after discriminator.
+    let macros: Vec<_> = tokens.iter().filter(|t| t.3 == label).collect();
+    assert_eq!(
+        macros.len(),
+        6,
+        "every @-label gets exactly one label token, got {macros:?}"
+    );
+}
+
+#[test]
+fn test_label_token_excludes_trailing_colon() {
+    // eventb-to-txt writes labels with a trailing colon (`@axm1:`); the strict
+    // parser's `extract_label` strips it, so the label token must cover `axm1`
+    // (4 chars), not `axm1:` (5) — the colon is a separator, not label text.
+    let text = "CONTEXT c\nAXIOMS\n    @axm1: 1 = 1\nEND\n";
+    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
+
+    let tokens = decode_tokens(text);
+    let label = token_type_index("macro");
+    let labels: Vec<_> = tokens.iter().filter(|t| t.3 == label).collect();
+    assert_eq!(
+        labels,
+        [&(2, 5, 4, label)],
+        "label token must cover `axm1` (col 5, len 4), not the trailing colon"
     );
 }
