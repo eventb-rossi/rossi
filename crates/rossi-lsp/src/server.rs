@@ -960,7 +960,7 @@ impl RossiLanguageServer {
         parse_result
             .errors
             .iter()
-            .map(parse_error_to_diagnostic)
+            .map(|e| parse_error_to_diagnostic(e, text))
             .collect()
     }
 
@@ -1161,11 +1161,46 @@ impl RossiLanguageServer {
     }
 }
 
+/// 0-indexed char column of the end of the token at 1-indexed (line, column),
+/// for sizing a diagnostic range. Returns the end of the contiguous run of
+/// non-whitespace chars starting at the error column, bounded by the line.
+/// Zero-width when the position is at/past the line's end (EOF / trailing ws).
+fn token_end_char(text: &str, line: usize, column: usize) -> u32 {
+    let start = column.saturating_sub(1);
+    let line_str = text.lines().nth(line.saturating_sub(1)).unwrap_or("");
+    if start >= line_str.chars().count() {
+        return start as u32; // zero-width at EOL/EOF
+    }
+    let run = line_str
+        .chars()
+        .skip(start)
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    // `.max(1)` covers a column landing on whitespace (a 1-char span).
+    (start + run.max(1)) as u32
+}
+
+/// Collapse pest's multi-line rendering (a location header, the source line, a
+/// caret, then an `= expected …` line) to a single line: the editor already
+/// shows the location via the diagnostic range, so only the `expected …`
+/// content carries information.
+fn concise_pest_message(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim_start)
+        .find_map(|l| l.strip_prefix("= "))
+        .map(|expected| format!("Syntax error: {expected}"))
+        .unwrap_or_else(|| message.trim().to_string()) // fallback: never drop info
+}
+
 /// Convert a parse error to an LSP diagnostic
-fn parse_error_to_diagnostic(error: &rossi::ParseError) -> Diagnostic {
+fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -> Diagnostic {
     use rossi::ParseError;
 
-    // Build an ERROR diagnostic from a 1-indexed (line, column) position.
+    // Build an ERROR diagnostic from a 1-indexed (line, column) position. The
+    // range is sized to the token at that position (pest reports a single
+    // failure point, not a span), so a diagnostic underlines the offending
+    // token rather than a fixed-width block.
     let diagnostic_at = |line: usize, column: usize, message: String| Diagnostic {
         range: Range {
             start: Position::new(
@@ -1174,7 +1209,7 @@ fn parse_error_to_diagnostic(error: &rossi::ParseError) -> Diagnostic {
             ),
             end: Position::new(
                 line.saturating_sub(1) as u32,
-                column.saturating_sub(1) as u32 + 10,
+                token_end_char(text, line, column),
             ),
         },
         severity: Some(DiagnosticSeverity::ERROR),
@@ -1200,8 +1235,12 @@ fn parse_error_to_diagnostic(error: &rossi::ParseError) -> Diagnostic {
             message,
             ..
         } => diagnostic_at(*line, *column, message.clone()),
-        ParseError::PestError { line, column, .. }
-        | ParseError::NestingTooDeep { line, column, .. } => {
+        ParseError::PestError {
+            line,
+            column,
+            message,
+        } => diagnostic_at(*line, *column, concise_pest_message(message)),
+        ParseError::NestingTooDeep { line, column, .. } => {
             diagnostic_at(*line, *column, error.to_string())
         }
         ParseError::ReservedWord { word, line, column } => {
@@ -1223,11 +1262,65 @@ mod tests {
     #[test]
     fn pest_diagnostic_uses_real_position() {
         // End-to-end through the real parser: the strict-parse error must
-        // carry pest's structured position, not 0:0.
-        let error = rossi::parse("CONTEXT c\nCONSTANTS\n    c1\n    +\nEND\n")
-            .expect_err("the stray `+` must fail strict parsing");
-        let diagnostic = parse_error_to_diagnostic(&error);
+        // carry pest's structured position, not 0:0, and the range must be
+        // sized to the offending token (the stray `+`), not a fixed width.
+        let text = "CONTEXT c\nCONSTANTS\n    c1\n    +\nEND\n";
+        let error = rossi::parse(text).expect_err("the stray `+` must fail strict parsing");
+        let diagnostic = parse_error_to_diagnostic(&error, text);
         assert_eq!(diagnostic.range.start, Position::new(3, 4));
+        // Token span: just the single-character `+`, not start + 10.
+        assert_eq!(diagnostic.range.end, Position::new(3, 5));
+        // Message is collapsed to a single line (issue #32): no pest caret art.
+        assert!(diagnostic.message.starts_with("Syntax error:"));
+        assert!(!diagnostic.message.contains("-->"));
+        assert!(!diagnostic.message.contains('\n'));
+    }
+
+    #[test]
+    fn pest_diagnostic_sized_to_token_issue_32() {
+        // Issue #32, example 1: a forgotten `@` on `axm2`. Through the real
+        // LSP recovery path, the diagnostic must land on the offending line
+        // (line 10) and underline just the token pest stopped at (`>`), rather
+        // than a fixed 10-character block running past the end of the line.
+        let text = concat!(
+            "CONTEXT library_ctx\n",
+            "EXTENDS\n",
+            "    base_ctx\n",
+            "SETS\n",
+            "    BOOK, READER\n",
+            "CONSTANTS\n",
+            "    max_loans\n",
+            "AXIOMS\n",
+            "    @axm1: max_loans = 5\n",
+            "    axm2: max_loans > 0\n",
+            "END\n",
+        );
+        let result = rossi::parse_components_with_recovery(text);
+        let error = result
+            .errors
+            .first()
+            .expect("recovery must report the error");
+        let diagnostic = parse_error_to_diagnostic(error, text);
+        // Line 10 (0-indexed 9), the `>` at column 21 (0-indexed 20).
+        assert_eq!(diagnostic.range.start, Position::new(9, 20));
+        assert_eq!(diagnostic.range.end, Position::new(9, 21));
+        assert!(!diagnostic.message.contains("-->"));
+    }
+
+    #[test]
+    fn concise_pest_message_keeps_add_missing_end_trigger() {
+        // The "Add missing END" quick fix (code_actions.rs) keys off
+        // `message.contains("expected")`. Shortening pest's dump must not drop
+        // that word, or the quick fix silently stops being offered.
+        let text = "MACHINE m\nVARIABLES\n    x\n"; // no END
+        let result = rossi::parse_components_with_recovery(text);
+        let error = result.errors.first().expect("missing END must be reported");
+        let diagnostic = parse_error_to_diagnostic(error, text);
+        assert!(
+            diagnostic.message.contains("expected"),
+            "concise message must retain the quick-fix trigger, got: {}",
+            diagnostic.message
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! These tests verify that the parser can recover from syntax errors
 //! and produce partial ASTs with error information.
 
-use rossi::{Component, parse_with_recovery};
+use rossi::{Component, parse_components_with_recovery, parse_with_recovery};
 
 /// Unwrap the recovered component as a context, failing the test otherwise.
 fn expect_context(result: &rossi::ParseResult<Component>) -> &rossi::ast::Context {
@@ -839,5 +839,59 @@ fn test_recovery_multiline_string_does_not_swallow_later_clauses() {
     assert!(
         labels.contains(&"axm2"),
         "the axiom after the multi-line string must be recovered, got {labels:?}"
+    );
+}
+
+#[test]
+fn test_recovery_set_error_does_not_leak_into_axioms_issue_32() {
+    // Issue #32, example 2: a malformed SETS line (`BOOK: READER`) must be
+    // reported once, at the SETS line, and must NOT produce spurious errors on
+    // the well-formed axioms that follow — nothing in AXIOMS references SETS.
+    let source = concat!(
+        "CONTEXT library_ctx\n",
+        "EXTENDS\n",
+        "    base_ctx\n",
+        "SETS\n",
+        "    BOOK: READER\n",
+        "CONSTANTS\n",
+        "    max_loans\n",
+        "AXIOMS\n",
+        "    @axm1: max_loans = 5\n",
+        "    @axm2: max_loans > 0\n",
+        "END\n",
+    );
+
+    let result = parse_components_with_recovery(source);
+
+    // Exactly one error, anchored to the SETS line (line 5).
+    assert_eq!(
+        result.errors.len(),
+        1,
+        "the SETS error must not leak into the axioms, got {:?}",
+        result.errors
+    );
+    let line = match &result.errors[0] {
+        rossi::ParseError::PestError { line, .. } => *line,
+        other => panic!("expected a PestError at the SETS line, got {other:?}"),
+    };
+    assert_eq!(line, 5, "error must point at the malformed SETS line");
+
+    // Both axioms recover cleanly.
+    let components = result
+        .component
+        .expect("a partial context must be recovered");
+    let ctx = match &components[..] {
+        [Component::Context(ctx)] => ctx,
+        other => panic!("expected a single recovered context, got {other:?}"),
+    };
+    let labels: Vec<&str> = ctx
+        .axioms
+        .iter()
+        .filter_map(|a| a.label.as_deref())
+        .collect();
+    assert_eq!(
+        labels,
+        vec!["axm1", "axm2"],
+        "both axioms must be recovered"
     );
 }
