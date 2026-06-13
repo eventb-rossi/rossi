@@ -386,10 +386,21 @@ pub fn is_clause_boundary(word: &str) -> bool {
 }
 
 /// Whether a char can be part of an identifier, i.e. must not directly
-/// follow or precede a whole-word keyword match. Mirrors the grammar's
-/// `!(ASCII_ALPHANUMERIC | "_")` keyword guards plus `'` from identifiers.
+/// follow or precede a whole-word keyword match. Mirrors the *math* keyword
+/// guards in the grammar (`!(ASCII_ALPHANUMERIC | "_")`) plus `'` from
+/// identifiers. Math contexts must keep recognizing words across `-`:
+/// `a-dom(r)` lexes `dom` as an operator. Structural scans use
+/// [`is_structural_word_char`] instead.
 pub fn is_word_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '\''
+}
+
+/// [`is_word_char`] plus `-`, mirroring the grammar's *structural* keyword
+/// guards (`!(ASCII_ALPHANUMERIC | "_" | "-")`): a hyphen-joined
+/// `component_name` like `end-to-end` or `the-MACHINE-x` must never be split
+/// at an embedded keyword.
+pub fn is_structural_word_char(c: char) -> bool {
+    is_word_char(c) || c == '-'
 }
 
 /// Whether the match of `len` bytes at byte `offset` in `text` is a whole
@@ -397,11 +408,19 @@ pub fn is_word_char(c: char) -> bool {
 /// parser's keyword scan and the LSP's semantic-token search so the two
 /// can never disagree on word boundaries.
 pub fn is_word_bounded(text: &str, offset: usize, len: usize) -> bool {
-    let before_ok = !text[..offset].chars().next_back().is_some_and(is_word_char);
-    let after_ok = !text[offset + len..]
-        .chars()
-        .next()
-        .is_some_and(is_word_char);
+    word_bounded_by(text, offset, len, is_word_char)
+}
+
+/// [`is_word_bounded`] under the structural-keyword boundary rule
+/// ([`is_structural_word_char`]). Used by the recovery parser when scanning
+/// for structural keywords (component headers, clause boundaries).
+pub fn is_structural_word_bounded(text: &str, offset: usize, len: usize) -> bool {
+    word_bounded_by(text, offset, len, is_structural_word_char)
+}
+
+fn word_bounded_by(text: &str, offset: usize, len: usize, is_part: fn(char) -> bool) -> bool {
+    let before_ok = !text[..offset].chars().next_back().is_some_and(is_part);
+    let after_ok = !text[offset + len..].chars().next().is_some_and(is_part);
     before_ok && after_ok
 }
 

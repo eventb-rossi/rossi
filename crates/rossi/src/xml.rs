@@ -97,66 +97,71 @@ fn required_attr(e: &quick_xml::events::BytesStart, key: &[u8]) -> Result<String
     }
 }
 
-/// Validate an identifier read from Event-B XML and return the form we
+/// Validate a *structural* name read from Event-B XML (machine/context
+/// names, refines/sees/extends targets, event names) and return the form we
 /// store: surrounding whitespace is trimmed away. Rodin tolerates stray
 /// whitespace around names (a real-world corpus model carries an event
 /// label with a trailing space), so we clean rather than reject — every
 /// identifier-position read goes through here, keeping cross-references
 /// (refines targets, etc.) consistent with the trimmed declarations.
 ///
-/// Beyond trimming, reject identifiers that our Event-B XML loader can't
-/// honestly handle. We deliberately mirror Rodin's permissive XML naming
-/// rather than the stricter text-grammar identifier rule:
+/// Beyond trimming, the charset check delegates to
+/// [`crate::names::check_component_name`] — the single source of truth shared
+/// with the text grammar's `component_name` rule. Rodin treats these names as
+/// file names and labels (bare strings), so real models carry hyphens
+/// (`A-C0`, `CTX-1`); the text grammar lexes them right after
+/// `MACHINE`/`EVENT`/`REFINES`/…, so import accepts exactly what re-parsing
+/// can honestly handle (issue #28) — no more (a trailing or doubled `-`
+/// would pretty-print into unparseable text and is rejected here).
 ///
-/// - First character must be an ASCII letter or `_`. (Leading digits or
-///   leading hyphens would confuse the text-grammar lexer if the name ever
-///   flowed into a parsed predicate.)
-/// - Subsequent characters: ASCII alphanumeric, `_`, `'`, or `-`. Rodin
-///   permits hyphens in machine and context names (e.g. `A-C0`,
-///   `CTX-1`); those names only appear in opaque attribute positions
-///   (refines target, sees target) so the text grammar never has to lex
-///   them.
-/// - *Structural* keyword-named identifiers (`end`, `events`, `extends`, ...)
-///   are accepted: Rodin permits them and our expression-position grammar
-///   parses them as identifiers (the `kw_*` rules fire only in their
-///   specific structural positions, not as a general reservation). The
-///   mathematical reserved words (`dom`, `card`, ...) are a different story —
-///   see [`validate_declared_identifier`].
-fn validate_identifier(name: &str, origin: &str) -> Result<String> {
-    let err = |reason: String| ParseError::UnsupportedIdentifier {
-        name: name.to_string(),
-        origin: origin.to_string(),
-        reason,
-    };
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(err("empty".to_string()));
-    }
-    let first = trimmed.chars().next().unwrap();
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return Err(err(format!(
-            "must start with ASCII letter or '_', got {:?}",
-            first
-        )));
-    }
-    for c in trimmed.chars() {
-        if !(c.is_ascii_alphanumeric() || c == '_' || c == '\'' || c == '-') {
-            return Err(err(format!("contains unsupported character {:?}", c)));
-        }
-    }
-    Ok(trimmed.to_string())
+/// *Structural* keyword-named identifiers (`end`, `events`, `extends`, ...)
+/// are accepted: Rodin permits them and our expression-position grammar
+/// parses them as identifiers (the `kw_*` rules fire only in their
+/// specific structural positions, not as a general reservation). The
+/// mathematical reserved words (`dom`, `card`, ...) are a different story —
+/// see [`validate_declared_identifier`].
+fn validate_component_name(name: &str, origin: &str) -> Result<String> {
+    validate_name_with(name, origin, crate::names::check_component_name)
 }
 
-/// [`validate_identifier`] plus the kernel_lang §2.2 reserved-word check, for
-/// *mathematical declarations* (carrier sets, constants, variables, event
-/// parameters). Rodin's own `isValidIdentifierName` rejects these names, so
-/// no Rodin-exported XML contains them; a hand-crafted file that does would
-/// otherwise import into an AST the text grammar can no longer express
-/// (pretty-print → re-parse fails on the declaration). Structural names
-/// (component/event names, refines/sees targets) stay on the permissive
-/// [`validate_identifier`].
+/// Validate a *mathematical* identifier position (witness labels and
+/// withBinding identifiers, which name abstract parameters or primed
+/// variables like `x'`): trimmed, then checked against
+/// [`crate::names::check_math_identifier`] — kernel_lang §2.2 names, never
+/// hyphenated.
+fn validate_math_identifier(name: &str, origin: &str) -> Result<String> {
+    validate_name_with(name, origin, crate::names::check_math_identifier)
+}
+
+/// Trim `name`, run `check` (the [`crate::names`] predicate for the position),
+/// and wrap any failure in a [`ParseError::UnsupportedIdentifier`] carrying
+/// the original (untrimmed) name and the predicate's reason string.
+fn validate_name_with(
+    name: &str,
+    origin: &str,
+    check: fn(&str) -> std::result::Result<(), crate::names::NameError>,
+) -> Result<String> {
+    let trimmed = name.trim();
+    match check(trimmed) {
+        Ok(()) => Ok(trimmed.to_string()),
+        Err(e) => Err(ParseError::UnsupportedIdentifier {
+            name: name.to_string(),
+            origin: origin.to_string(),
+            reason: e.to_string(),
+        }),
+    }
+}
+
+/// [`validate_math_identifier`] plus the kernel_lang §2.2 reserved-word
+/// check, for *mathematical declarations* (carrier sets, constants,
+/// variables, event parameters). Rodin's own `isValidIdentifierName` rejects
+/// these names, so no Rodin-exported XML contains them; a hand-crafted file
+/// that does would otherwise import into an AST the text grammar can no
+/// longer express (pretty-print → re-parse fails on the declaration).
+/// Structural names (component/event names, refines/sees targets) go through
+/// the hyphen-capable [`validate_component_name`] instead.
 fn validate_declared_identifier(name: &str, origin: &str) -> Result<String> {
-    let validated = validate_identifier(name, origin)?;
+    let validated = validate_math_identifier(name, origin)?;
     if crate::builtins::is_reserved_word(&validated) {
         return Err(ParseError::UnsupportedIdentifier {
             name: name.to_string(),
@@ -170,7 +175,7 @@ fn validate_declared_identifier(name: &str, origin: &str) -> Result<String> {
 /// Read an event's name from its XML element. In real Rodin XML, `name` is
 /// an internal id (e.g. `'`) and `org.eventb.core.label` holds the
 /// human-readable name; fall back to `name` for hand-crafted files that
-/// lack `label`. Trimmed here (not just in `validate_identifier`) so the
+/// lack `label`. Trimmed here (not just in `validate_component_name`) so the
 /// INITIALISATION check at the call sites sees the cleaned name.
 fn event_name_attr(e: &quick_xml::events::BytesStart) -> Result<String> {
     let raw = get_xml_attr(e, b"label")?
@@ -483,8 +488,10 @@ fn parse_context_xml_with_name(
                 match tag_name.as_str() {
                     "org.eventb.core.extendsContext" => {
                         let target = required_attr(&e, b"target")?;
-                        let target =
-                            validate_identifier(&target, &format!("extends target in {}", origin))?;
+                        let target = validate_component_name(
+                            &target,
+                            &format!("extends target in {}", origin),
+                        )?;
                         extends.push(target);
                     }
                     "org.eventb.core.carrierSet" => {
@@ -532,7 +539,8 @@ fn parse_context_xml_with_name(
     if context_name.is_empty() {
         context_name = "unnamed_context".to_string();
     } else {
-        context_name = validate_identifier(&context_name, &format!("context name in {}", origin))?;
+        context_name =
+            validate_component_name(&context_name, &format!("context name in {}", origin))?;
     }
 
     Ok(Context {
@@ -623,14 +631,18 @@ fn parse_machine_xml_with_name(
                 match tag_name.as_str() {
                     "org.eventb.core.refinesMachine" => {
                         let target = required_attr(&e, b"target")?;
-                        let target =
-                            validate_identifier(&target, &format!("refines target in {}", origin))?;
+                        let target = validate_component_name(
+                            &target,
+                            &format!("refines target in {}", origin),
+                        )?;
                         refines = Some(target);
                     }
                     "org.eventb.core.seesContext" => {
                         let target = required_attr(&e, b"target")?;
-                        let target =
-                            validate_identifier(&target, &format!("sees target in {}", origin))?;
+                        let target = validate_component_name(
+                            &target,
+                            &format!("sees target in {}", origin),
+                        )?;
                         sees.push(target);
                     }
                     "org.eventb.core.variable" => {
@@ -696,7 +708,7 @@ fn parse_machine_xml_with_name(
                                 witnesses: Vec::new(),
                             });
                         } else {
-                            let event_name = validate_identifier(
+                            let event_name = validate_component_name(
                                 &event_name,
                                 &format!("event name in {}", origin),
                             )?;
@@ -721,7 +733,7 @@ fn parse_machine_xml_with_name(
                         if let Some(ref mut event) = current_event
                             && let Some(target) = get_xml_attr(&e, b"target")?
                         {
-                            let target = validate_identifier(
+                            let target = validate_component_name(
                                 &target,
                                 &format!("refines target in event {:?} of {}", event.name, origin),
                             )?;
@@ -759,7 +771,7 @@ fn parse_machine_xml_with_name(
                             // `x'`), so it must stay consistent with the trimmed
                             // declarations.
                             let label = match get_xml_attr(&e, b"label")? {
-                                Some(l) => Some(validate_identifier(
+                                Some(l) => Some(validate_math_identifier(
                                     &l,
                                     &format!(
                                         "witness label in event {:?} of {}",
@@ -802,7 +814,7 @@ fn parse_machine_xml_with_name(
                                 get_xml_attr(&e, b"expression")?.unwrap_or_default();
 
                             if !expression_str.is_empty() && !identifier.is_empty() {
-                                let identifier = validate_identifier(
+                                let identifier = validate_math_identifier(
                                     &identifier,
                                     &format!(
                                         "withBinding identifier in event {:?} of {}",
@@ -892,7 +904,7 @@ fn parse_machine_xml_with_name(
                                 witnesses: event_builder.witnesses,
                             });
                         } else {
-                            let event_name = validate_identifier(
+                            let event_name = validate_component_name(
                                 &event_builder.name,
                                 &format!("event name in {}", origin),
                             )?;
@@ -925,7 +937,8 @@ fn parse_machine_xml_with_name(
     if machine_name.is_empty() {
         machine_name = "unnamed_machine".to_string();
     } else {
-        machine_name = validate_identifier(&machine_name, &format!("machine name in {}", origin))?;
+        machine_name =
+            validate_component_name(&machine_name, &format!("machine name in {}", origin))?;
     }
 
     Ok(Machine {

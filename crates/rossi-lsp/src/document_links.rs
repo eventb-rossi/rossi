@@ -209,7 +209,10 @@ fn tokenize_identifier_positions(
             break;
         }
 
-        if text_utils::is_identifier_char(ch) {
+        // `-` is a name-segment joiner here: this scanner only runs over
+        // SEES/REFINES/EXTENDS clause regions, whose tokens are component
+        // names (`ENV_C-1`), never subtraction.
+        if text_utils::is_identifier_char(ch) || ch == '-' {
             if current_start.is_none() {
                 current_start = Some(col);
             }

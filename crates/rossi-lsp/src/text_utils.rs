@@ -141,16 +141,17 @@ pub fn first_identifier_word(line: &str) -> Option<String> {
 }
 
 pub fn event_name_from_line(line: &str) -> Option<String> {
-    let words = identifier_words(line);
-    let event_idx = words
-        .iter()
-        .position(|word| word.eq_ignore_ascii_case("EVENT"))?;
-
-    if event_idx + 1 >= words.len() {
-        return None;
+    // Whitespace-delimited so a hyphenated event name (`EVENT do-step`,
+    // issue #28) comes back whole — `identifier_words` would split it at the
+    // hyphen and return only `do`, so `event_line_range`'s match against the
+    // AST event name would fail for every hyphenated-named event.
+    let mut tokens = line.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token.eq_ignore_ascii_case("EVENT") {
+            return tokens.next().map(str::to_string);
+        }
     }
-
-    Some(words[event_idx + 1].clone())
+    None
 }
 
 pub fn is_clause_boundary_keyword(word: &str) -> bool {

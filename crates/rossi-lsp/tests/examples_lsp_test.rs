@@ -27,7 +27,7 @@ use rossi_lsp::document_links::DocumentLinkProvider;
 use rossi_lsp::folding::FoldingRangeProvider;
 use rossi_lsp::formatting::FormattingProvider;
 use rossi_lsp::hover::HoverProvider;
-use rossi_lsp::identifier_utils::{find_whole_word_locations, position_to_offset};
+use rossi_lsp::identifier_utils::{WordBoundary, find_whole_word_locations, position_to_offset};
 use rossi_lsp::lsp_types::*;
 use rossi_lsp::references::ReferenceProvider;
 use rossi_lsp::rename::RenameProvider;
@@ -283,7 +283,8 @@ fn probe_uri() -> Url {
 
 /// Char-based start position of the `n`-th whole-word occurrence of `word`.
 fn nth_occurrence(text: &str, word: &str, n: usize) -> Position {
-    let locations = find_whole_word_locations(text, word, &probe_uri(), None);
+    let locations =
+        find_whole_word_locations(text, word, &probe_uri(), None, WordBoundary::MathIdentifier);
     locations
         .get(n)
         .unwrap_or_else(|| {
@@ -300,7 +301,7 @@ fn nth_occurrence(text: &str, word: &str, n: usize) -> Position {
 /// or after 0-indexed `line`. In merged documents this anchors searches to a
 /// component's region (its [`ModelFile::start_line`]).
 fn occurrence_after_line(text: &str, word: &str, line: usize) -> Position {
-    find_whole_word_locations(text, word, &probe_uri(), None)
+    find_whole_word_locations(text, word, &probe_uri(), None, WordBoundary::MathIdentifier)
         .into_iter()
         .map(|location| location.range.start)
         .find(|position| position.line as usize >= line)
@@ -324,7 +325,7 @@ fn line_of(text: &str, needle: &str) -> usize {
 /// an event-level one.
 fn pos_in_clause(text: &str, clause: &str, name: &str, start_line: usize) -> Position {
     let clause_pos = occurrence_after_line(text, clause, start_line);
-    find_whole_word_locations(text, name, &probe_uri(), None)
+    find_whole_word_locations(text, name, &probe_uri(), None, WordBoundary::MathIdentifier)
         .into_iter()
         .map(|location| location.range.start)
         .find(|position| *position > clause_pos)
@@ -659,7 +660,14 @@ fn cars_references_context_constant() {
         .files
         .iter()
         .filter_map(|f| {
-            let count = find_whole_word_locations(&f.text, "cars_limit", &f.uri, None).len();
+            let count = find_whole_word_locations(
+                &f.text,
+                "cars_limit",
+                &f.uri,
+                None,
+                WordBoundary::MathIdentifier,
+            )
+            .len();
             (count > 0).then(|| (f.uri.to_string(), count))
         })
         .collect();
@@ -700,11 +708,13 @@ fn cars_rename_component_cross_file() {
         rossi::parse(&renamed)
             .unwrap_or_else(|e| panic!("{uri}: text no longer parses after rename: {e}"));
         assert!(
-            find_whole_word_locations(&renamed, "C0", uri, None).is_empty(),
+            find_whole_word_locations(&renamed, "C0", uri, None, WordBoundary::MathIdentifier)
+                .is_empty(),
             "{uri}: whole-word C0 left behind after rename"
         );
         assert!(
-            !find_whole_word_locations(&renamed, "C0_v2", uri, None).is_empty(),
+            !find_whole_word_locations(&renamed, "C0_v2", uri, None, WordBoundary::MathIdentifier)
+                .is_empty(),
             "{uri}: C0_v2 missing after rename"
         );
     }
@@ -910,13 +920,19 @@ fn all_models_selection_ranges_nest() {
             .iter()
             .take(8)
             .map(|id| {
-                find_whole_word_locations(&file.text, id, &probe_uri(), None)
-                    .first()
-                    .unwrap_or_else(|| {
-                        panic!("{zip_name}/{name}: declared identifier `{id}` not found in text")
-                    })
-                    .range
-                    .start
+                find_whole_word_locations(
+                    &file.text,
+                    id,
+                    &probe_uri(),
+                    None,
+                    WordBoundary::MathIdentifier,
+                )
+                .first()
+                .unwrap_or_else(|| {
+                    panic!("{zip_name}/{name}: declared identifier `{id}` not found in text")
+                })
+                .range
+                .start
             })
             .collect();
         if positions.is_empty() {
