@@ -11,8 +11,13 @@ use rossi::ast::Span;
 /// Return the identifier that contains `position`, together with its range.
 ///
 /// An identifier is a maximal run of `text_utils::is_identifier_char` characters
-/// (alphanumeric plus `_`). Returns `None` when the line or character position is
-/// out of bounds, or when `position` is not on an identifier character.
+/// (alphanumeric plus `_`). In structural-name positions (after
+/// `MACHINE`/`CONTEXT`/`EVENT`/`REFINES`/`SEES`/`EXTENDS`) the run extends
+/// across `-` joins, so a cursor on `ENV_C-1` in a SEES clause resolves the
+/// whole component name instead of a fragment (issue #28); in formula lines
+/// `-` stays a subtraction boundary. Returns `None` when the line or
+/// character position is out of bounds, or when `position` is not on an
+/// identifier character.
 pub fn identifier_at_position(text: &str, position: Position) -> Option<(String, Range)> {
     let line = text.lines().nth(position.line as usize)?;
     let chars: Vec<char> = line.chars().collect();
@@ -32,16 +37,135 @@ pub fn identifier_at_position(text: &str, position: Position) -> Option<(String,
         end += 1;
     }
 
-    if start < end {
-        let identifier: String = chars[start..end].iter().collect();
-        let range = Range::new(
-            Position::new(position.line, start as u32),
-            Position::new(position.line, end as u32),
-        );
-        Some((identifier, range))
-    } else {
-        None
+    if start >= end {
+        return None;
     }
+
+    // Hyphen widening can only matter when a `-` is adjacent to the run.
+    // Check that cheaply on the current line before doing the O(document)
+    // structural-context scan — the overwhelming majority of cursor queries
+    // (formula/declaration positions with no adjacent `-`) skip it entirely.
+    let hyphen_adjacent =
+        (start > 0 && chars[start - 1] == '-') || (end < chars.len() && chars[end] == '-');
+    if hyphen_adjacent
+        && in_structural_name_context(text, position.line as usize)
+        && let Some(hit) = extend_over_hyphens(&chars, start, end, position.line)
+    {
+        return Some(hit);
+    }
+
+    let identifier: String = chars[start..end].iter().collect();
+    let range = Range::new(
+        Position::new(position.line, start as u32),
+        Position::new(position.line, end as u32),
+    );
+    Some((identifier, range))
+}
+
+/// Widen the identifier run `[start, end)` across `-` joins and return the
+/// resulting component name, or `None` when no widening applies (no adjacent
+/// hyphen, or the widened run is not a valid component name — e.g. `a--b`,
+/// or a non-ASCII run the grammar could not lex anyway).
+fn extend_over_hyphens(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    line_idx: u32,
+) -> Option<(String, Range)> {
+    let part = |c: char| text_utils::is_identifier_char(c) || c == '-';
+
+    let mut cstart = start;
+    while cstart > 0 && part(chars[cstart - 1]) {
+        cstart -= 1;
+    }
+    let mut cend = end;
+    while cend < chars.len() && part(chars[cend]) {
+        cend += 1;
+    }
+    // A maximal run may carry stray edge hyphens (`SEES a -b` punctuation);
+    // they are not part of any name.
+    while cstart < cend && chars[cstart] == '-' {
+        cstart += 1;
+    }
+    while cend > cstart && chars[cend - 1] == '-' {
+        cend -= 1;
+    }
+    if (cstart, cend) == (start, end) {
+        return None;
+    }
+
+    let candidate: String = chars[cstart..cend].iter().collect();
+    rossi::names::is_valid_component_name(&candidate).then(|| {
+        (
+            candidate,
+            Range::new(
+                Position::new(line_idx, cstart as u32),
+                Position::new(line_idx, cend as u32),
+            ),
+        )
+    })
+}
+
+/// Reference clauses whose component-name operands continue onto following
+/// lines — unlike the MACHINE/CONTEXT/EVENT headers, which are followed by a
+/// body rather than more names.
+const REFERENCE_LIST_CLAUSES: [&str; 3] = ["REFINES", "SEES", "EXTENDS"];
+/// Status modifiers that may precede an inline `EVENT` header
+/// (`convergent EVENT do-step`).
+const INLINE_EVENT_STATUS: [&str; 3] = ["ordinary", "convergent", "anticipated"];
+
+fn matches_any(word: &str, set: &[&str]) -> bool {
+    set.iter().any(|kw| word.eq_ignore_ascii_case(kw))
+}
+
+/// Clause keywords whose operands are component names (hyphen-capable
+/// structural names): component headers and the reference clauses.
+fn is_structural_name_clause(word: &str) -> bool {
+    matches_any(word, &["MACHINE", "CONTEXT", "EVENT"])
+        || matches_any(word, &REFERENCE_LIST_CLAUSES)
+}
+
+/// Whether tokens on line `line_idx` sit in a structural-name position: the
+/// line opens with a structural-name clause keyword (possibly behind an
+/// inline event status like `convergent EVENT …`), or it continues a
+/// REFINES/SEES/EXTENDS list opened on an earlier line. Formula lines must
+/// answer `false` so `x-y` stays a subtraction there.
+fn in_structural_name_context(text: &str, line_idx: usize) -> bool {
+    // Only lines up to and including the cursor line matter.
+    let lines: Vec<&str> = text.lines().take(line_idx + 1).collect();
+    if lines.len() != line_idx + 1 {
+        return false; // cursor line is past the end of the document
+    }
+
+    let words = text_utils::identifier_words(lines[line_idx]);
+    if let Some(first) = words.first() {
+        if is_structural_name_clause(first) {
+            return true;
+        }
+        // `convergent EVENT do-step` — inline status before the keyword.
+        if words.len() >= 2
+            && matches_any(first, &INLINE_EVENT_STATUS)
+            && words[1].eq_ignore_ascii_case("EVENT")
+        {
+            return true;
+        }
+        if text_utils::is_clause_boundary_keyword(first) {
+            return false;
+        }
+    }
+
+    // Continuation line: the nearest clause opened above decides.
+    for prev in lines[..line_idx].iter().rev() {
+        if let Some(first) = text_utils::first_identifier_word(prev) {
+            if matches_any(&first, &REFERENCE_LIST_CLAUSES) {
+                return true;
+            }
+            if text_utils::is_clause_boundary_keyword(&first) {
+                return false;
+            }
+        }
+    }
+    false
 }
 
 /// Return the token that contains `position`, together with its range.
@@ -150,19 +274,52 @@ pub fn span_to_range(span: &Span, source: &str) -> Range {
     }
 }
 
+/// Word-boundary rule for [`find_whole_word_locations`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordBoundary {
+    /// Mathematical identifiers: `-` is an operator, so the `x` of `x-y`
+    /// is a whole word.
+    MathIdentifier,
+    /// Component names: `-` joins name segments, so `ENV_C` inside
+    /// `ENV_C-1` is *not* a whole word. Used for component/event renames.
+    ComponentName,
+}
+
+impl WordBoundary {
+    /// The boundary rule appropriate for a needle: a hyphenated name can only
+    /// be a component name, so it must use the component boundary (a bare
+    /// `do-step` must not match inside `do-step-2`). A hyphen-free needle
+    /// keeps the math boundary. Callers that need the component boundary for a
+    /// hyphen-free needle (renaming a component `ENV_C` next to `ENV_C-1`)
+    /// pass [`WordBoundary::ComponentName`] explicitly.
+    pub fn for_name(name: &str) -> Self {
+        if name.contains('-') {
+            WordBoundary::ComponentName
+        } else {
+            WordBoundary::MathIdentifier
+        }
+    }
+}
+
 /// Find every whole-word occurrence of `identifier` in `text`, skipping comments,
 /// and return them as LSP `Location`s in `uri`.
 ///
 /// Matching is comment-aware (via `text_utils::CommentTracker`) and respects
-/// identifier word boundaries. When `line_range` is `Some((start, end))`, only
-/// lines in that inclusive range contribute matches (the tracker still advances
-/// over skipped lines so block-comment state stays correct).
+/// identifier word boundaries under the given [`WordBoundary`] rule. When
+/// `line_range` is `Some((start, end))`, only lines in that inclusive range
+/// contribute matches (the tracker still advances over skipped lines so
+/// block-comment state stays correct).
 pub fn find_whole_word_locations(
     text: &str,
     identifier: &str,
     uri: &Url,
     line_range: Option<(usize, usize)>,
+    boundary: WordBoundary,
 ) -> Vec<Location> {
+    let boundary_char: fn(char) -> bool = match boundary {
+        WordBoundary::ComponentName => |c| text_utils::is_identifier_char(c) || c == '-',
+        WordBoundary::MathIdentifier => text_utils::is_identifier_char,
+    };
     let mut locations = Vec::new();
     let id_chars: Vec<char> = identifier.chars().collect();
     let mut tracker = text_utils::CommentTracker::new();
@@ -182,9 +339,9 @@ pub fn find_whole_word_locations(
             while col + id_chars.len() <= span.end {
                 let matches = chars[col..col + id_chars.len()] == id_chars;
                 if matches {
-                    let before_ok = col == 0 || !text_utils::is_identifier_char(chars[col - 1]);
+                    let before_ok = col == 0 || !boundary_char(chars[col - 1]);
                     let after_ok = col + id_chars.len() >= chars.len()
-                        || !text_utils::is_identifier_char(chars[col + id_chars.len()]);
+                        || !boundary_char(chars[col + id_chars.len()]);
 
                     if before_ok && after_ok {
                         locations.push(Location::new(
@@ -287,6 +444,79 @@ mod tests {
     fn multibyte_identifier() {
         // chars (not bytes) are counted
         assert_eq!(word_at("α_name := 0", pos(0, 3)).as_deref(), Some("α_name"));
+    }
+
+    #[test]
+    fn hyphenated_component_name_in_structural_position() {
+        // Cursor anywhere on `ENV_C-1` in a SEES clause resolves the whole
+        // component name, hyphens included (issue #28).
+        let text = "MACHINE m1\nSEES ENV_C-1\nEND\n";
+        let (word, range) = identifier_at_position(text, pos(1, 6)).unwrap();
+        assert_eq!(word, "ENV_C-1");
+        assert_eq!(range, Range::new(pos(1, 5), pos(1, 12)));
+        // …also from the segment after the hyphen, and from the hyphen
+        // itself (via `identifier_at_position`, which rename/definition use;
+        // `word_at_position` keeps preferring the `-` operator there).
+        assert_eq!(word_at(text, pos(1, 11)).as_deref(), Some("ENV_C-1"));
+        let (word, _) = identifier_at_position(text, pos(1, 10)).unwrap();
+        assert_eq!(word, "ENV_C-1");
+    }
+
+    #[test]
+    fn hyphenated_name_on_clause_continuation_line() {
+        let text = "MACHINE m1\nREFINES\n    M-ALPHA-0\nEND\n";
+        assert_eq!(word_at(text, pos(2, 6)).as_deref(), Some("M-ALPHA-0"));
+    }
+
+    #[test]
+    fn hyphen_stays_subtraction_in_formula_lines() {
+        // INVARIANTS continuation: `x-y` is `x − y`, not a name.
+        let text = "MACHINE m1\nINVARIANTS\n    @inv1 x-y > 0\nEND\n";
+        assert_eq!(word_at(text, pos(2, 10)).as_deref(), Some("x"));
+        assert_eq!(word_at(text, pos(2, 12)).as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn invalid_hyphen_run_falls_back_to_fragment() {
+        // `a--b` is not a valid component name; the cursor keeps the fragment.
+        let text = "SEES a--b\n";
+        assert_eq!(word_at(text, pos(0, 5)).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn component_boundary_protects_longer_names() {
+        let uri = Url::parse("file:///t.eventb").unwrap();
+        let text = "MACHINE m1\nSEES ENV_C ENV_C-1\nEND\n";
+        // Math boundary (today's behavior): `ENV_C` also matches the prefix
+        // of `ENV_C-1` because `-` is a boundary char there.
+        let math =
+            find_whole_word_locations(text, "ENV_C", &uri, None, WordBoundary::MathIdentifier);
+        assert_eq!(math.len(), 2);
+        // Component boundary: renaming component `ENV_C` must leave the
+        // sibling `ENV_C-1` alone.
+        let comp =
+            find_whole_word_locations(text, "ENV_C", &uri, None, WordBoundary::ComponentName);
+        assert_eq!(comp.len(), 1);
+        assert_eq!(comp[0].range.start, pos(1, 5));
+        // `WordBoundary::for_name` picks the component boundary for a
+        // hyphenated needle, so `ENV_C-1` matches only itself.
+        assert_eq!(
+            WordBoundary::for_name("ENV_C-1"),
+            WordBoundary::ComponentName
+        );
+        assert_eq!(
+            WordBoundary::for_name("ENV_C"),
+            WordBoundary::MathIdentifier
+        );
+        let hyphenated = find_whole_word_locations(
+            text,
+            "ENV_C-1",
+            &uri,
+            None,
+            WordBoundary::for_name("ENV_C-1"),
+        );
+        assert_eq!(hyphenated.len(), 1);
+        assert_eq!(hyphenated[0].range.start, pos(1, 11));
     }
 
     #[test]

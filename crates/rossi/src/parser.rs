@@ -142,6 +142,11 @@ fn collect_identifiers_from_clause(
                     p.as_str().to_string()
                 });
             }
+            // Component references (EXTENDS, REFINES, SEES) — hyphen-capable
+            // structural names, never declarations.
+            Rule::component_name => {
+                identifiers.push(p.as_str().to_string());
+            }
             Rule::comma => {} // optional comma separator
             // Skip the leading clause keyword (varies by call site)
             Rule::kw_extends
@@ -2051,7 +2056,7 @@ pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
 // ============================================================================
 
 use crate::error::ParseResult;
-use crate::keywords::{KeywordId, is_word_bounded};
+use crate::keywords::{KeywordId, is_structural_word_bounded};
 
 /// Compute (line, column) from a byte offset in the source text, both 1-indexed.
 ///
@@ -2108,17 +2113,26 @@ impl<'a> RecoveryText<'a> {
 /// declaration the parser itself forbids.
 fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<String> {
     let declares = matches!(keyword, "SETS" | "CONSTANTS" | "VARIABLES");
+    // Keep only names the grammar would re-accept in this position, so a
+    // recovered AST stays round-trippable — whitespace-split recovery would
+    // otherwise yield `a--b`/`x-y`, which the pretty-printer cannot re-emit.
+    // Declaring clauses (SETS/CONSTANTS/VARIABLES) take mathematical
+    // identifiers (and reject reserved words, mirroring the strict path);
+    // reference clauses (EXTENDS/SEES/REFINES) take component names.
+    let accepts = |name: &String| {
+        if declares {
+            crate::names::is_valid_math_identifier(name) && !crate::builtins::is_reserved_word(name)
+        } else {
+            crate::names::is_valid_component_name(name)
+        }
+    };
     let mut result = Vec::new();
     if let Some(span) = extract_clause_content(text, keyword, bound) {
         for line in text.masked[span.start..span.end].lines() {
             let line = line.trim();
             let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
             if !content.is_empty() {
-                result.extend(
-                    extract_identifiers(content)
-                        .into_iter()
-                        .filter(|name| !declares || !crate::builtins::is_reserved_word(name)),
-                );
+                result.extend(extract_identifiers(content).into_iter().filter(&accepts));
             }
         }
     }
@@ -2596,7 +2610,7 @@ fn find_keyword_word(
         }
         if let Some(label) = crate::comments::span_containing(&text.labels, offset) {
             search = label.end;
-        } else if is_word_bounded(upper, offset, needle_upper.len()) {
+        } else if is_structural_word_bounded(upper, offset, needle_upper.len()) {
             return Some(offset);
         } else {
             // The needle is ASCII, so offset + 1 stays on a char boundary.
@@ -2610,7 +2624,7 @@ fn find_keyword_word(
 /// return the rest of the line, trimmed.
 fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
     let rest = line.get(..keyword.len())?;
-    if !rest.eq_ignore_ascii_case(keyword) || !is_word_bounded(line, 0, keyword.len()) {
+    if !rest.eq_ignore_ascii_case(keyword) || !is_structural_word_bounded(line, 0, keyword.len()) {
         return None;
     }
     Some(line[keyword.len()..].trim())
@@ -2618,10 +2632,15 @@ fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 
 /// Extract the component name following its header keyword at `keyword_pos`
 /// (a whole-word match in the masked text): the first identifier on the
-/// rest of that line.
+/// rest of that line. Only a grammar-valid component name is accepted, so a
+/// recovered AST never carries a name the pretty-printer cannot re-emit
+/// (`MACHINE a--b`, `CONTEXT ä`); a malformed header simply leaves the
+/// component's default `"unknown"` name.
 fn component_name_after(text: &RecoveryText, keyword_pos: usize, keyword: &str) -> Option<String> {
     let rest = text.masked[keyword_pos + keyword.len()..].lines().next()?;
-    extract_identifier(rest).ok()
+    extract_identifier(rest)
+        .ok()
+        .filter(|name| crate::names::is_valid_component_name(name))
 }
 
 /// Find the span between a clause keyword and the next clause or END,

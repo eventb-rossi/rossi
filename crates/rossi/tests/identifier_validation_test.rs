@@ -89,6 +89,79 @@ fn leading_hyphen_identifier_rejected() {
 }
 
 #[test]
+fn trailing_or_doubled_hyphen_rejected() {
+    // The text grammar's `component_name` rule requires every `-` to open a
+    // non-empty segment, so import rejects what pretty-printing could not
+    // re-parse (issue #28).
+    for bad in ["bad-", "ba--d"] {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.extendsContext name="bad" org.eventb.core.target="{bad}"/>
+</org.eventb.core.contextFile>"#
+        );
+        let err = parse_xml(&xml).expect_err("should reject malformed hyphen placement");
+        match err {
+            ParseError::UnsupportedIdentifier { name, reason, .. } => {
+                assert_eq!(name, bad);
+                assert!(
+                    reason.contains("'-' must be followed by"),
+                    "reason: {reason}"
+                );
+            }
+            other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn hyphen_in_declared_identifier_rejected() {
+    // Constants/variables/sets/parameters are mathematical identifiers
+    // (kernel_lang §2.2): Rodin's own isValidIdentifierName rejects
+    // hyphens there, and so do we — only structural names get them.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.constant name="c" org.eventb.core.identifier="c-1"/>
+</org.eventb.core.contextFile>"#;
+
+    let err = parse_xml(xml).expect_err("should reject hyphenated constant");
+    match err {
+        ParseError::UnsupportedIdentifier { name, reason, .. } => {
+            assert_eq!(name, "c-1");
+            assert!(
+                reason.contains("unsupported character '-'"),
+                "reason: {reason}"
+            );
+        }
+        other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+    }
+}
+
+#[test]
+fn hyphen_in_witness_label_rejected() {
+    // A witness label names an abstract parameter or primed variable — a
+    // mathematical identifier position, never a component name.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="'" org.eventb.core.label="evt" org.eventb.core.convergence="0" org.eventb.core.extended="false">
+        <org.eventb.core.witness name="w" org.eventb.core.label="p-1" org.eventb.core.predicate="p-1 = 0" rossi.kind="witness"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let err = parse_xml(xml).expect_err("should reject hyphenated witness label");
+    match err {
+        ParseError::UnsupportedIdentifier { name, reason, .. } => {
+            assert_eq!(name, "p-1");
+            assert!(
+                reason.contains("unsupported character '-'"),
+                "reason: {reason}"
+            );
+        }
+        other => panic!("expected UnsupportedIdentifier, got {other:?}"),
+    }
+}
+
+#[test]
 fn surrounding_whitespace_in_event_label_trimmed() {
     // Rodin tolerates stray whitespace around names — a real-world corpus
     // model carries an event label with a trailing space. We trim instead

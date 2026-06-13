@@ -8,8 +8,16 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 // Basic Tokens
 // ==========================
 
-// Identifiers
+// Identifiers (mathematical: kernel_lang §2.2 — no hyphens; see names.rs)
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "'")* }
+
+// Component name: machine/context names, REFINES/SEES/EXTENDS targets and
+// event names. Rodin stores these as file names / labels (bare strings, not
+// mathematical identifiers), so real models use hyphens (`A-C0`, `CTX-1`).
+// Hyphens join non-empty segments which may start with a digit (`ENV_C-1`);
+// leading/trailing/doubled hyphens never match. Kept in sync with
+// `names::check_component_name` by a parity test.
+component_name = @{ identifier ~ ("-" ~ (ASCII_ALPHANUMERIC | "_" | "'")+)* }
 
 // Typed identifier: x⦂ℤ (bound variable with optional type annotation).
 // The type uses `ident_binder_type` rather than `maplet_expr` so that
@@ -39,41 +47,44 @@ string_literal = { "\"" ~ string_inner ~ "\"" }
 // Context Keywords (case-insensitive)
 // Atomic rules with trailing word-boundary lookahead so keywords don't greedily
 // match identifier prefixes (e.g. `events_of_partition` must parse as one
-// identifier, not `events` + `_of_partition`).
-kw_context = @{ ^"context" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_extends = @{ ^"extends" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_sets = @{ ^"sets" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_constants = @{ ^"constants" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_axioms = @{ ^"axioms" ~ !(ASCII_ALPHANUMERIC | "_") }
+// identifier, not `events` + `_of_partition`). Structural keywords also treat
+// `-` as a word character so a `component_name` like `end-to-end` or
+// `variant-x` is never split at an embedded keyword (math keywords keep the
+// narrower guard: `NAT-1` must stay `ℕ − 1`).
+kw_context = @{ ^"context" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_extends = @{ ^"extends" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_sets = @{ ^"sets" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_constants = @{ ^"constants" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_axioms = @{ ^"axioms" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
 // THEOREMS section header. Distinct from the singular inline `kw_theorem` flag:
 // the trailing word-boundary guard means `THEOREMS` never matches `kw_theorem`
 // (the `s` fails its boundary) and vice-versa.
-kw_theorems = @{ ^"theorems" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_end = @{ ^"end" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_theorems = @{ ^"theorems" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_end = @{ ^"end" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
 
 // Machine Keywords (case-insensitive)
-kw_machine = @{ ^"machine" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_refines = @{ ^"refines" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_sees = @{ ^"sees" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_variables = @{ ^"variables" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_invariants = @{ ^"invariants" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_variant = @{ ^"variant" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_events = @{ ^"events" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_initialisation = @{ ^"initialisation" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_machine = @{ ^"machine" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_refines = @{ ^"refines" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_sees = @{ ^"sees" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_variables = @{ ^"variables" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_invariants = @{ ^"invariants" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_variant = @{ ^"variant" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_events = @{ ^"events" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_initialisation = @{ ^"initialisation" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
 
 // Event Keywords (case-insensitive)
-kw_event = @{ ^"event" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_any = @{ ^"any" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_where = @{ ^"where" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_when = @{ ^"when" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_with = @{ ^"with" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_then = @{ ^"then" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_begin = @{ ^"begin" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_witness = @{ ^"witness" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_status = @{ ^"status" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_ordinary = @{ ^"ordinary" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_convergent = @{ ^"convergent" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_anticipated = @{ ^"anticipated" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_event = @{ ^"event" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_any = @{ ^"any" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_where = @{ ^"where" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_when = @{ ^"when" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_with = @{ ^"with" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_then = @{ ^"then" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_begin = @{ ^"begin" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_witness = @{ ^"witness" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_status = @{ ^"status" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_ordinary = @{ ^"ordinary" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_convergent = @{ ^"convergent" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_anticipated = @{ ^"anticipated" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
 
 // Action Keywords
 kw_skip = @{ ^"skip" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -536,7 +547,7 @@ action_list = {
 // ==========================
 
 context_clause_extends = {
-    kw_extends ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ identifier)*
+    kw_extends ~ component_name ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ component_name)*
 }
 
 // Set declaration: deferred set (S) or enumerated set (S = {a, b, c})
@@ -582,7 +593,7 @@ context_body = {
 }
 
 context = {
-    kw_context ~ identifier ~ context_body ~ kw_end
+    kw_context ~ component_name ~ context_body ~ kw_end
 }
 
 // ==========================
@@ -590,11 +601,11 @@ context = {
 // ==========================
 
 machine_clause_refines = {
-    kw_refines ~ identifier
+    kw_refines ~ component_name
 }
 
 machine_clause_sees = {
-    kw_sees ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+    kw_sees ~ component_name ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ component_name)*
 }
 
 machine_clause_variables = {
@@ -625,7 +636,7 @@ event_status = {
 }
 
 event_refines = {
-    kw_refines ~ identifier
+    kw_refines ~ component_name
 }
 
 event_any = {
@@ -663,8 +674,8 @@ event_inline_status = { kw_ordinary | kw_convergent | kw_anticipated }
 
 event = {
     event_inline_status?
-  ~ kw_event ~ identifier
-  ~ ((kw_extends | kw_refines) ~ identifier)?
+  ~ kw_event ~ component_name
+  ~ ((kw_extends | kw_refines) ~ component_name)?
   ~ event_body ~ kw_end
 }
 
@@ -683,7 +694,7 @@ machine_body = {
 }
 
 machine = {
-    kw_machine ~ identifier ~ machine_body ~ kw_end
+    kw_machine ~ component_name ~ machine_body ~ kw_end
 }
 
 // ==========================

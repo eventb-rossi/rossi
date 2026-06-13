@@ -112,7 +112,15 @@ impl ReferenceProvider {
         identifier: &str,
         line_range: Option<(usize, usize)>,
     ) -> Vec<Location> {
-        identifier_utils::find_whole_word_locations(text, identifier, uri, line_range)
+        identifier_utils::find_whole_word_locations(
+            text,
+            identifier,
+            uri,
+            line_range,
+            // A hyphenated needle is necessarily a component name, so it gets
+            // the component boundary; a hyphen-free symbol keeps the math one.
+            identifier_utils::WordBoundary::for_name(identifier),
+        )
     }
 
     fn find_symbol_references_in_text_range(
@@ -362,10 +370,19 @@ impl ReferenceProvider {
 
         for component_name in component_names {
             if let Some((uri, text, _)) = self.load_component_by_name(&component_name, manager) {
+                // Component references use the component word boundary so a
+                // name like `ENV_C` does not match inside a sibling component
+                // `ENV_C-1` (consistent with rename's cross-file path).
                 push_unique_locations(
                     &mut locations,
                     &mut seen,
-                    self.find_references_in_text(&text, &uri, identifier),
+                    identifier_utils::find_whole_word_locations(
+                        &text,
+                        identifier,
+                        &uri,
+                        None,
+                        identifier_utils::WordBoundary::ComponentName,
+                    ),
                 );
             }
         }

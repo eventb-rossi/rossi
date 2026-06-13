@@ -48,6 +48,17 @@ use crate::ast::*;
 use crate::operators::{self, OperatorId};
 use std::fmt::Write;
 
+/// Debug guard: a structural name about to be emitted must be re-lexable by
+/// the grammar's `component_name` rule, or the printed text could not be
+/// parsed back (issue #28). Parser- and XML-built ASTs are validated
+/// upstream; this catches programmatically constructed ones.
+fn debug_assert_component_name(name: &str, role: &str) {
+    debug_assert!(
+        crate::names::is_valid_component_name(name),
+        "{role} {name:?} is not a valid component name; printed output would not re-parse"
+    );
+}
+
 /// Configuration for the pretty printer
 #[derive(Debug, Clone)]
 pub struct PrettyPrinter {
@@ -110,11 +121,13 @@ impl PrettyPrinter {
     pub fn print_context(&self, context: &Context) -> String {
         let mut output = String::new();
 
+        debug_assert_component_name(&context.name, "context name");
         writeln!(output, "CONTEXT {}", context.name).unwrap();
 
         if !context.extends.is_empty() {
             writeln!(output, "EXTENDS").unwrap();
             for ext in &context.extends {
+                debug_assert_component_name(ext, "extends target");
                 writeln!(output, "{}{}", self.indent, ext).unwrap();
             }
         }
@@ -162,9 +175,11 @@ impl PrettyPrinter {
     pub fn print_machine(&self, machine: &Machine) -> String {
         let mut output = String::new();
 
+        debug_assert_component_name(&machine.name, "machine name");
         writeln!(output, "MACHINE {}", machine.name).unwrap();
 
         if let Some(ref refines) = machine.refines {
+            debug_assert_component_name(refines, "refines target");
             writeln!(output, "REFINES").unwrap();
             writeln!(output, "{}{}", self.indent, refines).unwrap();
         }
@@ -172,6 +187,7 @@ impl PrettyPrinter {
         if !machine.sees.is_empty() {
             writeln!(output, "SEES").unwrap();
             for sees in &machine.sees {
+                debug_assert_component_name(sees, "sees target");
                 writeln!(output, "{}{}", self.indent, sees).unwrap();
             }
         }
@@ -289,6 +305,11 @@ impl PrettyPrinter {
     /// Print an event
     fn print_event(&self, output: &mut String, event: &Event) {
         let double_indent = format!("{}{}", self.indent, self.indent);
+
+        debug_assert_component_name(&event.name, "event name");
+        if let Some(ref parent) = event.refines {
+            debug_assert_component_name(parent, "event refines target");
+        }
 
         // Emit status inline before EVENT keyword (Camille-compatible form):
         // `convergent EVENT name` instead of `EVENT name\nSTATUS convergent`

@@ -12,7 +12,6 @@ use tracing::debug;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::identifier_utils;
-use crate::text_utils;
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -82,8 +81,17 @@ impl RenameProvider {
             identifier, new_name, position
         );
 
-        // Validate new name
-        if !is_valid_identifier(new_name) {
+        // Check if this is a component name that should be renamed across files
+        let is_component = self.is_component_name(&identifier);
+
+        // A structural name may be hyphenated (Rodin labels/file names);
+        // mathematical symbols may not (kernel_lang §2.2). Beyond tracked
+        // components, an old name that is itself hyphenated can only be a
+        // structural name (e.g. an event named `do-step`, which the cross-ref
+        // manager does not track), so allow the new name to be hyphenated too.
+        let allow_component_name =
+            is_component || !rossi::names::is_valid_math_identifier(&identifier);
+        if !is_valid_new_name(new_name, allow_component_name) {
             debug!("Invalid new name: '{}'", new_name);
             return None;
         }
@@ -94,9 +102,6 @@ impl RenameProvider {
             return None;
         }
 
-        // Check if this is a component name that should be renamed across files
-        let is_component = self.is_component_name(&identifier);
-
         let mut changes = HashMap::new();
 
         if is_component {
@@ -104,9 +109,15 @@ impl RenameProvider {
             debug!("Renaming component '{}' across workspace", identifier);
             self.rename_across_workspace(&identifier, new_name, &mut changes);
         } else {
-            // Rename only in the current document
+            // Rename only in the current document. A hyphenated symbol (an
+            // event name) gets the component boundary; a math symbol the math one.
             debug!("Renaming symbol '{}' in current document", identifier);
-            let locations = find_all_references(text, &identifier, uri)?;
+            let locations = find_all_references(
+                text,
+                &identifier,
+                uri,
+                identifier_utils::WordBoundary::for_name(&identifier),
+            )?;
 
             if locations.is_empty() {
                 return None;
@@ -203,7 +214,14 @@ impl RenameProvider {
 
             if let Some(text) = text
                 && let Ok(url) = Url::parse(&uri_str)
-                && let Some(locations) = find_all_references(&text, old_name, &url)
+                && let Some(locations) = find_all_references(
+                    &text,
+                    old_name,
+                    &url,
+                    // Component boundary: renaming component `ENV_C` must not
+                    // rewrite the prefix of a sibling named `ENV_C-1`.
+                    identifier_utils::WordBoundary::ComponentName,
+                )
             {
                 let mut edits: Vec<TextEdit> = locations
                     .into_iter()
@@ -233,20 +251,16 @@ fn get_identifier_and_range_at_position(text: &str, position: Position) -> Optio
     identifier_utils::identifier_at_position(text, position)
 }
 
-/// Check if a string is a valid Event-B identifier
-fn is_valid_identifier(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
+/// Check if a string can be the new name of a renamed symbol. Components
+/// (machines/contexts/events) accept hyphenated names, mathematical symbols
+/// do not — both per `rossi::names`, the same source of truth the parser and
+/// importer use, so a rename can never produce unparseable text.
+fn is_valid_new_name(s: &str, is_component: bool) -> bool {
+    if is_component {
+        rossi::names::is_valid_component_name(s)
+    } else {
+        rossi::names::is_valid_math_identifier(s)
     }
-
-    // Must start with a letter or underscore
-    let chars: Vec<char> = s.chars().collect();
-    if !chars[0].is_alphabetic() && chars[0] != '_' {
-        return false;
-    }
-
-    // Rest must be alphanumeric or underscore
-    chars.iter().all(|&c| text_utils::is_identifier_char(c))
 }
 
 /// Check if a string is reserved vocabulary that cannot name an identifier:
@@ -262,8 +276,14 @@ fn is_keyword(s: &str) -> bool {
 /// Find all references to an identifier in the text, skipping comments.
 ///
 /// Returns `None` when there are no matches.
-fn find_all_references(text: &str, identifier: &str, uri: &Url) -> Option<Vec<Location>> {
-    let locations = identifier_utils::find_whole_word_locations(text, identifier, uri, None);
+fn find_all_references(
+    text: &str,
+    identifier: &str,
+    uri: &Url,
+    boundary: identifier_utils::WordBoundary,
+) -> Option<Vec<Location>> {
+    let locations =
+        identifier_utils::find_whole_word_locations(text, identifier, uri, None, boundary);
     if locations.is_empty() {
         None
     } else {
@@ -300,16 +320,23 @@ mod tests {
     }
 
     #[test]
-    fn test_is_valid_identifier() {
-        assert!(is_valid_identifier("count"));
-        assert!(is_valid_identifier("_count"));
-        assert!(is_valid_identifier("count_1"));
-        assert!(is_valid_identifier("MAX_VALUE"));
+    fn test_is_valid_new_name() {
+        for kind in [false, true] {
+            assert!(is_valid_new_name("count", kind));
+            assert!(is_valid_new_name("_count", kind));
+            assert!(is_valid_new_name("count_1", kind));
+            assert!(is_valid_new_name("MAX_VALUE", kind));
 
-        assert!(!is_valid_identifier(""));
-        assert!(!is_valid_identifier("1count")); // starts with digit
-        assert!(!is_valid_identifier("count-1")); // contains hyphen
-        assert!(!is_valid_identifier("count.var")); // contains dot
+            assert!(!is_valid_new_name("", kind));
+            assert!(!is_valid_new_name("1count", kind)); // starts with digit
+            assert!(!is_valid_new_name("count.var", kind)); // contains dot
+            assert!(!is_valid_new_name("count-", kind)); // trailing hyphen
+        }
+
+        // Hyphenated names are valid only for components (machines,
+        // contexts, events) — Rodin labels/file names, not math identifiers.
+        assert!(is_valid_new_name("count-1", true));
+        assert!(!is_valid_new_name("count-1", false));
     }
 
     #[test]
@@ -524,6 +551,29 @@ END
         let edit = provider.rename(&params, source);
 
         assert!(edit.is_none());
+    }
+
+    #[test]
+    fn test_rename_hyphenated_event_to_hyphenated_name() {
+        // A hyphenated old name can only be a structural name (here an event,
+        // which the cross-ref manager does not track), so a hyphenated new
+        // name must be allowed (issue #28).
+        let provider = RenameProvider::new();
+        let uri = make_uri();
+        let source = "\
+MACHINE m1
+EVENTS
+EVENT do-step
+THEN
+    @act1 skip
+END
+END
+";
+        let params = make_rename_params(2, 6, uri.clone(), "do-step2".to_string());
+        let edit = provider.rename(&params, source);
+        assert!(edit.is_some(), "hyphenated event rename should succeed");
+        let edits = edit.unwrap().changes.unwrap();
+        assert!(edits.get(&uri).is_some_and(|e| !e.is_empty()));
     }
 
     #[test]

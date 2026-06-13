@@ -46,6 +46,7 @@ pub mod comments;
 pub mod deps;
 pub mod error;
 pub mod keywords;
+pub mod names;
 pub mod nesting;
 pub mod operators;
 pub mod parser;
