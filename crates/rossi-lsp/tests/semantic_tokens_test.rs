@@ -263,6 +263,33 @@ fn test_keyword_not_matched_inside_identifier() {
 }
 
 #[test]
+fn test_hyphenated_name_not_split_into_keyword() {
+    // Regression for issue #36: a structural keyword scan must not latch onto
+    // the `end` fragment of the hyphenated event name `end-update`. Here the
+    // machine's END search crosses the second event (INITIALISATION is walked
+    // separately, so the EVENTS clause re-scan starts mid-document) and, under
+    // the old math word boundary, matched `end` because `-` counted as a
+    // boundary. The structural boundary treats `-` as part of the word.
+    let text = "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\n    EVENT end-update\n    THEN\n        x := 1\n    END\nEND\n";
+    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
+
+    let tokens = decode_tokens(text);
+
+    // `EVENT end-update` is line 8; the name starts at char 10 (`    EVENT `).
+    // No keyword token may land in the name region (char >= 10); a keyword on
+    // the leading `EVENT` (char 4) would be fine.
+    let keyword = token_type_index("keyword");
+    let in_name: Vec<_> = tokens
+        .iter()
+        .filter(|t| t.3 == keyword && t.0 == 8 && t.1 >= 10)
+        .collect();
+    assert!(
+        in_name.is_empty(),
+        "no keyword token may land inside the hyphenated name `end-update`, got {in_name:?}"
+    );
+}
+
+#[test]
 fn test_token_columns_are_chars_not_bytes() {
     // `∈` and `ℕ` are 3 UTF-8 bytes but 1 character (and 1 UTF-16 unit)
     // each; a comment after them must be positioned and sized in characters,

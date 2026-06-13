@@ -7,8 +7,8 @@
 //! - Snippets (common patterns like events, axioms)
 
 use crate::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Documentation,
-    InsertTextFormat, MarkupContent, MarkupKind, Position,
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
+    Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::references::component_reference_clause;
 
 /// Configuration for completion behavior
 #[derive(Debug, Clone)]
@@ -203,21 +204,24 @@ impl CompletionProvider {
         // `EVENT` mentioned in a trailing comment cannot change the scope.
         let masked = lexical.mask_comments_chars(text);
 
-        // Get completion context from the cached component under the cursor
-        let completion_ctx = self
+        // Get completion context from the cached component under the cursor,
+        // along with that component's own name (to exclude it from
+        // component-name completion — a component never references itself).
+        let (completion_ctx, self_name) = self
             .component_cache
             .get(&uri)
             .and_then(|entry| {
                 let offset = position_to_offset(text, position).unwrap_or(text.len());
                 component_at_offset(&entry, offset).map(|component| {
-                    CompletionContext::from_component_with_refs(
+                    let ctx = CompletionContext::from_component_with_refs(
                         component,
                         self.cross_ref_manager.as_deref(),
                         self.document_manager.as_deref(),
-                    )
+                    );
+                    (ctx, Some(rossi::deps::kind_and_name(component).1))
                 })
             })
-            .unwrap_or_else(CompletionContext::new);
+            .unwrap_or((CompletionContext::new(), None));
 
         // Determine what to complete based on context
         let mut items = Vec::new();
@@ -234,6 +238,10 @@ impl CompletionProvider {
 
         // Add identifier completions
         items.extend(self.get_identifier_completions(&completion_ctx, &word_at_cursor));
+
+        // Add component-name completions on REFINES/SEES/EXTENDS clauses, with a
+        // hyphen-aware replace range so editors match/replace across `-` (#36).
+        items.extend(self.get_component_name_completions(&masked, position, self_name.as_deref()));
 
         // Add snippet completions
         if config.enable_snippets {
@@ -371,6 +379,45 @@ impl CompletionProvider {
         }
 
         items
+    }
+
+    /// Component-name completions for a REFINES/SEES/EXTENDS clause. The cheap
+    /// clause check runs first, so the workspace component list is only queried
+    /// when the cursor is actually in such a clause. Each item carries an
+    /// explicit edit spanning the whole (possibly hyphenated) word under the
+    /// cursor, so the editor filters and replaces across `-` rather than only
+    /// the segment after the last hyphen (issue #36). `self_name` is the
+    /// enclosing component, excluded so it can't reference itself.
+    fn get_component_name_completions(
+        &self,
+        masked: &str,
+        position: Position,
+        self_name: Option<&str>,
+    ) -> Vec<CompletionItem> {
+        let Some(clause) = component_reference_clause(masked, position) else {
+            return Vec::new();
+        };
+        let Some(crm) = self.cross_ref_manager.as_deref() else {
+            return Vec::new();
+        };
+        // REFINES targets a machine; SEES/EXTENDS a context (the edge's target).
+        let kind = clause.target_kind();
+
+        let range = hyphenated_word_range(masked, position);
+        crm.component_names_of_kind(kind)
+            .into_iter()
+            .filter(|name| Some(name.as_str()) != self_name)
+            .map(|name| CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::MODULE),
+                detail: Some("Component".to_string()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: name,
+                })),
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// Get snippet completions for common patterns
@@ -633,6 +680,31 @@ fn get_word_at_position(line: &str, char_pos: usize) -> String {
         .to_string()
 }
 
+/// The range of the (possibly hyphenated) word ending at the cursor, used as a
+/// completion edit range so a hyphenated component name is replaced whole, not
+/// just its last `-` segment. Scans left over component-name characters
+/// (`keywords::is_structural_word_char`: ASCII alphanumerics, `_`, `'`, `-`) —
+/// the same charset the grammar accepts — so it covers a trailing `'` and never
+/// extends across a character that can't be part of a name.
+fn hyphenated_word_range(masked: &str, position: Position) -> Range {
+    let line = masked.lines().nth(position.line as usize).unwrap_or("");
+    let chars: Vec<char> = line.chars().collect();
+    let cursor = (position.character as usize).min(chars.len());
+    let mut start = cursor;
+    while start > 0 && keywords::is_structural_word_char(chars[start - 1]) {
+        start -= 1;
+    }
+    // A component name can't start with `-`, so don't pull a leading hyphen
+    // into the replace range.
+    while start < cursor && chars[start] == '-' {
+        start += 1;
+    }
+    Range::new(
+        Position::new(position.line, start as u32),
+        Position::new(position.line, cursor as u32),
+    )
+}
+
 // Context detection functions
 
 fn is_top_level_context(line_text: &str) -> bool {
@@ -869,6 +941,97 @@ mod tests {
         assert!(
             ctx.variables.contains(&"concrete_state".to_string()),
             "concrete_state should appear in completions"
+        );
+    }
+
+    /// Build a provider whose workspace holds an abstract machine, a context,
+    /// and the current machine `concrete_mch`.
+    fn provider_with_workspace() -> CompletionProvider {
+        let abstract_source = "MACHINE abstract_mch\nVARIABLES\n    s\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        s := 0\n    END\nEND";
+        let ctx_source = "CONTEXT ctx0\nCONSTANTS\n    c\nAXIOMS\n    @a1 c = 0\nEND";
+        let concrete_source = "MACHINE concrete_mch\nREFINES\n    abstract_mch\nVARIABLES\n    t\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        t := 0\n    END\nEND";
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component("file:///abstract_mch.eventb".to_string(), abstract_source);
+        crm.update_component("file:///ctx0.eventb".to_string(), ctx_source);
+        crm.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
+
+        let mut provider = CompletionProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider
+    }
+
+    #[test]
+    fn test_component_names_filtered_by_kind_excluding_self() {
+        let provider = provider_with_workspace();
+        // A REFINES clause in concrete_mch: offer abstract machines only,
+        // exclude concrete_mch itself, never offer a context.
+        let masked = "MACHINE concrete_mch\nREFINES\n    \nEND\n";
+        let labels: Vec<String> = provider
+            .get_component_name_completions(masked, Position::new(2, 4), Some("concrete_mch"))
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+
+        assert!(
+            labels.contains(&"abstract_mch".to_string()),
+            "REFINES should offer the abstract machine, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"concrete_mch".to_string()),
+            "the current component must be excluded, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"ctx0".to_string()),
+            "REFINES must not offer a context, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn test_component_name_completion_spans_hyphenated_word() {
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(
+            "file:///abstract-mch.eventb".to_string(),
+            "MACHINE abstract-mch\nVARIABLES\n    s\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        s := 0\n    END\nEND",
+        );
+        let mut provider = CompletionProvider::new();
+        provider.set_cross_reference_manager(crm);
+
+        // REFINES target on its own indented line; cursor after `abstract-`.
+        let masked = "MACHINE concrete\nREFINES\n    abstract-\nEND\n";
+        let items =
+            provider.get_component_name_completions(masked, Position::new(2, 13), Some("concrete"));
+        let item = items
+            .iter()
+            .find(|i| i.label == "abstract-mch")
+            .expect("hyphenated machine name must be offered in a REFINES clause");
+        assert_eq!(item.kind, Some(CompletionItemKind::MODULE));
+
+        // The edit must replace the whole hyphenated prefix `abstract-`, so the
+        // editor matches across `-` rather than only the empty last segment.
+        match item
+            .text_edit
+            .as_ref()
+            .expect("component item needs a text_edit")
+        {
+            CompletionTextEdit::Edit(edit) => {
+                assert_eq!(edit.range.start, Position::new(2, 4));
+                assert_eq!(edit.range.end, Position::new(2, 13));
+                assert_eq!(edit.new_text, "abstract-mch");
+            }
+            other => panic!("expected a plain TextEdit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_component_names_not_offered_outside_reference_clause() {
+        let provider = provider_with_workspace();
+        // VARIABLES clause is not a component-reference position.
+        let masked = "MACHINE m\nVARIABLES\n    x\nEND\n";
+        let items = provider.get_component_name_completions(masked, Position::new(2, 5), Some("m"));
+        assert!(
+            items.is_empty(),
+            "component names must not be offered outside REFINES/SEES/EXTENDS, got {items:?}"
         );
     }
 }

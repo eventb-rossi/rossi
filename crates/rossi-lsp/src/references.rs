@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::cross_references::{ComponentKind, CrossReferenceManager};
+use crate::cross_references::{ComponentKind, CrossReferenceManager, ReferenceKind};
 use crate::document::DocumentManager;
 use crate::identifier_utils;
 use crate::symbols::{SymbolKind, SymbolRef, enumerate_symbols};
@@ -494,19 +494,25 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     Some((start_line, end_line))
 }
 
-/// Whether `position` sits in a SEES/REFINES/EXTENDS clause. `masked` is the
-/// comment-masked document text, so keywords spelled inside comments are
-/// already blanked out and cannot be mistaken for clause boundaries.
-fn is_component_reference_position(masked: &str, position: Position) -> bool {
-    let lines: Vec<&str> = masked.lines().collect();
-    if position.line as usize >= lines.len() {
-        return false;
-    }
-
+/// The SEES/REFINES/EXTENDS clause `position` sits in, if any, as the dependency
+/// edge it introduces (`ReferenceKind::target_kind` then says whether the target
+/// is a machine or a context). `masked` is the comment-masked document text, so
+/// keywords spelled inside comments are already blanked out and cannot be
+/// mistaken for clause boundaries.
+pub(crate) fn component_reference_clause(
+    masked: &str,
+    position: Position,
+) -> Option<ReferenceKind> {
     let mut current_clause = None;
     let mut in_event = false;
+    let mut reached = false;
 
-    for line in lines.iter().take(position.line as usize + 1) {
+    for (idx, line) in masked.lines().enumerate() {
+        if idx > position.line as usize {
+            break;
+        }
+        reached |= idx == position.line as usize;
+
         if text_utils::event_name_from_line(line).is_some() {
             in_event = true;
             current_clause = None;
@@ -522,20 +528,26 @@ fn is_component_reference_position(masked: &str, position: Position) -> bool {
                 current_clause = None;
             }
             Some(word) if word.eq_ignore_ascii_case("SEES") && !in_event => {
-                current_clause = Some("SEES")
+                current_clause = Some(ReferenceKind::Sees)
             }
             Some(word) if word.eq_ignore_ascii_case("EXTENDS") && !in_event => {
-                current_clause = Some("EXTENDS")
+                current_clause = Some(ReferenceKind::Extends)
             }
             Some(word) if word.eq_ignore_ascii_case("REFINES") && !in_event => {
-                current_clause = Some("REFINES")
+                current_clause = Some(ReferenceKind::Refines)
             }
             Some(word) if text_utils::is_clause_boundary_keyword(word) => current_clause = None,
             _ => {}
         }
     }
 
-    current_clause.is_some()
+    // A position past the last line isn't in any clause.
+    reached.then_some(current_clause).flatten()
+}
+
+/// Whether `position` sits in a SEES/REFINES/EXTENDS clause.
+fn is_component_reference_position(masked: &str, position: Position) -> bool {
+    component_reference_clause(masked, position).is_some()
 }
 
 /// Get the identifier at the given position in the text.
@@ -867,6 +879,23 @@ EVENTS
 END";
         assert_eq!(event_line_range(source, "step"), Some((2, 7)));
         assert_eq!(event_line_range(source, "ghost"), None);
+    }
+
+    #[test]
+    fn test_event_line_range_anchors_hyphenated_name() {
+        // A hyphenated event name (issue #36) must be recognized as the region
+        // anchor: `event_name_from_line` returns the whole whitespace-delimited
+        // token, so the `end` segment before the hyphen is not a separate event.
+        let source = "\
+MACHINE m
+EVENTS
+    EVENT end-update
+    THEN
+        @act1 x ≔ 1
+    END
+END";
+        assert_eq!(event_line_range(source, "end-update"), Some((2, 5)));
+        assert_eq!(event_line_range(source, "end"), None);
     }
 
     #[test]

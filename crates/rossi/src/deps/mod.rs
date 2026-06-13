@@ -262,6 +262,11 @@ impl DependencyGraph {
         }
     }
 
+    /// Owned names of all nodes of a given kind (clones only that kind's keys).
+    pub fn component_names_of_kind(&self, kind: ComponentKind) -> Vec<String> {
+        self.names_of(kind).into_iter().map(String::from).collect()
+    }
+
     // --- Topological order (build) ---
 
     /// Topologically order the nodes reachable through a single edge kind,

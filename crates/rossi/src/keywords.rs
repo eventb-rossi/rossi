@@ -418,6 +418,19 @@ pub fn is_structural_word_bounded(text: &str, offset: usize, len: usize) -> bool
     word_bounded_by(text, offset, len, is_structural_word_char)
 }
 
+/// The whole-word boundary rule appropriate for a `name` needle: a hyphenated
+/// needle can only be a component name, so it takes the structural boundary
+/// (where `-` is part of the word); a hyphen-free needle is a math identifier,
+/// where `-` is the subtraction operator, so it keeps the math boundary. The
+/// `rossi` analogue of the LSP's `WordBoundary::for_name`.
+pub fn word_bounded_for_name(name: &str) -> fn(&str, usize, usize) -> bool {
+    if name.contains('-') {
+        is_structural_word_bounded
+    } else {
+        is_word_bounded
+    }
+}
+
 fn word_bounded_by(text: &str, offset: usize, len: usize, is_part: fn(char) -> bool) -> bool {
     let before_ok = !text[..offset].chars().next_back().is_some_and(is_part);
     let after_ok = !text[offset + len..].chars().next().is_some_and(is_part);
