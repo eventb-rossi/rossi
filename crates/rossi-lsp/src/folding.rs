@@ -8,6 +8,7 @@
 //! - Clause sections (SETS, CONSTANTS, VARIABLES, INVARIANTS, AXIOMS, etc.)
 
 use crate::lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams};
+use crate::text_utils::{is_declaration_scan_boundary, line_keyword_is};
 use rossi::keywords::{self, KeywordGroup, KeywordId};
 
 /// Provides folding ranges for Event-B documents
@@ -66,14 +67,14 @@ impl FoldingRangeProvider {
             let trimmed = line.trim();
 
             // Check for component start
-            if self.line_keyword_is(trimmed, KeywordId::Context)
-                || self.line_keyword_is(trimmed, KeywordId::Machine)
+            if line_keyword_is(trimmed, KeywordId::Context)
+                || line_keyword_is(trimmed, KeywordId::Machine)
             {
                 component_start = Some(idx);
             }
 
             // Check for component end
-            if self.line_keyword_is(trimmed, KeywordId::End)
+            if line_keyword_is(trimmed, KeywordId::End)
                 && component_start.is_some()
                 && let Some(start) = component_start
             {
@@ -108,15 +109,15 @@ impl FoldingRangeProvider {
             let trimmed = line.trim();
 
             // Check for event (or EVENTS section) start
-            if self.line_keyword_is(trimmed, KeywordId::Events)
-                || self.line_keyword_is(trimmed, KeywordId::Event)
-                || self.line_keyword_is(trimmed, KeywordId::Initialisation)
+            if line_keyword_is(trimmed, KeywordId::Events)
+                || line_keyword_is(trimmed, KeywordId::Event)
+                || line_keyword_is(trimmed, KeywordId::Initialisation)
             {
                 event_stack.push(idx);
             }
 
             // Check for event end
-            if self.line_keyword_is(trimmed, KeywordId::End)
+            if line_keyword_is(trimmed, KeywordId::End)
                 && !event_stack.is_empty()
                 && let Some(start) = event_stack.pop()
             {
@@ -174,16 +175,12 @@ impl FoldingRangeProvider {
                 continue;
             }
 
-            // If we're in a clause, check if we've reached the end
+            // If we're in a clause, check if we've reached the end: a blank
+            // line, or any line that opens a new structural region (clause,
+            // component, or event header).
             if let Some(start) = clause_start {
-                // Check if this line starts a new clause or is END
-                let is_end_of_clause = lines[idx].trim().is_empty()
-                    || self.line_keyword_is(trimmed, KeywordId::End)
-                    || self.line_keyword_is(trimmed, KeywordId::Context)
-                    || self.line_keyword_is(trimmed, KeywordId::Machine)
-                    || self.line_keyword_is(trimmed, KeywordId::Event)
-                    || self.line_keyword_is(trimmed, KeywordId::Initialisation)
-                    || self.is_clause_keyword(trimmed);
+                let is_end_of_clause =
+                    lines[idx].trim().is_empty() || is_declaration_scan_boundary(trimmed);
 
                 if is_end_of_clause {
                     // Only create folding range if there's content to fold
@@ -218,19 +215,6 @@ impl FoldingRangeProvider {
         }
 
         ranges
-    }
-
-    /// Check if a line starts with a clause keyword (its first whitespace-separated token)
-    fn is_clause_keyword(&self, trimmed: &str) -> bool {
-        let first = trimmed.split_whitespace().next().unwrap_or("");
-        keywords::is_clause_keyword(first)
-    }
-
-    /// Whether `trimmed`'s first whitespace-separated token is the keyword `id`,
-    /// resolved case-insensitively through the canonical keyword table.
-    fn line_keyword_is(&self, trimmed: &str, id: KeywordId) -> bool {
-        let first = trimmed.split_whitespace().next().unwrap_or("");
-        keywords::lookup(first).map(|kw| kw.id) == Some(id)
     }
 }
 

@@ -53,13 +53,32 @@ pub fn is_clause_boundary_keyword(word: &str) -> bool {
     rossi::keywords::is_clause_boundary(word)
 }
 
-/// Whether `word` bounds a *declaration-clause* scan that walks a SETS/
-/// CONSTANTS/VARIABLES (or in-event ANY) block to locate a named symbol.
+/// Whether `line`'s first whitespace-delimited token is the keyword `id`,
+/// resolved case-insensitively through the canonical keyword table. A header
+/// line like `EVENT do-step` or `sees C1` matches on its leading keyword
+/// regardless of casing or what follows.
 ///
-/// Like [`is_clause_boundary_keyword`] but excludes `STATUS`: it is a
-/// contextual keyword that only acts as one inside an EVENT and is commonly
-/// used as a set/constant name, so a line that is just `STATUS` in a
+/// Uses the whole first token (not [`first_identifier_word`], which would strip
+/// a leading `@`): a labelled action such as `@end y := 0` must NOT be read as
+/// the `END` keyword.
+pub fn line_keyword_is(line: &str, id: rossi::keywords::KeywordId) -> bool {
+    line.split_whitespace()
+        .next()
+        .and_then(rossi::keywords::lookup)
+        .map(|keyword| keyword.id)
+        == Some(id)
+}
+
+/// Whether `line` begins a new structural region (clause, component, or event)
+/// and so bounds a scan that walks a clause/section body — its first token is a
+/// clause-boundary keyword, EXCEPT `STATUS`.
+///
+/// `STATUS` is a contextual keyword that only acts as one inside an EVENT and is
+/// commonly used as a set/constant name, so a line that is just `STATUS` in a
 /// declaration clause is a declaration to be found, not a boundary to stop at.
-pub fn is_declaration_scan_boundary(word: &str) -> bool {
-    is_clause_boundary_keyword(word) && !word.eq_ignore_ascii_case("STATUS")
+/// Matching the first token (not the whole line) keeps a header carrying inline
+/// content — e.g. `EVENT incr` — recognised as a boundary.
+pub fn is_declaration_scan_boundary(line: &str) -> bool {
+    let first = line.split_whitespace().next().unwrap_or("");
+    is_clause_boundary_keyword(first) && !first.eq_ignore_ascii_case("STATUS")
 }
