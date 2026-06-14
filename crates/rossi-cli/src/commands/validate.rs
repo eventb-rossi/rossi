@@ -1,5 +1,5 @@
 use clap::{Args, ValueEnum};
-use rossi::{Component, ParseError, parse_components, parse_zip_file_with_recovery};
+use rossi::{Component, ParseError, parse_components, parse_zip_with_recovery};
 use rossi_build::{Diagnostic, Project, RuleId, Severity, error::ProjectError};
 use serde::{Serialize, Serializer};
 use std::fs;
@@ -101,6 +101,34 @@ pub struct ValidationResult {
     /// loose-text parse errors, where the source is available to resolve it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Region>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_summary: Option<ProofSummaryJson>,
+}
+
+/// Proof-obligation counts for one input, mirroring eventb-checker's
+/// `proofSummary` object. Carried on a synthetic success row so the JSON
+/// output stays a flat array of rows.
+#[derive(Debug, Serialize)]
+pub struct ProofSummaryJson {
+    pub total: usize,
+    pub discharged: usize,
+    pub reviewed: usize,
+    pub pending: usize,
+    pub unattempted: usize,
+    pub broken: usize,
+}
+
+impl From<rossi_build::proofs::ProofSummary> for ProofSummaryJson {
+    fn from(s: rossi_build::proofs::ProofSummary) -> Self {
+        ProofSummaryJson {
+            total: s.total,
+            discharged: s.discharged,
+            reviewed: s.reviewed,
+            pending: s.pending,
+            unattempted: s.unattempted,
+            broken: s.broken,
+        }
+    }
 }
 
 fn ser_severity<S: Serializer>(value: &Option<Severity>, s: S) -> Result<S::Ok, S::Error> {
@@ -255,7 +283,18 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
 }
 
 fn validate_zip_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
-    let parse_result = parse_zip_file_with_recovery(file);
+    // Read the archive once and drive the recovery parse, the semantic build,
+    // and the proof scan from the same bytes — opening and inflating the file
+    // three times per validation was pure waste on large archives.
+    let data = match std::fs::read(file) {
+        Ok(d) => d,
+        Err(e) => {
+            let err = ParseError::IoError(e.to_string());
+            let rule = rule_for_parse_error(&err);
+            return vec![error_result(file, None, format!("{err}"), Some(rule))];
+        }
+    };
+    let parse_result = parse_zip_with_recovery(&data);
     let mut results = Vec::new();
     let mut had_parse_error = false;
 
@@ -294,7 +333,11 @@ fn validate_zip_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
     }
 
     if !cli.no_semantic && !had_parse_error {
-        match Project::from_zip_file(file) {
+        let name = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("project");
+        match Project::from_zip_bytes(name, &data) {
             Ok(project) => fold_semantic(&project, file, cli, &mut results),
             Err(e) => results.push(error_result(
                 file,
@@ -305,7 +348,32 @@ fn validate_zip_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
         }
     }
 
+    fold_proofs(
+        rossi_build::proofs::check_zip_bytes(&data),
+        file,
+        &mut results,
+    );
+
     results
+}
+
+/// Append proof-status diagnostics and the summary row for one input.
+/// Runs whenever the archive/directory contains proof files — there is no
+/// flag; an input without `.bpr`/`.bpo`/`.bps` files is a silent no-op.
+/// A zip/IO failure here is ignored: the component-parsing path has
+/// already reported the unreadable input.
+fn fold_proofs(
+    report: rossi_build::error::Result<rossi_build::proofs::ProofReport>,
+    file: &Path,
+    out: &mut Vec<ValidationResult>,
+) {
+    let Ok(report) = report else { return };
+    for diag in report.diagnostics {
+        out.push(fold_diagnostic(file, diag));
+    }
+    if let Some(summary) = report.summary {
+        out.push(proof_summary_result(file, summary));
+    }
 }
 
 fn validate_directory(dir: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
@@ -339,6 +407,8 @@ fn validate_directory(dir: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
             rule_for_build_error(&e),
         )),
     }
+
+    fold_proofs(rossi_build::proofs::check_directory(dir), dir, &mut results);
 
     results
 }
@@ -385,6 +455,27 @@ fn success_result(file: &Path, inner: Option<String>, component: &Component) -> 
         rule_id: None,
         origin: None,
         region: None,
+        proof_summary: None,
+    }
+}
+
+/// Synthetic success row carrying the proof-obligation counts for one input.
+fn proof_summary_result(
+    file: &Path,
+    summary: rossi_build::proofs::ProofSummary,
+) -> ValidationResult {
+    ValidationResult {
+        file: file.to_path_buf(),
+        success: true,
+        inner_filename: None,
+        error: None,
+        component_type: None,
+        component_name: None,
+        severity: None,
+        rule_id: None,
+        origin: None,
+        region: None,
+        proof_summary: Some(summary.into()),
     }
 }
 
@@ -400,11 +491,12 @@ fn fold_diagnostic(file: &Path, diag: Diagnostic) -> ValidationResult {
         rule_id: diag.rule_id,
         origin: Some(diag.origin),
         region: None,
+        proof_summary: None,
     }
 }
 
 /// Pick the right [`RuleId`] for an XML-path [`ParseError`] surfaced by
-/// [`parse_zip_file_with_recovery`]. Unwraps the `FileContext` envelope so
+/// [`parse_zip_with_recovery`]. Unwraps the `FileContext` envelope so
 /// EB002/EB003 emitted from deep inside the per-file parse still reach the
 /// CLI as structured rule codes; everything else falls back to EB001.
 fn rule_for_parse_error(err: &ParseError) -> RuleId {
@@ -460,6 +552,7 @@ fn error_result(
         rule_id,
         origin: None,
         region: None,
+        proof_summary: None,
     }
 }
 
@@ -514,6 +607,13 @@ fn print_text_result(result: &ValidationResult, quiet: bool) {
         return;
     }
 
+    if let Some(proofs) = &result.proof_summary {
+        if !quiet {
+            println!("{file_info} - {}", format_proof_summary(proofs));
+        }
+        return;
+    }
+
     let is_error = result.severity == Some(Severity::Error);
     let glyph = match result.severity {
         Some(Severity::Error) => "✗",
@@ -539,7 +639,29 @@ fn print_text_result(result: &ValidationResult, quiet: bool) {
     }
 }
 
+/// `Proofs: 836/843 discharged, 6 reviewed, 1 pending, 289 broken` —
+/// zero categories are omitted, the discharged/total ratio always shows.
+fn format_proof_summary(proofs: &ProofSummaryJson) -> String {
+    let mut line = format!("Proofs: {}/{} discharged", proofs.discharged, proofs.total);
+    for (count, label) in [
+        (proofs.reviewed, "reviewed"),
+        (proofs.pending, "pending"),
+        (proofs.unattempted, "unattempted"),
+        (proofs.broken, "broken"),
+    ] {
+        if count > 0 {
+            line.push_str(&format!(", {count} {label}"));
+        }
+    }
+    line
+}
+
 fn print_summary(results: &[ValidationResult]) {
+    // Proof-summary rows are bookkeeping, not validations; don't count them.
+    let results: Vec<_> = results
+        .iter()
+        .filter(|r| r.proof_summary.is_none())
+        .collect();
     let total = results.len();
     let passed = results.iter().filter(|r| r.success).count();
     let failed = total - passed;
