@@ -49,6 +49,7 @@ pub mod error;
 pub mod keywords;
 pub mod names;
 pub mod nesting;
+pub mod op_info;
 pub mod operators;
 pub mod parser;
 pub mod pretty;
