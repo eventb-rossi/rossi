@@ -21,7 +21,8 @@
 //! Per-model metadata comes from the corpus itself: column 4 of
 //! `animate_results.tsv` names the machine each reference outcome was
 //! recorded with (`(auto)` = let eventb-animate pick), and
-//! `model_flags.tsv` flags known-defective and nondeterministic models.
+//! `model_flags.tsv` flags known-broken (`defective` / `unsupported` /
+//! `rodin_rejected`) and `nondeterministic` models.
 //!
 //! Output:
 //!   target/eventb-models-regen/<model>.zip     — regenerated archives
@@ -29,12 +30,18 @@
 //!
 //! Verdicts:
 //!   match   — actual outcome matches the reference TSV
-//!   known   — mismatch on a model flagged `defective` (broken source) or
+//!   known   — mismatch on a model flagged `defective` (broken source),
 //!             `unsupported` (needs an Event-B extension rossi doesn't
-//!             support yet, e.g. the theory plugin) in the corpus
-//!             `model_flags.tsv` (does not fail)
-//!   flaky   — success ↔ invariant_violation drift on a model flagged
-//!             `nondeterministic` (does not fail)
+//!             support yet, e.g. the theory plugin), or `rodin_rejected`
+//!             (Rodin's own static checker rejects the pristine archive, so
+//!             it ships `accurate="false"` artifacts; the pristine animates
+//!             only because ProB tolerates Rodin's degraded output, and the
+//!             regenerated archive's animate outcome is undefined) in the
+//!             corpus `model_flags.tsv` (does not fail)
+//!   flaky   — success ↔ invariant_violation ↔ deadlock drift on a model
+//!             flagged `nondeterministic` (random animation can hit a
+//!             reachable invariant violation, or reach a terminal state
+//!             before the requested steps complete) (does not fail)
 //!   regress — unexpected mismatch (fails the test)
 
 mod common;
@@ -126,10 +133,13 @@ fn animate_regenerated_corpus_matches_reference() {
         let matches = actual_str == expected_outcome;
         let verdict = if matches {
             "match"
-        } else if has_flag(&model, "defective") || has_flag(&model, "unsupported") {
+        } else if has_flag(&model, "defective")
+            || has_flag(&model, "unsupported")
+            || has_flag(&model, "rodin_rejected")
+        {
             "known"
         } else if has_flag(&model, "nondeterministic")
-            && is_invariant_drift(&expected_outcome, actual_str)
+            && is_tolerated_drift(&expected_outcome, actual_str)
         {
             "flaky"
         } else {
@@ -225,11 +235,16 @@ fn animate_one(animate: &Path, zip: &Path, machine: Option<&str>, timeout: Durat
     }
 }
 
-/// True when the two outcomes differ only by hitting (or missing) a
-/// reachable invariant violation — the drift the `nondeterministic`
-/// flag tolerates.
-fn is_invariant_drift(expected: &str, actual: &str) -> bool {
-    const DRIFT: [&str; 2] = ["success", "invariant_violation"];
+/// True when both outcomes are reachable end-states of the same random walk —
+/// the drift the `nondeterministic` flag tolerates. `eventb-animate` has no
+/// seed flag, so a 10-step walk over identical semantics can finish all steps
+/// (`success`), hit a reachable invariant violation (`invariant_violation`),
+/// or reach a state with no enabled events (`deadlock`); which one depends on
+/// the random path, and the path differs between the pristine and regenerated
+/// archives purely because their byte layout differs (element names/ordering).
+/// A structural failure (`load_error`/`regen_error`) is never tolerated here.
+fn is_tolerated_drift(expected: &str, actual: &str) -> bool {
+    const DRIFT: [&str; 3] = ["success", "invariant_violation", "deadlock"];
     DRIFT.contains(&expected) && DRIFT.contains(&actual)
 }
 
