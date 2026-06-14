@@ -119,32 +119,31 @@ END
         m.invariants
     );
 
-    // Exactly one recovered-predicate error, naming @CommonRole4 — never a
-    // correct neighbour.
-    let recovered: Vec<&str> = result
-        .errors
-        .iter()
-        .filter_map(|e| match e {
-            rossi::ParseError::RecoverableError { message, .. } => Some(message.as_str()),
-            _ => None,
-        })
-        .collect();
+    // Exactly one diagnostic survives: the precise strict-parse error on the
+    // offending token, not a coarse per-label recovery error. The duplicate
+    // recovery error covering the same predicate is collapsed away.
     assert_eq!(
-        recovered.len(),
+        result.errors.len(),
         1,
-        "exactly one predicate should fail to recover, got {recovered:?}"
+        "exactly one diagnostic should remain, got {:?}",
+        result.errors
     );
     assert!(
-        recovered[0].contains("@CommonRole4"),
-        "the failure should name @CommonRole4, got {:?}",
-        recovered[0]
+        !matches!(result.errors[0], rossi::ParseError::RecoverableError { .. }),
+        "the surviving diagnostic should be the precise strict error, got {:?}",
+        result.errors[0]
     );
-    for ok in ["CommonRole1", "CommonRole2", "CommonRole3", "CommonRole5"] {
-        assert!(
-            !recovered.iter().any(|m| m.contains(ok)),
-            "no spurious recovery error should mention {ok}, got {recovered:?}"
-        );
-    }
+
+    // It points at the broken predicate's line, never spilling over the block.
+    let bad = source.find("sdfsdf").expect("fixture has the bad token");
+    let bad_line = source[..bad].matches('\n').count() + 1;
+    let (line, _) = result.errors[0]
+        .position()
+        .expect("the strict error has a position");
+    assert_eq!(
+        line, bad_line,
+        "the diagnostic should sit on the broken line"
+    );
 }
 
 #[test]
@@ -686,11 +685,17 @@ fn test_recovery_inline_theorem_forms() {
 
 #[test]
 fn test_recovery_error_names_label_with_position() {
-    let source = "CONTEXT issue24_position\nAXIOMS\n    @axm1 ### // why: broken\nEND\n";
+    // Two broken axioms. The strict parse pinpoints the first, so its recovery
+    // duplicate is collapsed away; recovery still reports the second one, with
+    // a byte-exact position and a concise, label-named message (no masked
+    // comment artifacts).
+    let source =
+        "CONTEXT issue24_position\nAXIOMS\n    @axm1 $$$\n    @axm2 ### // why: broken\nEND\n";
 
     let result = parse_with_recovery(source);
 
-    let error = result.errors[1..]
+    let error = result
+        .errors
         .iter()
         .find_map(|e| match e {
             rossi::ParseError::RecoverableError {
@@ -701,14 +706,12 @@ fn test_recovery_error_names_label_with_position() {
             } => Some((*line, *column, message.clone())),
             _ => None,
         })
-        .expect("the broken axiom must be reported");
+        .expect("the second broken axiom must be reported by recovery");
 
     let (line, column, message) = error;
-    assert_eq!(line, 3, "1-indexed line of the broken axiom");
+    assert_eq!(line, 4, "1-indexed line of the second broken axiom");
     assert_eq!(column, 5, "1-indexed column of the axiom text");
-    // The message names the failing label, not the whole (comment-bearing)
-    // line — concise and free of masked comment artifacts.
-    assert_eq!(message, "Failed to parse axiom: @axm1");
+    assert_eq!(message, "Failed to parse axiom: @axm2");
 }
 
 #[test]
