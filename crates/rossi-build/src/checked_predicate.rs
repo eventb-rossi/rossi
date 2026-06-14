@@ -38,6 +38,12 @@ use crate::{Diagnostic, Severity};
 /// Result of checking a labeled predicate.
 #[derive(Debug, Clone)]
 pub struct PredicateCheck {
+    /// The [enriched](crate::enrich::enrich_predicate) predicate the
+    /// check ran on: binder types stamped, short-form comprehensions
+    /// lowered. `canonical` is a rendering of exactly this AST. Kept on
+    /// guard/axiom decls, where descendant (M1+) static checks re-read it
+    /// to re-derive parameter types for extended events.
+    pub predicate: Predicate,
     /// Rodin-canonical formatting of the predicate.
     pub canonical: String,
     /// First identifier in the predicate that is neither in `env` nor
@@ -57,6 +63,9 @@ pub struct ExpressionCheck {
 /// Result of checking an action.
 #[derive(Debug, Clone)]
 pub struct ActionCheck {
+    /// The enriched action the check ran on (see
+    /// [`PredicateCheck::predicate`]).
+    pub action: Action,
     /// Rodin-canonical assignment text, with empty-set RHS annotated
     /// against the LHS type when known (see
     /// [`canonical_action_with_env`]).
@@ -82,6 +91,7 @@ pub fn check_predicate(p: &Predicate, env: &TypeEnv) -> PredicateCheck {
     PredicateCheck {
         free_identifier: free_identifier_in_predicate(&enriched, env),
         canonical: canonical_predicate(&enriched),
+        predicate: enriched,
     }
 }
 
@@ -101,12 +111,14 @@ pub fn check_action(a: &Action, env: &TypeEnv) -> ActionCheck {
     ActionCheck {
         free_identifier: free_identifier_in_action_rhs(&enriched, env),
         canonical: canonical_action_with_env(&enriched, env),
+        action: enriched,
     }
 }
 
-/// Resolve a labeled predicate against `env` and produce the
-/// (effective label, canonical text) pair, or a [`Diagnostic`] if the
-/// predicate references an unknown identifier.
+/// Resolve a labeled predicate against `env` and produce the effective
+/// label plus the full [`PredicateCheck`] (enriched AST + canonical
+/// text), or a [`Diagnostic`] if the predicate references an unknown
+/// identifier.
 ///
 /// This is the shared shape of axiom / invariant / guard checking:
 ///
@@ -127,13 +139,13 @@ pub fn check_labeled_predicate(
     default_label: &str,
     kind_name: &str,
     origin: impl FnOnce(&str) -> String,
-) -> std::result::Result<(String, String), Diagnostic> {
+) -> std::result::Result<(String, PredicateCheck), Diagnostic> {
     let pc = check_predicate(&raw.predicate, env);
     let label = raw
         .label
         .clone()
         .unwrap_or_else(|| default_label.to_string());
-    if let Some(bad) = pc.free_identifier {
+    if let Some(bad) = &pc.free_identifier {
         return Err(Diagnostic {
             severity: Severity::Error,
             origin: origin(&label),
@@ -141,7 +153,7 @@ pub fn check_labeled_predicate(
             rule_id: Some(crate::RuleId::UndeclaredIdentifier),
         });
     }
-    Ok((label, pc.canonical))
+    Ok((label, pc))
 }
 
 #[cfg(test)]

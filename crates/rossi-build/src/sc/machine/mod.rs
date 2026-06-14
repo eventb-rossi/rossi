@@ -139,7 +139,7 @@ pub fn check_machine(
         accurate = false;
     }
     if let Some(p) = parent {
-        for (k, v) in p.env.iter() {
+        for (k, v) in p.env().iter() {
             env.insert_if_absent(k, v.clone());
         }
     }
@@ -193,8 +193,8 @@ pub fn check_machine(
     );
 
     let mut invariant_decls: Vec<InvariantDecl> = Vec::with_capacity(machine.invariants.len());
-    for inv in &machine.invariants {
-        match build_invariant_decl(&pc.rodin_ids, &file_root, inv, &env, &machine.name) {
+    for (i, inv) in machine.invariants.iter().enumerate() {
+        match build_invariant_decl(&pc.rodin_ids, &file_root, i, inv, &env, &machine.name) {
             Ok(d) => invariant_decls.push(d),
             Err(diag) => {
                 diags.push(diag);
@@ -280,19 +280,20 @@ pub fn check_machine(
     // Ancestors closure.
     let mut ancestors: Vec<String> = Vec::new();
     if let Some(p) = parent {
-        ancestors.extend(p.ancestors.iter().cloned());
-        ancestors.push(p.name.clone());
+        ancestors.extend(p.ancestors().iter().cloned());
+        ancestors.push(p.name().to_string());
     }
     let visible_variables: BTreeSet<String> = all_var_names
         .into_iter()
         .filter(|n| env.contains(n))
         .collect();
 
-    // Assemble the record.
+    // Assemble the record — the single home for the machine's name,
+    // output filename, environment and ancestor closure.
     let record = MachineRecord {
         name: machine.name.clone(),
         output_filename: pc.output_filename(),
-        env: env.clone(),
+        env,
         configuration,
         refines: refines_decl,
         sees: sees_decls,
@@ -300,7 +301,7 @@ pub fn check_machine(
         invariants: invariant_decls,
         variant: variant_decl,
         events: event_decls,
-        ancestors: ancestors.clone(),
+        ancestors,
     };
 
     // -----------------------------------------------------------------
@@ -326,13 +327,10 @@ pub fn check_machine(
     full_invariant_elems.extend(render_own_invariants(&record));
 
     let cm = CheckedMachine {
-        name: machine.name.clone(),
-        output_filename: pc.output_filename(),
-        env,
+        record,
         visible_variables,
         invariant_elems: full_invariant_elems,
         events_by_label,
-        ancestors,
     };
 
     Ok((
@@ -392,7 +390,7 @@ fn build_refines_machine_decl(
         in_tag::REFINES_MACHINE,
         parent_name,
     );
-    let sc_target = HandleUri::file(&project.name, &parent_cm.output_filename).into();
+    let sc_target = HandleUri::file(&project.name, parent_cm.output_filename()).into();
     Some(RefinesMachineDecl {
         parent_name: parent_name.to_string(),
         sc_target,
@@ -432,20 +430,20 @@ fn build_sees_decls(
 fn build_invariant_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
+    source_index: usize,
     inv: &LabeledPredicate,
     env: &TypeEnv,
     machine_name: &str,
 ) -> std::result::Result<InvariantDecl, Diagnostic> {
-    let (label, predicate_canonical) =
-        check_labeled_predicate(inv, env, "inv", "invariant", |lbl| {
-            format!("{machine_name}.{lbl}")
-        })?;
+    let (label, pc) = check_labeled_predicate(inv, env, "inv", "invariant", |lbl| {
+        format!("{machine_name}.{lbl}")
+    })?;
     let source =
         crate::sc::file_child_source(ids, file_root, Kind::Invariant, in_tag::INVARIANT, &label);
     Ok(InvariantDecl {
         label,
-        predicate: inv.predicate.clone(),
-        predicate_canonical,
+        source_index,
+        predicate_canonical: pc.canonical,
         is_theorem: inv.is_theorem,
         source,
     })
@@ -569,13 +567,22 @@ fn emit_decomposition_stub(
 ) -> (ScFile, CheckedMachine, Vec<Diagnostic>) {
     let root = Element::new(tag::SC_MACHINE_FILE).attr(attr::CONFIGURATION, cfg);
     let cm = CheckedMachine {
-        name: machine_name.to_string(),
-        output_filename: pc.output_filename(),
-        env: TypeEnv::new(),
+        record: MachineRecord {
+            name: machine_name.to_string(),
+            output_filename: pc.output_filename(),
+            env: TypeEnv::new(),
+            configuration: cfg.to_string(),
+            refines: None,
+            sees: Vec::new(),
+            variables: Vec::new(),
+            invariants: Vec::new(),
+            variant: None,
+            events: Vec::new(),
+            ancestors: Vec::new(),
+        },
         visible_variables: BTreeSet::new(),
         invariant_elems: Vec::new(),
         events_by_label: HashMap::new(),
-        ancestors: Vec::new(),
     };
     let file = ScFile {
         filename: pc.output_filename(),

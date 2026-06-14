@@ -217,6 +217,12 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
 /// etc. — are the `BuiltinApplication` arm.) These are reserved words, so the
 /// `Identifier` arm consults this before an env lookup.
 fn reserved_atom(name: &str, u: &mut Unifier) -> Option<ITy> {
+    // Membership comes from the one list in `rossi::builtins`, shared with the
+    // WD computer (reserved-beats-env: these always denote the built-in,
+    // regardless of any illegal declaration).
+    if !rossi::builtins::is_reserved_relational_atom(name) {
+        return None;
+    }
     match name {
         "succ" | "pred" => Some(ITy::relation(ITy::Integer, ITy::Integer)),
         "id" => {
@@ -904,6 +910,11 @@ fn collect_from_maplet(
 /// set-builder / quantified-union / quantified-inter — those nodes'
 /// internal binders shouldn't leak. Names bound by a quantifier inside
 /// `bool(P)` or an `if-then-else` condition are also filtered out.
+///
+/// This stops-at-binders, expression-only contract is the opposite of
+/// `wd::normal`'s `expression_free_names`, which descends *into* binders
+/// (and predicates) to find every free occurrence for unused-declaration
+/// dropping. They are intentionally distinct analyses — don't unify them.
 pub(crate) fn collect_free_identifiers<'a>(expr: &'a Expression, out: &mut Vec<&'a str>) {
     let mut shadow: Vec<&'a str> = Vec::new();
     collect_free_idents_expr(expr, &mut shadow, out);

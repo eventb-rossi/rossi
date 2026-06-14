@@ -34,6 +34,7 @@ pub mod project;
 pub mod repack;
 pub mod rodin_ids;
 pub mod rules;
+pub mod sc_model;
 pub mod sc_view;
 pub mod type_env;
 pub mod types;
@@ -57,6 +58,15 @@ pub use types::Type;
 /// and do not abort the build — Rodin's SC has the same "drop but continue"
 /// philosophy and downstream tools tolerate it.
 pub fn build(project: &Project) -> BuildResult {
+    sc::build_project(project).0
+}
+
+/// Like [`build`], additionally returning the typed model of every
+/// successfully-checked component (type environments, axiom/event records).
+/// Passes that analyse formulas after the static check — well-definedness,
+/// IDE tooling — start from this instead of re-deriving state from the
+/// emitted XML. See [`sc_model`] for the record types.
+pub fn build_with_model(project: &Project) -> (BuildResult, sc_model::ScModel) {
     sc::build_project(project)
 }
 
