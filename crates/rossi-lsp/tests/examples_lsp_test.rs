@@ -591,6 +591,18 @@ fn cars_goto_definition_cross_file() {
     }
 }
 
+/// `base-model.eventb` is a single document holding `context C1` and the
+/// `machine M1` that sees it, written with LOWERCASE keywords (Camille style).
+/// Goto-definition on the `C1` in `sees C1` must jump to the `context C1`
+/// header — the case the bug report flagged.
+#[test]
+fn base_model_lowercase_sees_goto_definition() {
+    let text = include_str!("../../rossi/examples/base-model.eventb");
+    let ws = Workspace::from_merged_text("base-model", text);
+    let provider = definition_provider(&ws);
+    assert_goto_clause(&ws, &provider, "M1", "sees", "C1");
+}
+
 #[test]
 fn cars_goto_definition_identifiers() {
     let ws = Workspace::open(CARS);

@@ -171,6 +171,17 @@ impl Component {
             Component::Machine(m) => m.span,
         }
     }
+
+    /// The span of the component's name token, whichever kind it is.
+    ///
+    /// `None` for components built without location info (Rodin XML import,
+    /// error recovery).
+    pub fn name_span(&self) -> Option<Span> {
+        match self {
+            Component::Context(ctx) => ctx.name_span,
+            Component::Machine(m) => m.name_span,
+        }
+    }
 }
 
 /// Source location information for error reporting and LSP features
