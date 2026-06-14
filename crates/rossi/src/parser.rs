@@ -2178,10 +2178,13 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
 
 /// Extract labeled predicates from a clause during error recovery.
 ///
-/// Comment-only lines are skipped (they mask to whitespace), and a predicate
-/// written inline after the clause keyword (`AXIOMS @axm1 P`) is recovered
-/// like any other. Error positions are byte-exact; error messages quote the
-/// original line, comment included.
+/// The clause is segmented into labeled predicates by label-bearing lines, so
+/// a predicate that spans several physical lines (`@inv1` on one line, the
+/// predicate indented below) stays whole — `WHITESPACE` includes `\n` in the
+/// grammar. A comment-only line masks to whitespace and falls inside whichever
+/// predicate it sits in; a predicate written inline after the clause keyword
+/// (`AXIOMS @axm1 P`) is recovered like any other. Error positions are
+/// byte-exact.
 fn recover_labeled_predicates(
     text: &RecoveryText,
     keyword: &str,
@@ -2190,35 +2193,112 @@ fn recover_labeled_predicates(
     errors: &mut Vec<ParseError>,
 ) -> Vec<LabeledPredicate> {
     let mut result = Vec::new();
-    if let Some(span) = extract_clause_content(text, keyword, bound) {
-        let mut line_start = span.start;
-        for line in text.masked[span.start..span.end].split_inclusive('\n') {
-            let trimmed = line.trim();
-            let content = strip_keyword_prefix(trimmed, keyword).unwrap_or(trimmed);
-            if !content.is_empty() {
-                match try_parse_labeled_predicate_from_text(content) {
-                    Ok(pred) => result.push(pred),
-                    Err(e) => {
-                        // `content` is a subslice of `line`; its offset within
-                        // the line maps to the same offset in the original.
-                        let content_offset = content.as_ptr() as usize - line.as_ptr() as usize;
-                        let offset = line_start + content_offset;
-                        let (err_line, err_col) = offset_to_line_col(text.original, offset);
-                        let original_content =
-                            text.original[offset..line_start + line.len()].trim();
-                        errors.push(ParseError::RecoverableError {
-                            line: err_line,
-                            column: err_col,
-                            message: format!("Failed to parse {}: {}", label, original_content),
-                            source: Some(Box::new(e)),
-                        });
-                    }
-                }
+    let Some(span) = extract_clause_content(text, keyword, bound) else {
+        return result;
+    };
+
+    // Collect the byte offset where each labeled predicate begins: the clause
+    // keyword (the leading segment, which also covers a predicate written
+    // inline after the keyword) plus every later predicate start. Splitting on
+    // `\n` instead — as this once did — cut every multi-line label off from its
+    // body and reported each correct predicate as a failure, lighting up the
+    // whole clause in the editor.
+    //
+    // A predicate starts at a line whose first token is `@label` or `theorem`.
+    // When the clause has no such line it is a run of bare, label-less
+    // predicates (the grammar's `label?` is optional) — there, every line
+    // starts a predicate, so each is recovered rather than lumped into one
+    // segment the single-predicate parser would reject.
+    let body = &text.masked[span.start..span.end];
+    let any_label = body
+        .split_inclusive('\n')
+        .skip(1)
+        .any(line_starts_labeled_predicate);
+    let mut starts = vec![span.start];
+    let mut line_start = span.start;
+    for line in body.split_inclusive('\n') {
+        if line_start != span.start && (!any_label || line_starts_labeled_predicate(line)) {
+            starts.push(line_start);
+        }
+        line_start += line.len();
+    }
+    starts.push(span.end);
+
+    for pair in starts.windows(2) {
+        let (seg_start, seg_end) = (pair[0], pair[1]);
+        let raw = &text.masked[seg_start..seg_end];
+        // Only the leading segment still carries the clause keyword.
+        let content = if seg_start == span.start {
+            strip_keyword_prefix(raw, keyword).unwrap_or_else(|| raw.trim())
+        } else {
+            raw.trim()
+        };
+        if content.is_empty() {
+            continue;
+        }
+        match try_parse_labeled_predicate_from_text(content) {
+            Ok(pred) => result.push(pred),
+            Err(e) => {
+                // `content` is a subslice of `raw`; recover its absolute offset
+                // (masked and original share a byte layout).
+                let content_offset = content.as_ptr() as usize - raw.as_ptr() as usize;
+                let abs_start = seg_start + content_offset;
+                let abs_end = abs_start + content.len();
+                let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
+                let subject = leading_label(content)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        text.original[abs_start..abs_end]
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string()
+                    });
+                errors.push(ParseError::RecoverableError {
+                    line: err_line,
+                    column: err_col,
+                    message: format!("Failed to parse {label}: {subject}"),
+                    source: Some(Box::new(e)),
+                });
             }
-            line_start += line.len();
         }
     }
     result
+}
+
+/// Whether `line` (a physical line, possibly indented) begins a new labeled
+/// predicate during recovery: its first token is a `@label` or the `theorem`
+/// keyword. A continuation line of a multi-line predicate begins with neither.
+fn line_starts_labeled_predicate(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('@') || starts_with_keyword(t, "theorem")
+}
+
+/// Whether `s` begins with `kw` as a whole word (case-insensitive): the match
+/// is not immediately followed by another word char, so `theorem` matches in
+/// `theorem @t1` but `theoremish` is left alone. Boundary detection goes
+/// through the shared [`crate::keywords::is_word_bounded`] so it can't drift
+/// from the rest of the keyword scanning.
+fn starts_with_keyword(s: &str, kw: &str) -> bool {
+    s.get(..kw.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(kw))
+        && crate::keywords::is_word_bounded(s, 0, kw.len())
+}
+
+/// The leading `@label` of a recovered segment, if any. The segment may open
+/// with the `theorem` keyword before the label (`theorem @grd1 …`); the label,
+/// including its `@`, keeps the recovery error message short. A stray `@`
+/// inside a malformed predicate is not mistaken for a leading label.
+fn leading_label(content: &str) -> Option<&str> {
+    let at = content.find('@')?;
+    let prefix = content[..at].trim();
+    if !prefix.is_empty() && !prefix.eq_ignore_ascii_case("theorem") {
+        return None;
+    }
+    let rest = &content[at..];
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    Some(&rest[..end])
 }
 
 /// Recover a `THEOREMS` clause, forcing `is_theorem = true` on each predicate.

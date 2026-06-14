@@ -84,6 +84,70 @@ fn test_recovery_machine_with_invalid_invariant() {
 }
 
 #[test]
+fn test_recovery_multiline_invariant_isolates_the_broken_one() {
+    // Idiomatic Event-B writes each invariant as a `@label` on one line with
+    // the predicate indented below. A syntax error in one predicate must not
+    // be blamed on the surrounding (correct) invariants: recovery segments by
+    // label, not by physical line, so it no longer lights up the whole block.
+    let source = r#"
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @CommonRole1
+        x ∈ ℕ
+    @CommonRole2
+        x ≥ 0
+    @CommonRole3
+        x ≠ 1
+    @CommonRole4
+        ∀u · u ∈ ℕ sdfsdf x ≠ u
+    @CommonRole5
+        x ≤ 100
+END
+"#;
+
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+
+    // The four correct invariants survive; only the broken one is dropped.
+    let m = expect_machine(&result);
+    assert_eq!(
+        m.invariants.len(),
+        4,
+        "the four correct invariants should be recovered, got {:?}",
+        m.invariants
+    );
+
+    // Exactly one recovered-predicate error, naming @CommonRole4 — never a
+    // correct neighbour.
+    let recovered: Vec<&str> = result
+        .errors
+        .iter()
+        .filter_map(|e| match e {
+            rossi::ParseError::RecoverableError { message, .. } => Some(message.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        recovered.len(),
+        1,
+        "exactly one predicate should fail to recover, got {recovered:?}"
+    );
+    assert!(
+        recovered[0].contains("@CommonRole4"),
+        "the failure should name @CommonRole4, got {:?}",
+        recovered[0]
+    );
+    for ok in ["CommonRole1", "CommonRole2", "CommonRole3", "CommonRole5"] {
+        assert!(
+            !recovered.iter().any(|m| m.contains(ok)),
+            "no spurious recovery error should mention {ok}, got {recovered:?}"
+        );
+    }
+}
+
+#[test]
 fn test_recovery_context_missing_end() {
     let source = r#"
     CONTEXT test
@@ -621,7 +685,7 @@ fn test_recovery_inline_theorem_forms() {
 }
 
 #[test]
-fn test_recovery_error_quotes_original_line_with_position() {
+fn test_recovery_error_names_label_with_position() {
     let source = "CONTEXT issue24_position\nAXIOMS\n    @axm1 ### // why: broken\nEND\n";
 
     let result = parse_with_recovery(source);
@@ -642,10 +706,9 @@ fn test_recovery_error_quotes_original_line_with_position() {
     let (line, column, message) = error;
     assert_eq!(line, 3, "1-indexed line of the broken axiom");
     assert_eq!(column, 5, "1-indexed column of the axiom text");
-    assert!(
-        message.contains("@axm1 ### // why: broken"),
-        "error must quote the original line, got: {message}"
-    );
+    // The message names the failing label, not the whole (comment-bearing)
+    // line — concise and free of masked comment artifacts.
+    assert_eq!(message, "Failed to parse axiom: @axm1");
 }
 
 #[test]
@@ -893,5 +956,34 @@ fn test_recovery_set_error_does_not_leak_into_axioms_issue_32() {
         labels,
         vec!["axm1", "axm2"],
         "both axioms must be recovered"
+    );
+}
+
+#[test]
+fn test_recovery_label_less_predicates_are_not_lost() {
+    // Bare, label-less predicates (one per line) must still be recovered when
+    // another clause forces recovery: the label is optional in the grammar, so
+    // each line is a valid clause member. Label-anchored segmentation finds no
+    // `@`, so it must fall back to a per-line split rather than lump them into
+    // one segment the single-predicate parser would reject (dropping them all).
+    let source = r#"
+CONTEXT c
+SETS
+    S $ broken
+AXIOMS
+    1 ∈ ℕ
+    2 ∈ ℕ
+END
+"#;
+
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+
+    let ctx = expect_context(&result);
+    assert_eq!(
+        ctx.axioms.len(),
+        2,
+        "both label-less axioms must be recovered, got {:?}",
+        ctx.axioms
     );
 }
