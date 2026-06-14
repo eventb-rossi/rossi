@@ -157,17 +157,16 @@ impl<'a> SemanticTokensBuilder<'a> {
         span_containing(&self.lexical.labels, offset).map(|s| s.end)
     }
 
-    /// Find position (line, column) from byte offset.
+    /// Find position (line, UTF-16 column) from a byte offset.
     ///
-    /// The column is in characters, not bytes — the convention used by the
-    /// rest of this crate, and equal to UTF-16 code units (the LSP default
-    /// encoding) for all of Event-B's BMP symbols. Byte columns would place
-    /// tokens after a Unicode operator (`x ∈ ℕ // note`) too far right.
+    /// LSP columns are UTF-16 code units (the protocol's default encoding); see
+    /// [`crate::position`]. The line is located via the precomputed
+    /// `line_offsets` table so this stays cheap when emitting many tokens.
     fn position_from_offset(&self, offset: usize) -> (u32, u32) {
         // line_offsets[0] == 0 <= offset, so the partition point is >= 1.
         let line = self.line_offsets.partition_point(|&start| start <= offset) - 1;
-        let column = self.text[self.line_offsets[line]..offset].chars().count();
-        (line as u32, column as u32)
+        let column = crate::position::utf16_len(&self.text[self.line_offsets[line]..offset]);
+        (line as u32, column)
     }
 
     /// Find `needle` in `haystack` (a same-length view of the source, byte
@@ -308,9 +307,9 @@ impl<'a> SemanticTokensBuilder<'a> {
         self.tokens.push(SemanticTokenData {
             line,
             start,
-            // In characters: identifiers are ASCII, but labels accept any
+            // UTF-16 code units: identifiers are ASCII, but labels accept any
             // non-whitespace char.
-            length: identifier.chars().count() as u32,
+            length: crate::position::utf16_len(identifier),
             token_type: token_type as u32,
             token_modifiers: modifiers,
         });
@@ -728,7 +727,7 @@ impl<'a> SemanticTokensBuilder<'a> {
                     self.tokens.push(SemanticTokenData {
                         line,
                         start: col,
-                        length: segment.chars().count() as u32,
+                        length: crate::position::utf16_len(segment),
                         token_type: TokenType::Comment as u32,
                         token_modifiers: 0,
                     });
@@ -756,7 +755,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             if name.is_empty() {
                 continue; // a bare `@` (or `@:`) with no label text
             }
-            let length = name.chars().count() as u32;
+            let length = crate::position::utf16_len(name);
             let (line, col) = self.position_from_offset(name_start);
             self.tokens.push(SemanticTokenData {
                 line,

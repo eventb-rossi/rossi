@@ -5,8 +5,8 @@
 //! can't drift apart.
 
 use crate::lsp_types::{Location, Position, Range, Url};
+use crate::position::{line_run_to_range, utf16_to_char_col};
 use crate::text_utils;
-use rossi::ast::Span;
 
 /// Return the identifier that contains `position`, together with its range.
 ///
@@ -21,7 +21,7 @@ use rossi::ast::Span;
 pub fn identifier_at_position(text: &str, position: Position) -> Option<(String, Range)> {
     let line = text.lines().nth(position.line as usize)?;
     let chars: Vec<char> = line.chars().collect();
-    let char_pos = position.character as usize;
+    let char_pos = utf16_to_char_col(line, position.character as usize);
 
     if char_pos >= chars.len() {
         return None;
@@ -49,17 +49,16 @@ pub fn identifier_at_position(text: &str, position: Position) -> Option<(String,
         (start > 0 && chars[start - 1] == '-') || (end < chars.len() && chars[end] == '-');
     if hyphen_adjacent
         && in_structural_name_context(text, position.line as usize)
-        && let Some(hit) = extend_over_hyphens(&chars, start, end, position.line)
+        && let Some(hit) = extend_over_hyphens(line, position.line, &chars, start, end)
     {
         return Some(hit);
     }
 
     let identifier: String = chars[start..end].iter().collect();
-    let range = Range::new(
-        Position::new(position.line, start as u32),
-        Position::new(position.line, end as u32),
-    );
-    Some((identifier, range))
+    Some((
+        identifier,
+        line_run_to_range(line, position.line, start, end),
+    ))
 }
 
 /// Widen the identifier run `[start, end)` across `-` joins and return the
@@ -67,10 +66,11 @@ pub fn identifier_at_position(text: &str, position: Position) -> Option<(String,
 /// hyphen, or the widened run is not a valid component name — e.g. `a--b`,
 /// or a non-ASCII run the grammar could not lex anyway).
 fn extend_over_hyphens(
+    line: &str,
+    line_idx: u32,
     chars: &[char],
     start: usize,
     end: usize,
-    line_idx: u32,
 ) -> Option<(String, Range)> {
     let part = |c: char| text_utils::is_identifier_char(c) || c == '-';
 
@@ -95,15 +95,8 @@ fn extend_over_hyphens(
     }
 
     let candidate: String = chars[cstart..cend].iter().collect();
-    rossi::names::is_valid_component_name(&candidate).then(|| {
-        (
-            candidate,
-            Range::new(
-                Position::new(line_idx, cstart as u32),
-                Position::new(line_idx, cend as u32),
-            ),
-        )
-    })
+    rossi::names::is_valid_component_name(&candidate)
+        .then(|| (candidate, line_run_to_range(line, line_idx, cstart, cend)))
 }
 
 /// Reference clauses whose component-name operands continue onto following
@@ -180,7 +173,7 @@ fn in_structural_name_context(text: &str, line_idx: usize) -> bool {
 /// Returns `None` when the line or character position is out of bounds.
 pub fn word_at_position(text: &str, position: Position) -> Option<(String, Range)> {
     let line = text.lines().nth(position.line as usize)?;
-    let char_pos = position.character as usize;
+    let char_pos = utf16_to_char_col(line, position.character as usize);
 
     // The operator must be tried before `identifier_at_position`'s
     // trailing-edge rule, or an operator glued to an identifier would lose
@@ -193,15 +186,13 @@ pub fn word_at_position(text: &str, position: Position) -> Option<(String, Range
         return identifier_at_position(text, position);
     }
 
-    let char_range = |start: usize, end: usize| {
-        Range::new(
-            Position::new(position.line, start as u32),
-            Position::new(position.line, end as u32),
-        )
-    };
-
+    // `operator_at` is char-indexed in and out; the converter turns its char
+    // range back into a UTF-16 range.
     if let Some((operator, range)) = rossi::operators::operator_at(line, char_pos) {
-        return Some((operator.to_string(), char_range(range.start, range.end)));
+        return Some((
+            operator.to_string(),
+            line_run_to_range(line, position.line, range.start, range.end),
+        ));
     }
 
     // Cursor just past a word (trailing edge) keeps resolving to that word.
@@ -210,69 +201,16 @@ pub fn word_at_position(text: &str, position: Position) -> Option<(String, Range
     }
 
     let ch = line.chars().nth(char_pos)?;
-    Some((ch.to_string(), char_range(char_pos, char_pos + 1)))
+    Some((
+        ch.to_string(),
+        line_run_to_range(line, position.line, char_pos, char_pos + 1),
+    ))
 }
 
-/// Convert an LSP [`Position`] to a byte offset into `text`.
-///
-/// Columns are counted in characters (Unicode scalar values), matching
-/// [`Span::to_line_col`] and the rest of this crate. Returns `None` when the
-/// position is out of bounds (a position at end-of-file is accepted).
-pub fn position_to_offset(text: &str, position: Position) -> Option<usize> {
-    let mut line = 0;
-    let mut col = 0;
-    let mut offset = 0;
-
-    for ch in text.chars() {
-        if line == position.line as usize && col == position.character as usize {
-            return Some(offset);
-        }
-
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-
-        offset += ch.len_utf8();
-    }
-
-    // Position at end of file.
-    (line == position.line as usize && col == position.character as usize).then_some(offset)
-}
-
-/// Convert a source [`Span`] (byte offsets) to an LSP [`Range`].
-///
-/// Columns are counted in characters, consistent with [`position_to_offset`].
-/// Both endpoints are located in a single walk over the prefix `[0, span.end)`.
-pub fn span_to_range(span: &Span, source: &str) -> Range {
-    let mut line = 0u32;
-    let mut col = 0u32;
-    let mut start = None;
-
-    for (i, c) in source.char_indices() {
-        if start.is_none() && i >= span.start {
-            start = Some(Position::new(line, col));
-        }
-        if i >= span.end {
-            break;
-        }
-        if c == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-
-    // Positions at or past end-of-source fall through to the final cursor.
-    let end = Position::new(line, col);
-    Range {
-        start: start.unwrap_or(end),
-        end,
-    }
-}
+// Position/offset conversion lives in [`crate::position`] (the single,
+// UTF-16-correct source of truth). Re-exported here so the providers that
+// historically imported these from `identifier_utils` keep working.
+pub use crate::position::{position_to_offset, span_to_range};
 
 /// Word-boundary rule for [`find_whole_word_locations`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -373,6 +311,20 @@ mod tests {
     #[test]
     fn word_in_middle_of_identifier() {
         assert_eq!(word_at("count := 0", pos(0, 2)).as_deref(), Some("count"));
+    }
+
+    #[test]
+    fn cursor_resolution_is_utf16_after_astral_char() {
+        // `𝔹` (U+1D539) is one char but two UTF-16 units, so `foo` begins at
+        // UTF-16 column 3. The cursor position (UTF-16) must map to the right
+        // char, and the returned range must be in UTF-16 columns.
+        let text = "𝔹 foo";
+        let (word, range) = identifier_at_position(text, pos(0, 3)).expect("cursor on `foo`");
+        assert_eq!(word, "foo");
+        assert_eq!(range.start, pos(0, 3));
+        assert_eq!(range.end, pos(0, 6));
+        // The same through word_at_position (trailing edge / operator path).
+        assert_eq!(word_at(text, pos(0, 4)).as_deref(), Some("foo"));
     }
 
     #[test]
@@ -514,45 +466,5 @@ mod tests {
         );
         assert_eq!(hyphenated.len(), 1);
         assert_eq!(hyphenated[0].range.start, pos(1, 11));
-    }
-
-    #[test]
-    fn position_to_offset_basic() {
-        let text = "line1\nline2\nline3";
-        assert_eq!(position_to_offset(text, pos(0, 0)), Some(0));
-        assert_eq!(position_to_offset(text, pos(0, 5)), Some(5));
-        assert_eq!(position_to_offset(text, pos(1, 0)), Some(6));
-        assert_eq!(position_to_offset(text, pos(1, 3)), Some(9));
-        assert_eq!(position_to_offset(text, pos(2, 5)), Some(17));
-    }
-
-    #[test]
-    fn position_to_offset_multibyte() {
-        // `∈` is 3 UTF-8 bytes but one column; the byte offset reflects that.
-        let text = "a ∈ S";
-        assert_eq!(position_to_offset(text, pos(0, 0)), Some(0)); // 'a'
-        assert_eq!(position_to_offset(text, pos(0, 2)), Some(2)); // '∈'
-        assert_eq!(position_to_offset(text, pos(0, 4)), Some(6)); // 'S' (2 + 3 + 1)
-    }
-
-    #[test]
-    fn position_to_offset_out_of_bounds() {
-        assert_eq!(position_to_offset("x", pos(5, 0)), None);
-    }
-
-    #[test]
-    fn span_to_range_multibyte() {
-        // Range over `S`, which sits after the 3-byte `∈`.
-        let text = "a ∈ S";
-        let s_byte = text.find('S').unwrap();
-        let range = span_to_range(
-            &Span {
-                start: s_byte,
-                end: s_byte + 1,
-            },
-            text,
-        );
-        assert_eq!(range.start, Position::new(0, 4));
-        assert_eq!(range.end, Position::new(0, 5));
     }
 }
