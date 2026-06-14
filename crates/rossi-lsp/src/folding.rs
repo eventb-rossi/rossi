@@ -66,14 +66,14 @@ impl FoldingRangeProvider {
             let trimmed = line.trim();
 
             // Check for component start
-            if trimmed.starts_with(keywords::spell(KeywordId::Context))
-                || trimmed.starts_with(keywords::spell(KeywordId::Machine))
+            if self.line_keyword_is(trimmed, KeywordId::Context)
+                || self.line_keyword_is(trimmed, KeywordId::Machine)
             {
                 component_start = Some(idx);
             }
 
             // Check for component end
-            if trimmed == "END"
+            if self.line_keyword_is(trimmed, KeywordId::End)
                 && component_start.is_some()
                 && let Some(start) = component_start
             {
@@ -95,7 +95,11 @@ impl FoldingRangeProvider {
         ranges
     }
 
-    /// Detect EVENT...END and INITIALISATION...END blocks
+    /// Detect EVENTS...END, EVENT...END and INITIALISATION...END blocks.
+    ///
+    /// The `EVENTS` section is folded as a block too (header to the machine's
+    /// END), via the same END-matching stack as the individual events nested
+    /// inside it.
     fn detect_event_blocks(&self, lines: &[&str]) -> Vec<FoldingRange> {
         let mut ranges = Vec::new();
         let mut event_stack: Vec<usize> = Vec::new();
@@ -103,15 +107,16 @@ impl FoldingRangeProvider {
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
 
-            // Check for event start
-            if trimmed.starts_with(keywords::spell(KeywordId::Event))
-                || trimmed.starts_with(keywords::spell(KeywordId::Initialisation))
+            // Check for event (or EVENTS section) start
+            if self.line_keyword_is(trimmed, KeywordId::Events)
+                || self.line_keyword_is(trimmed, KeywordId::Event)
+                || self.line_keyword_is(trimmed, KeywordId::Initialisation)
             {
                 event_stack.push(idx);
             }
 
             // Check for event end
-            if trimmed == "END"
+            if self.line_keyword_is(trimmed, KeywordId::End)
                 && !event_stack.is_empty()
                 && let Some(start) = event_stack.pop()
             {
@@ -163,8 +168,8 @@ impl FoldingRangeProvider {
         for (idx, line) in masked_lines.iter().enumerate() {
             let trimmed = line.trim();
 
-            // Check if this line is the clause keyword
-            if trimmed == clause_name {
+            // Check if this line is the clause keyword (case-insensitive)
+            if trimmed.eq_ignore_ascii_case(clause_name) {
                 clause_start = Some(idx);
                 continue;
             }
@@ -173,11 +178,11 @@ impl FoldingRangeProvider {
             if let Some(start) = clause_start {
                 // Check if this line starts a new clause or is END
                 let is_end_of_clause = lines[idx].trim().is_empty()
-                    || trimmed == "END"
-                    || trimmed.starts_with("CONTEXT")
-                    || trimmed.starts_with("MACHINE")
-                    || trimmed.starts_with("EVENT")
-                    || trimmed.starts_with("INITIALISATION")
+                    || self.line_keyword_is(trimmed, KeywordId::End)
+                    || self.line_keyword_is(trimmed, KeywordId::Context)
+                    || self.line_keyword_is(trimmed, KeywordId::Machine)
+                    || self.line_keyword_is(trimmed, KeywordId::Event)
+                    || self.line_keyword_is(trimmed, KeywordId::Initialisation)
                     || self.is_clause_keyword(trimmed);
 
                 if is_end_of_clause {
@@ -219,6 +224,13 @@ impl FoldingRangeProvider {
     fn is_clause_keyword(&self, trimmed: &str) -> bool {
         let first = trimmed.split_whitespace().next().unwrap_or("");
         keywords::is_clause_keyword(first)
+    }
+
+    /// Whether `trimmed`'s first whitespace-separated token is the keyword `id`,
+    /// resolved case-insensitively through the canonical keyword table.
+    fn line_keyword_is(&self, trimmed: &str, id: KeywordId) -> bool {
+        let first = trimmed.split_whitespace().next().unwrap_or("");
+        keywords::lookup(first).map(|kw| kw.id) == Some(id)
     }
 }
 
@@ -278,6 +290,48 @@ mod tests {
         // Should have a range for the INITIALISATION block
         let has_init = ranges.iter().any(|r| r.start_line == 2 && r.end_line == 4);
         assert!(has_init, "Should detect INITIALISATION...END block");
+    }
+
+    #[test]
+    fn test_fold_lowercase_keywords() {
+        let provider = FoldingRangeProvider::new();
+
+        // Lowercase keywords (Camille style) must fold like UPPERCASE ones.
+        let ctx = "context test\nsets\n    S\n    T\nconstants\n    c\nend";
+        let ranges = provider.detect_folding_ranges(ctx);
+        assert!(
+            ranges.iter().any(|r| r.start_line == 0 && r.end_line == 6),
+            "should fold lowercase context...end"
+        );
+        assert!(
+            ranges.iter().any(|r| r.start_line == 1 && r.end_line == 3),
+            "should fold lowercase sets clause"
+        );
+
+        let mch = "machine test\nevents\n    event evt\n    then\n        x := x + 1\n    end\nend";
+        let ranges = provider.detect_folding_ranges(mch);
+        assert!(
+            ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
+            "should fold lowercase event...end"
+        );
+        assert!(
+            ranges.iter().any(|r| r.start_line == 1 && r.end_line == 6),
+            "should fold lowercase events section"
+        );
+    }
+
+    #[test]
+    fn test_label_named_like_keyword_does_not_close_fold() {
+        let provider = FoldingRangeProvider::new();
+        // An action labelled `@end` must NOT be read as the END keyword.
+        let text = "machine m\nevents\n    event e\n    then\n        @end y := 0\n    end\nend";
+        let ranges = provider.detect_folding_ranges(text);
+        // The event spans its header (line 2) to its real END (line 5), not the
+        // `@end` action line (line 4).
+        assert!(
+            ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
+            "event fold must reach the real END, not stop at the @end label"
+        );
     }
 
     #[test]
