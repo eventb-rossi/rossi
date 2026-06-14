@@ -855,7 +855,20 @@ impl RossiLanguageServer {
     /// Custom request `rossi/operatorTable`: the single-source operator table
     /// exposed to editor-side input methods so the VSCode extension never
     /// duplicates the mapping in TypeScript.
-    pub async fn operator_table(&self, _params: ()) -> Result<Vec<OperatorRow>> {
+    ///
+    /// The handler must stay parameter-less. tower-lsp routes a handler that
+    /// declares a params argument (even `_params: ()`) through its *required*
+    /// params path, which rejects a request whose `params` field is absent with
+    /// `-32602 "Missing params field"`. `vscode-languageclient` sends this
+    /// request with no `params`, so a params-taking signature makes the server
+    /// 404 the input method: the client's matcher never loads and neither eager
+    /// combos (`/=`) nor the `\name` leader convert. Covered by the wire-level
+    /// `tests/operator_table_test.rs` so it can't regress.
+    ///
+    /// The param-less form also rejects an *explicit* `params: null`, but that
+    /// is moot: `vscode-languageclient` omits `params`, and no other client
+    /// calls this method.
+    pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
         Ok(operator_rows())
     }
 

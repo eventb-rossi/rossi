@@ -18,6 +18,7 @@
 import {
     Disposable,
     ExtensionContext,
+    OutputChannel,
     Range,
     TextDocumentChangeEvent,
     TextEditor,
@@ -52,9 +53,10 @@ function readConfig(): InputConfig {
 export function registerSymbolInput(
     context: ExtensionContext,
     client: LanguageClient,
-    ready: Promise<void>
+    ready: Promise<void>,
+    output: OutputChannel
 ): void {
-    const controller = new SymbolInputController(client);
+    const controller = new SymbolInputController(client, output);
     context.subscriptions.push(controller);
     void controller.init(ready);
 }
@@ -73,7 +75,10 @@ class SymbolInputController implements Disposable {
     // Null when there is no run in progress.
     private pendingRun: { text: string; end: number; uri: string } | null = null;
 
-    constructor(private readonly client: LanguageClient) {
+    constructor(
+        private readonly client: LanguageClient,
+        private readonly output: OutputChannel
+    ) {
         this.decoration = window.createTextEditorDecorationType({
             textDecoration: 'underline',
         });
@@ -111,15 +116,25 @@ class SymbolInputController implements Disposable {
         );
 
         // The operator table is the single source of truth (Rust); fetch it
-        // once the server is ready. Input stays inert if the request fails.
+        // once the server is ready. Input stays inert if the request fails, but
+        // we log why: a silent failure here disables all as-you-type conversion
+        // (eager and leader alike) with no visible symptom, which is exactly how
+        // a server-side `rossi/operatorTable` regression hid in plain sight.
         try {
             await ready;
             const rows = await this.client.sendRequest<OperatorRow[]>(
                 'rossi/operatorTable'
             );
             this.matcher = new SymbolMatcher(rows);
-        } catch {
+            this.output.appendLine(
+                `Symbol input ready: ${rows.length} operators loaded.`
+            );
+        } catch (err) {
             this.matcher = null;
+            this.output.appendLine(
+                `Symbol input disabled: failed to load the operator table ` +
+                    `(rossi/operatorTable): ${err instanceof Error ? err.message : String(err)}`
+            );
         }
     }
 

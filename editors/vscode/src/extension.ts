@@ -104,7 +104,7 @@ export function activate(context: ExtensionContext) {
     registerRossiCommands(context, diagnostics, output, () => languageServerReady);
 
     // Editor-side ASCII -> Unicode input method (type `=>`, `\and`, ...).
-    registerSymbolInput(context, client, languageServerReady);
+    registerSymbolInput(context, client, languageServerReady, output);
 }
 
 export function deactivate(): Thenable<void> | undefined {

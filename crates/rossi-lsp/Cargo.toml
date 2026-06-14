@@ -42,3 +42,8 @@ rossi.workspace = true
 
 # File system operations
 walkdir.workspace = true
+
+[dev-dependencies]
+# `ServiceExt::ready` for driving the LspService in the rossi/operatorTable
+# wire-level test. Pinned to the 0.4 line tower-lsp uses internally.
+tower = { version = "0.4", features = ["util"] }
