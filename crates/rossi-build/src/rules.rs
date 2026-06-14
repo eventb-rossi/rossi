@@ -9,9 +9,8 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes follow the eventb-checker scheme (`"EB001"`..`"EB019"`); unused
-/// numbers correspond to rules not yet implemented in rossi (e.g. EB010 well-
-/// definedness, EB015–17 proof status).
+/// Codes follow the eventb-checker scheme (`"EB001"`..`"EB019"`), with the
+/// full catalogue implemented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -32,6 +31,8 @@ pub enum RuleId {
     CircularRefines,
     /// EB009 — Cross-reference target not found (unknown SEES / EXTENDS / REFINES name).
     CrossReferenceNotFound,
+    /// EB010 — Non-trivial well-definedness condition (informational).
+    WellDefinedness,
     /// EB011 — Declared variable never referenced.
     DeadVariable,
     /// EB012 — Variable referenced but never assigned by any event.
@@ -63,6 +64,7 @@ impl RuleId {
             RuleId::CircularExtends => "EB007",
             RuleId::CircularRefines => "EB008",
             RuleId::CrossReferenceNotFound => "EB009",
+            RuleId::WellDefinedness => "EB010",
             RuleId::DeadVariable => "EB011",
             RuleId::UnmodifiedVariable => "EB012",
             RuleId::DeadConstant => "EB013",
@@ -86,6 +88,7 @@ impl RuleId {
             RuleId::CircularExtends => "Circular EXTENDS",
             RuleId::CircularRefines => "Circular REFINES",
             RuleId::CrossReferenceNotFound => "Cross-reference not found",
+            RuleId::WellDefinedness => "Well-definedness condition",
             RuleId::DeadVariable => "Dead variable",
             RuleId::UnmodifiedVariable => "Unmodified variable",
             RuleId::DeadConstant => "Dead constant",
@@ -122,6 +125,9 @@ impl RuleId {
             RuleId::CircularRefines => "A cycle was detected among machines connected by REFINES.",
             RuleId::CrossReferenceNotFound => {
                 "A SEES, EXTENDS, or REFINES clause names a component that does not exist."
+            }
+            RuleId::WellDefinedness => {
+                "A formula carries a non-trivial well-definedness condition that must be proven."
             }
             RuleId::DeadVariable => {
                 "A machine variable is declared but never referenced in any invariant, guard, or action."
@@ -168,6 +174,7 @@ impl RuleId {
             | RuleId::IncompleteInitialisation
             | RuleId::DuplicateComponent
             | RuleId::ShadowedName => Severity::Warning,
+            RuleId::WellDefinedness => Severity::Info,
         }
     }
 
@@ -185,6 +192,7 @@ impl RuleId {
             RuleId::CircularExtends,
             RuleId::CircularRefines,
             RuleId::CrossReferenceNotFound,
+            RuleId::WellDefinedness,
             RuleId::DeadVariable,
             RuleId::UnmodifiedVariable,
             RuleId::DeadConstant,
@@ -224,6 +232,7 @@ mod tests {
         assert_eq!(RuleId::CircularExtends.code(), "EB007");
         assert_eq!(RuleId::CircularRefines.code(), "EB008");
         assert_eq!(RuleId::CrossReferenceNotFound.code(), "EB009");
+        assert_eq!(RuleId::WellDefinedness.code(), "EB010");
         assert_eq!(RuleId::DeadVariable.code(), "EB011");
         assert_eq!(RuleId::UnmodifiedVariable.code(), "EB012");
         assert_eq!(RuleId::DeadConstant.code(), "EB013");

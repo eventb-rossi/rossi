@@ -38,6 +38,7 @@ pub mod sc_model;
 pub mod sc_view;
 pub mod type_env;
 pub mod types;
+pub mod wd;
 pub mod wellformed;
 pub mod xml_out;
 

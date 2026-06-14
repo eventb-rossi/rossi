@@ -40,6 +40,11 @@ pub struct ValidateArgs {
     #[arg(long)]
     no_lints: bool,
 
+    /// Include INFO-severity findings in the output (hidden by default,
+    /// like eventb-checker's --show-info).
+    #[arg(long)]
+    show_info: bool,
+
     /// Reported file name for `-` (stdin) input (default: `<stdin>`).
     #[arg(long, value_name = "PATH")]
     stdin_filename: Option<String>,
@@ -117,7 +122,12 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
     let aggregating_format = matches!(cli.format, OutputFormat::Json | OutputFormat::Sarif);
 
     for file in &cli.files {
-        let file_results = validate_file(file, &cli);
+        let mut file_results = validate_file(file, &cli);
+        // Drop INFO rows before any formatting or counting so summaries
+        // match what is displayed (eventb-checker's `withoutInfo()`).
+        if !cli.show_info {
+            file_results.retain(|r| r.severity != Some(Severity::Info));
+        }
 
         for result in file_results {
             if !result.success {
@@ -339,9 +349,18 @@ fn fold_semantic(
     cli: &ValidateArgs,
     out: &mut Vec<ValidationResult>,
 ) {
-    let build = rossi_build::build(project);
+    let (build, model) = rossi_build::build_with_model(project);
     for diag in build.diagnostics {
         out.push(fold_diagnostic(file, diag));
+    }
+    // EB010 well-definedness conditions are INFO-only, and INFO rows are
+    // dropped from every output format unless `--show-info` is set (see
+    // the post-collection filter). Running the WD pipeline otherwise is
+    // pure waste — skip it when the rows would be discarded.
+    if cli.show_info {
+        for diag in rossi_build::wd::run(project, &model) {
+            out.push(fold_diagnostic(file, diag));
+        }
     }
     if !cli.no_lints {
         for diag in rossi_build::lint::run(project) {
@@ -500,7 +519,11 @@ fn print_text_result(result: &ValidationResult, quiet: bool) {
     }
 
     let is_error = result.severity == Some(Severity::Error);
-    let glyph = if is_error { "✗" } else { "!" };
+    let glyph = match result.severity {
+        Some(Severity::Error) => "✗",
+        Some(Severity::Info) => "i",
+        _ => "!",
+    };
     let prefix = result
         .rule_id
         .map(|r| format!("[{}] ", r.code()))
