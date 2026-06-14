@@ -151,7 +151,6 @@ impl From<std::io::Error> for ParseError {
 
 impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
     fn from(error: Box<pest::error::Error<crate::parser::Rule>>) -> Self {
-        let message = error.to_string();
         let (line, column) = match &error.line_col {
             pest::error::LineColLocation::Pos(pos) => *pos,
             pest::error::LineColLocation::Span(start, _) => *start,
@@ -163,6 +162,17 @@ impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
             pest::error::InputLocation::Pos(p) => Some(Span { start: *p, end: *p }),
             pest::error::InputLocation::Span((s, e)) => Some(Span { start: *s, end: *e }),
         };
+        // Rewrite the `expected …` list from internal rule names (`op_in`,
+        // `lbrace`) to the symbols a user types (`∈`, `{`); unmapped rules keep
+        // their pest name. Renaming leaves the position fields untouched, so it
+        // happens last (it consumes the pest error).
+        let message = (*error)
+            .renamed_rules(|rule| {
+                crate::parser::friendly_rule_name(*rule)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{rule:?}"))
+            })
+            .to_string();
         ParseError::PestError {
             message,
             line,
