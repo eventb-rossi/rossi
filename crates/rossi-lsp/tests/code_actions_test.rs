@@ -595,6 +595,39 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
 }
 
 #[test]
+fn test_add_missing_end_not_offered_when_terminated() {
+    // A complete MACHINE … END whose only problem is a typo deep inside a
+    // predicate must NOT offer "Add missing END": the component is already
+    // terminated. The trigger is structural, not the diagnostic's prose.
+    use rossi_lsp::lsp_types::Diagnostic;
+
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nINVARIANTS\n    @inv1 x ∈ ℕ sdfsdf y\nEND\n";
+    let range = Range {
+        start: Position::new(2, 18),
+        end: Position::new(2, 24),
+    };
+    let mut params = create_test_params("file:///test.eventb", range);
+    params.context.diagnostics = vec![Diagnostic {
+        range,
+        message: "Syntax error: expected ∈, ∉, …".to_string(),
+        ..Default::default()
+    }];
+
+    let actions = provider
+        .provide_code_actions(&params, text)
+        .unwrap_or_default();
+
+    assert!(
+        !actions.iter().any(|a| matches!(
+            a,
+            CodeActionOrCommand::CodeAction(action) if action.title.contains("Add missing END")
+        )),
+        "Add-missing-END must not be offered when END is present, got {actions:?}"
+    );
+}
+
+#[test]
 fn test_operator_conversion_leaves_comments_alone() {
     let provider = CodeActionProvider::new();
     let text = "MACHINE test\nVARIABLES x\nINVARIANTS\n  @inv1 x : NAT & x <= 10 // prose: x <= 10 and & stay ASCII\nEND";

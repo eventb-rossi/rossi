@@ -1116,22 +1116,6 @@ mod tests {
     }
 
     #[test]
-    fn concise_pest_message_keeps_add_missing_end_trigger() {
-        // The "Add missing END" quick fix (code_actions.rs) keys off
-        // `message.contains("expected")`. Shortening pest's dump must not drop
-        // that word, or the quick fix silently stops being offered.
-        let text = "MACHINE m\nVARIABLES\n    x\n"; // no END
-        let result = rossi::parse_components_with_recovery(text);
-        let error = result.errors.first().expect("missing END must be reported");
-        let diagnostic = parse_error_to_diagnostic(error, text);
-        assert!(
-            diagnostic.message.contains("expected"),
-            "concise message must retain the quick-fix trigger, got: {}",
-            diagnostic.message
-        );
-    }
-
-    #[test]
     fn operator_rows_are_well_formed() {
         let rows = operator_rows();
         assert!(!rows.is_empty(), "operator table must not be empty");
