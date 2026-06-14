@@ -10,6 +10,8 @@ use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, TextEdit, Url, WorkspaceEdit,
 };
+use crate::text_utils::line_keyword_is;
+use rossi::keywords::KeywordId;
 use rossi::operators;
 use std::collections::HashMap;
 
@@ -23,6 +25,13 @@ fn document_end_position(text: &str) -> Position {
         last_line_length = crate::position::utf16_len(line);
     }
     Position::new(line_count.saturating_sub(1), last_line_length)
+}
+
+/// Whether any line in `text` begins with the keyword `id` (case-insensitive).
+/// A parse-free probe for a component's kind or which clauses are present, so
+/// the action still fires on a mid-edit document that does not yet parse.
+fn has_keyword_line(text: &str, id: KeywordId) -> bool {
+    text.lines().any(|line| line_keyword_is(line, id))
 }
 
 /// Provides code actions and refactorings
@@ -368,10 +377,13 @@ impl CodeActionProvider {
 
         let line = lines[line_idx];
 
-        // Determine what kind of END we need based on context
-        let end_keyword = if line.contains("MACHINE") || line.contains("CONTEXT") {
+        // Determine what kind of END we need based on context (keywords are
+        // case-insensitive; an event's END is indented under the EVENTS section)
+        let end_keyword = if line_keyword_is(line, KeywordId::Machine)
+            || line_keyword_is(line, KeywordId::Context)
+        {
             "END"
-        } else if line.contains("EVENT") {
+        } else if line_keyword_is(line, KeywordId::Event) {
             "    END"
         } else {
             "END"
@@ -421,13 +433,13 @@ impl CodeActionProvider {
         let masked = rossi::comments::mask_comments(text);
         let text = masked.as_str();
 
-        // Detect if we're in a MACHINE or CONTEXT
-        let is_machine = text.contains("MACHINE");
-        let is_context = text.contains("CONTEXT");
+        // Detect if we're in a MACHINE or CONTEXT (keywords are case-insensitive)
+        let is_machine = has_keyword_line(text, KeywordId::Machine);
+        let is_context = has_keyword_line(text, KeywordId::Context);
 
         if is_machine {
             // Check for missing clauses in machines
-            if !text.contains("INVARIANTS")
+            if !has_keyword_line(text, KeywordId::Invariants)
                 && let Some(action) = self.create_add_clause_action(
                     &params.text_document.uri,
                     text,
@@ -437,7 +449,7 @@ impl CodeActionProvider {
             {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
-            if !text.contains("VARIABLES")
+            if !has_keyword_line(text, KeywordId::Variables)
                 && let Some(action) =
                     self.create_add_clause_action(&params.text_document.uri, text, "VARIABLES", "")
             {
@@ -447,7 +459,7 @@ impl CodeActionProvider {
 
         if is_context {
             // Check for missing clauses in contexts
-            if !text.contains("AXIOMS")
+            if !has_keyword_line(text, KeywordId::Axioms)
                 && let Some(action) = self.create_add_clause_action(
                     &params.text_document.uri,
                     text,
@@ -457,13 +469,13 @@ impl CodeActionProvider {
             {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
-            if !text.contains("CONSTANTS")
+            if !has_keyword_line(text, KeywordId::Constants)
                 && let Some(action) =
                     self.create_add_clause_action(&params.text_document.uri, text, "CONSTANTS", "")
             {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
-            if !text.contains("SETS")
+            if !has_keyword_line(text, KeywordId::Sets)
                 && let Some(action) =
                     self.create_add_clause_action(&params.text_document.uri, text, "SETS", "")
             {
@@ -484,10 +496,13 @@ impl CodeActionProvider {
     ) -> Option<CodeAction> {
         let lines: Vec<&str> = text.lines().collect();
 
-        // Find a good insertion point (after the component declaration)
+        // Find a good insertion point (after the component declaration;
+        // keywords are case-insensitive)
         let mut insert_line = 1; // Default to line 1
         for (idx, line) in lines.iter().enumerate() {
-            if line.contains("MACHINE") || line.contains("CONTEXT") {
+            if line_keyword_is(line, KeywordId::Machine)
+                || line_keyword_is(line, KeywordId::Context)
+            {
                 insert_line = idx + 1;
                 break;
             }
@@ -571,16 +586,18 @@ impl CodeActionProvider {
         let mut clause_end = None;
 
         for (idx, line) in lines.iter().enumerate() {
-            if line.trim() == clause_name {
+            if line.trim().eq_ignore_ascii_case(clause_name) {
                 clause_start = Some(idx);
             } else if clause_start.is_some() && clause_end.is_none() {
-                // Check if we've reached the end of the clause
-                if line.trim().is_empty()
-                    || line.trim().starts_with("INVARIANTS")
-                    || line.trim().starts_with("AXIOMS")
-                    || line.trim().starts_with("EVENTS")
-                    || line.trim().starts_with("END")
-                    || line.trim().starts_with("INITIALISATION")
+                // Check if we've reached the end of the clause (keywords are
+                // case-insensitive)
+                let trimmed = line.trim();
+                if trimmed.is_empty()
+                    || line_keyword_is(trimmed, KeywordId::Invariants)
+                    || line_keyword_is(trimmed, KeywordId::Axioms)
+                    || line_keyword_is(trimmed, KeywordId::Events)
+                    || line_keyword_is(trimmed, KeywordId::End)
+                    || line_keyword_is(trimmed, KeywordId::Initialisation)
                 {
                     clause_end = Some(idx);
                     break;
@@ -657,8 +674,8 @@ impl CodeActionProvider {
 
         let line = lines[cursor_line].trim();
 
-        // Check if this line is an event declaration
-        if line.starts_with("EVENT") {
+        // Check if this line is an event declaration (keyword is case-insensitive)
+        if line_keyword_is(line, KeywordId::Event) {
             // Note: Rename is better handled by the LSP rename feature
             // This code action would just provide a hint
             Some(CodeActionOrCommand::CodeAction(CodeAction {
@@ -888,5 +905,42 @@ mod tests {
         };
         let result = provider.get_text_in_range(text, &range);
         assert_eq!(result, Some("∈ ".to_string()));
+    }
+
+    #[test]
+    fn test_has_keyword_line_is_case_insensitive() {
+        assert!(has_keyword_line(
+            "machine m\nvariables\n    x\nend",
+            KeywordId::Machine
+        ));
+        assert!(has_keyword_line("MACHINE m", KeywordId::Machine));
+        assert!(!has_keyword_line("context c\nend", KeywordId::Machine));
+        // First-token precision: a keyword embedded in an identifier never matches.
+        assert!(!has_keyword_line("    machinery\n", KeywordId::Machine));
+    }
+
+    #[test]
+    fn test_sort_clause_action_lowercase_keywords() {
+        let provider = CodeActionProvider::new();
+        let uri = Url::parse("file:///m.eventb").unwrap();
+        // Lowercase keywords; an out-of-order `variables` clause ended by `events`.
+        let text = "machine m\nvariables\n    b\n    a\n    c\nevents\nend";
+        let action = provider
+            .create_sort_clause_action(&uri, text, "VARIABLES")
+            .expect("should offer to sort the lowercase variables clause");
+        assert_eq!(action.title, "Sort variables alphabetically");
+    }
+
+    #[test]
+    fn test_add_clause_inserts_after_lowercase_header() {
+        let provider = CodeActionProvider::new();
+        let uri = Url::parse("file:///m.eventb").unwrap();
+        let text = "machine m\nvariables\n    x\nend";
+        let action = provider
+            .create_add_clause_action(&uri, text, "INVARIANTS", "    @inv1 TRUE")
+            .expect("should offer to add a clause");
+        let edit = &action.edit.unwrap().changes.unwrap()[&uri][0];
+        // Inserted right after the lowercase `machine` header (line 0).
+        assert_eq!(edit.range.start.line, 1);
     }
 }
