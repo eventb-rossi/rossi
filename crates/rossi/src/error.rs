@@ -126,6 +126,9 @@ pub enum ParseError {
         line: usize,
         column: usize,
         message: String,
+        /// Byte span of the recovered predicate that failed to parse — the
+        /// whole `@label … predicate`, so consumers underline it precisely.
+        span: Option<Span>,
         source: Option<Box<ParseError>>,
     },
 
@@ -187,15 +190,18 @@ impl ParseError {
     }
 
     /// Source byte [`Span`] of this error, when the parser captured one that
-    /// tightly bounds the offending token. Follows the same envelope/aggregate
+    /// bounds the offending construct. Follows the same envelope/aggregate
     /// handling as [`position`](Self::position). Often a zero-width position for
     /// pest errors; callers that need a visible range should size an empty span
-    /// themselves. Clause-order and recovery errors deliberately carry no span
-    /// (their pest span is the whole multi-line clause, not the offending
-    /// token) — consumers size those from [`position`](Self::position).
+    /// themselves. A recovery error spans the whole `@label … predicate` it
+    /// failed on; clause-order errors still carry no span (their pest span is
+    /// the whole multi-line clause) — consumers size those from
+    /// [`position`](Self::position).
     pub fn span(&self) -> Option<Span> {
         match self {
-            ParseError::PestError { span, .. } | ParseError::ReservedWord { span, .. } => *span,
+            ParseError::PestError { span, .. }
+            | ParseError::ReservedWord { span, .. }
+            | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),
             _ => None,

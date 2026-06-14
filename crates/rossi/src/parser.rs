@@ -2259,6 +2259,10 @@ fn recover_labeled_predicates(
                     line: err_line,
                     column: err_col,
                     message: format!("Failed to parse {label}: {subject}"),
+                    span: Some(Span {
+                        start: abs_start,
+                        end: abs_end,
+                    }),
                     source: Some(Box::new(e)),
                 });
             }
@@ -2619,11 +2623,15 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
             line,
             column,
             message,
+            span: _,
             source,
         } => ParseError::RecoverableError {
             line: line + line_delta,
             column,
             message,
+            // Byte span is relative to the region slice; drop it like the
+            // other span-bearing variants above.
+            span: None,
             source: source.map(|e| Box::new(offset_error_lines(*e, line_delta))),
         },
         ParseError::MultipleErrors(errors) => ParseError::MultipleErrors(
@@ -2672,6 +2680,7 @@ fn parse_context_with_recovery(
         .axioms
         .extend(recover_theorem_predicates(text, bound, &mut errors));
 
+    dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Context(context)), errors)
 }
 
@@ -2711,7 +2720,33 @@ fn parse_machine_with_recovery(
     // Note: VARIANT and EVENTS are more complex and would need specialized recovery
     // For now, we'll skip them if they fail to parse
 
+    dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Machine(machine)), errors)
+}
+
+/// Drop a recovered-predicate error that merely re-flags a predicate the
+/// strict parse already pinpointed. The strict failure (`errors[0]`) carries a
+/// byte position at the exact offending token; a [`ParseError::RecoverableError`]
+/// spanning the predicate that contains that token would underline it a second
+/// time, so keep the precise strict error and discard the coarser duplicate.
+/// Recovery errors for *other* broken predicates (which the strict parse never
+/// reached) keep their span and survive.
+fn dedup_recovered_errors(errors: &mut Vec<ParseError>) {
+    let Some(strict) = errors.first().and_then(ParseError::span) else {
+        return;
+    };
+    let mut is_strict = true;
+    errors.retain(|e| {
+        if is_strict {
+            is_strict = false;
+            return true; // never drop the strict error itself
+        }
+        !matches!(
+            e,
+            ParseError::RecoverableError { span: Some(s), .. }
+                if s.start <= strict.start && strict.end <= s.end
+        )
+    });
 }
 
 /// Byte offset where the event section begins: the first whole-word
