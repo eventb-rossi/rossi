@@ -1065,6 +1065,26 @@ mod tests {
     }
 
     #[test]
+    fn pest_diagnostic_lists_symbols_not_rule_names() {
+        // The expected-token list is rendered with the Event-B symbols a user
+        // types, not pest's internal rule names (`op_in, op_notin, …` used to
+        // leak straight into the diagnostic).
+        let text = "CONTEXT c\nAXIOMS\n    @a S sdfsdf T\nEND\n";
+        let error = rossi::parse(text).expect_err("`sdfsdf` where an operator is expected fails");
+        let diagnostic = parse_error_to_diagnostic(&error, text);
+        assert!(
+            diagnostic.message.contains('∈'),
+            "expected-list should use symbols, got: {}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("op_in"),
+            "internal rule names must not leak, got: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
     fn pest_diagnostic_sized_to_token_issue_32() {
         // Issue #32, example 1: a forgotten `@` on `axm2`. Through the real
         // LSP recovery path, the diagnostic must land on the offending line

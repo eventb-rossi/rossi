@@ -20,6 +20,91 @@ use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
 #[grammar = "grammar.pest"]
 pub struct RossiParser;
 
+/// A human-readable spelling for a grammar [`Rule`], used to rewrite pest's
+/// `expected …` lists from internal rule names (`op_in`, `lbrace`) into the
+/// Event-B symbols a user actually types (`∈`, `{`). Returns `None` for rules
+/// with no terser spelling, so the caller keeps pest's own name. Operators map
+/// to a canonical Event-B glyph (usually the Unicode form); the few Rodin
+/// private-use relations have no standard glyph, so they keep an ASCII
+/// spelling.
+#[rustfmt::skip]
+pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
+    Some(match rule {
+        Rule::op_and => "∧",
+        Rule::op_or => "∨",
+        Rule::op_implies => "⇒",
+        Rule::op_equivalent => "⇔",
+        Rule::op_not => "¬",
+        Rule::op_forall => "∀",
+        Rule::op_exists => "∃",
+        Rule::op_in => "∈",
+        Rule::op_notin => "∉",
+        Rule::op_subset => "⊆",
+        Rule::op_subset_strict => "⊂",
+        Rule::op_not_subset => "⊈",
+        Rule::op_not_subset_strict => "⊄",
+        Rule::op_union => "∪",
+        Rule::op_intersection => "∩",
+        Rule::op_difference => "∖",
+        Rule::op_cartesian => "×",
+        Rule::op_powerset => "ℙ",
+        Rule::op_powerset1 => "ℙ1",
+        Rule::op_emptyset => "∅",
+        Rule::op_oftype => "⦂",
+        Rule::op_maplet => "↦",
+        Rule::op_relation => "↔",
+        Rule::op_partial_fn => "⇸",
+        Rule::op_total_fn => "→",
+        Rule::op_partial_inj => "⤔",
+        Rule::op_total_inj => "↣",
+        Rule::op_partial_surj => "⤀",
+        Rule::op_total_surj => "↠",
+        Rule::op_bijection => "⤖",
+        Rule::op_domain => "dom",
+        Rule::op_range => "ran",
+        Rule::op_inverse => "∼",
+        Rule::op_semicolon => ";",
+        Rule::op_composition => "∘",
+        Rule::op_domain_restrict => "◁",
+        Rule::op_domain_subtract => "⩤",
+        Rule::op_range_restrict => "▷",
+        Rule::op_range_subtract => "⩥",
+        Rule::op_overwrite => "⊕",
+        Rule::op_direct_product => "⊗",
+        Rule::op_parallel_product => "∥",
+        Rule::op_total_surjective_relation => "<<->>",
+        Rule::op_surjective_relation => "<->>",
+        Rule::op_total_relation => "<<->",
+        Rule::op_plus => "+",
+        Rule::op_minus => "−",
+        Rule::op_multiply => "∗",
+        Rule::op_divide => "÷",
+        Rule::op_modulo => "mod",
+        Rule::op_exponent => "^",
+        Rule::op_range_op => "..",
+        Rule::op_eq => "=",
+        Rule::op_neq => "≠",
+        Rule::op_lt => "<",
+        Rule::op_le => "≤",
+        Rule::op_gt => ">",
+        Rule::op_ge => "≥",
+        Rule::op_becomes_equal => "≔",
+        Rule::op_becomes_in => ":∈",
+        Rule::op_becomes_such => ":∣",
+        Rule::dot => "·",
+        Rule::comma => ",",
+        Rule::colon => ":",
+        Rule::lparen => "(",
+        Rule::rparen => ")",
+        Rule::lbrace => "{",
+        Rule::rbrace => "}",
+        Rule::lbracket => "[",
+        Rule::rbracket => "]",
+        Rule::pipe => "|",
+        _ => return None,
+    })
+}
+
 /// Run a parse (pest + AST build) with guaranteed stack headroom.
 ///
 /// Both pest's generated parser and the AST builder recurse on nested formula
