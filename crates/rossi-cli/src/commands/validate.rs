@@ -55,6 +55,16 @@ enum OutputFormat {
     Sarif,
 }
 
+/// 1-indexed source region of a parse failure (character columns — the SARIF
+/// and Camille convention). `end` equals `start` for a single point.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Region {
+    pub start_line: usize,
+    pub start_column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+}
+
 /// One row of the validation report — a parsed component, a parse failure,
 /// or a semantic/lint diagnostic. All constructors live below so the
 /// derived `success` / `severity` pair stays consistent.
@@ -82,6 +92,10 @@ pub struct ValidationResult {
     pub rule_id: Option<RuleId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Source region of a parse failure, when known (issue #42). Populated for
+    /// loose-text parse errors, where the source is available to resolve it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<Region>,
 }
 
 fn ser_severity<S: Serializer>(value: &Option<Severity>, s: S) -> Result<S::Ok, S::Error> {
@@ -217,12 +231,16 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             results
         }
         // Loose `.eventb` text → Camille / formula parse failure (EB005).
-        Err(e) => vec![error_result(
-            display,
-            None,
-            format!("{e}"),
-            Some(RuleId::FormulaParseError),
-        )],
+        Err(e) => {
+            let mut result = error_result(
+                display,
+                None,
+                format!("{e}"),
+                Some(RuleId::FormulaParseError),
+            );
+            result.region = parse_error_region(&e, source);
+            vec![result]
+        }
     }
 }
 
@@ -347,6 +365,7 @@ fn success_result(file: &Path, inner: Option<String>, component: &Component) -> 
         severity: None,
         rule_id: None,
         origin: None,
+        region: None,
     }
 }
 
@@ -361,6 +380,7 @@ fn fold_diagnostic(file: &Path, diag: Diagnostic) -> ValidationResult {
         severity: Some(diag.severity),
         rule_id: diag.rule_id,
         origin: Some(diag.origin),
+        region: None,
     }
 }
 
@@ -420,14 +440,48 @@ fn error_result(
         severity: Some(Severity::Error),
         rule_id,
         origin: None,
+        region: None,
     }
 }
 
+/// Resolve a loose-text parse error to a 1-indexed source [`Region`] (issue
+/// #42). The start is the error's reported position; the end comes from its
+/// byte span when present (a zero-width pest position yields a point region).
+fn parse_error_region(err: &ParseError, source: &str) -> Option<Region> {
+    let (start_line, start_column) = err.position()?;
+    let (end_line, end_column) = match err.span() {
+        Some(span) if span.end > span.start => line_col_1_indexed(source, span.end),
+        _ => (start_line, start_column),
+    };
+    Some(Region {
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+    })
+}
+
+/// 1-indexed (line, column) of `byte_offset` in `source` — the SARIF/Camille
+/// convention. [`Span::to_line_col`] reads only the start, so a point span at
+/// the offset yields its position.
+fn line_col_1_indexed(source: &str, byte_offset: usize) -> (usize, usize) {
+    let (line, col) = rossi::ast::Span {
+        start: byte_offset,
+        end: byte_offset,
+    }
+    .to_line_col(source);
+    (line + 1, col + 1)
+}
+
 fn print_text_result(result: &ValidationResult, quiet: bool) {
-    let file_info = match &result.inner_filename {
+    let mut file_info = match &result.inner_filename {
         Some(inner) => format!("{}:{}", result.file.display(), inner),
         None => format!("{}", result.file.display()),
     };
+    // Append the 1-indexed start position when known (issue #42).
+    if let Some(region) = &result.region {
+        file_info = format!("{file_info}:{}:{}", region.start_line, region.start_column);
+    }
 
     if result.component_name.is_some() {
         if !quiet {
@@ -481,4 +535,32 @@ fn write_json(results: &[ValidationResult], out: &mut impl Write) {
         return;
     }
     let _ = writeln!(out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_error_region_covers_reserved_word() {
+        // The reserved word `dom` carries a byte span (issue #42); the region's
+        // end comes from that span, covering the whole word.
+        let source = "CONTEXT c0\nCONSTANTS\n    dom\nEND\n";
+        let err = rossi::parse(source).expect_err("`dom` is reserved");
+        let region = parse_error_region(&err, source).expect("located error has a region");
+        assert_eq!((region.start_line, region.start_column), (3, 5));
+        assert_eq!((region.end_line, region.end_column), (3, 8));
+    }
+
+    #[test]
+    fn parse_error_region_is_a_point_without_a_span() {
+        // A bare pest position (zero-width span) yields a point region.
+        let source = "CONTEXT c\nCONSTANTS\n    c1\n    +\nEND\n";
+        let err = rossi::parse(source).expect_err("the stray `+` must fail");
+        let region = parse_error_region(&err, source).expect("located error has a region");
+        assert_eq!(
+            (region.start_line, region.start_column),
+            (region.end_line, region.end_column)
+        );
+    }
 }

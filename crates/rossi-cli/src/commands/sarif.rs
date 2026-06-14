@@ -8,7 +8,7 @@ use rossi_build::{RuleId, Severity};
 use serde_json::{Value, json};
 use std::io::{self, Write};
 
-use crate::commands::validate::ValidationResult;
+use crate::commands::validate::{Region, ValidationResult};
 
 const SCHEMA_URI: &str = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json";
 
@@ -64,6 +64,9 @@ fn result_to_sarif(result: &ValidationResult) -> Option<Value> {
             "artifactLocation": { "uri": uri }
         }
     });
+    if let Some(region) = &result.region {
+        location["physicalLocation"]["region"] = region_to_sarif(region);
+    }
     if let Some(origin) = &result.origin {
         location["logicalLocations"] = json!([{ "name": origin }]);
     }
@@ -74,6 +77,16 @@ fn result_to_sarif(result: &ValidationResult) -> Option<Value> {
         "message": { "text": message },
         "locations": [location],
     }))
+}
+
+/// A SARIF `region` object (1-indexed lines/columns, character units).
+fn region_to_sarif(region: &Region) -> Value {
+    json!({
+        "startLine": region.start_line,
+        "startColumn": region.start_column,
+        "endLine": region.end_line,
+        "endColumn": region.end_column,
+    })
 }
 
 fn uri_for(result: &ValidationResult) -> String {

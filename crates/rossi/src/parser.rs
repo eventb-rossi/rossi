@@ -43,6 +43,7 @@ fn reserved_word_error(word: &str, span: pest::Span<'_>) -> ParseError {
         word: word.to_string(),
         line,
         column,
+        span: Some(Span::from_pest(span)),
     }
 }
 
@@ -2489,14 +2490,19 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
         return error;
     }
     match error {
+        // The byte span is relative to the slice that produced the error; a
+        // line delta can't translate byte offsets, so drop it and let consumers
+        // fall back to the (shifted) line/column.
         ParseError::PestError {
             message,
             line,
             column,
+            span: _,
         } => ParseError::PestError {
             message,
             line: line + line_delta,
             column,
+            span: None,
         },
         ParseError::NestingTooDeep {
             limit,
@@ -2507,10 +2513,16 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
             line: line + line_delta,
             column,
         },
-        ParseError::ReservedWord { word, line, column } => ParseError::ReservedWord {
+        ParseError::ReservedWord {
+            word,
+            line,
+            column,
+            span: _,
+        } => ParseError::ReservedWord {
             word,
             line: line + line_delta,
             column,
+            span: None,
         },
         ParseError::ClauseError {
             clause_type,

@@ -1,5 +1,6 @@
 //! Error types for the Event-B parser
 
+use crate::ast::Span;
 use thiserror::Error;
 
 /// Errors that can occur during parsing
@@ -11,6 +12,11 @@ pub enum ParseError {
         /// 1-indexed error position, from pest's structured location.
         line: usize,
         column: usize,
+        /// Source byte span from pest's structured location, when available.
+        /// Additive and unreferenced by `Display` (oracle-safe); lets
+        /// CLI/SARIF/LSP share an accurate range instead of reconstructing one.
+        /// Usually a zero-width position — pest reports a single failure point.
+        span: Option<Span>,
     },
 
     #[error("Unexpected rule: expected {expected}, found {found}")]
@@ -40,6 +46,8 @@ pub enum ParseError {
         word: String,
         line: usize,
         column: usize,
+        /// Byte span of the offending word (additive, oracle-safe).
+        span: Option<Span>,
     },
 
     #[error("Empty expression")]
@@ -140,14 +148,57 @@ impl From<std::io::Error> for ParseError {
 
 impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
     fn from(error: Box<pest::error::Error<crate::parser::Rule>>) -> Self {
-        let (line, column) = match error.line_col {
-            pest::error::LineColLocation::Pos(pos) => pos,
-            pest::error::LineColLocation::Span(start, _) => start,
+        let message = error.to_string();
+        let (line, column) = match &error.line_col {
+            pest::error::LineColLocation::Pos(pos) => *pos,
+            pest::error::LineColLocation::Span(start, _) => *start,
+        };
+        // pest's `location` is byte offsets: a single point for `new_from_pos`
+        // (the common case — a zero-width span) or a real span for
+        // `new_from_span`.
+        let span = match &error.location {
+            pest::error::InputLocation::Pos(p) => Some(Span { start: *p, end: *p }),
+            pest::error::InputLocation::Span((s, e)) => Some(Span { start: *s, end: *e }),
         };
         ParseError::PestError {
-            message: error.to_string(),
+            message,
             line,
             column,
+            span,
+        }
+    }
+}
+
+impl ParseError {
+    /// 1-indexed `(line, column)` of where this error starts, when it carries a
+    /// source position. Unwraps a [`ParseError::FileContext`] envelope and
+    /// follows [`ParseError::MultipleErrors`] to its first entry.
+    pub fn position(&self) -> Option<(usize, usize)> {
+        match self {
+            ParseError::PestError { line, column, .. }
+            | ParseError::NestingTooDeep { line, column, .. }
+            | ParseError::ReservedWord { line, column, .. }
+            | ParseError::ClauseError { line, column, .. }
+            | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
+            ParseError::FileContext { source, .. } => source.position(),
+            ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::position),
+            _ => None,
+        }
+    }
+
+    /// Source byte [`Span`] of this error, when the parser captured one that
+    /// tightly bounds the offending token. Follows the same envelope/aggregate
+    /// handling as [`position`](Self::position). Often a zero-width position for
+    /// pest errors; callers that need a visible range should size an empty span
+    /// themselves. Clause-order and recovery errors deliberately carry no span
+    /// (their pest span is the whole multi-line clause, not the offending
+    /// token) — consumers size those from [`position`](Self::position).
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            ParseError::PestError { span, .. } | ParseError::ReservedWord { span, .. } => *span,
+            ParseError::FileContext { source, .. } => source.span(),
+            ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),
+            _ => None,
         }
     }
 }
@@ -222,3 +273,40 @@ impl<T> ParseResult<T> {
 }
 
 pub type Result<T> = std::result::Result<T, ParseError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn span_is_additive_and_display_ignores_it() {
+        // The optional `span` is additive: it must not change `Display`, so the
+        // rodin/import corpora and any message oracles stay byte-identical.
+        let with = ParseError::PestError {
+            message: "boom".to_string(),
+            line: 2,
+            column: 3,
+            span: Some(Span { start: 5, end: 9 }),
+        };
+        let without = ParseError::PestError {
+            message: "boom".to_string(),
+            line: 2,
+            column: 3,
+            span: None,
+        };
+        assert_eq!(with.to_string(), "Pest parsing error: boom");
+        assert_eq!(with.to_string(), without.to_string());
+    }
+
+    #[test]
+    fn accessors_expose_position_and_span() {
+        let err = ParseError::ReservedWord {
+            word: "dom".to_string(),
+            line: 4,
+            column: 7,
+            span: Some(Span { start: 10, end: 13 }),
+        };
+        assert_eq!(err.position(), Some((4, 7)));
+        assert_eq!(err.span(), Some(Span { start: 10, end: 13 }));
+    }
+}
