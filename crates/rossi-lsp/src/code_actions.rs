@@ -344,15 +344,27 @@ impl CodeActionProvider {
     ) -> Vec<CodeActionOrCommand> {
         let mut actions = Vec::new();
 
-        // Check diagnostics in context
-        for diagnostic in &params.context.diagnostics {
-            // Check for missing END keyword
-            if (diagnostic.message.contains("END") || diagnostic.message.contains("expected"))
-                && let Some(action) =
-                    self.create_add_missing_end_action(&params.text_document.uri, diagnostic, text)
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
+        // Offer "Add missing END" only for a diagnostic at end-of-input. A
+        // missing terminator is reported there (pest's EOF position); a syntax
+        // error inside the body sits on an earlier line. Keying off the
+        // position — not the old `message.contains("expected")`, which matched
+        // every syntax error — avoids suggesting an END for a typo deep inside
+        // a predicate, and (unlike a "no END anywhere" text scan) is not fooled
+        // by a nested END (`if … then … else … end`, an event END, or an `END`
+        // inside a label). The component check is done last, only once a
+        // candidate diagnostic exists.
+        let end_line = document_end_position(text).line;
+        if let Some(diagnostic) = params
+            .context
+            .diagnostics
+            .iter()
+            .find(|d| d.range.start.line >= end_line)
+            && (has_keyword_line(text, KeywordId::Machine)
+                || has_keyword_line(text, KeywordId::Context))
+            && let Some(action) =
+                self.create_add_missing_end_action(&params.text_document.uri, diagnostic, text)
+        {
+            actions.push(CodeActionOrCommand::CodeAction(action));
         }
 
         actions
