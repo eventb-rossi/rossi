@@ -6,6 +6,7 @@
 
 use crate::component_util::{component_line_window, lines_in_window};
 use crate::lsp_types::*;
+use crate::text_utils;
 use dashmap::DashMap;
 use rossi::ast::*;
 use std::sync::Arc;
@@ -126,6 +127,12 @@ impl WorkspaceSymbolProvider {
         let mut symbols = Vec::new();
         let window = component_line_window(component, text);
 
+        // Mask comments (char columns preserved) before the clause/event text
+        // scans below, so a clause header or symbol name spelled in a `//` or
+        // `/* */` comment never opens a clause or becomes a symbol's location.
+        let masked = rossi::comments::mask_comments_chars(text);
+        let text = masked.as_str();
+
         match component {
             Component::Context(ctx) => {
                 let container = ctx.name.clone();
@@ -229,14 +236,17 @@ impl WorkspaceSymbolProvider {
         for (line_idx, line) in lines_in_window(text, window) {
             let trimmed = line.trim();
 
-            // Check if we're entering the target clause
-            if trimmed.starts_with(clause) {
+            // Check if we're entering the target clause (keywords are
+            // case-insensitive, per the grammar's `^"sets"` rules).
+            if text_utils::first_identifier_word(trimmed)
+                .is_some_and(|word| word.eq_ignore_ascii_case(clause))
+            {
                 in_clause = true;
                 continue;
             }
 
             // Check if we're exiting the clause
-            if in_clause && self.is_keyword(trimmed) {
+            if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
                 break;
             }
 
@@ -263,12 +273,23 @@ impl WorkspaceSymbolProvider {
         window: (usize, usize),
     ) -> Option<Location> {
         for (line_idx, line) in lines_in_window(text, window) {
-            let trimmed = line.trim();
+            // An `EVENT <name>` header in any casing (`event_name_from_line`
+            // reads the keyword case-insensitively and keeps a hyphenated name
+            // whole). The init event's name is the INITIALISATION *keyword*
+            // (case-insensitive); every other event name is a case-sensitive
+            // identifier.
+            let Some(name) = text_utils::event_name_from_line(line) else {
+                continue;
+            };
+            let is_init = rossi::keywords::lookup(event_name).map(|k| k.id)
+                == Some(rossi::keywords::KeywordId::Initialisation);
+            let matches = if is_init {
+                name.eq_ignore_ascii_case(event_name)
+            } else {
+                name == event_name
+            };
 
-            // Look for "EVENT event_name" or "INITIALISATION"
-            if (trimmed.starts_with("EVENT ") || trimmed == "INITIALISATION")
-                && let Some(col_idx) = self.find_whole_word_in_line(line, event_name)
-            {
+            if matches && let Some(col_idx) = self.find_whole_word_in_line(line, &name) {
                 let position = Position::new(line_idx as u32, col_idx as u32);
                 return Some(Location::new(
                     Url::parse(uri).ok()?,
@@ -310,35 +331,6 @@ impl WorkspaceSymbolProvider {
             }
         }
         None
-    }
-
-    /// Check if a line starts with an Event-B keyword (clause starter)
-    fn is_keyword(&self, line: &str) -> bool {
-        matches!(
-            line,
-            "CONTEXT"
-                | "MACHINE"
-                | "END"
-                | "EXTENDS"
-                | "SETS"
-                | "CONSTANTS"
-                | "AXIOMS"
-                | "REFINES"
-                | "SEES"
-                | "VARIABLES"
-                | "INVARIANTS"
-                | "VARIANT"
-                | "EVENTS"
-                | "EVENT"
-                | "INITIALISATION"
-                | "ANY"
-                | "WHERE"
-                | "WHEN"
-                | "WITH"
-                | "WITNESS"
-                | "THEN"
-                | "BEGIN"
-        )
     }
 }
 
@@ -435,6 +427,60 @@ END
         let results = provider.search("INITIALISATION");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "INITIALISATION");
+    }
+
+    #[test]
+    fn test_workspace_symbols_lowercase_keywords() {
+        let provider = WorkspaceSymbolProvider::new();
+
+        // Lowercase keywords (Camille style). The set named STATUS — a
+        // contextual keyword — is followed by another set, exercising the
+        // declaration-scan carve-out that keeps STATUS a name, not a boundary.
+        let source = r#"
+context types
+sets
+    STATUS
+    Colours
+constants
+    ceiling
+axioms
+    @axm1 ceiling ∈ ℕ
+end
+
+machine counter
+sees types
+variables
+    tally
+events
+    event initialisation
+    then
+        tally := 0
+    end
+
+    event increment
+    where
+        tally < ceiling
+    then
+        tally := tally + 1
+    end
+end
+"#;
+
+        provider.update_symbols("file:///model.eventb".to_string(), source);
+
+        for (name, kind) in [
+            ("STATUS", SymbolKind::ENUM),
+            ("Colours", SymbolKind::ENUM),
+            ("ceiling", SymbolKind::CONSTANT),
+            ("tally", SymbolKind::VARIABLE),
+            ("increment", SymbolKind::EVENT),
+            ("INITIALISATION", SymbolKind::EVENT),
+        ] {
+            let results = provider.search(name);
+            assert_eq!(results.len(), 1, "expected exactly one `{name}` symbol");
+            assert_eq!(results[0].name, name);
+            assert_eq!(results[0].kind, kind);
+        }
     }
 
     #[test]
