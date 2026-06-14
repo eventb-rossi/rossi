@@ -12,25 +12,7 @@ local util = require('lspconfig.util')
 -- nvim-lspconfig merges a user-supplied on_attach *after* default_config's, so
 -- both run and nothing here is lost.
 local function default_on_attach(client, bufnr)
-  -- Keep CodeLens (ProB animate / model-check actions on MACHINE/CONTEXT) fresh.
-  -- Guarded so we never poke a server build that lacks the capability.
-  if client.server_capabilities.codeLensProvider then
-    local group = vim.api.nvim_create_augroup('RossiCodeLens', { clear = false })
-    vim.api.nvim_create_autocmd({ 'BufEnter', 'CursorHold', 'InsertLeave' }, {
-      group = group,
-      buffer = bufnr,
-      callback = function()
-        vim.lsp.codelens.refresh({ bufnr = bufnr })
-      end,
-    })
-    -- Populate lenses immediately on attach rather than waiting for the first event.
-    vim.lsp.codelens.refresh({ bufnr = bufnr })
-  end
-
   local opts = { noremap = true, silent = true, buffer = bufnr }
-
-  -- Run the CodeLens under the cursor (e.g. start the ProB animator).
-  vim.keymap.set('n', '<leader>cl', vim.lsp.codelens.run, opts)
 
   -- Expand the LSP selection range (textDocument/selectionRange, smart
   -- expand/shrink). Use the built-in when this Neovim ships it, otherwise fall
@@ -69,7 +51,7 @@ return {
     -- File types that this server handles
     filetypes = { 'eventb' },
 
-    -- Pinned defaults: CodeLens refresh autocmd + Rossi keymaps. A user
+    -- Pinned defaults: selection-range expand + Rossi keymaps. A user
     -- `on_attach` passed to setup{} composes with (runs after) this one.
     on_attach = default_on_attach,
 
@@ -142,14 +124,10 @@ Rossi Language Server provides language support for Event-B formal modeling:
 - Folding ranges
 - Selection range (smart expand/shrink, `<leader>v`)
 - Semantic tokens
-- ProB integration
 
 **Pinned defaults (default_config.on_attach):**
 
 When this config is set up, every Event-B buffer automatically gets:
-- A CodeLens refresh autocmd (BufEnter/CursorHold/InsertLeave), guarded on the
-  server advertising codeLensProvider, plus `<leader>cl` to run the lens under
-  the cursor (e.g. start the ProB animator).
 - `<leader>v` to expand the LSP selection range (textDocument/selectionRange).
 - The :Rossi* user commands (from lua/eventb/commands.lua) and `<leader>ru` /
   `<leader>ra` / `<leader>rv` for convert-to-unicode / convert-to-ascii /

@@ -36,8 +36,6 @@
     "onCommand:rossi.validateWorkspace",
     "onCommand:rossi.convertCurrentFileToUnicode",
     "onCommand:rossi.convertCurrentFileToAscii",
-    "onCommand:rossi.animateWithProb",
-    "onCommand:rossi.modelCheckWithProb",
     "onCommand:rossi.checkToolchain",
     "onCommand:rossi.newProject"
   ],
@@ -120,16 +118,6 @@
         "category": "Rossi"
       },
       {
-        "command": "rossi.animateWithProb",
-        "title": "Animate with ProB",
-        "category": "Rossi"
-      },
-      {
-        "command": "rossi.modelCheckWithProb",
-        "title": "Model Check with ProB",
-        "category": "Rossi"
-      },
-      {
         "command": "rossi.checkToolchain",
         "title": "Check Toolchain",
         "category": "Rossi"
@@ -163,49 +151,39 @@
           "group": "rossi@4"
         },
         {
-          "command": "rossi.animateWithProb",
-          "when": "resourceExtname == .eventb",
+          "command": "rossi.buildCheckedRodinZip",
+          "when": "resourceExtname == .eventb || resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
           "group": "rossi@5"
         },
         {
-          "command": "rossi.modelCheckWithProb",
+          "command": "rossi.buildCheckedRodinZip",
+          "when": "explorerResourceIsFolder",
+          "group": "rossi@5"
+        },
+        {
+          "command": "rossi.openInRodin",
           "when": "resourceExtname == .eventb",
           "group": "rossi@6"
         },
         {
-          "command": "rossi.buildCheckedRodinZip",
-          "when": "resourceExtname == .eventb || resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
-          "group": "rossi@7"
-        },
-        {
-          "command": "rossi.buildCheckedRodinZip",
-          "when": "explorerResourceIsFolder",
-          "group": "rossi@7"
-        },
-        {
-          "command": "rossi.openInRodin",
-          "when": "resourceExtname == .eventb",
-          "group": "rossi@8"
-        },
-        {
           "command": "rossi.openInRodin",
           "when": "explorerResourceIsFolder",
-          "group": "rossi@8"
+          "group": "rossi@6"
         },
         {
           "command": "rossi.importRodinProject",
           "when": "resourceExtname == .zip || resourceExtname == .buc || resourceExtname == .bum",
-          "group": "rossi@9"
+          "group": "rossi@7"
         },
         {
           "command": "rossi.importRodinProject",
           "when": "explorerResourceIsFolder",
-          "group": "rossi@9"
+          "group": "rossi@7"
         },
         {
           "command": "rossi.newProject",
           "when": "explorerResourceIsFolder",
-          "group": "rossi@10"
+          "group": "rossi@8"
         }
       ],
       "editor/context": [
@@ -230,19 +208,9 @@
           "group": "rossi@4"
         },
         {
-          "command": "rossi.animateWithProb",
-          "when": "editorLangId == eventb",
-          "group": "rossi@5"
-        },
-        {
-          "command": "rossi.modelCheckWithProb",
-          "when": "editorLangId == eventb",
-          "group": "rossi@6"
-        },
-        {
           "command": "rossi.openInRodin",
           "when": "editorLangId == eventb",
-          "group": "rossi@7"
+          "group": "rossi@5"
         }
       ],
       "commandPalette": [
@@ -260,14 +228,6 @@
         },
         {
           "command": "rossi.exportCurrentFileToRodinZip",
-          "when": "editorLangId == eventb"
-        },
-        {
-          "command": "rossi.animateWithProb",
-          "when": "editorLangId == eventb"
-        },
-        {
-          "command": "rossi.modelCheckWithProb",
           "when": "editorLangId == eventb"
         }
       ]
@@ -360,26 +320,6 @@
           ],
           "default": "off",
           "description": "Traces the communication between VS Code and the language server."
-        },
-        "rossi.prob.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable ProB integration features."
-        },
-        "rossi.prob.path": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the probcli executable. Leave empty to search in PATH."
-        },
-        "rossi.prob.timeout": {
-          "type": "number",
-          "default": 10000,
-          "description": "ProB model checking timeout in milliseconds."
-        },
-        "rossi.prob.animateSteps": {
-          "type": "number",
-          "default": 5,
-          "description": "Number of random animation steps for ProB animation."
         }
       }
     },
@@ -425,7 +365,7 @@
           {
             "id": "rossi.getStarted.exportRodin",
             "title": "Export to Rodin",
-            "description": "Hand the model to Rodin or explore it with ProB.\n[Open in Rodin](command:rossi.openInRodin)",
+            "description": "Hand the model to the Rodin platform.\n[Open in Rodin](command:rossi.openInRodin)",
             "media": {
               "markdown": "walkthroughs/export-rodin.md"
             },

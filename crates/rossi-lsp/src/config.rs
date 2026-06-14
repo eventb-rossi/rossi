@@ -29,10 +29,6 @@ pub struct RossiConfig {
     /// Trace configuration
     #[serde(default)]
     pub trace: TraceConfig,
-
-    /// ProB integration configuration
-    #[serde(default)]
-    pub prob: ProBConfig,
 }
 
 impl RossiConfig {
@@ -173,47 +169,6 @@ fn default_trace_level() -> String {
     "off".to_string()
 }
 
-/// ProB integration configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProBConfig {
-    /// Enable ProB integration (code lenses, model checking, animation)
-    #[serde(default = "default_prob_enabled")]
-    pub enabled: bool,
-    /// Path to probcli executable. Empty string means auto-detect from PATH.
-    #[serde(default)]
-    pub path: String,
-    /// Model checking timeout in milliseconds
-    #[serde(default = "default_prob_timeout")]
-    pub timeout: u32,
-    /// Number of random animation steps (0 = just initialize)
-    #[serde(default = "default_prob_animate_steps")]
-    pub animate_steps: u32,
-}
-
-impl Default for ProBConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_prob_enabled(),
-            path: String::new(),
-            timeout: default_prob_timeout(),
-            animate_steps: default_prob_animate_steps(),
-        }
-    }
-}
-
-fn default_prob_enabled() -> bool {
-    true
-}
-
-fn default_prob_timeout() -> u32 {
-    10000
-}
-
-fn default_prob_animate_steps() -> u32 {
-    5
-}
-
 /// Configuration manager that holds the current configuration
 pub struct ConfigManager {
     config: Arc<RwLock<RossiConfig>>,
@@ -283,18 +238,6 @@ impl ConfigManager {
     #[allow(dead_code)]
     pub fn get_trace(&self) -> TraceConfig {
         self.config.read().trace.clone()
-    }
-
-    /// Update just the ProB configuration
-    #[allow(dead_code)]
-    pub fn update_prob(&self, prob: ProBConfig) {
-        self.config.write().prob = prob;
-    }
-
-    /// Get the ProB configuration
-    #[allow(dead_code)]
-    pub fn get_prob(&self) -> ProBConfig {
-        self.config.read().prob.clone()
     }
 }
 

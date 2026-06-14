@@ -32,7 +32,6 @@
 ;; - Signature help for quantifiers and lambda
 ;; - Code actions (quick fixes and refactorings)
 ;; - Folding ranges
-;; - ProB integration
 ;;
 ;; Installation:
 ;;
@@ -288,7 +287,7 @@ See `eventb-input.el' for the backslash-leader spellings."
       (deactivate-input-method)
     (eventb-activate-input-method)))
 
-;;; Editor commands (Rodin/ProB/validation helpers)
+;;; Editor commands (Rodin/validation helpers)
 
 ;; Interactive commands live in eventb-commands.el.  Require it softly so
 ;; this file still byte-compiles and loads when that companion is absent.
@@ -299,8 +298,6 @@ See `eventb-input.el' for the backslash-leader spellings."
 (declare-function eventb-convert-to-ascii "eventb-commands")
 (declare-function eventb-validate "eventb-commands")
 (declare-function eventb-validate-workspace "eventb-commands")
-(declare-function eventb-animate-prob "eventb-commands")
-(declare-function eventb-model-check-prob "eventb-commands")
 (declare-function eventb-import "eventb-commands")
 (declare-function eventb-export "eventb-commands")
 (declare-function eventb-build "eventb-commands")
@@ -322,8 +319,6 @@ See `eventb-input.el' for the backslash-leader spellings."
     (define-key map (kbd "C-c C-S-v") #'eventb-validate-workspace)
     (define-key map (kbd "C-c C-u") #'eventb-convert-to-unicode)
     (define-key map (kbd "C-c C-a") #'eventb-convert-to-ascii)
-    (define-key map (kbd "C-c C-p a") #'eventb-animate-prob)
-    (define-key map (kbd "C-c C-p m") #'eventb-model-check-prob)
     (define-key map (kbd "C-c C-r i") #'eventb-import)
     (define-key map (kbd "C-c C-r e") #'eventb-export)
     (define-key map (kbd "C-c C-r b") #'eventb-build)

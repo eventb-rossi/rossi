@@ -120,7 +120,7 @@ Configure `rossi.rodin.path` only if `Open in Rodin` cannot use the platform def
 ```
 
 For the full list of settings (formatting, diagnostics, completion, symbol
-input, ProB) and a complete example configuration, see the
+input) and a complete example configuration, see the
 [README](README.md#extension-settings).
 
 ## Troubleshooting

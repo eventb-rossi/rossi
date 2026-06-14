@@ -18,7 +18,6 @@ use crate::document_links::DocumentLinkProvider;
 use crate::folding::FoldingRangeProvider;
 use crate::formatting::FormattingProvider;
 use crate::hover::HoverProvider;
-use crate::prob::ProBProvider;
 use crate::references::ReferenceProvider;
 use crate::rename::RenameProvider;
 use crate::selection_range::SelectionRangeProvider;
@@ -62,8 +61,6 @@ pub struct RossiLanguageServer {
     selection_range_provider: Arc<SelectionRangeProvider>,
     /// Signature help provider
     signature_help_provider: Arc<SignatureHelpProvider>,
-    /// ProB integration provider
-    prob_provider: Arc<ProBProvider>,
 }
 
 impl RossiLanguageServer {
@@ -122,7 +119,6 @@ impl RossiLanguageServer {
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
             signature_help_provider: Arc::new(SignatureHelpProvider::new()),
-            prob_provider: Arc::new(ProBProvider::new()),
         }
     }
 }
@@ -258,16 +254,6 @@ impl LanguageServer for RossiLanguageServer {
                         "⇒".to_string(),
                         "|".to_string(),
                     ]),
-                    work_done_progress_options: WorkDoneProgressOptions::default(),
-                }),
-                code_lens_provider: Some(CodeLensOptions {
-                    resolve_provider: Some(false),
-                }),
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![
-                        "rossi.prob.animate".to_string(),
-                        "rossi.prob.modelcheck".to_string(),
-                    ],
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
                 ..Default::default()
@@ -826,43 +812,6 @@ impl LanguageServer for RossiLanguageServer {
 
         Ok(response)
     }
-
-    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
-        let uri = &params.text_document.uri;
-        debug!("Code lens request for: {}", uri);
-
-        // Get document text
-        let text = match self.document_manager.get_text(uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
-        };
-
-        // Get code lenses from ProB provider
-        let lenses = self.prob_provider.provide_code_lenses(&text, uri);
-
-        debug!("Code lenses returned: {}", lenses.len());
-
-        Ok(Some(lenses))
-    }
-
-    async fn execute_command(
-        &self,
-        params: ExecuteCommandParams,
-    ) -> Result<Option<serde_json::Value>> {
-        debug!("Execute command request: {}", params.command);
-
-        match params.command.as_str() {
-            "rossi.prob.animate" => self.execute_prob_animate(&params).await,
-            "rossi.prob.modelcheck" => self.execute_prob_modelcheck(&params).await,
-            _ => {
-                debug!("Unknown command: {}", params.command);
-                Ok(None)
-            }
-        }
-    }
 }
 
 /// One operator spelling, as returned by the `rossi/operatorTable` custom
@@ -928,9 +877,6 @@ impl RossiLanguageServer {
         };
         self.completion_provider.update_config(completion_config);
 
-        // Apply ProB configuration
-        self.prob_provider.update_config(config.prob.clone());
-
         info!("Configuration applied to all providers");
     }
 
@@ -962,202 +908,6 @@ impl RossiLanguageServer {
             .iter()
             .map(|e| parse_error_to_diagnostic(e, text))
             .collect()
-    }
-
-    /// Execute ProB animation command
-    async fn execute_prob_animate(
-        &self,
-        params: &ExecuteCommandParams,
-    ) -> Result<Option<serde_json::Value>> {
-        use tracing::error;
-
-        // Check if ProB is available
-        if !self.prob_provider.is_available() {
-            self.client
-                .show_message(
-                    MessageType::ERROR,
-                    "ProB (probcli) is not installed or not found in PATH. Please install ProB to use this feature.",
-                )
-                .await;
-            return Ok(None);
-        }
-
-        // Extract file URI from arguments
-        let uri = match params.arguments.first() {
-            Some(serde_json::Value::String(uri_str)) => match Url::parse(uri_str) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    error!("Failed to parse URI: {}", e);
-                    self.client
-                        .show_message(MessageType::ERROR, format!("Invalid URI: {}", e))
-                        .await;
-                    return Ok(None);
-                }
-            },
-            _ => {
-                error!("No URI provided in command arguments");
-                self.client
-                    .show_message(MessageType::ERROR, "No file URI provided")
-                    .await;
-                return Ok(None);
-            }
-        };
-
-        // Convert URI to file path
-        let file_path = match uri.to_file_path() {
-            Ok(path) => path,
-            Err(_) => {
-                error!("Failed to convert URI to file path");
-                self.client
-                    .show_message(MessageType::ERROR, "Invalid file path")
-                    .await;
-                return Ok(None);
-            }
-        };
-
-        info!("Executing ProB animation for: {:?}", file_path);
-
-        // Show progress message
-        self.client
-            .show_message(
-                MessageType::INFO,
-                format!("Launching ProB animator for {}", file_path.display()),
-            )
-            .await;
-
-        // Execute ProB animation
-        match self.prob_provider.animate(&file_path) {
-            Ok(result) => {
-                self.client
-                    .show_message(
-                        MessageType::INFO,
-                        format!(
-                            "ProB animation completed. Output: {}",
-                            result.stdout.lines().take(3).collect::<Vec<_>>().join(" ")
-                        ),
-                    )
-                    .await;
-                Ok(Some(serde_json::json!({ "success": true })))
-            }
-            Err(e) => {
-                error!("ProB animation failed: {}", e);
-                self.client
-                    .show_message(MessageType::ERROR, format!("ProB animation failed: {}", e))
-                    .await;
-                Ok(Some(
-                    serde_json::json!({ "success": false, "error": e.to_string() }),
-                ))
-            }
-        }
-    }
-
-    /// Execute ProB model checking command
-    async fn execute_prob_modelcheck(
-        &self,
-        params: &ExecuteCommandParams,
-    ) -> Result<Option<serde_json::Value>> {
-        use tracing::error;
-
-        // Check if ProB is available
-        if !self.prob_provider.is_available() {
-            self.client
-                .show_message(
-                    MessageType::ERROR,
-                    "ProB (probcli) is not installed or not found in PATH. Please install ProB to use this feature.",
-                )
-                .await;
-            return Ok(None);
-        }
-
-        // Extract file URI from arguments
-        let uri = match params.arguments.first() {
-            Some(serde_json::Value::String(uri_str)) => match Url::parse(uri_str) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    error!("Failed to parse URI: {}", e);
-                    self.client
-                        .show_message(MessageType::ERROR, format!("Invalid URI: {}", e))
-                        .await;
-                    return Ok(None);
-                }
-            },
-            _ => {
-                error!("No URI provided in command arguments");
-                self.client
-                    .show_message(MessageType::ERROR, "No file URI provided")
-                    .await;
-                return Ok(None);
-            }
-        };
-
-        // Convert URI to file path
-        let file_path = match uri.to_file_path() {
-            Ok(path) => path,
-            Err(_) => {
-                error!("Failed to convert URI to file path");
-                self.client
-                    .show_message(MessageType::ERROR, "Invalid file path")
-                    .await;
-                return Ok(None);
-            }
-        };
-
-        info!("Executing ProB model checking for: {:?}", file_path);
-
-        // Show progress message
-        self.client
-            .show_message(
-                MessageType::INFO,
-                format!("Running ProB model checker on {}", file_path.display()),
-            )
-            .await;
-
-        // Execute ProB model checking
-        match self.prob_provider.modelcheck(&file_path) {
-            Ok(result) => {
-                if result.success {
-                    self.client
-                        .show_message(
-                            MessageType::INFO,
-                            "ProB model checking completed successfully. No errors found.",
-                        )
-                        .await;
-                } else {
-                    let msg = if result.counterexamples.is_empty() {
-                        "ProB model checking completed with warnings.".to_string()
-                    } else {
-                        format!(
-                            "ProB found {} issue(s). Check diagnostics for details.",
-                            result.counterexamples.len()
-                        )
-                    };
-                    self.client.show_message(MessageType::WARNING, msg).await;
-
-                    // Publish diagnostics for counterexamples
-                    let text = self.document_manager.get_text(&uri).unwrap_or_default();
-                    let diagnostics = self.prob_provider.results_to_diagnostics(&result, &text);
-                    self.client
-                        .publish_diagnostics(uri.clone(), diagnostics, None)
-                        .await;
-                }
-                Ok(Some(serde_json::json!({
-                    "success": result.success,
-                    "counterexamples": result.counterexamples.len()
-                })))
-            }
-            Err(e) => {
-                error!("ProB model checking failed: {}", e);
-                self.client
-                    .show_message(
-                        MessageType::ERROR,
-                        format!("ProB model checking failed: {}", e),
-                    )
-                    .await;
-                Ok(Some(
-                    serde_json::json!({ "success": false, "error": e.to_string() }),
-                ))
-            }
-        }
     }
 }
 

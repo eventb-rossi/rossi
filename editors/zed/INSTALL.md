@@ -68,8 +68,7 @@ If you already have a published version installed, Zed uninstalls it first.
    rename an identifier.
 4. Enable the richer features in `settings.json` (see
    [README.md](README.md#configuration)): `semantic_tokens: "combined"`,
-   `document_symbols: "on"` (outline), `document_folding_ranges: "on"`,
-   `code_lens: "on"` (ProB lenses).
+   `document_symbols: "on"` (outline), `document_folding_ranges: "on"`.
 
 ## Troubleshooting
 

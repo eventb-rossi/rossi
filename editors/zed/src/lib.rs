@@ -4,8 +4,8 @@
 //! from the standalone `tree-sitter-eventb` grammar (pinned in `extension.toml`,
 //! developed in this monorepo under `editors/tree-sitter-eventb/`) and its
 //! `languages/eventb/highlights.scm`, and everything else (diagnostics,
-//! completion, hover, goto, rename, formatting, code actions, outline, folding,
-//! ProB code lenses) comes from `rossi-language-server` over LSP.
+//! completion, hover, goto, rename, formatting, code actions, outline,
+//! folding) comes from `rossi-language-server` over LSP.
 //!
 //! The server binary is resolved from the user's Zed LSP settings
 //! (`lsp.rossi-language-server.binary.path`) if set, otherwise from `PATH`. The
@@ -50,8 +50,8 @@ impl zed::Extension for RossiExtension {
             })?;
 
         // Inherit the worktree's shell environment, then layer any vars the user
-        // set under `lsp.rossi-language-server.binary.env` on top (e.g. PROB_HOME
-        // for ProB, or RUST_LOG) so they reach the server process.
+        // set under `lsp.rossi-language-server.binary.env` on top (e.g. RUST_LOG)
+        // so they reach the server process.
         let mut env = worktree.shell_env();
         if let Some(custom_env) = custom_env {
             env.extend(custom_env);

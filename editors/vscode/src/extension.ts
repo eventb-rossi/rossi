@@ -26,12 +26,6 @@ interface RossiConfiguration {
     trace: {
         server: string;
     };
-    prob: {
-        enabled: boolean;
-        path: string;
-        timeout: number;
-        animateSteps: number;
-    };
 }
 
 function getRossiConfiguration(): RossiConfiguration {
@@ -51,12 +45,6 @@ function getRossiConfiguration(): RossiConfiguration {
         },
         trace: {
             server: config.get<string>('trace.server', 'off'),
-        },
-        prob: {
-            enabled: config.get<boolean>('prob.enabled', true),
-            path: config.get<string>('prob.path', ''),
-            timeout: config.get<number>('prob.timeout', 10000),
-            animateSteps: config.get<number>('prob.animateSteps', 5),
         },
     };
 }

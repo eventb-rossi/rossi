@@ -18,7 +18,6 @@ grammar (see the Grammar note below); everything else is provided by
 - Rename, document/workspace symbols, document links
 - Formatting (Unicode or ASCII operators), code actions (quick fixes, refactors)
 - Folding ranges, selection ranges, signature help
-- ProB integration via code lenses (animate / model-check)
 
 Zed can also overlay the server's **semantic tokens** on top of the tree-sitter
 highlighting for richer, meaning-aware colors — see Configuration.
@@ -72,8 +71,7 @@ Add to your Zed `settings.json` (per-language keys live under
         "rossi": {
           "format": { "useUnicode": true, "indentation": "    " },
           "diagnostics": { "enabled": true },
-          "completion": { "enabled": true },
-          "prob": { "enabled": true }
+          "completion": { "enabled": true }
         }
       }
     }
@@ -88,7 +86,6 @@ What each per-language key buys you (all default to `"off"` in Zed):
 | `semantic_tokens` | `"combined"` overlays the server's semantic tokens on the tree-sitter base; `"full"` uses the server's tokens exclusively. |
 | `document_symbols` | `"on"` sources the outline and breadcrumbs from the server's `textDocument/documentSymbol` (the grammar ships no `outline.scm`). |
 | `document_folding_ranges` | `"on"` uses the server's folding ranges instead of indentation/tree-sitter. |
-| `code_lens` | `"on"` shows the ProB animate / model-check lenses. |
 
 ### Server binary and settings
 
@@ -98,7 +95,7 @@ What each per-language key buys you (all default to `"off"` in Zed):
   `binary.arguments`).
 - **Server options.** Everything under `lsp."rossi-language-server".settings`
   is forwarded to the server. Nest options under `rossi` as shown above; the
-  available options (`format`, `diagnostics`, `completion`, `trace`, `prob`)
+  available options (`format`, `diagnostics`, `completion`, `trace`)
   and their defaults match the Neovim integration
   (`editors/neovim/lua/lspconfig/eventb.lua`).
 

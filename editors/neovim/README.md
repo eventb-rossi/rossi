@@ -31,7 +31,6 @@ This directory contains Neovim configuration for Event-B formal modeling, provid
 - **Code Formatting**: Auto-format with Unicode or ASCII operators
 - **Code Completion**: Context-aware suggestions
 - **Semantic Tokens**: Precise, parser-driven highlighting (applied automatically)
-- **Code Lens**: ProB animate/model-check actions on MACHINE/CONTEXT
 - **Selection Range**: Smart expand/shrink selection along the syntax tree
 - **Hover Documentation**: Operator and symbol documentation
 - **Go-to-Definition**: Jump to symbol definitions (across files!)
@@ -42,7 +41,6 @@ This directory contains Neovim configuration for Event-B formal modeling, provid
 - **Signature Help**: Parameter hints for quantifiers and lambda
 - **Code Actions**: Quick fixes and refactorings
 - **Folding Ranges**: Collapse/expand code sections
-- **ProB Integration**: Run ProB animator and model checker
 
 ## Quick Start
 
@@ -302,15 +300,6 @@ Grow and shrink the selection along the syntax tree:
 - Expands from the symbol under the cursor outward (term → clause → section)
 - Drives `vim.lsp.buf.selection_range` and treesitter-style incremental selection
 
-### ProB Integration
-
-Run ProB directly from Neovim:
-- Code lens appears on MACHINE/CONTEXT declarations
-- Run `vim.lsp.codelens.refresh()` then `vim.lsp.codelens.run()` to execute an action
-- Or use the `:RossiAnimateWithProb` / `:RossiModelCheckWithProb` commands
-- Animate or model check your specifications
-- Counterexamples shown as diagnostics
-
 ## Symbol Input
 
 Type ASCII and get Unicode without leaving the keyboard. Enable it for Event-B
@@ -395,8 +384,6 @@ user commands:
 - `:RossiValidateWorkspace`
 - `:RossiConvertCurrentFileToUnicode`
 - `:RossiConvertCurrentFileToAscii`
-- `:RossiAnimateWithProb`
-- `:RossiModelCheckWithProb`
 - `:RossiCheckToolchain`
 
 Suggested keymaps (set them in your `on_attach` or an `eventb` FileType
@@ -406,8 +393,6 @@ autocommand):
 local opts = { noremap = true, silent = true, buffer = bufnr }
 vim.keymap.set('n', '<leader>pu', '<Cmd>RossiConvertCurrentFileToUnicode<CR>', opts)
 vim.keymap.set('n', '<leader>pa', '<Cmd>RossiConvertCurrentFileToAscii<CR>', opts)
-vim.keymap.set('n', '<leader>pp', '<Cmd>RossiAnimateWithProb<CR>', opts)
-vim.keymap.set('n', '<leader>pm', '<Cmd>RossiModelCheckWithProb<CR>', opts)
 vim.keymap.set('n', '<leader>pv', '<Cmd>RossiValidateCurrentFile<CR>', opts)
 ```
 
@@ -522,8 +507,6 @@ return {
 |---------|--------|
 | `:RossiConvertCurrentFileToUnicode` | Convert operators to Unicode |
 | `:RossiConvertCurrentFileToAscii` | Convert operators to ASCII |
-| `:RossiAnimateWithProb` | Animate with ProB |
-| `:RossiModelCheckWithProb` | Model check with ProB |
 | `:RossiValidateCurrentFile` | Validate the current file |
 
 See [Editor Commands](#editor-commands) for the full list and suggested keymaps.

@@ -73,7 +73,6 @@ Type a prefix and press Tab:
 - Build checked Rodin `.zip` archives with generated `.bcc` / `.bcm` files
 - Run on-demand validation and show results in VS Code Problems
 - Convert the current `.eventb` file between Unicode and ASCII notation
-- Trigger ProB animation and model checking through the language server
 
 ## Requirements
 
@@ -107,10 +106,6 @@ This extension contributes the following settings:
 - `rossi.input.enabled`: Convert ASCII to Unicode math symbols as you type — eager combos and the `\name` leader (default: `true`)
 - `rossi.input.eager`: Eagerly substitute symbolic combos (`=>`, `<=>`, `|->`, `:=`) while typing; when `false`, only the `\name` leader converts (default: `true`)
 - `rossi.trace.server`: Traces communication between VS Code and the language server (default: `"off"`)
-- `rossi.prob.enabled`: Enable ProB integration features (default: `true`)
-- `rossi.prob.path`: Path to `probcli`; empty searches in PATH (default: `""`)
-- `rossi.prob.timeout`: ProB model checking timeout in milliseconds (default: `10000`)
-- `rossi.prob.animateSteps`: Number of random animation steps for ProB animation (default: `5`)
 
 ### Example Configuration
 
@@ -129,10 +124,6 @@ Add to your `.vscode/settings.json`:
   "rossi.completion.enabled": true,
   "rossi.input.enabled": true,
   "rossi.input.eager": true,
-  "rossi.prob.enabled": true,
-  "rossi.prob.path": "",
-  "rossi.prob.timeout": 10000,
-  "rossi.prob.animateSteps": 5,
   "editor.formatOnSave": true
 }
 ```
@@ -221,11 +212,9 @@ Open the Command Palette and run:
 - `Rossi: Validate Workspace`
 - `Rossi: Convert Current File to Unicode`
 - `Rossi: Convert Current File to ASCII`
-- `Rossi: Animate with ProB`
-- `Rossi: Model Check with ProB`
 - `Rossi: Check Toolchain`
 
-Rodin and conversion commands shell out to the configured `rossi.tool.path`. `Open in Rodin` exports a temporary Rodin project, registers it in a temporary workspace through Rodin’s headless Ant runner, and launches the configured `rossi.rodin.path`; edits made in Rodin are not synced back to `.eventb` files. ProB commands are forwarded to the language server and use the `rossi.prob.*` settings.
+Rodin and conversion commands shell out to the configured `rossi.tool.path`. `Open in Rodin` exports a temporary Rodin project, registers it in a temporary workspace through Rodin’s headless Ant runner, and launches the configured `rossi.rodin.path`; edits made in Rodin are not synced back to `.eventb` files.
 
 ## Contributing
 

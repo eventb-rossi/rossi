@@ -308,7 +308,6 @@ Enhanced configuration with keybindings and settings:
   (setq lsp-idle-delay 0.5)
   ;; Pinned Event-B defaults
   (setq lsp-semantic-tokens-enable t)   ; Server-driven semantic highlighting
-  (setq lsp-lens-enable t)              ; ProB animate/model-check code lens
   (setq lsp-extend-selection t))        ; Smart expand/shrink selection
 
 ;; LSP UI configuration
@@ -357,10 +356,8 @@ Enhanced configuration with keybindings and settings:
          ;; Notation conversion
          ("C-c C-u"   . eventb-convert-to-unicode)
          ("C-c C-d"   . eventb-convert-to-ascii)
-         ;; Checker and ProB
-         ("C-c C-v"   . eventb-validate)
-         ("C-c C-p a" . eventb-animate-prob)
-         ("C-c C-p m" . eventb-model-check-prob))
+         ;; Checker
+         ("C-c C-v"   . eventb-validate))
   :config
   ;; Event-B specific settings
   (setq lsp-rossi-format-use-unicode t)
@@ -686,11 +683,6 @@ ls -l ~/.cargo/bin/rossi-language-server
 After successful installation:
 
 1. **Customize**: Adjust keybindings and settings to your preference
-2. **Install ProB**: For model checking integration (optional but recommended)
-   ```bash
-   # Download from: https://prob.hhu.de/
-   # Ensure `probcli` is in your PATH
-   ```
 
 ## Resources
 

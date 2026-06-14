@@ -24,8 +24,6 @@
 ;; - `eventb-validate' / `eventb-validate-workspace': run
 ;;   `rossi validate --format json --continue-on-error' and surface the
 ;;   diagnostics in a `compilation-mode' buffer.
-;; - `eventb-animate-prob' / `eventb-model-check-prob': hand the file off to
-;;   the language server's ProB workspace commands.
 ;; - `eventb-import' / `eventb-export' / `eventb-build': prompt for paths and
 ;;   invoke the matching `rossi' subcommand.
 ;;
@@ -47,12 +45,6 @@
 ;; `json-parse-buffer' is built in on Emacs 27+; fall back to `json-read'
 ;; (json.el) on Emacs 26. Both are loaded lazily inside `eventb--parse-json'.
 (require 'json)
-
-;; ProB animation / model checking is delegated to lsp-mode's workspace
-;; commands. These are resolved at call time so this file loads without
-;; lsp-mode installed.
-(declare-function lsp--buffer-uri "ext:lsp-mode")
-(declare-function lsp-send-execute-command "ext:lsp-mode")
 
 ;;; Customization
 
@@ -261,31 +253,6 @@ jumps to the offending file."
                                       default-directory)
                                   nil t)))
     (eventb--run-validate (list (directory-file-name dir)) dir)))
-
-;;; ProB integration (delegated to the language server)
-
-(defun eventb--prob-command (command)
-  "Save the current buffer and dispatch lsp execute COMMAND on its URI."
-  (unless (and (fboundp 'lsp-send-execute-command) (fboundp 'lsp--buffer-uri))
-    (user-error "lsp-mode is required for ProB commands"))
-  (eventb--buffer-file)
-  (when (buffer-modified-p)
-    (save-buffer))
-  (lsp-send-execute-command command (vector (lsp--buffer-uri))))
-
-;;;###autoload
-(defun eventb-animate-prob ()
-  "Animate the current Event-B model with ProB via the language server."
-  (interactive)
-  (eventb--prob-command "rossi.prob.animate")
-  (message "Requested ProB animation"))
-
-;;;###autoload
-(defun eventb-model-check-prob ()
-  "Model check the current Event-B model with ProB via the language server."
-  (interactive)
-  (eventb--prob-command "rossi.prob.modelcheck")
-  (message "Requested ProB model checking"))
 
 ;;; Import / export / build
 

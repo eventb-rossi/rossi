@@ -378,8 +378,6 @@ The language server pins sensible defaults for the newer LSP features, so no
 extra setup is required to get them:
 
 - **Semantic tokens** — applied automatically once the client attaches.
-- **Code lens** — ProB animate/model-check actions on MACHINE/CONTEXT
-  declarations; refresh with `vim.lsp.codelens.refresh()`.
 - **Selection range** — smart expand/shrink; bind `vim.lsp.buf.selection_range`.
 
 ---
@@ -591,11 +589,6 @@ cp editors/neovim/lua/lspconfig/eventb.lua <found-path>/lua/lspconfig/
 After successful installation:
 
 1. **Customize**: Adjust keybindings and settings to your preference
-2. **Install ProB**: For model checking integration (optional but recommended)
-   ```bash
-   # Download from: https://prob.hhu.de/
-   # Ensure `probcli` is in your PATH
-   ```
 
 ## Resources
 

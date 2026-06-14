@@ -44,7 +44,6 @@ Rossi covers the full author-to-Rodin path:
 **Editor integration (LSP)**
 - Diagnostics, completion, hover, go-to-definition, find references, rename
 - Formatting, semantic highlighting, code actions, folding, and signature help
-- ProB code lenses for animation and model checking
 - Extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed
 
 ## Installation
@@ -277,7 +276,6 @@ IDE features for Event-B development:
 - **Code actions** — Unicode/ASCII conversion, extract constant, sort clauses
 - **Code folding, smart selection, signature help, and document links**
 - **Cross-file resolution** — transitive SEES / REFINES / EXTENDS traversal
-- **ProB integration** — code lenses for animation and model checking (when ProB is installed)
 
 ### Editor Extensions
 
@@ -287,7 +285,7 @@ Extensions are available in the `editors/` directory:
 - **Neovim** (`editors/neovim/`) — file detection, syntax highlighting, LSP config
 - **Sublime Text** (`editors/sublime/`) — generated syntax (also used by `bat` and `delta`)
 - **Emacs** (`editors/emacs/`) — major mode for Event-B
-- **Zed** (`editors/zed/`) — LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay and ProB code lenses
+- **Zed** (`editors/zed/`) — LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay
 
 See each editor's README and INSTALL files for setup instructions.
 

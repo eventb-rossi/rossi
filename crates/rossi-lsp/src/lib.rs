@@ -25,7 +25,6 @@ pub mod folding;
 pub mod formatting;
 pub mod hover;
 pub mod identifier_utils;
-pub mod prob;
 pub mod references;
 pub mod rename;
 pub mod selection_range;

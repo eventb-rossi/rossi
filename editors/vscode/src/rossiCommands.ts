@@ -220,14 +220,6 @@ export class RossiCommandController {
         await this.convertCurrentFile(uri, true);
     }
 
-    async animateWithProb(uri?: Uri): Promise<void> {
-        await this.executeProbCommand('rossi.prob.animate', uri);
-    }
-
-    async modelCheckWithProb(uri?: Uri): Promise<void> {
-        await this.executeProbCommand('rossi.prob.modelcheck', uri);
-    }
-
     async checkToolchain(): Promise<void> {
         try {
             const version = await this.runRossi(['--version'], {
@@ -318,23 +310,6 @@ export class RossiCommandController {
             );
             await this.replaceDocumentText(input, result.stdout);
             window.showInformationMessage(`Converted ${path.basename(input)} to ${ascii ? 'ASCII' : 'Unicode'}.`);
-        } catch (error) {
-            this.showCommandError(error);
-        }
-    }
-
-    private async executeProbCommand(command: string, uri?: Uri): Promise<void> {
-        const input = await this.getEventBFile(uri);
-        if (!input) {
-            window.showErrorMessage('Open or select a .eventb file to run ProB.');
-            return;
-        }
-
-        await this.saveDocumentIfOpen(input);
-
-        try {
-            await this.waitForLanguageServer?.();
-            await vscodeCommands.executeCommand(command, Uri.file(input).toString());
         } catch (error) {
             this.showCommandError(error);
         }
@@ -788,8 +763,6 @@ export function registerRossiCommands(
         vscodeCommands.registerCommand('rossi.validateWorkspace', () => controller.runCommand(() => controller.validateWorkspace())),
         vscodeCommands.registerCommand('rossi.convertCurrentFileToUnicode', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToUnicode(uri))),
         vscodeCommands.registerCommand('rossi.convertCurrentFileToAscii', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToAscii(uri))),
-        vscodeCommands.registerCommand('rossi.animateWithProb', (uri?: Uri) => controller.runCommand(() => controller.animateWithProb(uri))),
-        vscodeCommands.registerCommand('rossi.modelCheckWithProb', (uri?: Uri) => controller.runCommand(() => controller.modelCheckWithProb(uri))),
         vscodeCommands.registerCommand('rossi.checkToolchain', () => controller.runCommand(() => controller.checkToolchain())),
         vscodeCommands.registerCommand('rossi.newProject', () => controller.runCommand(() => controller.newProject()))
     );

@@ -25,7 +25,6 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 - **Code actions** - ASCII/Unicode operator conversion, missing-clause fixes, missing `END`, sorting, and rename hints
 - **Folding** - Folding ranges for components, events, initialisation, and clauses
 - **Signature help** - Parameter hints for quantifiers, lambdas, and set comprehensions
-- **ProB integration** - Optional code lenses and commands for animation and model checking when `probcli` is available
 
 ## Installation
 
@@ -221,17 +220,6 @@ Implemented code actions include:
 Signature help is available for universal and existential quantifiers, lambda
 expressions, and set comprehensions. It supports both Unicode and ASCII forms.
 
-### ProB Integration
-
-When `probcli` is available, the server exposes code lenses and commands for
-animation and model checking. ProB output is parsed for invariant violations,
-deadlocks, assertions, and related counterexample diagnostics.
-
-ProB integration is optional. If `probcli` cannot be auto-detected, the server
-disables those features without affecting parser, navigation, or editing
-features. If `rossi.prob.path` is set to an invalid executable, ProB commands
-will report an execution error when invoked.
-
 ## Semantic Analysis Reuse
 
 The LSP currently reports parser diagnostics only. The `rossi-build` crate
@@ -278,7 +266,6 @@ well-definedness and refinement proof checks.
 - Some providers still use text-based lookup where full AST spans would be more precise.
 - Expression, predicate, action, initialisation, and individual identifier spans are still incomplete in the AST.
 - Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
-- ProB features require a working external `probcli` installation.
 
 ## Development
 
@@ -356,7 +343,6 @@ rossi-language-server
 ├── code_actions.rs      # Quick fixes and refactorings
 ├── folding.rs           # Folding range provider
 ├── signature_help.rs    # Signature help provider
-├── prob.rs              # Optional ProB integration
 └── main.rs              # Entry point and initialization
 ```
 
@@ -415,12 +401,6 @@ interface RossiConfig {
   };
   trace: {
     server: "off" | "messages" | "verbose";
-  };
-  prob: {
-    enabled: boolean;         // Enable ProB integration (default: true)
-    path: string;             // Optional path to probcli
-    timeout: number;          // Model-check timeout in milliseconds
-    animateSteps: number;     // Number of animation steps
   };
 }
 ```

@@ -215,22 +215,6 @@ local function validate_workspace()
   run_validate({ root }, root)
 end
 
--- RossiAnimateProb / RossiModelCheckProb: save the buffer, then ask the
--- language server to run ProB on its URI. Mirrors executeProbCommand().
-local function execute_prob(command)
-  if current_eventb_file() == nil then
-    return
-  end
-  -- ProB reads the model from disk, so persist any unsaved edits first.
-  if vim.bo.modified then
-    vim.cmd("write")
-  end
-  vim.lsp.buf.execute_command({
-    command = command,
-    arguments = { vim.uri_from_bufnr(0) },
-  })
-end
-
 -- Prompt for a value with a default, returning nil if the user cancels.
 local function prompt(label, default)
   local answer = vim.fn.input(label, default or "")
@@ -279,14 +263,6 @@ function M.setup()
   cmd("RossiValidate", validate_current, { desc = "Validate the current Event-B buffer" })
 
   cmd("RossiValidateWorkspace", validate_workspace, { desc = "Validate the Event-B workspace" })
-
-  cmd("RossiAnimateProb", function()
-    execute_prob("rossi.prob.animate")
-  end, { desc = "Animate the current model with ProB" })
-
-  cmd("RossiModelCheckProb", function()
-    execute_prob("rossi.prob.modelcheck")
-  end, { desc = "Model check the current model with ProB" })
 
   cmd("RossiImport", function()
     run_io("import", "Rodin project to import: ", "", "Output directory: ")

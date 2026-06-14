@@ -29,7 +29,6 @@ This directory contains Emacs configuration for Event-B formal modeling, providi
 - **Code Actions**: Quick fixes and refactorings
 - **Folding Ranges**: Collapse/expand code sections
 - **Selection Range**: Smart expand/shrink of the active region
-- **ProB Integration**: Run ProB animator and model checker
 
 ### ✏️ Snippets (yasnippet)
 - Ready-made templates for the common Event-B constructs
@@ -44,7 +43,6 @@ This directory contains Emacs configuration for Event-B formal modeling, providi
 ### 🛠️ Commands
 - Convert the current buffer between Unicode and ASCII notation
 - Validate the current file against the Rossi checker
-- Animate or model check with ProB
 - Import, export, and build Rodin projects
 
 ## Quick Start
@@ -173,12 +171,9 @@ capabilities the server already provides:
 
 ```elisp
 (setq lsp-semantic-tokens-enable t)  ; Server-driven semantic highlighting
-(setq lsp-lens-enable t)             ; Show ProB animate/model-check code lens
 (setq lsp-extend-selection t)        ; Enable smart expand/shrink selection
 ```
 
-With `lsp-lens-enable` on, ProB actions appear as code lenses on
-MACHINE/CONTEXT declarations; trigger them with `M-x lsp-avy-lens`.
 With `lsp-extend-selection`, `M-x lsp-extend-selection` grows the active region
 to the next syntactic scope (and `lsp-shrink-selection` reverses it).
 
@@ -281,14 +276,6 @@ Enable format-on-save:
             (add-hook 'before-save-hook #'lsp-format-buffer nil t)))
 ```
 
-### ProB Integration
-
-Run ProB directly from Emacs:
-- Code lens appears on MACHINE/CONTEXT declarations
-- Use `M-x lsp-avy-lens` to execute code lens actions
-- Animate or model check your specifications
-- Counterexamples shown as diagnostics
-
 ### Snippets
 
 This directory ships [yasnippet](https://github.com/joaotavora/yasnippet)
@@ -369,7 +356,7 @@ server, so editor input and `rossi/operatorTable` can never disagree.
 ### Commands
 
 Beyond the LSP code actions, `eventb-mode` provides commands that drive the
-Rossi CLI and ProB:
+Rossi CLI:
 
 | Command | Action |
 |---------|--------|
@@ -377,8 +364,6 @@ Rossi CLI and ProB:
 | `M-x eventb-convert-to-ascii` | Rewrite the current buffer with ASCII operators |
 | `M-x eventb-validate` | Validate the current file against the Rossi checker |
 | `M-x eventb-validate-workspace` | Validate every `.eventb` file in the workspace |
-| `M-x eventb-animate-prob` | Animate the current machine with ProB |
-| `M-x eventb-model-check-prob` | Model check the current machine with ProB |
 | `M-x eventb-import` | Import a Rodin project into `.eventb` files |
 | `M-x eventb-export` | Export the current file to a Rodin ZIP |
 | `M-x eventb-build` | Build a checked Rodin ZIP |
@@ -386,7 +371,7 @@ Rossi CLI and ProB:
 
 The conversion, validation, import, export, and build commands shell out to the
 `rossi` CLI; ensure it is on your `PATH` or set `rossi-tool-path` to its
-location. The ProB commands are forwarded through the language server.
+location.
 
 ```elisp
 (setq rossi-tool-path "~/.cargo/bin/rossi")  ; defaults to "rossi" on exec-path
@@ -401,9 +386,7 @@ Suggested keybindings:
   :bind (:map eventb-mode-map
          ("C-c C-u" . eventb-convert-to-unicode)
          ("C-c C-d" . eventb-convert-to-ascii)
-         ("C-c C-v" . eventb-validate)
-         ("C-c C-p a" . eventb-animate-prob)
-         ("C-c C-p m" . eventb-model-check-prob))
+         ("C-c C-v" . eventb-validate))
   :hook (eventb-mode . lsp-deferred))
 ```
 
@@ -441,7 +424,6 @@ Here's a complete example configuration using `use-package`:
   (setq lsp-headerline-breadcrumb-enable t)
   ;; Pinned Event-B defaults
   (setq lsp-semantic-tokens-enable t)   ; Semantic highlighting
-  (setq lsp-lens-enable t)              ; ProB animate/model-check code lens
   (setq lsp-extend-selection t))        ; Smart expand/shrink selection
 
 ;; LSP UI
@@ -482,9 +464,7 @@ Here's a complete example configuration using `use-package`:
          ("C-c r"     . lsp-rename)
          ("C-c C-u"   . eventb-convert-to-unicode)
          ("C-c C-d"   . eventb-convert-to-ascii)
-         ("C-c C-v"   . eventb-validate)
-         ("C-c C-p a" . eventb-animate-prob)
-         ("C-c C-p m" . eventb-model-check-prob))
+         ("C-c C-v"   . eventb-validate))
   :config
   ;; Event-B specific settings
   (setq lsp-rossi-format-use-unicode t)
@@ -534,8 +514,6 @@ Here's a complete example configuration using `use-package`:
 | `C-c C-u` | `eventb-convert-to-unicode` |
 | `C-c C-d` | `eventb-convert-to-ascii` |
 | `C-c C-v` | `eventb-validate` |
-| `C-c C-p a` | `eventb-animate-prob` |
-| `C-c C-p m` | `eventb-model-check-prob` |
 
 ### Diagnostics
 | Key | Action |
