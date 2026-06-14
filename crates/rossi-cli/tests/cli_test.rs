@@ -1080,6 +1080,39 @@ fn validate_zip_missing_target_reports_eb003() {
     );
 }
 
+#[test]
+fn validate_stdin_camille_error_reports_eb004() {
+    // Loose `.eventb` text that the Camille grammar rejects is tagged EB004
+    // (whole-file Camille parse error), not EB005 (formula-level error).
+    let output = run_cli_with_stdin(
+        &["validate", "--format", "json", "-"],
+        "MACHINE broken\nTHIS IS NOT EVENT-B\nEND\n",
+    );
+    assert!(!output.status.success(), "expected non-zero exit for EB004");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"rule_id\": \"EB004\""),
+        "expected EB004 in JSON: {stdout}"
+    );
+}
+
+#[test]
+fn validate_zip_bad_formula_reports_eb005() {
+    // A formula attribute inside Rodin XML that the grammar rejects stays
+    // EB005 — EB004 is reserved for whole-file Camille parse failures.
+    assert_validate_zip_json_contains_rule(
+        "rossi-cli-validate-eb005",
+        "bad-formula.zip",
+        "Bad.buc",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.constant name="c1" org.eventb.core.identifier="x"/>
+    <org.eventb.core.axiom name="a1" org.eventb.core.label="axm1" org.eventb.core.predicate="x ==== ((("/>
+</org.eventb.core.contextFile>"#,
+        "EB005",
+    );
+}
+
 fn assert_validate_zip_json_contains_rule(
     tmp_prefix: &str,
     zip_name: &str,
