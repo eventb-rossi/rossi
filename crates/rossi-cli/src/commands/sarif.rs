@@ -26,20 +26,38 @@ fn build_document(results: &[ValidationResult]) -> Value {
     let rules: Vec<Value> = RuleId::all().iter().map(|r| rule_descriptor(*r)).collect();
     let sarif_results: Vec<Value> = results.iter().filter_map(result_to_sarif).collect();
 
+    let mut run = json!({
+        "tool": {
+            "driver": {
+                "name": "rossi",
+                "version": env!("CARGO_PKG_VERSION"),
+                "informationUri": INFORMATION_URI,
+                "rules": rules,
+            }
+        },
+        "results": sarif_results,
+    });
+
+    // Proof-summary rows have no rule_id and so produce no SARIF result;
+    // surface their counts in the run-level properties bag instead.
+    let proof_summaries: Vec<Value> = results
+        .iter()
+        .filter_map(|r| {
+            let summary = r.proof_summary.as_ref()?;
+            Some(json!({
+                "file": r.file.display().to_string(),
+                "proofSummary": serde_json::to_value(summary).ok()?,
+            }))
+        })
+        .collect();
+    if !proof_summaries.is_empty() {
+        run["properties"] = json!({ "proofSummaries": proof_summaries });
+    }
+
     json!({
         "$schema": SCHEMA_URI,
         "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "rossi",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": INFORMATION_URI,
-                    "rules": rules,
-                }
-            },
-            "results": sarif_results,
-        }]
+        "runs": [run]
     })
 }
 

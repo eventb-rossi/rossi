@@ -235,8 +235,8 @@ pub fn infer_project_name_from_archive_bytes(zip_bytes: &[u8]) -> Option<String>
     None
 }
 
-fn basename(path: &str) -> &str {
-    // Handles '/' — zip archives normalize to forward slashes regardless of
-    // the host OS.
+/// Last path segment (`a/b/M1.bpr` → `M1.bpr`). Handles `/` only — zip
+/// archives normalize to forward slashes regardless of the host OS.
+pub(crate) fn basename(path: &str) -> &str {
     path.rsplit_once('/').map(|(_, b)| b).unwrap_or(path)
 }

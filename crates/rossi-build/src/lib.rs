@@ -31,6 +31,7 @@ pub mod infer;
 pub mod lint;
 pub mod normalize;
 pub mod project;
+pub mod proofs;
 pub mod repack;
 pub mod rodin_ids;
 pub mod rules;

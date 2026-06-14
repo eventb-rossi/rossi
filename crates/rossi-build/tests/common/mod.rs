@@ -256,6 +256,35 @@ pub fn locate_corpus() -> Option<PathBuf> {
     env_path("EVENTB_CORPUS_DIR").filter(|p| p.is_dir())
 }
 
+/// The `eventb-checker` oracle command: `EVENTB_CHECKER` if set, else the
+/// `eventb-checker` CLI resolved from `PATH`. Shared by the oracle-diff gates.
+pub fn eventb_checker_bin() -> String {
+    std::env::var("EVENTB_CHECKER").unwrap_or_else(|_| "eventb-checker".to_string())
+}
+
+/// Whether the oracle CLI is runnable (`<bin> --version` succeeds).
+pub fn oracle_available(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The `.zip` corpus models in `dir`, sorted for deterministic iteration.
+pub fn collect_zips(dir: &Path) -> Vec<PathBuf> {
+    let mut zips: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "zip"))
+                .collect()
+        })
+        .unwrap_or_default();
+    zips.sort();
+    zips
+}
+
 /// One row of a corpus report: the `model` and its `expected`/`actual`
 /// outcomes, the resulting `verdict`, and any `notes`. Shared by every corpus
 /// harness; see [`write_report`] for the columnar layout.
