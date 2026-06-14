@@ -280,8 +280,8 @@ impl WorkspaceSymbolProvider {
         None
     }
 
-    /// Find a whole word match in a line and return its CHARACTER column
-    /// (LSP positions in this crate count characters, not bytes).
+    /// Find a whole word match in a line and return its UTF-16 column (the LSP
+    /// column convention; see [`crate::position`]).
     fn find_whole_word_in_line(&self, line: &str, word: &str) -> Option<usize> {
         let mut idx = 0;
         while idx < line.len() {
@@ -299,7 +299,7 @@ impl WorkspaceSymbolProvider {
                     .is_some_and(|c| c.is_alphanumeric() || c == '_');
 
                 if before_ok && after_ok {
-                    return Some(line[..abs_pos].chars().count());
+                    return Some(crate::position::utf16_len(&line[..abs_pos]) as usize);
                 }
 
                 // Identifiers start with an ASCII character (grammar), so

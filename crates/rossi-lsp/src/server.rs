@@ -171,6 +171,10 @@ impl LanguageServer for RossiLanguageServer {
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
+                // All positions this server emits/consumes are UTF-16 code units
+                // (see `crate::position`). UTF-16 is the LSP default, so this is
+                // an explicit statement of the contract rather than a change.
+                position_encoding: Some(PositionEncodingKind::UTF16),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),

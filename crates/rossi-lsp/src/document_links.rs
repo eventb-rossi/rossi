@@ -5,7 +5,7 @@
 //! - REFINES references (concrete machine → abstract machine)
 //! - EXTENDS references (context → parent context)
 
-use crate::lsp_types::{DocumentLink, DocumentLinkParams, Range, Url};
+use crate::lsp_types::{DocumentLink, DocumentLinkParams, Url};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -51,23 +51,28 @@ impl DocumentLinkProvider {
         let mut links = Vec::new();
 
         // Scan comment-masked text (char columns preserved): clause keywords
-        // and component names inside comments must not produce links.
+        // and component names inside comments must not produce links. Ranges
+        // are built against the original `text` so UTF-16 columns are correct.
         let masked = rossi::comments::mask_comments_chars(text);
 
         // Find all SEES, REFINES, and EXTENDS clauses
-        links.extend(self.find_clause_links(&masked, "SEES", cross_ref_manager));
-        links.extend(self.find_clause_links(&masked, "REFINES", cross_ref_manager));
-        links.extend(self.find_clause_links(&masked, "EXTENDS", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, text, "SEES", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, text, "REFINES", cross_ref_manager));
+        links.extend(self.find_clause_links(&masked, text, "EXTENDS", cross_ref_manager));
 
         debug!("Found {} document links", links.len());
 
         if links.is_empty() { None } else { Some(links) }
     }
 
-    /// Find links in a specific clause (SEES, REFINES, or EXTENDS)
+    /// Find links in a specific clause (SEES, REFINES, or EXTENDS). Tokens are
+    /// scanned from comment-masked `text`; ranges are resolved against the
+    /// original `source` (masking preserves char layout, so the char columns
+    /// line up) through the shared UTF-16 converter.
     fn find_clause_links(
         &self,
         text: &str,
+        source: &str,
         clause_keyword: &str,
         cross_ref_manager: &CrossReferenceManager,
     ) -> Vec<DocumentLink> {
@@ -76,9 +81,15 @@ impl DocumentLinkProvider {
         for token in clause_identifier_tokens(text, clause_keyword) {
             if let Some(target_uri) = cross_ref_manager.find_component_uri(&token.name) {
                 if let Ok(url) = Url::parse(&target_uri) {
-                    let range = Range::new(
-                        crate::lsp_types::Position::new(token.line as u32, token.start as u32),
-                        crate::lsp_types::Position::new(token.line as u32, token.end as u32),
+                    // `token.start`/`end` are char columns from the scanner;
+                    // route them through the single UTF-16 converter against the
+                    // real source line.
+                    let line_text = source.lines().nth(token.line).unwrap_or("");
+                    let range = crate::position::line_run_to_range(
+                        line_text,
+                        token.line as u32,
+                        token.start,
+                        token.end,
                     );
 
                     links.push(DocumentLink {

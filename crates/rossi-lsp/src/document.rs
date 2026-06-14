@@ -3,7 +3,7 @@
 //! This module handles in-memory storage of open documents, text synchronization,
 //! and provides efficient text editing operations.
 
-use crate::lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
+use crate::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
 use dashmap::DashMap;
 use ropey::Rope;
 use std::time::Instant;
@@ -102,46 +102,32 @@ impl DocumentManager {
         self.documents.get(uri)
     }
 
-    /// Convert LSP Position to byte offset
+    /// Convert an LSP [`Position`] to a `ropey` char index.
+    ///
+    /// The rope-based twin of [`crate::position::position_to_offset`]: the
+    /// column is interpreted as UTF-16 code units (the LSP convention) but the
+    /// result is a char index, since the rope splices used for incremental edits
+    /// are char-indexed. A column past the line clamps to the line's end.
     fn position_to_offset(&self, rope: &Rope, position: Position) -> usize {
         let line_idx = position.line as usize;
-        let col_idx = position.character as usize;
 
         // Ensure line index is valid
         if line_idx >= rope.len_lines() {
             return rope.len_chars();
         }
 
-        let line_start = rope.line_to_char(line_idx);
-        let line_end = if line_idx + 1 < rope.len_lines() {
+        let line_start_char = rope.line_to_char(line_idx);
+        let line_end_char = if line_idx + 1 < rope.len_lines() {
             rope.line_to_char(line_idx + 1)
         } else {
             rope.len_chars()
         };
 
-        // Ensure column index is valid
-        let line_length = line_end - line_start;
-        let offset = line_start + col_idx.min(line_length);
-
-        offset.min(rope.len_chars())
-    }
-
-    /// Convert byte offset to LSP Position
-    #[allow(dead_code)]
-    pub fn offset_to_position(&self, rope: &Rope, offset: usize) -> Position {
-        let offset = offset.min(rope.len_chars());
-        let line_idx = rope.char_to_line(offset);
-        let line_start = rope.line_to_char(line_idx);
-        let col_idx = offset - line_start;
-        Position::new(line_idx as u32, col_idx as u32)
-    }
-
-    /// Convert LSP Range to byte range
-    #[allow(dead_code)]
-    pub fn lsp_range_to_offsets(&self, rope: &Rope, range: Range) -> (usize, usize) {
-        let start = self.position_to_offset(rope, range.start);
-        let end = self.position_to_offset(rope, range.end);
-        (start, end)
+        // Map the UTF-16 column onto a char index, clamped to the line's content.
+        let line_start_cu = rope.char_to_utf16_cu(line_start_char);
+        let line_end_cu = rope.char_to_utf16_cu(line_end_char);
+        let target_cu = (line_start_cu + position.character as usize).min(line_end_cu);
+        rope.utf16_cu_to_char(target_cu)
     }
 }
 
@@ -154,6 +140,7 @@ impl Default for DocumentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lsp_types::Range;
 
     #[test]
     fn test_document_manager_open_close() {
@@ -194,22 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn test_offset_to_position() {
-        let manager = DocumentManager::new();
-        let text = "line 1\nline 2\nline 3";
-        let rope = Rope::from_str(text);
-
-        // Line starts
-        assert_eq!(manager.offset_to_position(&rope, 0), Position::new(0, 0));
-        assert_eq!(manager.offset_to_position(&rope, 7), Position::new(1, 0));
-        assert_eq!(manager.offset_to_position(&rope, 14), Position::new(2, 0));
-
-        // Mid-line
-        assert_eq!(manager.offset_to_position(&rope, 3), Position::new(0, 3));
-        assert_eq!(manager.offset_to_position(&rope, 10), Position::new(1, 3));
-    }
-
-    #[test]
     fn test_incremental_change() {
         let manager = DocumentManager::new();
         let uri = Url::parse("file:///test.eventb").unwrap();
@@ -238,6 +209,29 @@ mod tests {
             manager.get_text(&uri).unwrap(),
             "CONTEXT test example\nEND\n"
         );
+    }
+
+    #[test]
+    fn incremental_change_after_astral_char_is_utf16() {
+        // `𝔹` (U+1D539) is one char but *two* UTF-16 code units. A client sends
+        // UTF-16 columns, so the position just after `𝔹` is column 2, not 1.
+        // Char-indexing the column would splice in the wrong place.
+        let manager = DocumentManager::new();
+        let uri = Url::parse("file:///test.eventb").unwrap();
+        manager.open(uri.clone(), "rossi".to_string(), 1, "𝔹x\n".to_string());
+
+        // Insert "Y" at UTF-16 column 2 = between `𝔹` and `x`.
+        let changes = vec![TextDocumentContentChangeEvent {
+            range: Some(Range {
+                start: Position::new(0, 2),
+                end: Position::new(0, 2),
+            }),
+            range_length: None,
+            text: "Y".to_string(),
+        }];
+        manager.change(&uri, 2, changes);
+
+        assert_eq!(manager.get_text(&uri).unwrap(), "𝔹Yx\n");
     }
 
     #[test]

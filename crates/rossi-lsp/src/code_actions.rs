@@ -13,29 +13,14 @@ use crate::lsp_types::{
 use rossi::operators;
 use std::collections::HashMap;
 
-/// Convert a character (code-point) offset to a byte offset within a line.
-/// Returns `None` if the character offset is out of range.
-fn char_offset_to_byte(line: &str, char_offset: usize) -> Option<usize> {
-    line.char_indices()
-        .nth(char_offset)
-        .map(|(byte_idx, _)| byte_idx)
-        .or_else(|| {
-            if char_offset == line.chars().count() {
-                Some(line.len())
-            } else {
-                None
-            }
-        })
-}
-
-/// LSP end position of `text` (last line index, byte length of the last line),
+/// LSP end position of `text` (last line index, UTF-16 length of the last line),
 /// computed in a single pass over the lines.
 fn document_end_position(text: &str) -> Position {
     let mut line_count: u32 = 0;
     let mut last_line_length: u32 = 0;
     for line in text.lines() {
         line_count += 1;
-        last_line_length = line.len() as u32;
+        last_line_length = crate::position::utf16_len(line);
     }
     Position::new(line_count.saturating_sub(1), last_line_length)
 }
@@ -709,15 +694,15 @@ impl CodeActionProvider {
 
         if start_line == end_line {
             let line = lines[start_line];
-            let start_byte = char_offset_to_byte(line, range.start.character as usize)?;
-            let end_byte = char_offset_to_byte(line, range.end.character as usize)?;
+            let start_byte = crate::position::utf16_to_byte(line, range.start.character as usize)?;
+            let end_byte = crate::position::utf16_to_byte(line, range.end.character as usize)?;
             Some(line[start_byte..end_byte].to_string())
         } else {
             let mut result = String::new();
 
             // First line
             let start_byte =
-                char_offset_to_byte(lines[start_line], range.start.character as usize)?;
+                crate::position::utf16_to_byte(lines[start_line], range.start.character as usize)?;
             result.push_str(&lines[start_line][start_byte..]);
             result.push('\n');
 
@@ -728,7 +713,8 @@ impl CodeActionProvider {
             }
 
             // Last line
-            let end_byte = char_offset_to_byte(lines[end_line], range.end.character as usize)?;
+            let end_byte =
+                crate::position::utf16_to_byte(lines[end_line], range.end.character as usize)?;
             result.push_str(&lines[end_line][..end_byte]);
 
             Some(result)
@@ -902,20 +888,5 @@ mod tests {
         };
         let result = provider.get_text_in_range(text, &range);
         assert_eq!(result, Some("∈ ".to_string()));
-    }
-
-    #[test]
-    fn test_char_offset_to_byte() {
-        // ASCII only: byte == char
-        assert_eq!(char_offset_to_byte("hello", 0), Some(0));
-        assert_eq!(char_offset_to_byte("hello", 5), Some(5));
-        // Unicode: ∈ is 3 bytes
-        assert_eq!(char_offset_to_byte("x ∈ y", 0), Some(0)); // 'x'
-        assert_eq!(char_offset_to_byte("x ∈ y", 2), Some(2)); // '∈' starts at byte 2
-        assert_eq!(char_offset_to_byte("x ∈ y", 3), Some(5)); // ' ' after ∈ (3 bytes)
-        assert_eq!(char_offset_to_byte("x ∈ y", 4), Some(6)); // 'y'
-        assert_eq!(char_offset_to_byte("x ∈ y", 5), Some(7)); // end
-        // Out of range
-        assert_eq!(char_offset_to_byte("hello", 6), None);
     }
 }
