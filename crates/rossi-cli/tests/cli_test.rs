@@ -1080,6 +1080,84 @@ fn validate_zip_missing_target_reports_eb003() {
     );
 }
 
+#[test]
+fn validate_zip_reports_wd_condition_with_show_info() {
+    // EB010 findings are INFO-severity: hidden by default, shown with
+    // --show-info, never affecting the exit code. The message is the
+    // Rodin-rendered WD lemma (byte-compatible with eventb-checker).
+    let tmp = tempdir_unique("rossi-cli-validate-wd");
+    let zip_path = tmp.join("wd.zip");
+    write_zip(
+        &zip_path,
+        &[(
+            "C0.buc",
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.carrierSet name="_s1" org.eventb.core.identifier="S"/>
+    <org.eventb.core.constant name="_c1" org.eventb.core.identifier="f"/>
+    <org.eventb.core.constant name="_c2" org.eventb.core.identifier="x"/>
+    <org.eventb.core.axiom name="_a1" org.eventb.core.label="axm1" org.eventb.core.predicate="f ∈ S ⇸ ℤ"/>
+    <org.eventb.core.axiom name="_a2" org.eventb.core.label="axm2" org.eventb.core.predicate="x ∈ S"/>
+    <org.eventb.core.axiom name="_a3" org.eventb.core.label="axm3" org.eventb.core.predicate="f(x) = 0"/>
+</org.eventb.core.contextFile>"#
+                .as_bytes(),
+        )],
+    );
+
+    // Default: INFO rows filtered out, exit 0.
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            zip_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("EB010"),
+        "INFO findings must be hidden without --show-info: {stdout}"
+    );
+
+    // --show-info: the WD condition appears, exit code stays 0.
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--show-info",
+            "--format",
+            "json",
+            zip_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "INFO findings should not flip the exit code; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for needle in [
+        "\"rule_id\": \"EB010\"",
+        "\"severity\": \"info\"",
+        "Well-definedness condition: x∈dom(f)∧f∈S ⇸ ℤ",
+        "\"origin\": \"C0.axm3\"",
+    ] {
+        assert!(stdout.contains(needle), "expected {needle} in: {stdout}");
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 fn assert_validate_zip_json_contains_rule(
     tmp_prefix: &str,
     zip_name: &str,
