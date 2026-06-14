@@ -19,6 +19,8 @@ pub enum RuleId {
     XmlRootError,
     /// EB003 — A required XML attribute is missing from a Rodin element.
     XmlAttributeError,
+    /// EB004 — Camille parse error (an `.eventb` file rejected as a whole).
+    CamilleParseError,
     /// EB005 — Formula parse error (Camille / pest grammar rejected source text).
     FormulaParseError,
     /// EB006 — Type error (ill-typed predicate or expression; element dropped).
@@ -63,6 +65,7 @@ impl RuleId {
             RuleId::XmlParseError => "EB001",
             RuleId::XmlRootError => "EB002",
             RuleId::XmlAttributeError => "EB003",
+            RuleId::CamilleParseError => "EB004",
             RuleId::FormulaParseError => "EB005",
             RuleId::TypeError => "EB006",
             RuleId::CircularExtends => "EB007",
@@ -89,6 +92,7 @@ impl RuleId {
             RuleId::XmlParseError => "XML parse error",
             RuleId::XmlRootError => "Unexpected XML root",
             RuleId::XmlAttributeError => "Missing XML attribute",
+            RuleId::CamilleParseError => "Camille parse error",
             RuleId::FormulaParseError => "Formula parse error",
             RuleId::TypeError => "Type error",
             RuleId::CircularExtends => "Circular EXTENDS",
@@ -120,6 +124,9 @@ impl RuleId {
             }
             RuleId::XmlAttributeError => {
                 "A Rodin XML element is missing a required attribute (e.g. the `target` of an extends/refines/sees clause)."
+            }
+            RuleId::CamilleParseError => {
+                "An .eventb file could not be parsed using the Camille textual notation grammar."
             }
             RuleId::FormulaParseError => {
                 "A predicate or expression rejected by the Event-B formula grammar."
@@ -176,6 +183,7 @@ impl RuleId {
             RuleId::XmlParseError
             | RuleId::XmlRootError
             | RuleId::XmlAttributeError
+            | RuleId::CamilleParseError
             | RuleId::FormulaParseError
             | RuleId::TypeError
             | RuleId::CircularExtends
@@ -203,6 +211,7 @@ impl RuleId {
             RuleId::XmlParseError,
             RuleId::XmlRootError,
             RuleId::XmlAttributeError,
+            RuleId::CamilleParseError,
             RuleId::FormulaParseError,
             RuleId::TypeError,
             RuleId::CircularExtends,
@@ -245,6 +254,7 @@ mod tests {
         assert_eq!(RuleId::XmlParseError.code(), "EB001");
         assert_eq!(RuleId::XmlRootError.code(), "EB002");
         assert_eq!(RuleId::XmlAttributeError.code(), "EB003");
+        assert_eq!(RuleId::CamilleParseError.code(), "EB004");
         assert_eq!(RuleId::FormulaParseError.code(), "EB005");
         assert_eq!(RuleId::TypeError.code(), "EB006");
         assert_eq!(RuleId::CircularExtends.code(), "EB007");

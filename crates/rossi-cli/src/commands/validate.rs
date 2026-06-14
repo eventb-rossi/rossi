@@ -268,13 +268,13 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             }
             results
         }
-        // Loose `.eventb` text → Camille / formula parse failure (EB005).
+        // Loose `.eventb` text → Camille parse failure (EB004).
         Err(e) => {
             let mut result = error_result(
                 display,
                 None,
                 format!("{e}"),
-                Some(RuleId::FormulaParseError),
+                Some(RuleId::CamilleParseError),
             );
             result.region = parse_error_region(&e, source);
             vec![result]
@@ -510,6 +510,10 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
         // A formula inside an XML attribute exceeded the nesting limit —
         // that's a formula problem (EB005), not a malformed-XML one.
         ParseError::NestingTooDeep { .. } => RuleId::FormulaParseError,
+        // `MalformedAttribute` is only raised by `wrap_attr_error` when a
+        // formula attribute (predicate/expression/assignment) is rejected by
+        // the grammar — that's a formula syntax error, not XML corruption.
+        ParseError::MalformedAttribute { .. } => RuleId::FormulaParseError,
         _ => RuleId::XmlParseError,
     }
 }
