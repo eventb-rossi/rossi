@@ -19,6 +19,8 @@ use std::sync::Arc;
 use crate::component_util::{component_line_window, lines_in_window, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::position::span_to_range;
+use crate::references::component_reference_clause;
 use crate::symbols::SymbolKind;
 
 /// Information about where an identifier is defined
@@ -190,10 +192,11 @@ impl DefinitionProvider {
     ) -> Option<Location> {
         let cross_ref_manager = self.cross_ref_manager.as_ref()?;
 
-        // Check if cursor is in a SEES, REFINES, or EXTENDS clause
-        if !is_in_cross_reference_clause(masked, position) {
-            return None;
-        }
+        // Check if cursor is in a SEES, REFINES, or EXTENDS clause. Reuses the
+        // references provider's detector: case-insensitive (matching the
+        // grammar's `^"sees"` keywords) and in-event-aware, so a `sees` spelled
+        // any way resolves and one mentioned inside an event never misfires.
+        component_reference_clause(masked, position)?;
 
         // Load the target file (prefer open documents over disk)
         let target_text =
@@ -201,19 +204,14 @@ impl DefinitionProvider {
         let target_uri = cross_ref_manager.find_component_uri(word)?;
         let target_url = Url::parse(&target_uri).ok()?;
 
-        // Find the position of the component name in the target file
-        let target_position = find_component_name_position(&target_text, word)?;
+        // Locate the component's name via the parser (the source of truth) and
+        // map its span to a range — exact for any casing or spacing, unlike a
+        // textual keyword scan.
+        let component = parse_named(&target_text, word)?;
+        let name_span = component.name_span()?;
+        let range = span_to_range(&name_span, &target_text);
 
-        Some(Location::new(
-            target_url,
-            Range::new(
-                target_position,
-                Position::new(
-                    target_position.line,
-                    target_position.character + word.len() as u32,
-                ),
-            ),
-        ))
+        Some(Location::new(target_url, range))
     }
 
     /// Extract all definitions visible from a component: those declared locally
@@ -577,73 +575,10 @@ fn is_keyword(line: &str) -> bool {
     )
 }
 
-/// Check if a position is within a cross-reference clause (SEES, REFINES, or EXTENDS)
-fn is_in_cross_reference_clause(text: &str, position: Position) -> bool {
-    let lines: Vec<&str> = text.lines().collect();
-    if position.line as usize >= lines.len() {
-        return false;
-    }
-
-    // Search backwards from the current line to find which clause we're in
-    let mut current_clause = None;
-    for line in lines.iter().take(position.line as usize + 1) {
-        let line = line.trim();
-
-        // Check if this line starts a new clause
-        if line == "SEES" || line.starts_with("SEES ") {
-            current_clause = Some("SEES");
-        } else if line == "REFINES" || line.starts_with("REFINES ") {
-            current_clause = Some("REFINES");
-        } else if line == "EXTENDS" || line.starts_with("EXTENDS ") {
-            current_clause = Some("EXTENDS");
-        } else if is_keyword(line)
-            && !matches!(current_clause, Some("SEES" | "REFINES" | "EXTENDS"))
-        {
-            // If we hit another keyword and we're not in a cross-ref clause, we're not in one
-            current_clause = None;
-        } else if is_keyword(line) {
-            // Hit another keyword while in a cross-ref clause - we've exited
-            current_clause = None;
-        }
-    }
-
-    matches!(current_clause, Some("SEES" | "REFINES" | "EXTENDS"))
-}
-
-/// Find the position of a component name (CONTEXT or MACHINE) in source text.
-/// Scans comment-masked text so a header spelled in a comment never matches.
-fn find_component_name_position(text: &str, component_name: &str) -> Option<Position> {
-    let masked = rossi::comments::mask_comments_chars(text);
-    let lines: Vec<&str> = masked.lines().collect();
-    let context_kw: Vec<char> = "CONTEXT".chars().collect();
-    let machine_kw: Vec<char> = "MACHINE".chars().collect();
-    let name_chars: Vec<char> = component_name.chars().collect();
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        let chars: Vec<char> = line.chars().collect();
-
-        // Look for "CONTEXT component_name" or "MACHINE component_name"
-        if let Some(kw_pos) = char_find_substr(&chars, &context_kw, 0)
-            && let Some(name_pos) = char_find_substr(&chars, &name_chars, kw_pos + context_kw.len())
-            && is_whole_word_at(&chars, name_pos, name_chars.len())
-        {
-            return Some(Position::new(line_idx as u32, name_pos as u32));
-        }
-
-        if let Some(kw_pos) = char_find_substr(&chars, &machine_kw, 0)
-            && let Some(name_pos) = char_find_substr(&chars, &name_chars, kw_pos + machine_kw.len())
-            && is_whole_word_at(&chars, name_pos, name_chars.len())
-        {
-            return Some(Position::new(line_idx as u32, name_pos as u32));
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
 
     /// Whole-file search window, the single-component default.
     const FULL: (usize, usize) = (0, usize::MAX);
@@ -983,20 +918,6 @@ mod tests {
         assert_eq!(x_def.location.uri.as_str(), "file:///m.eventb");
     }
 
-    #[test]
-    fn test_is_in_cross_reference_clause() {
-        let text = "MACHINE test\nSEES\n    ctx1\n    ctx2\nVARIABLES\n    x\nEND";
-
-        // Line 2 (ctx1) is in SEES clause
-        assert!(is_in_cross_reference_clause(text, Position::new(2, 4)));
-        // Line 3 (ctx2) is in SEES clause
-        assert!(is_in_cross_reference_clause(text, Position::new(3, 4)));
-        // Line 5 (x) is in VARIABLES, not a cross-ref clause
-        assert!(!is_in_cross_reference_clause(text, Position::new(5, 4)));
-        // Line 0 (MACHINE) is not a cross-ref clause
-        assert!(!is_in_cross_reference_clause(text, Position::new(0, 0)));
-    }
-
     /// Helper to register multiple components and return a configured provider
     fn setup_multi_component_provider(
         components: &[(&str, &str)],
@@ -1135,5 +1056,72 @@ mod tests {
             state_def.location.uri.as_str(),
             "file:///concrete_mch.eventb"
         );
+    }
+
+    /// Goto-definition params at a 0-indexed `(line, character)` in `uri`.
+    fn goto_params(uri: &str, line: u32, character: u32) -> GotoDefinitionParams {
+        GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse(uri).unwrap(),
+                },
+                position: Position::new(line, character),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        }
+    }
+
+    /// Resolve the cross-file target under `(line, character)` and assert it
+    /// lands on `uri`'s `expected` range (a single document holds both the
+    /// machine and the context it sees, as in `base-model.eventb`).
+    fn assert_sees_target(source: &str, line: u32, character: u32, expected: Range) {
+        let uri = "file:///model.eventb";
+        let (provider, _crm, _dm) = setup_multi_component_provider(&[(uri, source)]);
+        provider.update_definitions(uri.to_string(), source);
+
+        let response = provider
+            .goto_definition(&goto_params(uri, line, character), source)
+            .expect("SEES target should resolve to the context definition");
+        let location = match response {
+            GotoDefinitionResponse::Scalar(location) => location,
+            other => panic!("expected a scalar location, got {other:?}"),
+        };
+        assert_eq!(location.uri.as_str(), uri);
+        assert_eq!(location.range, expected);
+    }
+
+    // `C1` on `context C1` spans cols 8..10 in every casing variant below.
+    const C1_NAME: Range = Range {
+        start: Position {
+            line: 0,
+            character: 8,
+        },
+        end: Position {
+            line: 0,
+            character: 10,
+        },
+    };
+
+    #[test]
+    fn goto_definition_lowercase_sees_resolves_same_file_context() {
+        // The reported bug: lowercase keywords (as in base-model.eventb). The
+        // `C1` in `sees C1` (line 6, col 5) must jump to `context C1` (line 0).
+        let source = "context C1\nsets\n    S1\nend\n\nmachine M1\nsees C1\nvariables\n    v\nend";
+        assert_sees_target(source, 6, 5, C1_NAME);
+    }
+
+    #[test]
+    fn goto_definition_mixed_case_sees_resolves_same_file_context() {
+        // Mixed-case keywords are equally valid per the grammar's `^"sees"`.
+        let source = "Context C1\nSets\n    S1\nEnd\n\nMachine M1\nSees C1\nVariables\n    v\nEnd";
+        assert_sees_target(source, 6, 5, C1_NAME);
+    }
+
+    #[test]
+    fn goto_definition_uppercase_sees_still_resolves() {
+        // Regression guard: the canonical UPPERCASE spelling keeps working.
+        let source = "CONTEXT C1\nSETS\n    S1\nEND\n\nMACHINE M1\nSEES C1\nVARIABLES\n    v\nEND";
+        assert_sees_target(source, 6, 5, C1_NAME);
     }
 }
