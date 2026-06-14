@@ -915,23 +915,18 @@ impl RossiLanguageServer {
     }
 }
 
-/// 0-indexed char column of the end of the token at 1-indexed (line, column),
-/// for sizing a diagnostic range. Returns the end of the contiguous run of
-/// non-whitespace chars starting at the error column, bounded by the line.
-/// Zero-width when the position is at/past the line's end (EOF / trailing ws).
-fn token_end_char(text: &str, line: usize, column: usize) -> u32 {
-    let start = column.saturating_sub(1);
-    let line_str = text.lines().nth(line.saturating_sub(1)).unwrap_or("");
-    if start >= line_str.chars().count() {
-        return start as u32; // zero-width at EOL/EOF
+/// End byte offset of the token at byte offset `start`, for sizing a diagnostic
+/// range when pest reports only a point: the end of the contiguous non-whitespace
+/// run starting at `start`, bounded by the line. Zero-width at EOL/EOF, one char
+/// when `start` lands on whitespace.
+fn token_end_byte(text: &str, start: usize) -> usize {
+    let rest = &text[start..];
+    match rest.chars().next() {
+        None | Some('\n') => start, // EOF / EOL: zero-width
+        Some(first) if first.is_whitespace() => start + first.len_utf8(), // 1-char span
+        // The leading non-whitespace run ends at the first whitespace (or EOL).
+        _ => start + rest.find(char::is_whitespace).unwrap_or(rest.len()),
     }
-    let run = line_str
-        .chars()
-        .skip(start)
-        .take_while(|c| !c.is_whitespace())
-        .count();
-    // `.max(1)` covers a column landing on whitespace (a 1-char span).
-    (start + run.max(1)) as u32
 }
 
 /// Collapse pest's multi-line rendering (a location header, the source line, a
@@ -951,21 +946,18 @@ fn concise_pest_message(message: &str) -> String {
 fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -> Diagnostic {
     use rossi::ParseError;
 
-    // Build an ERROR diagnostic from a 1-indexed (line, column) position. The
-    // range is sized to the token at that position (pest reports a single
-    // failure point, not a span), so a diagnostic underlines the offending
-    // token rather than a fixed-width block.
-    let diagnostic_at = |line: usize, column: usize, message: String| Diagnostic {
-        range: Range {
-            start: Position::new(
-                line.saturating_sub(1) as u32,
-                column.saturating_sub(1) as u32,
-            ),
-            end: Position::new(
-                line.saturating_sub(1) as u32,
-                token_end_char(text, line, column),
-            ),
-        },
+    // pest's multi-line dump is collapsed to a single line; located variants
+    // keep their own message; everything else uses the Display rendering.
+    let message = match error {
+        ParseError::PestError { message, .. } => concise_pest_message(message),
+        ParseError::RecoverableError { message, .. } | ParseError::ClauseError { message, .. } => {
+            message.clone()
+        }
+        _ => error.to_string(),
+    };
+
+    Diagnostic {
+        range: parse_error_range(error, text),
         severity: Some(DiagnosticSeverity::ERROR),
         code: None,
         source: Some("rossi".to_string()),
@@ -974,44 +966,73 @@ fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -> Diagnosti
         tags: None,
         code_description: None,
         data: None,
-    };
-
-    match error {
-        ParseError::RecoverableError {
-            line,
-            column,
-            message,
-            ..
-        }
-        | ParseError::ClauseError {
-            line,
-            column,
-            message,
-            ..
-        } => diagnostic_at(*line, *column, message.clone()),
-        ParseError::PestError {
-            line,
-            column,
-            message,
-        } => diagnostic_at(*line, *column, concise_pest_message(message)),
-        ParseError::NestingTooDeep { line, column, .. } => {
-            diagnostic_at(*line, *column, error.to_string())
-        }
-        ParseError::ReservedWord { word, line, column } => {
-            // The offending word's exact extent is known — size the range to
-            // it (reserved words are ASCII, so bytes == columns).
-            let mut diagnostic = diagnostic_at(*line, *column, error.to_string());
-            diagnostic.range.end.character = diagnostic.range.start.character + word.len() as u32;
-            diagnostic
-        }
-        _ => diagnostic_at(1, 1, error.to_string()),
     }
+}
+
+/// LSP range for a parse-error diagnostic, rendered through the single UTF-16
+/// converter (issue #48).
+///
+/// Everything resolves to a byte `[start, end)`: a non-empty span (issue #42)
+/// underlines the offending token directly; a zero-width span (pest reports a
+/// single point) or a span-less variant gives only a start, so the token is
+/// sized in bytes from there. A span-less start comes from the 1-indexed
+/// (line, column) — those variants (nesting, clause-order, recovery) point at
+/// ASCII keywords/clause content, where char and UTF-16 columns coincide.
+fn parse_error_range(error: &rossi::ParseError, text: &str) -> Range {
+    let span = error.span();
+    let start = match span {
+        Some(s) => s.start,
+        None => {
+            let (line, column) = error.position().unwrap_or((1, 1));
+            let pos = Position::new(
+                line.saturating_sub(1) as u32,
+                column.saturating_sub(1) as u32,
+            );
+            crate::position::position_to_offset(text, pos).unwrap_or(text.len())
+        }
+    };
+    let end = match span {
+        Some(s) if s.start < s.end => s.end,
+        _ => token_end_byte(text, start),
+    };
+    crate::position::span_to_range(&rossi::ast::Span { start, end }, text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{operator_rows, parse_error_to_diagnostic};
     use crate::lsp_types::Position;
+
+    #[test]
+    fn clause_order_diagnostic_stays_on_one_line() {
+        // A misordered EXTENDS clause yields a ClauseError whose pest span
+        // covers the whole multi-line clause; the diagnostic must NOT underline
+        // all of it. With no span it falls back to a single-line, token-sized
+        // range at the offending keyword.
+        let text = "CONTEXT test\nSETS\n    S\nEXTENDS\n    other_ctx\nEND\n";
+        let error = rossi::parse(text).expect_err("EXTENDS after SETS must fail");
+        let diagnostic = parse_error_to_diagnostic(&error, text);
+        assert_eq!(
+            diagnostic.range.start.line, diagnostic.range.end.line,
+            "clause-order diagnostic must stay on one line, got {:?}",
+            diagnostic.range
+        );
+        // Sized to the `EXTENDS` keyword on line 4 (0-indexed 3), not the body.
+        assert_eq!(diagnostic.range.start, Position::new(3, 0));
+        assert_eq!(diagnostic.range.end, Position::new(3, 7));
+    }
+
+    #[test]
+    fn reserved_word_diagnostic_spans_the_word_issue_42() {
+        // The reserved word `dom` used as a constant name carries a byte span
+        // (issue #42); the diagnostic range comes from that span and covers the
+        // whole 3-char word, not the old byte-length special case.
+        let text = "CONTEXT c0\nCONSTANTS\n    dom\nEND\n";
+        let error = rossi::parse(text).expect_err("`dom` is a reserved word");
+        let diagnostic = parse_error_to_diagnostic(&error, text);
+        assert_eq!(diagnostic.range.start, Position::new(2, 4));
+        assert_eq!(diagnostic.range.end, Position::new(2, 7));
+    }
 
     #[test]
     fn pest_diagnostic_uses_real_position() {

@@ -432,6 +432,37 @@ fn validate_sarif_output_is_valid() {
 }
 
 #[test]
+fn validate_sarif_includes_parse_error_region_issue_42() {
+    // A reserved word used as a constant name: SARIF must carry a
+    // physicalLocation.region covering the offending word (issue #42).
+    let source = "CONTEXT c0\nCONSTANTS\n    dom\nEND\n";
+    let output = run_cli_with_stdin(
+        &[
+            "validate",
+            "--format",
+            "sarif",
+            "--stdin-filename",
+            "broken.eventb",
+            "-",
+        ],
+        source,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("SARIF output should be valid JSON");
+    let results = doc["runs"][0]["results"].as_array().expect("results array");
+    let region = results
+        .iter()
+        .map(|r| &r["locations"][0]["physicalLocation"]["region"])
+        .find(|reg| reg.is_object())
+        .expect("a parse-error result should carry a physicalLocation.region");
+    assert_eq!(region["startLine"], 3);
+    assert_eq!(region["startColumn"], 5);
+    assert_eq!(region["endLine"], 3);
+    assert_eq!(region["endColumn"], 8);
+}
+
+#[test]
 fn validate_directory_input() {
     // Extract binary-search.zip into a temp dir and validate the directory.
     // The archive nests its files under a `binary-search/` folder, so we

@@ -34,8 +34,18 @@ fn assert_reserved<T: std::fmt::Debug>(
             word: w,
             line: l,
             column: c,
+            span,
         }) => {
             assert_eq!((w.as_str(), l, c), (word, line, column), "in {input:?}");
+            // The byte span covers exactly the offending word (issue #42).
+            assert_eq!(
+                span,
+                Some(rossi::ast::Span {
+                    start: byte,
+                    end: byte + word.len(),
+                }),
+                "reserved-word span must cover the word in {input:?}"
+            );
         }
         other => panic!("expected ReservedWord({word:?}) at {line}:{column}, got {other:?}"),
     }
