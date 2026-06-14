@@ -88,8 +88,8 @@ pub fn check_context(
     let extends = build_extends_decls(&pc.rodin_ids, &file_root, project, ctx, checked);
 
     let mut axioms: Vec<AxiomDecl> = Vec::with_capacity(ctx.axioms.len());
-    for ax in &ctx.axioms {
-        match build_axiom_decl(&pc.rodin_ids, &file_root, ax, &env, &ctx.name) {
+    for (i, ax) in ctx.axioms.iter().enumerate() {
+        match build_axiom_decl(&pc.rodin_ids, &file_root, i, ax, &env, &ctx.name) {
             Ok(decl) => axioms.push(decl),
             Err(diag) => {
                 accurate = false;
@@ -262,17 +262,19 @@ fn build_constant_decl(
 fn build_axiom_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
+    source_index: usize,
     ax: &LabeledPredicate,
     env: &TypeEnv,
     ctx_name: &str,
 ) -> std::result::Result<AxiomDecl, Diagnostic> {
-    let (label, predicate_canonical) =
+    let (label, pc) =
         check_labeled_predicate(ax, env, "axm", "axiom", |lbl| format!("{ctx_name}.{lbl}"))?;
     let source = crate::sc::file_child_source(ids, file_root, Kind::Axiom, in_tag::AXIOM, &label);
     Ok(AxiomDecl {
         label,
-        predicate_canonical,
-        predicate: ax.predicate.clone(),
+        source_index,
+        predicate_canonical: pc.canonical,
+        predicate: pc.predicate,
         is_theorem: ax.is_theorem,
         source,
     })

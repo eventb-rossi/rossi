@@ -86,9 +86,13 @@ impl CheckedContext {
 /// - transitively-refined ancestor machine names.
 #[derive(Debug, Clone)]
 pub struct CheckedMachine {
-    pub name: String,
-    pub output_filename: String,
-    pub env: TypeEnv,
+    /// The typed record this machine's `.bcm` was rendered from —
+    /// name, output filename, environment, invariants, variant, events,
+    /// and ancestors in enriched-AST form. The machine analogue of
+    /// [`CheckedContext::record`] and the single home for those fields;
+    /// downstream passes (well-definedness, IDE tooling) read them via
+    /// the accessors below.
+    pub record: machine_record::MachineRecord,
     /// Names of every variable visible at the end of checking this
     /// machine — own + inherited from the REFINES chain.
     pub visible_variables: std::collections::BTreeSet<String>,
@@ -103,12 +107,50 @@ pub struct CheckedMachine {
     /// `Predicate` and `Action` ASTs survive all the way through, no
     /// XML round-trip required.
     pub events_by_label: HashMap<String, Rc<EventDecl>>,
-    /// Transitively-refined ancestor machine names, oldest first.
-    pub ancestors: Vec<String>,
 }
 
-/// Entry point called from [`crate::build`].
-pub fn build_project(project: &Project) -> BuildResult {
+impl CheckedMachine {
+    pub fn name(&self) -> &str {
+        &self.record.name
+    }
+    pub fn output_filename(&self) -> &str {
+        &self.record.output_filename
+    }
+    pub fn env(&self) -> &TypeEnv {
+        &self.record.env
+    }
+    /// Transitively-refined ancestor machine names, oldest first.
+    pub fn ancestors(&self) -> &[String] {
+        &self.record.ancestors
+    }
+
+    /// The type environment in scope inside `event`: the machine env
+    /// (variables + seen constants) extended with every parameter of
+    /// the event's extended-event chain. `event` should come from this
+    /// machine's [`Self::events_by_label`] / record.
+    pub fn event_env(&self, event: &machine_record::EventDecl) -> TypeEnv {
+        let mut env = self.env().clone();
+        env.push_scope();
+        for p in event.chain_parameters() {
+            env.insert(p.name.clone(), p.ty.clone());
+        }
+        env
+    }
+}
+
+/// The typed model retained after a build: every successfully-checked
+/// component, keyed by name. [`crate::build`] discards it;
+/// [`crate::build_with_model`] returns it for downstream passes that need
+/// the resolved type environments and event records (well-definedness,
+/// IDE tooling) without re-deriving them from the emitted XML.
+#[derive(Debug, Default)]
+pub struct ScModel {
+    pub contexts: HashMap<String, CheckedContext>,
+    pub machines: HashMap<String, CheckedMachine>,
+}
+
+/// Entry point called from [`crate::build`] / [`crate::build_with_model`].
+pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
     let mut result = BuildResult::default();
     let mut checked: HashMap<String, CheckedContext> = HashMap::new();
 
@@ -126,7 +168,7 @@ pub fn build_project(project: &Project) -> BuildResult {
                 message: format!("circular EXTENDS: {}", cycle.join(" → ")),
                 rule_id: Some(crate::RuleId::CircularExtends),
             });
-            return result;
+            return (result, ScModel::default());
         }
     };
 
@@ -165,9 +207,17 @@ pub fn build_project(project: &Project) -> BuildResult {
                 message: format!("circular REFINES: {}", cycle.join(" → ")),
                 rule_id: Some(crate::RuleId::CircularRefines),
             });
-            return result;
+            return (
+                result,
+                ScModel {
+                    contexts: checked,
+                    machines: HashMap::new(),
+                },
+            );
         }
     };
+    // NOTE: `checked` / `checked_machines` keep only components whose check
+    // succeeded — failed components have diagnostics but no model entry.
     let mut checked_machines: HashMap<String, CheckedMachine> = HashMap::new();
     for idx in mach_order {
         let pc = &project.components[idx];
@@ -177,7 +227,7 @@ pub fn build_project(project: &Project) -> BuildResult {
         };
         match machine::check_machine(project, pc, m, &checked, &checked_machines) {
             Ok((file, cm, mut diags)) => {
-                checked_machines.insert(cm.name.clone(), cm);
+                checked_machines.insert(cm.name().to_string(), cm);
                 result.files.push(file);
                 result.diagnostics.append(&mut diags);
             }
@@ -192,7 +242,13 @@ pub fn build_project(project: &Project) -> BuildResult {
         }
     }
 
-    result
+    (
+        result,
+        ScModel {
+            contexts: checked,
+            machines: checked_machines,
+        },
+    )
 }
 
 /// Map the shared dependency graph's topological order for `edge` back to

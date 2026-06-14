@@ -90,11 +90,27 @@ pub const RESERVED_ATOM_WORDS: &[&str] = &[
     "BOOL", "FALSE", "TRUE", "bool", "id", "pred", "prj1", "prj2", "succ",
 ];
 
+/// The reserved *relational* atoms (`id`, `prj1`, `prj2`, `pred`, `succ`):
+/// the subset of [`RESERVED_ATOM_WORDS`] that denote a built-in total
+/// relation rather than a boolean value or type literal. The semantic layer
+/// keys on exactly these — `rossi_build`'s type inference types them ahead of
+/// the environment, and the well-definedness computer skips their `f∈dom(f)`
+/// domain condition — so this is the one membership set both passes share
+/// (kept here, the vocabulary authority, so the relational subset can't drift
+/// from [`RESERVED_ATOM_WORDS`]; a test pins the inclusion).
+pub const RESERVED_RELATIONAL_ATOM_WORDS: &[&str] = &["id", "pred", "prj1", "prj2", "succ"];
+
 /// Whether `word` is in the full kernel_lang §2.2 reserved list (exact case).
 /// Checked wherever a user identifier is being *named*: declarations,
 /// assignment targets, predicate-application heads, recovery, XML import.
 pub fn is_reserved_word(word: &str) -> bool {
     is_reserved_operator_word(word) || RESERVED_ATOM_WORDS.contains(&word)
+}
+
+/// Whether `word` is one of the reserved relational atoms
+/// ([`RESERVED_RELATIONAL_ATOM_WORDS`]) — exact case.
+pub fn is_reserved_relational_atom(word: &str) -> bool {
+    RESERVED_RELATIONAL_ATOM_WORDS.contains(&word)
 }
 
 /// Whether `word` may not appear as a plain (unapplied) identifier inside a
@@ -287,6 +303,14 @@ mod tests {
             assert!(
                 is_builtin(w),
                 "reserved word {w:?} missing from BUILTIN_WORDS"
+            );
+        }
+        // The relational atoms are a subset of the reserved atoms — the
+        // semantic layer derives from this list, so it must not drift.
+        for w in RESERVED_RELATIONAL_ATOM_WORDS {
+            assert!(
+                RESERVED_ATOM_WORDS.contains(w),
+                "relational atom {w:?} missing from RESERVED_ATOM_WORDS"
             );
         }
     }

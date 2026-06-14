@@ -231,12 +231,11 @@ fn build_event_scope(
     let mut scope = base_env.clone();
     scope.push_scope();
     if let Some(pe) = inherited_chain {
-        for (name, ty) in pe.inherited_parameter_types() {
-            scope.insert(name.clone(), ty.clone());
-        }
-        // Plus the immediate parent's own parameter types (the chain
-        // above stops at parent's `inherited`, so add parent's own).
-        for p in &pe.parameters {
+        // The parent's full parameter chain — ancestors root-first then the
+        // parent's own, deduped by name — is the scope an extended event
+        // inherits. This is the same set `chain_parameters` builds for
+        // `CheckedMachine::event_env`.
+        for p in pe.chain_parameters() {
             scope.insert(p.name.clone(), p.ty.clone());
         }
     }
@@ -296,7 +295,7 @@ fn build_event_buckets(
     let mut accurate = true;
 
     let mut guards: Vec<GuardDecl> = Vec::with_capacity(kind.guards().len());
-    for g in kind.guards() {
+    for (i, g) in kind.guards().iter().enumerate() {
         // Abstract-only-reference drop: guard reads a variable that
         // vanished in this refinement (inherited from parent but not
         // redeclared, no witness). Rodin drops the guard and marks
@@ -341,7 +340,7 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        match build_guard_decl(ids, file_root, label, g, scope, machine_name) {
+        match build_guard_decl(ids, file_root, label, i, g, scope, machine_name) {
             Ok(d) => guards.push(d),
             Err(diag) => {
                 diags.push(diag);
@@ -366,7 +365,7 @@ fn build_event_buckets(
     // enclosing event without it and marks the event `accurate=false`.
     // We mirror that.
     let mut actions: Vec<ActionDecl> = Vec::with_capacity(kind.actions().len());
-    for act in kind.actions() {
+    for (i, act) in kind.actions().iter().enumerate() {
         let bad_lhs = lhs_variables(&act.action)
             .iter()
             .find(|v| !scope.contains(v))
@@ -426,16 +425,19 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        actions.push(build_action_decl(ids, file_root, label, act, scope));
+        actions.push(build_action_decl(ids, file_root, label, i, act, scope));
     }
 
+    // Witnesses in `witnesses`-then-`with` order; the index is the source
+    // position the well-definedness pass uses to pair these back up.
     let mut witnesses: Vec<WitnessDecl> = Vec::new();
-    for w in kind
+    for (i, w) in kind
         .witnesses_primary()
         .iter()
         .chain(kind.witnesses_with().iter())
+        .enumerate()
     {
-        witnesses.push(build_witness_decl(ids, file_root, label, w));
+        witnesses.push(build_witness_decl(ids, file_root, label, i, w));
     }
 
     (
@@ -477,11 +479,12 @@ fn build_guard_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     event_label: &str,
+    source_index: usize,
     g: &LabeledPredicate,
     env: &TypeEnv,
     machine_name: &str,
 ) -> std::result::Result<GuardDecl, Diagnostic> {
-    let (label, predicate_canonical) = check_labeled_predicate(g, env, "grd", "guard", |lbl| {
+    let (label, pc) = check_labeled_predicate(g, env, "grd", "guard", |lbl| {
         format!("{machine_name}.{event_label}.{lbl}")
     })?;
     let source = build_event_child_source(
@@ -494,8 +497,9 @@ fn build_guard_decl(
     );
     Ok(GuardDecl {
         label,
-        predicate: g.predicate.clone(),
-        predicate_canonical,
+        source_index,
+        predicate: pc.predicate,
+        predicate_canonical: pc.canonical,
         is_theorem: g.is_theorem,
         source,
     })
@@ -528,6 +532,7 @@ fn build_action_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     event_label: &str,
+    source_index: usize,
     act: &LabeledAction,
     env: &TypeEnv,
 ) -> ActionDecl {
@@ -550,7 +555,8 @@ fn build_action_decl(
     );
     ActionDecl {
         label,
-        action: act.action.clone(),
+        source_index,
+        action: ac.action,
         canonical: ac.canonical,
         source,
     }
@@ -560,6 +566,7 @@ fn build_witness_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     event_label: &str,
+    source_index: usize,
     w: &LabeledPredicate,
 ) -> WitnessDecl {
     let label = w.label.clone().unwrap_or_else(|| "wit".to_string());
@@ -580,7 +587,7 @@ fn build_witness_decl(
     );
     WitnessDecl {
         label,
-        predicate: w.predicate.clone(),
+        source_index,
         predicate_canonical: canonical,
         source,
     }
@@ -614,8 +621,8 @@ fn build_refines_event_decl(
     let sc_target = format!(
         "/{proj}/{file}|org.eventb.core.scMachineFile#{mach}|org.eventb.core.scEvent#{abs}",
         proj = file_root_project(file_root),
-        file = parent.output_filename,
-        mach = parent.name,
+        file = parent.output_filename(),
+        mach = parent.name(),
         abs = crate::handles::escape_handle_id_owned(abstract_event_label),
     );
     RefinesEventDecl {

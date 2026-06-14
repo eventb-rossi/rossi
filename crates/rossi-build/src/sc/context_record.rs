@@ -60,8 +60,15 @@ pub struct ConstantDecl {
 #[derive(Debug, Clone)]
 pub struct AxiomDecl {
     pub label: String,
-    /// Parsed predicate AST — kept so dependent machines can re-check it
-    /// against their own environment without re-parsing strings.
+    /// Position of this axiom in the *raw* context's `axioms` list. Lets
+    /// later passes (well-definedness) pair a kept decl back to its source
+    /// clause by identity rather than by label, which is ambiguous when
+    /// two clauses share an (effective) label.
+    pub source_index: usize,
+    /// Enriched predicate AST (binder types stamped, short-form
+    /// comprehensions lowered) — the form `predicate_canonical` was
+    /// rendered from. Kept so dependent machines and downstream
+    /// analyses can re-check it without re-parsing strings.
     #[allow(dead_code)] // used by machine SC (M1+)
     pub predicate: Predicate,
     pub predicate_canonical: String,
@@ -164,6 +171,7 @@ mod tests {
             }],
             axioms: vec![AxiomDecl {
                 label: "axm1".into(),
+                source_index: 0,
                 predicate: rossi::parse_predicate_str("c ∈ ℕ").unwrap(),
                 predicate_canonical: "c∈ℕ".into(),
                 is_theorem: false,

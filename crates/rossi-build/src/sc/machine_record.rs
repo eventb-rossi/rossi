@@ -41,11 +41,13 @@ use crate::xml_out::{Element, attr, in_tag, tag};
 /// so it remains a self-describing typed snapshot.
 #[derive(Debug, Clone)]
 pub struct MachineRecord {
-    #[allow(dead_code)]
+    /// Machine name. Read through [`super::CheckedMachine::name`].
     pub name: String,
-    #[allow(dead_code)]
+    /// Output `.bcm` filename. Read through
+    /// [`super::CheckedMachine::output_filename`].
     pub output_filename: String,
-    #[allow(dead_code)]
+    /// The machine's type environment (variables + seen constants). Read
+    /// through [`super::CheckedMachine::env`].
     pub env: TypeEnv,
     /// `org.eventb.core.fwd` unless the source file overrides it.
     pub configuration: String,
@@ -65,8 +67,8 @@ pub struct MachineRecord {
     /// out the same decl that descendants extend.
     pub events: Vec<Rc<EventDecl>>,
 
-    /// Transitively-refined ancestor names, oldest first.
-    #[allow(dead_code)]
+    /// Transitively-refined ancestor names, oldest first. Read through
+    /// [`super::CheckedMachine::ancestors`].
     pub ancestors: Vec<String>,
 }
 
@@ -91,10 +93,9 @@ pub struct SeesContextDecl {
 #[derive(Debug, Clone)]
 pub struct InvariantDecl {
     pub label: String,
-    /// Parsed predicate AST — kept for descendants and for downstream
-    /// analyses. Today only the canonical string is rendered.
-    #[allow(dead_code)]
-    pub predicate: Predicate,
+    /// Position of this invariant in the *raw* machine's `invariants`
+    /// list — see [`super::context_record::AxiomDecl::source_index`].
+    pub source_index: usize,
     pub predicate_canonical: String,
     pub is_theorem: bool,
     pub source: HandleUri,
@@ -160,6 +161,12 @@ pub struct ParameterDecl {
 #[derive(Debug, Clone)]
 pub struct GuardDecl {
     pub label: String,
+    /// Position of this guard in the *raw* event's `guards` list — see
+    /// [`super::context_record::AxiomDecl::source_index`].
+    pub source_index: usize,
+    /// Enriched predicate AST — the form `predicate_canonical` was rendered
+    /// from. Re-read by [`EventDecl::typing_guard_predicates`] to recover
+    /// parameter types for extended events in descendant (M1+) machines.
     pub predicate: Predicate,
     pub predicate_canonical: String,
     pub is_theorem: bool,
@@ -169,9 +176,12 @@ pub struct GuardDecl {
 #[derive(Debug, Clone)]
 pub struct ActionDecl {
     pub label: String,
-    /// The original action AST, kept so future passes can re-analyse
-    /// without re-parsing the canonical string.
-    #[allow(dead_code)]
+    /// Position of this action in the *raw* event's `actions` list — see
+    /// [`super::context_record::AxiomDecl::source_index`].
+    pub source_index: usize,
+    /// Enriched action AST. Read in `machine/mod.rs` (via `lhs_variables`)
+    /// to find the LHS variables an inherited INITIALISATION action
+    /// assigns when deciding extended-event scope.
     pub action: Action,
     pub canonical: String,
     pub source: HandleUri,
@@ -180,12 +190,10 @@ pub struct ActionDecl {
 #[derive(Debug, Clone)]
 pub struct WitnessDecl {
     pub label: String,
-    /// Original predicate AST. Witnesses reference dropped abstract
-    /// names which intentionally aren't resolved against env, so
-    /// keeping the AST lets downstream tools perform their own
-    /// analyses.
-    #[allow(dead_code)]
-    pub predicate: Predicate,
+    /// Position of this witness in the *raw* event's witnesses, taken in
+    /// `witnesses`-then-`with` order (the order the SC builds them) — see
+    /// [`super::context_record::AxiomDecl::source_index`].
+    pub source_index: usize,
     pub predicate_canonical: String,
     pub source: HandleUri,
 }
@@ -227,25 +235,27 @@ impl EventDecl {
         out
     }
 
-    /// Inherited parameter bindings, root-first then deduplicated by
-    /// later occurrence (matches today's `Rc<Vec<(String, Type)>>`
-    /// semantics, where own-types appended). Used by descendants
-    /// when building scope.
-    pub fn inherited_parameter_types(&self) -> Vec<(String, Type)> {
-        let mut out: Vec<(String, Type)> = Vec::new();
-        let mut cur = self.inherited.as_deref();
-        // Walk ancestors root-first by collecting then reversing.
-        let mut chain: Vec<&EventDecl> = Vec::new();
-        while let Some(p) = cur {
-            chain.push(p);
-            cur = p.inherited.as_deref();
-        }
-        chain.reverse();
-        for ancestor in chain {
+    /// Every parameter visible to this event: the inherited chain
+    /// (root-first, populated only when the event is `extended`)
+    /// followed by own. A name re-listed along the chain is kept once
+    /// — it denotes the same parameter, so the types agree.
+    ///
+    /// This is the parameter analogue of
+    /// [`Self::typing_guard_predicates`]; downstream passes use it to
+    /// rebuild the event-local scope (see
+    /// [`super::CheckedMachine::event_env`]).
+    pub fn chain_parameters(&self) -> Vec<&ParameterDecl> {
+        let mut out: Vec<&ParameterDecl> = Vec::new();
+        for ancestor in self.chain_root_first() {
             for p in &ancestor.parameters {
-                if !out.iter().any(|(n, _)| n == &p.name) {
-                    out.push((p.name.clone(), p.ty.clone()));
+                if !out.iter().any(|q| q.name == p.name) {
+                    out.push(p);
                 }
+            }
+        }
+        for p in &self.parameters {
+            if !out.iter().any(|q| q.name == p.name) {
+                out.push(p);
             }
         }
         out
@@ -460,7 +470,6 @@ use in_tag as _;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rossi::parse_predicate_str;
 
     fn mk_uri() -> HandleUri {
         HandleUri::root("proj", "M.bum", "org.eventb.core.machineFile", "M")
@@ -502,7 +511,7 @@ mod tests {
         });
         r.invariants.push(InvariantDecl {
             label: "inv1".into(),
-            predicate: parse_predicate_str("⊤").unwrap(),
+            source_index: 0,
             predicate_canonical: "⊤".into(),
             is_theorem: false,
             source: mk_uri().child("org.eventb.core.invariant", "inv1"),

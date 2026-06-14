@@ -40,6 +40,20 @@ impl TypeEnv {
         self.by_name.insert(name, ty);
     }
 
+    /// Hide any binding of `name` for the duration of the current scope,
+    /// so it reads as undeclared until [`TypeEnv::pop_scope`]. Used when a
+    /// binder shadows an outer name but its own type can't be inferred: the
+    /// name must mask the outer declaration rather than leak its type. With
+    /// no scope open this is a permanent removal.
+    pub fn remove(&mut self, name: &str) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope
+                .entry(name.to_string())
+                .or_insert_with(|| self.by_name.get(name).cloned());
+        }
+        self.by_name.remove(name);
+    }
+
     /// Insert only if the name is not yet present. Returns `true` if this
     /// call inserted the entry.
     pub fn insert_if_absent(&mut self, name: impl Into<String>, ty: Type) -> bool {
