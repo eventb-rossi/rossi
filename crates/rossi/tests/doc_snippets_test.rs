@@ -136,9 +136,12 @@ fn doc_eventb_blocks_parse() {
         failures.join("\n\n")
     );
     // Sanity check that extraction still finds the known examples; if this
-    // fires, the fence detection above broke, not the docs.
+    // fires, the fence detection above broke, not the docs. The floor sits
+    // one below the count of complete-component ```eventb blocks in tracked
+    // markdown (the editor READMEs/INSTALL) so a routine doc edit doesn't trip
+    // it, while a fence-detection collapse to ~0 still does.
     assert!(
-        checked >= 5,
+        checked >= 3,
         "only {checked} eventb blocks checked ({skipped} skipped) — extraction is broken"
     );
 }

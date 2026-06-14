@@ -19,279 +19,51 @@ Rossi covers the full author-to-Rodin path:
 - **`rossi-cli`** — the `rossi` command-line tool wrapping the
   parser, checker, and language server.
 - **`rossi-lsp`** — Language Server Protocol implementation powering
-  editor extensions for VS Code, Neovim, Emacs, and Zed.
+  editor extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed.
 
 ## Features
 
-**Complete Event-B Syntax Support**
-- Contexts (sets, constants, axioms, theorems)
-- Machines (variables, invariants, events, variants)
-- Mathematical expressions and predicates
-- Event refinement, convergence, and witnesses
-- Set theory and first-order logic operators
-- Native XML format (`.buc` and `.bum` files from Rodin)
+**Parse & round-trip**
+- Full Event-B syntax: contexts, machines, events, refinement, witnesses
+- Text ↔ native Rodin XML (`.buc` / `.bum` / `.zip`)
+- Unicode and ASCII operator conventions (Rodin Keyboard mapping)
+- Pretty-printer with configurable indentation; parse → transform → print
+- Optional serde support for JSON serialization of the AST
 
-**Modern Parser Architecture**
-- Built with [pest](https://pest.rs/) PEG parser generator
-- Type-safe AST with Rust's strong type system
-- Detailed error messages with source locations
-- Syntax error recovery for partial parsing
-- Optional serde support for JSON serialization
-- Support for both text and XML Event-B formats
+**Static checking & type inference**
+- Type inference with unification (integers, booleans, given sets, power sets, products)
+- Well-formedness checks for guards, actions, invariants, and axioms
+- Cross-reference resolution across SEES / EXTENDS / REFINES, with circular-dependency detection
+- `EB0xx` diagnostics plus advisory lints (dead or unmodified variables, incomplete INITIALISATION, …)
+- Rodin-compatible `.bcc` / `.bcm` checked output
 
-**Developer Friendly**
-- Comprehensive test suite
-- Well-documented API
-- Example Event-B models included
-- Clean separation of grammar, AST, and parser logic
-- Pretty printer for AST-to-text conversion
-- Roundtrip support (parse, transform, print)
+**Command-line workflows**
+- `validate`, `import`, `export`, `fmt`, and `build` subcommands
+- Text, JSON, and SARIF 2.1.0 diagnostic output for CI and IDE integration
 
-For editor and Language Server features, see
-[Language Server & IDE Support](#language-server--ide-support) below.
+**Editor integration (LSP)**
+- Diagnostics, completion, hover, go-to-definition, find references, rename
+- Formatting, semantic highlighting, code actions, folding, and signature help
+- ProB code lenses for animation and model checking
+- Extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed
 
 ## Installation
 
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-rossi = "0.1"
-```
-
-Or install from source:
+Build the `rossi` command-line tool from source:
 
 ```bash
 git clone https://github.com/eventb-rossi/rossi
 cd rossi
-cargo build --release
+cargo build --release -p rossi-cli
 ```
 
-## Quick Start
+The binary is then available at `target/release/rossi`. The standalone
+language server (`rossi-language-server`) builds the same way with
+`-p rossi-lsp`.
 
-### Parsing Event-B
-
-```rust
-use rossi::parse;
-
-fn main() {
-    let source = r#"
-        CONTEXT counter_ctx
-        CONSTANTS
-            max_value
-        AXIOMS
-            @axm1 max_value = 100
-        END
-    "#;
-
-    match parse(source) {
-        Ok(component) => {
-            println!("Successfully parsed: {:#?}", component);
-        }
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-        }
-    }
-}
-```
-
-### Parsing Native Event-B XML Format
-
-The parser also supports the native Event-B XML format used by the Rodin platform (`.buc` and `.bum` files):
-
-```rust
-use rossi::parse_xml;
-use std::fs;
-
-fn main() {
-    // Parse a .buc context file
-    let xml = fs::read_to_string("model.buc").unwrap();
-    let component = parse_xml(&xml).unwrap();
-
-    println!("Parsed: {:#?}", component);
-}
-```
-
-Supported XML file types:
-- **`.buc` files**: Event-B contexts (compatible with Rodin 3.0+)
-- **`.bum` files**: Event-B machines (compatible with Rodin 3.0+)
-- **`.zip` archives**: Complete Rodin projects containing multiple .buc and .bum files
-
-The XML parser automatically converts the native format into the same AST structure as the text parser, allowing seamless interoperability between formats.
-
-### Parsing Rodin Project Archives
-
-Rodin stores complete Event-B projects as ZIP archives. You can parse all components from a ZIP file at once:
-
-```rust
-use rossi::parse_zip_file;
-
-// Parse all components from a Rodin project archive
-let components = parse_zip_file("myproject.zip").unwrap();
-
-for comp in &components {
-    println!("Found component: {} from file {}",
-        match &comp.component {
-            rossi::Component::Context(c) => &c.name,
-            rossi::Component::Machine(m) => &m.name,
-        },
-        comp.filename
-    );
-}
-```
-
-### Pretty Printing
-
-Convert AST back to Event-B text:
-
-```rust
-use rossi::{parse, to_string};
-
-fn main() {
-    let source = "CONTEXT test\nSETS\n    STATUS\nEND\n";
-
-    // Parse to AST
-    let component = parse(source).unwrap();
-
-    // Convert back to text
-    let output = to_string(&component);
-    println!("{}", output);
-}
-```
-
-The pretty printer supports both Unicode (default) and ASCII operators:
-
-```rust
-use rossi::{parse, to_string, to_string_ascii, PrettyPrinter};
-
-let component = parse(source).unwrap();
-
-// Unicode output (default)
-let unicode_output = to_string(&component);
-
-// ASCII output
-let ascii_output = to_string_ascii(&component);
-
-// Custom configuration
-let printer = PrettyPrinter::new()
-    .with_indent("  ".to_string());
-let custom_output = printer.print_component(&component);
-```
-
-## Event-B Syntax Support
-
-### Contexts
-
-Contexts define static properties of a model:
-
-```eventb
-CONTEXT library_ctx
-EXTENDS
-    base_ctx
-SETS
-    BOOK, READER
-CONSTANTS
-    max_loans
-AXIOMS
-    @axm1 max_loans = 5
-    @axm2 max_loans > 0
-END
-```
-
-### Machines
-
-Machines define dynamic behavior through events:
-
-```eventb
-MACHINE counter
-SEES
-    counter_ctx
-VARIABLES
-    count
-INVARIANTS
-    @inv1 count >= 0
-    @inv2 count <= max_value
-EVENTS
-    EVENT INITIALISATION
-    BEGIN
-        count := 0
-    END
-
-    EVENT increment
-    WHERE
-        @grd1 count < max_value
-    THEN
-        count := count + 1
-    END
-
-    EVENT reset
-    THEN
-        count := 0
-    END
-END
-```
-
-### Mathematical Operators
-
-The parser supports both Unicode and ASCII alternatives following the
-[Rodin Keyboard](https://wiki.event-b.org/index.php/Rodin_Keyboard_User_Guide) conventions:
-
-| Operator | Unicode | ASCII | Description |
-|----------|---------|-------|-------------|
-| And | `∧` | `&` | Logical conjunction |
-| Or | `∨` | `or` | Logical disjunction |
-| Implies | `⇒` | `=>` | Implication |
-| Not | `¬` | `not` | Negation |
-| In | `∈` | `:` | Set membership |
-| Subset | `⊆` | `<:` | Subset or equal |
-| Union | `∪` | `\/` | Set union |
-| Intersection | `∩` | `/\` | Set intersection |
-| Cartesian | `×` | `**` | Cartesian product |
-| Power set | `ℙ` | `POW` | Power set |
-| Empty set | `∅` | `{}` | Empty set |
-| Forall | `∀` | `!` | Universal quantifier |
-| Exists | `∃` | `#` | Existential quantifier |
-| Maplet | `↦` | `\|->` | Ordered pair |
-
-Note that logical AND/OR (`&`, `or`) and set intersection/union (`/\`, `\/`)
-use different ASCII representations.
-
-## AST Structure
-
-The parser produces a strongly-typed AST:
-
-```rust
-pub enum Component {
-    Context(Context),
-    Machine(Machine),
-}
-
-pub struct Context {
-    pub name: String,
-    pub extends: Vec<String>,
-    pub sets: Vec<SetDeclaration>,
-    pub constants: Vec<NamedElement>,
-    pub axioms: Vec<LabeledPredicate>,
-    // ... source location and metadata fields
-}
-
-pub struct Machine {
-    pub name: String,
-    pub refines: Option<String>,
-    pub sees: Vec<String>,
-    pub variables: Vec<NamedElement>,
-    pub invariants: Vec<LabeledPredicate>,
-    pub variant: Option<Expression>,
-    pub initialisation: Option<InitialisationEvent>,
-    pub events: Vec<Event>,
-    // ... source location and metadata fields
-}
-```
-
-`SetDeclaration` supports both deferred (carrier) sets and enumerated sets.
-`NamedElement` carries a name and an optional comment (from Rodin XML).
-Theorem predicates are stored in `axioms` or `invariants` with
-`is_theorem = true`.
+To use Rossi as a library, depend on the `rossi` crate — the parser, typed
+AST, pretty-printer, and Rodin XML/ZIP conversion. Run `cargo doc -p rossi
+--open` for the API documentation.
 
 ## CLI Tool
 
@@ -306,14 +78,6 @@ the `rossi-build` static checker, and the language server:
 | `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
 | `lsp`      | Run the Rossi language server over stdio (equivalent to the `rossi-language-server` binary). |
-
-### Installation
-
-```bash
-cargo build --release -p rossi-cli
-```
-
-The binary will be available at `target/release/rossi`.
 
 ### Validate
 
@@ -463,21 +227,6 @@ See the `crates/rossi/examples/` directory for Event-B model files:
 - `refinement_abstract.eventb` / `refinement_concrete.eventb` - Refinement example
 - `lambda_example_ctx.eventb` - Lambda expressions and set comprehensions
 
-## Testing
-
-The project includes comprehensive tests:
-
-```bash
-# Run all tests
-cargo test
-
-# Run specific test suite
-cargo test --test full_models_test
-
-# Run with output
-cargo test -- --nocapture
-```
-
 ## Architecture
 
 The project is organized as a Cargo workspace with four public crates:
@@ -499,63 +248,46 @@ rossi/
 
 ## Development
 
-### Setup
-
 ```bash
-# Enable pre-commit hook (runs cargo fmt, clippy, doc, and tests)
+# Enable the pre-commit hook (runs cargo fmt, clippy, doc, and tests)
 git config core.hooksPath .githooks
-```
 
-### Building
-
-```bash
+# Build
 cargo build
-```
 
-### Running Tests
-
-```bash
+# Run the tests (all, a specific suite, or with output)
 cargo test
-```
+cargo test --test full_models_test
+cargo test -- --nocapture
 
-### Documentation
-
-```bash
+# Generate API documentation
 cargo doc --open
 ```
 
 ## Language Server & IDE Support
 
-The project includes a fully-featured **Language Server Protocol (LSP)** implementation that provides modern IDE features for Event-B development.
+The `rossi-lsp` Language Server Protocol implementation provides modern
+IDE features for Event-B development:
 
-### Implemented Features
-
-- **Real-time diagnostics** - Syntax errors as you type with error recovery
-- **Code completion** - Context-aware keywords, operators, identifiers, and snippets
-- **Hover documentation** - Keyword, operator, and identifier information
-- **Go-to-definition** - Navigate to declarations across files
-- **Find references** - Workspace-wide reference search
-- **Rename refactoring** - Safe identifier renaming with validation
-- **Document symbols** - Hierarchical outline and breadcrumb navigation
-- **Code formatting** - Auto-format with Unicode or ASCII operators
-- **Semantic highlighting** - AST-based token classification
-- **Code actions** - Unicode/ASCII conversion, extract constant, sort clauses
-- **Signature help** - Quantifier and lambda parameter hints
-- **Document links** - Clickable SEES/REFINES/EXTENDS references
-- **Code folding** - Collapse contexts, machines, events, and clause sections
-- **Smart selection** - Expand/shrink selection by syntactic structure
-- **Cross-file resolution** - Transitive SEES/REFINES/EXTENDS chain traversal
-- **ProB integration** - Code lenses for model checking (when ProB is installed)
+- **Real-time diagnostics** — syntax and semantic errors with error recovery
+- **Completion & hover** — context-aware keywords, operators, identifiers, snippets
+- **Navigation** — go-to-definition, find references, and document/workspace symbols
+- **Rename refactoring** — safe identifier renaming with validation
+- **Formatting & semantic highlighting** — Unicode/ASCII operators, AST-based tokens
+- **Code actions** — Unicode/ASCII conversion, extract constant, sort clauses
+- **Code folding, smart selection, signature help, and document links**
+- **Cross-file resolution** — transitive SEES / REFINES / EXTENDS traversal
+- **ProB integration** — code lenses for animation and model checking (when ProB is installed)
 
 ### Editor Extensions
 
 Extensions are available in the `editors/` directory:
 
-- **VS Code** (`editors/vscode/`) - Syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
-- **Neovim** (`editors/neovim/`) - File detection, syntax highlighting, LSP config
-- **Sublime Text** (`editors/sublime/`) - Generated syntax (also used by `bat` and `delta`)
-- **Emacs** (`editors/emacs/`) - Major mode for Event-B
-- **Zed** (`editors/zed/`) - LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay and ProB code lenses
+- **VS Code** (`editors/vscode/`) — syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
+- **Neovim** (`editors/neovim/`) — file detection, syntax highlighting, LSP config
+- **Sublime Text** (`editors/sublime/`) — generated syntax (also used by `bat` and `delta`)
+- **Emacs** (`editors/emacs/`) — major mode for Event-B
+- **Zed** (`editors/zed/`) — LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay and ProB code lenses
 
 See each editor's README and INSTALL files for setup instructions.
 
