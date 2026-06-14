@@ -46,6 +46,7 @@ use crate::ast::expression::{BinaryOp, IdentPattern, UnaryOp};
 use crate::ast::predicate::{ComparisonOp, LogicalOp};
 use crate::ast::*;
 use crate::comments;
+use crate::op_info;
 use crate::operators::{self, OperatorId};
 use std::fmt::Write;
 
@@ -696,8 +697,8 @@ impl PrettyPrinter {
             return format!("({})", self.print_expression(child));
         }
         if let Expression::Binary { op: child_op, .. } = child {
-            let child_prec = Self::op_precedence(*child_op);
-            let parent_prec = Self::op_precedence(parent_op);
+            let child_prec = op_info::binary_precedence(*child_op);
+            let parent_prec = op_info::binary_precedence(parent_op);
 
             let needs_parens = if child_prec < parent_prec {
                 true
@@ -705,11 +706,11 @@ impl PrettyPrinter {
                 false
             } else {
                 // Same precedence: check compatibility matrix
-                if !Self::ops_are_compatible(*child_op, parent_op) {
+                if !op_info::binary_ops_compatible(*child_op, parent_op) {
                     true // Incompatible operators: always need parens
-                } else if Self::is_right_associative(parent_op) {
+                } else if op_info::is_right_associative(parent_op) {
                     !is_right // left child needs parens for right-associative
-                } else if Self::is_non_associative(parent_op) {
+                } else if op_info::is_non_associative(parent_op) {
                     true // non-associative ops always need parens at same level
                 } else {
                     is_right // right child needs parens for left-associative
@@ -721,84 +722,6 @@ impl PrettyPrinter {
             }
         }
         self.print_expression(child)
-    }
-
-    /// Precedence level of a binary operator (higher = binds tighter)
-    fn op_precedence(op: BinaryOp) -> u8 {
-        match op {
-            // Maplet / pair constructor (lowest binary precedence per
-            // kernel_lang Table 3.1: `a ↦ b ↔ c = a ↦ (b ↔ c)`)
-            BinaryOp::Maplet => 1,
-
-            // Relation types (bind tighter than maplet, looser than set ops)
-            BinaryOp::Relation
-            | BinaryOp::TotalRelation
-            | BinaryOp::SurjectiveRelation
-            | BinaryOp::TotalSurjectiveRelation
-            | BinaryOp::TotalFunction
-            | BinaryOp::PartialFunction
-            | BinaryOp::TotalInjection
-            | BinaryOp::PartialInjection
-            | BinaryOp::TotalSurjection
-            | BinaryOp::PartialSurjection
-            | BinaryOp::Bijection
-            | BinaryOp::OfType => 2,
-
-            // Binary set operators
-            BinaryOp::Union
-            | BinaryOp::Intersection
-            | BinaryOp::Difference
-            | BinaryOp::CartesianProduct
-            | BinaryOp::Overwrite
-            | BinaryOp::Semicolon
-            | BinaryOp::Composition
-            | BinaryOp::DomainRestriction
-            | BinaryOp::DomainSubtraction
-            | BinaryOp::RangeRestriction
-            | BinaryOp::RangeSubtraction
-            | BinaryOp::DirectProduct
-            | BinaryOp::ParallelProduct => 3,
-
-            // Interval
-            BinaryOp::Range => 4,
-
-            // Additive (arithmetic only)
-            BinaryOp::Add | BinaryOp::Subtract => 5,
-
-            // Multiplicative (arithmetic only)
-            BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => 6,
-
-            // Exponent — highest arithmetic precedence per spec §3.3.6
-            BinaryOp::Exponent => 7,
-        }
-    }
-
-    fn is_right_associative(_op: BinaryOp) -> bool {
-        // Event-B has no right-associative binary operators at expression
-        // level. Maplet is left-associative per spec p.18 (`a ↦ b ↦ c =
-        // (a ↦ b) ↦ c`). Kept as a function for symmetry with
-        // `is_non_associative`.
-        false
-    }
-
-    fn is_non_associative(op: BinaryOp) -> bool {
-        matches!(
-            op,
-            BinaryOp::Range
-                | BinaryOp::Exponent
-                | BinaryOp::Relation
-                | BinaryOp::TotalRelation
-                | BinaryOp::SurjectiveRelation
-                | BinaryOp::TotalSurjectiveRelation
-                | BinaryOp::TotalFunction
-                | BinaryOp::PartialFunction
-                | BinaryOp::TotalInjection
-                | BinaryOp::PartialInjection
-                | BinaryOp::TotalSurjection
-                | BinaryOp::PartialSurjection
-                | BinaryOp::Bijection
-                | BinaryOp::OfType
-        )
     }
 
     /// Check if an expression needs parentheses when used as the relation of
@@ -925,79 +848,6 @@ impl PrettyPrinter {
         }
     }
 
-    /// Precedence of a logical operator (higher = binds tighter).
-    ///
-    /// And/Or share the same precedence level; Camille compatibility classes
-    /// (see `pred_compat_class`) decide whether parentheses are needed.
-    fn logical_op_precedence(op: LogicalOp) -> u8 {
-        match op {
-            LogicalOp::Equivalent => 1,
-            LogicalOp::Implies => 2,
-            LogicalOp::Or | LogicalOp::And => 3,
-        }
-    }
-
-    /// Camille compatibility class for predicate logical operators.
-    ///
-    /// Operators at the same precedence level but in different classes always
-    /// require explicit parentheses. Class 0 means "singleton" — incompatible
-    /// with everything, including itself.
-    fn pred_compat_class(op: LogicalOp) -> u8 {
-        match op {
-            LogicalOp::And => 1,
-            LogicalOp::Or => 2,
-            LogicalOp::Implies | LogicalOp::Equivalent => 0, // non-associative singletons
-        }
-    }
-
-    /// Check whether two set-level operators are compatible for mixing
-    /// without parentheses. The `child` operator appears as the left operand
-    /// of the `parent` operator in a flat sequence: `... child ... parent ...`.
-    ///
-    /// This is an asymmetric relation derived empirically from the Rodin
-    /// formula parser's actual behaviour.
-    fn are_set_ops_compatible(child: BinaryOp, parent: BinaryOp) -> bool {
-        use BinaryOp::*;
-        matches!(
-            (child, parent),
-            (Union, Union)
-                | (Intersection, Intersection)
-                | (Intersection, Difference)
-                | (Composition, Composition)
-                | (Semicolon, Semicolon)
-                | (Overwrite, Overwrite)
-                | (DomainRestriction, Intersection)
-                | (DomainRestriction, Difference)
-                | (DomainRestriction, Semicolon)
-                | (DomainSubtraction, Intersection)
-                | (DomainSubtraction, Difference)
-                | (DomainSubtraction, Semicolon)
-        )
-    }
-
-    /// Check whether two same-precedence operators are compatible (can mix
-    /// without parentheses). For arithmetic and other non-set levels, uses
-    /// simple same-operator grouping.
-    fn ops_are_compatible(child: BinaryOp, parent: BinaryOp) -> bool {
-        let prec = Self::op_precedence(child);
-        debug_assert_eq!(prec, Self::op_precedence(parent));
-
-        match prec {
-            // Set operator level — use the asymmetric compatibility matrix
-            p if p == Self::op_precedence(BinaryOp::Union) => {
-                Self::are_set_ops_compatible(child, parent)
-            }
-            // Additive: + and - can freely mix (left-associative)
-            p if p == Self::op_precedence(BinaryOp::Add) => true,
-            // Multiplicative: *, ÷, mod can freely mix (left-associative)
-            p if p == Self::op_precedence(BinaryOp::Multiply) => true,
-            // Maplet: left-associative, self-compatible
-            p if p == Self::op_precedence(BinaryOp::Maplet) => child == parent,
-            // Everything else (arrows, range, exponent): incompatible
-            _ => false,
-        }
-    }
-
     /// Print a child predicate of a logical connective, adding parentheses
     /// when necessary for correct precedence and associativity.
     fn print_predicate_child(
@@ -1011,16 +861,16 @@ impl PrettyPrinter {
             // hierarchy, so they always need parentheses inside a logical op.
             Predicate::Quantified { .. } => true,
             Predicate::Logical { op: child_op, .. } => {
-                let child_prec = Self::logical_op_precedence(*child_op);
-                let parent_prec = Self::logical_op_precedence(parent_op);
+                let child_prec = op_info::logical_precedence(*child_op);
+                let parent_prec = op_info::logical_precedence(parent_op);
                 if child_prec < parent_prec {
                     true // lower precedence → needs parens
                 } else if child_prec > parent_prec {
                     false // higher precedence → no parens
                 } else {
                     // Same precedence: check Camille compatibility class
-                    let child_class = Self::pred_compat_class(*child_op);
-                    let parent_class = Self::pred_compat_class(parent_op);
+                    let child_class = op_info::logical_compat_class(*child_op);
+                    let parent_class = op_info::logical_compat_class(parent_op);
                     if child_class == 0 || parent_class == 0 || child_class != parent_class {
                         true // Incompatible (And↔Or, Implies↔Implies, etc.)
                     } else {

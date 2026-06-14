@@ -45,6 +45,27 @@ fn test_pretty_print_inverse_operator() {
 }
 
 #[test]
+fn test_pretty_print_cartesian_product_left_associative() {
+    // `×` is left-associative: Rodin renders a left-nested chain bare and
+    // only parenthesizes a right-nested child. Regression test for the
+    // shared `op_info::set_ops_compatible` table (a missing `(×, ×)` entry
+    // made `rossi fmt` emit `(ℤ × ℤ) × ℤ`, diverging from Rodin).
+    let left_nested = common::axiom_context("S", "S = ℤ × ℤ × ℤ");
+    let out = to_string(&parse(&left_nested).expect("parse left-nested ×"));
+    assert!(
+        out.contains("ℤ × ℤ × ℤ") && !out.contains("(ℤ × ℤ)"),
+        "left-nested × must print bare, got: {out}"
+    );
+
+    let right_nested = common::axiom_context("S", "S = ℤ × (ℤ × ℤ)");
+    let out = to_string(&parse(&right_nested).expect("parse right-nested ×"));
+    assert!(
+        out.contains("ℤ × (ℤ × ℤ)"),
+        "right-nested × must keep its parentheses, got: {out}"
+    );
+}
+
+#[test]
 fn test_pretty_print_context_with_all_clauses() {
     let source = r#"CONTEXT test_ctx
 EXTENDS base_ctx
