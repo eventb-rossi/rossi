@@ -22,6 +22,7 @@ use crate::document::DocumentManager;
 use crate::position::span_to_range;
 use crate::references::component_reference_clause;
 use crate::symbols::SymbolKind;
+use crate::text_utils;
 
 /// Information about where an identifier is defined
 #[derive(Debug, Clone)]
@@ -432,14 +433,14 @@ fn find_identifier_in_clause(
     for (line_num, line) in lines_in_window(text, window) {
         let trimmed = line.trim();
 
-        // Check if we're entering the clause
-        if trimmed == clause {
+        // Check if we're entering the clause (keywords are case-insensitive).
+        if trimmed.eq_ignore_ascii_case(clause) {
             in_clause = true;
             continue;
         }
 
         // Check if we've left the clause (another keyword)
-        if in_clause && is_keyword(trimmed) {
+        if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
             break;
         }
 
@@ -459,18 +460,26 @@ fn find_identifier_in_clause(
 
 /// Find an event definition
 fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -> Option<Position> {
-    let event_kw: Vec<char> = "EVENT".chars().collect();
     let name_chars: Vec<char> = event_name.chars().collect();
 
     for (line_num, line) in lines_in_window(text, window) {
+        // Only a header line whose `EVENT` keyword (any casing) names this
+        // event — `event_name_from_line` reads the keyword case-insensitively
+        // and keeps a hyphenated name whole.
+        if text_utils::event_name_from_line(line).as_deref() != Some(event_name) {
+            continue;
+        }
+        // The name itself is case-sensitive; locate its first whole-word
+        // occurrence for the column. Scanning for whole words (not the first
+        // substring) avoids a false hit when the name is a substring of the
+        // EVENT keyword spelled before it (e.g. an event named `ent`).
         let chars: Vec<char> = line.chars().collect();
-        // Look for "EVENT event_name"
-        if let Some(event_pos) = char_find_substr(&chars, &event_kw, 0)
-            && let Some(name_pos) =
-                char_find_substr(&chars, &name_chars, event_pos + event_kw.len())
-            && is_whole_word_at(&chars, name_pos, name_chars.len())
-        {
-            return Some(Position::new(line_num as u32, name_pos as u32));
+        let mut from = 0;
+        while let Some(name_pos) = char_find_substr(&chars, &name_chars, from) {
+            if is_whole_word_at(&chars, name_pos, name_chars.len()) {
+                return Some(Position::new(line_num as u32, name_pos as u32));
+            }
+            from = name_pos + 1;
         }
     }
 
@@ -479,11 +488,20 @@ fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -
 
 /// Find INITIALISATION event definition
 fn find_initialisation_definition(text: &str, window: (usize, usize)) -> Option<Position> {
-    let kw: Vec<char> = "INITIALISATION".chars().collect();
+    // The init event's header is `EVENT INITIALISATION` (any casing). Detect it
+    // by its event name (as `find_event_definition` does), then locate the
+    // INITIALISATION token's column case-insensitively (an ASCII-uppercased copy
+    // preserves char columns). Uppercasing only the matched header line.
+    let kw = rossi::keywords::spell(rossi::keywords::KeywordId::Initialisation);
+    let kw_chars: Vec<char> = kw.chars().collect();
 
     for (line_num, line) in lines_in_window(text, window) {
-        let chars: Vec<char> = line.chars().collect();
-        if let Some(pos) = char_find_substr(&chars, &kw, 0) {
+        if !text_utils::event_name_from_line(line).is_some_and(|name| name.eq_ignore_ascii_case(kw))
+        {
+            continue;
+        }
+        let upper: Vec<char> = line.chars().map(|c| c.to_ascii_uppercase()).collect();
+        if let Some(pos) = char_find_substr(&upper, &kw_chars, 0) {
             return Some(Position::new(line_num as u32, pos as u32));
         }
     }
@@ -508,25 +526,27 @@ fn find_identifier_in_event(
     for (line_num, line) in lines_in_window(text, window) {
         let trimmed = line.trim();
 
-        // Check if we're entering the event
-        if !in_event && line.contains("EVENT") && line.contains(event_name) {
-            in_event = true;
+        // Walk to the target event's header (EVENT keyword in any casing).
+        if !in_event {
+            if text_utils::event_name_from_line(line).as_deref() == Some(event_name) {
+                in_event = true;
+            }
             continue;
         }
 
-        // Check if we've left the event
-        if in_event && (trimmed == "END" || trimmed.starts_with("EVENT")) {
+        // Check if we've left the event: its END or the next event's header.
+        if trimmed.eq_ignore_ascii_case("END") || text_utils::event_name_from_line(line).is_some() {
             break;
         }
 
         // Check if we're entering the clause within the event
-        if in_event && trimmed == clause {
+        if trimmed.eq_ignore_ascii_case(clause) {
             in_clause = true;
             continue;
         }
 
         // Check if we've left the clause
-        if in_clause && is_keyword(trimmed) {
+        if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
             in_clause = false;
         }
 
@@ -542,37 +562,6 @@ fn find_identifier_in_event(
     }
 
     None
-}
-
-/// Check if a line is an Event-B keyword
-fn is_keyword(line: &str) -> bool {
-    matches!(
-        line,
-        "CONTEXT"
-            | "MACHINE"
-            | "END"
-            | "EXTENDS"
-            | "SETS"
-            | "CONSTANTS"
-            | "AXIOMS"
-            | "REFINES"
-            | "SEES"
-            | "VARIABLES"
-            | "INVARIANTS"
-            | "VARIANT"
-            | "EVENTS"
-            | "EVENT"
-            | "INITIALISATION"
-            // Note: "STATUS" is intentionally not included here because it's commonly
-            // used as a set name, and only appears as a keyword within EVENT clauses
-            | "ANY"
-            | "WHERE"
-            | "WHEN"
-            | "WITH"
-            | "WITNESS"
-            | "THEN"
-            | "BEGIN"
-    )
 }
 
 #[cfg(test)]
@@ -721,6 +710,43 @@ mod tests {
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 2);
+    }
+
+    #[test]
+    fn test_local_finders_are_case_insensitive() {
+        // Lowercase keywords (Camille style) must resolve like UPPERCASE ones.
+        let text = "machine test\nvariables\n    count\nevents\n    event increment\n    then\n        count := count + 1\n    end\n    event initialisation\n    then\n        count := 0\n    end\nend";
+
+        assert_eq!(
+            find_identifier_in_clause(text, "VARIABLES", "count", FULL).map(|p| p.line),
+            Some(2)
+        );
+        assert_eq!(
+            find_event_definition(text, "increment", FULL).map(|p| p.line),
+            Some(4)
+        );
+        // The init header sits on the second `event ...` line.
+        assert_eq!(
+            find_initialisation_definition(text, FULL).map(|p| p.line),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn test_clause_scan_keeps_status_as_a_set_name() {
+        // STATUS is a contextual keyword but a common set name; a SETS clause
+        // member named STATUS must be found, and must not end the scan early so
+        // a following member is still reachable. Lowercase header to boot.
+        let text = "context c\nsets\n    STATUS\n    Colours\nend";
+
+        assert_eq!(
+            find_identifier_in_clause(text, "SETS", "STATUS", FULL).map(|p| p.line),
+            Some(2)
+        );
+        assert_eq!(
+            find_identifier_in_clause(text, "SETS", "Colours", FULL).map(|p| p.line),
+            Some(3)
+        );
     }
 
     #[test]

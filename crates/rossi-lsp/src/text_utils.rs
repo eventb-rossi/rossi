@@ -52,3 +52,14 @@ pub fn event_name_from_line(line: &str) -> Option<String> {
 pub fn is_clause_boundary_keyword(word: &str) -> bool {
     rossi::keywords::is_clause_boundary(word)
 }
+
+/// Whether `word` bounds a *declaration-clause* scan that walks a SETS/
+/// CONSTANTS/VARIABLES (or in-event ANY) block to locate a named symbol.
+///
+/// Like [`is_clause_boundary_keyword`] but excludes `STATUS`: it is a
+/// contextual keyword that only acts as one inside an EVENT and is commonly
+/// used as a set/constant name, so a line that is just `STATUS` in a
+/// declaration clause is a declaration to be found, not a boundary to stop at.
+pub fn is_declaration_scan_boundary(word: &str) -> bool {
+    is_clause_boundary_keyword(word) && !word.eq_ignore_ascii_case("STATUS")
+}
