@@ -1880,34 +1880,51 @@ fn parse_predicate_application(pair: pest::iterators::Pair<Rule>) -> Result<Pred
     }
 }
 
-fn parse_comparison_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, ParseError> {
+/// Map a grammar comparison operator rule to a [`ComparisonOp`].
+///
+/// [`ComparisonOp`]: crate::ast::predicate::ComparisonOp
+fn rule_to_comparison_op(rule: Rule) -> Option<crate::ast::predicate::ComparisonOp> {
     use crate::ast::predicate::ComparisonOp;
+    match rule {
+        Rule::op_eq => Some(ComparisonOp::Equal),
+        Rule::op_neq => Some(ComparisonOp::NotEqual),
+        Rule::op_lt => Some(ComparisonOp::LessThan),
+        Rule::op_le => Some(ComparisonOp::LessEqual),
+        Rule::op_gt => Some(ComparisonOp::GreaterThan),
+        Rule::op_ge => Some(ComparisonOp::GreaterEqual),
+        Rule::op_in => Some(ComparisonOp::In),
+        Rule::op_notin => Some(ComparisonOp::NotIn),
+        Rule::op_subset => Some(ComparisonOp::Subset),
+        Rule::op_subset_strict => Some(ComparisonOp::SubsetStrict),
+        Rule::op_not_subset => Some(ComparisonOp::NotSubset),
+        Rule::op_not_subset_strict => Some(ComparisonOp::NotSubsetStrict),
+        _ => None,
+    }
+}
 
+/// Map a grammar quantifier rule to a [`Quantifier`].
+///
+/// [`Quantifier`]: crate::ast::predicate::Quantifier
+fn rule_to_quantifier(rule: Rule) -> Option<crate::ast::predicate::Quantifier> {
+    use crate::ast::predicate::Quantifier;
+    match rule {
+        Rule::op_forall => Some(Quantifier::ForAll),
+        Rule::op_exists => Some(Quantifier::Exists),
+        _ => None,
+    }
+}
+
+fn parse_comparison_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, ParseError> {
     let mut inner = pair.into_inner();
     let left_expr = parse_expression(inner.next().ok_or(ParseError::EmptyExpression)?)?;
     let op_pair = inner.next().ok_or(ParseError::MissingOperator)?;
     let right_expr = parse_expression(inner.next().ok_or(ParseError::EmptyExpression)?)?;
 
-    let op = match op_pair.as_rule() {
-        Rule::op_eq => ComparisonOp::Equal,
-        Rule::op_neq => ComparisonOp::NotEqual,
-        Rule::op_lt => ComparisonOp::LessThan,
-        Rule::op_le => ComparisonOp::LessEqual,
-        Rule::op_gt => ComparisonOp::GreaterThan,
-        Rule::op_ge => ComparisonOp::GreaterEqual,
-        Rule::op_in => ComparisonOp::In,
-        Rule::op_notin => ComparisonOp::NotIn,
-        Rule::op_subset => ComparisonOp::Subset,
-        Rule::op_subset_strict => ComparisonOp::SubsetStrict,
-        Rule::op_not_subset => ComparisonOp::NotSubset,
-        Rule::op_not_subset_strict => ComparisonOp::NotSubsetStrict,
-        _ => {
-            return Err(ParseError::UnexpectedRule {
-                expected: "comparison operator".to_string(),
-                found: format!("{:?}", op_pair.as_rule()),
-            });
-        }
-    };
+    let op =
+        rule_to_comparison_op(op_pair.as_rule()).ok_or_else(|| ParseError::UnexpectedRule {
+            expected: "comparison operator".to_string(),
+            found: format!("{:?}", op_pair.as_rule()),
+        })?;
 
     Ok(Predicate::Comparison {
         op,
@@ -2042,21 +2059,14 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
 
     match rule {
         Rule::negation_predicate | Rule::negation_predicate_no_semi => {
-            use crate::ast::predicate::Quantifier;
-
             let mut inner = pair.into_inner();
             let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
             if first.as_rule() == Rule::op_not {
                 let pred = parse_predicate(inner.next().ok_or(ParseError::EmptyPredicate)?)?;
                 Ok(Predicate::Not(Box::new(pred)))
-            } else if first.as_rule() == Rule::op_forall || first.as_rule() == Rule::op_exists {
+            } else if let Some(quantifier) = rule_to_quantifier(first.as_rule()) {
                 // Quantified predicate nested inside conjunction/disjunction
                 // (Rodin extension: spec requires parens, but Rodin accepts bare quantifiers)
-                let quantifier = if first.as_rule() == Rule::op_forall {
-                    Quantifier::ForAll
-                } else {
-                    Quantifier::Exists
-                };
                 let (identifiers, predicate) = collect_typed_identifiers_and_predicate(&mut inner)?;
                 Ok(Predicate::Quantified {
                     quantifier,
@@ -2071,20 +2081,13 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
         Rule::quantified_predicate | Rule::quantified_predicate_no_semi => {
             // Reached only when the iterative loop above detected a real
             // quantifier (`∀`/`∃`) at this level.
-            use crate::ast::predicate::Quantifier;
-
             let mut inner = pair.into_inner();
             let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
-            let quantifier = match first.as_rule() {
-                Rule::op_forall => Quantifier::ForAll,
-                Rule::op_exists => Quantifier::Exists,
-                _ => {
-                    return Err(ParseError::UnexpectedRule {
-                        expected: "∀ or ∃".to_string(),
-                        found: format!("{:?}", first.as_rule()),
-                    });
-                }
-            };
+            let quantifier =
+                rule_to_quantifier(first.as_rule()).ok_or_else(|| ParseError::UnexpectedRule {
+                    expected: "∀ or ∃".to_string(),
+                    found: format!("{:?}", first.as_rule()),
+                })?;
             let (identifiers, predicate) = collect_typed_identifiers_and_predicate(&mut inner)?;
             Ok(Predicate::Quantified {
                 quantifier,
