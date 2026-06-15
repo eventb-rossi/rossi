@@ -6,19 +6,26 @@
 //! component, pick the one under the cursor for position-based features, or
 //! pick one by name for cross-file lookups.
 
-use rossi::{Component, parse_components};
+use rossi::Component;
 
-/// Parse every component in `text`. Returns an empty vector when the strict
-/// parse fails — callers that want partial results on broken documents use
-/// [`rossi::parse_components_with_recovery`] instead.
+/// Parse every component in `text`, recovering a partial AST from local syntax
+/// errors. A single broken predicate no longer blanks out the whole document:
+/// the component it sits in is recovered (sans the broken clause) and its
+/// siblings parse normally. Returns an empty vector only when nothing at all
+/// could be recovered — there is no `CONTEXT`/`MACHINE` header to anchor on.
 pub fn parse_all(text: &str) -> Vec<Component> {
-    parse_components(text).unwrap_or_default()
+    rossi::parse_components_with_recovery(text)
+        .component
+        .unwrap_or_default()
 }
 
-/// Parse `text` and return the component named `name`, if any.
+/// Parse `text` and return the component named `name`, if any. Recovers from
+/// local errors, so the component is still found when it — or a sibling in the
+/// same file — fails a strict parse. A component whose header is too broken to
+/// read keeps its placeholder name and so is simply not matched.
 pub fn parse_named(text: &str, name: &str) -> Option<Component> {
-    parse_components(text)
-        .ok()?
+    rossi::parse_components_with_recovery(text)
+        .component?
         .into_iter()
         .find(|c| c.name() == name)
 }
@@ -80,7 +87,30 @@ mod tests {
 
     #[test]
     fn parse_all_returns_empty_on_error() {
+        // No CONTEXT/MACHINE header: recovery has nothing to anchor on, so the
+        // result is still empty.
         assert!(parse_all("not event-b").is_empty());
+    }
+
+    #[test]
+    fn parse_all_recovers_partial_components_on_local_error() {
+        // A broken predicate (`@a k ∈` with no right-hand side) used to fail
+        // the whole strict parse and blank the document. Recovery keeps both
+        // components: the broken one (sans the bad axiom) and its sibling.
+        let text = "CONTEXT C0\nCONSTANTS\n    k\nAXIOMS\n    @a k ∈\nEND\n\nMACHINE M0\nVARIABLES\n    x\nEND\n";
+        let components = parse_all(text);
+        let names: Vec<&str> = components.iter().map(|c| c.name()).collect();
+        assert_eq!(names, vec!["C0", "M0"]);
+    }
+
+    #[test]
+    fn parse_named_finds_component_despite_local_error() {
+        // `parse_named` resolves a component even when the file does not parse
+        // strictly — here the named machine is healthy but its sibling context
+        // has a broken axiom.
+        let text = "CONTEXT C0\nAXIOMS\n    @a k ∈\nEND\n\nMACHINE M0\nVARIABLES\n    x\nEND\n";
+        let component = parse_named(text, "M0").expect("M0 resolves despite C0's error");
+        assert!(matches!(component, Component::Machine(_)));
     }
 
     #[test]
