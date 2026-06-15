@@ -10,11 +10,10 @@ use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
-use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::{Component, keywords, operators};
 
-use crate::component_util::{component_at_offset, parse_all, parse_named};
+use crate::component_util::{component_at_offset, parse_named};
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_char_col};
 use std::collections::HashSet;
@@ -137,11 +136,9 @@ impl CompletionContext {
 /// Provides code completion for Event-B documents
 pub struct CompletionProvider {
     config: Arc<RwLock<CompletionConfig>>,
-    /// Cache of parsed components for quick completion
-    component_cache: Arc<DashMap<String, Vec<Component>>>,
     /// Cross-reference manager for workspace-wide navigation
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
-    /// Document manager to access open documents
+    /// Document manager — the source of the document's shared recovered parse
     document_manager: Option<Arc<DocumentManager>>,
 }
 
@@ -149,7 +146,6 @@ impl CompletionProvider {
     pub fn new() -> Self {
         Self {
             config: Arc::new(RwLock::new(CompletionConfig::default())),
-            component_cache: Arc::new(DashMap::new()),
             cross_ref_manager: None,
             document_manager: None,
         }
@@ -174,20 +170,9 @@ impl CompletionProvider {
         self.config.read().clone()
     }
 
-    /// Update the cached components for a document
-    pub fn update_component(&self, uri: String, text: &str) {
-        let components = parse_all(text);
-        if !components.is_empty() {
-            self.component_cache.insert(uri, components);
-        } else {
-            // Remove from cache if parsing fails
-            self.component_cache.remove(&uri);
-        }
-    }
-
     /// Generate completion items for the given position
     pub fn complete(&self, params: &CompletionParams, text: &str) -> Option<CompletionResponse> {
-        let uri = params.text_document_position.text_document.uri.to_string();
+        let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let config = self.get_config();
         if !config.enabled {
@@ -205,15 +190,20 @@ impl CompletionProvider {
         // `EVENT` mentioned in a trailing comment cannot change the scope.
         let masked = lexical.mask_comments_chars(text);
 
-        // Get completion context from the cached component under the cursor,
-        // along with that component's own name (to exclude it from
-        // component-name completion — a component never references itself).
-        let (completion_ctx, self_name) = self
-            .component_cache
-            .get(&uri)
-            .and_then(|entry| {
+        // Get completion context from the component under the cursor in the
+        // document's shared parse (the single source of truth maintained by the
+        // document manager), along with that component's own name (to exclude it
+        // from component-name completion — a component never references itself).
+        let parsed = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let (completion_ctx, self_name) = parsed
+            .as_deref()
+            .map(|parsed| parsed.components())
+            .and_then(|components| {
                 let offset = position_to_offset(text, position).unwrap_or(text.len());
-                component_at_offset(&entry, offset).map(|component| {
+                component_at_offset(components, offset).map(|component| {
                     let ctx = CompletionContext::from_component_with_refs(
                         component,
                         self.cross_ref_manager.as_deref(),
@@ -892,16 +882,6 @@ mod tests {
     }
 
     #[test]
-    fn test_component_caching() {
-        let provider = CompletionProvider::new();
-        let source = "CONTEXT test\nCONSTANTS\n    max_value\nEND";
-
-        provider.update_component("file:///test.eventb".to_string(), source);
-
-        assert!(provider.component_cache.contains_key("file:///test.eventb"));
-    }
-
-    #[test]
     fn test_completion_refined_variables() {
         use crate::lsp_types::Url;
 
@@ -916,26 +896,27 @@ mod tests {
         dm.open(url, "rossi".to_string(), 1, abstract_source.to_string());
 
         crm.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
-        let url = Url::parse("file:///concrete_mch.eventb").unwrap();
-        dm.open(url, "rossi".to_string(), 1, concrete_source.to_string());
+        let concrete_url = Url::parse("file:///concrete_mch.eventb").unwrap();
+        dm.open(
+            concrete_url.clone(),
+            "rossi".to_string(),
+            1,
+            concrete_source.to_string(),
+        );
 
         let mut provider = CompletionProvider::new();
         provider.set_cross_reference_manager(Arc::clone(&crm));
         provider.set_document_manager(Arc::clone(&dm));
-        provider.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
 
-        // Build completion context from the cached component
-        let ctx = provider
-            .component_cache
-            .get("file:///concrete_mch.eventb")
-            .map(|entry| {
-                CompletionContext::from_component_with_refs(
-                    &entry[0],
-                    provider.cross_ref_manager.as_deref(),
-                    provider.document_manager.as_deref(),
-                )
-            })
-            .unwrap();
+        // Build completion context from the component in the shared parse — the
+        // same source `complete` reads from.
+        let parsed = dm.parse_result(&concrete_url).unwrap();
+        let components = parsed.parse.component.as_deref().unwrap();
+        let ctx = CompletionContext::from_component_with_refs(
+            &components[0],
+            provider.cross_ref_manager.as_deref(),
+            provider.document_manager.as_deref(),
+        );
 
         // Should include abstract_state from refined machine
         assert!(

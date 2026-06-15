@@ -7,7 +7,6 @@
 //! - Built-in types and constants
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
-use dashmap::DashMap;
 use rossi::{
     Component, Expression, LabeledPredicate, Predicate, PrettyPrinter,
     keywords::{self, KeywordId},
@@ -16,7 +15,7 @@ use rossi::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::component_util::{component_at_offset, parse_all, parse_named};
+use crate::component_util::{component_at_offset, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::identifier_utils::position_to_offset;
@@ -132,19 +131,15 @@ impl HoverContext {
 
 /// Provides hover documentation for Event-B documents
 pub struct HoverProvider {
-    /// Cache of parsed components per document for quick hover lookup (a
-    /// document may define several components)
-    component_cache: Arc<DashMap<String, Vec<Component>>>,
     /// Cross-reference manager for workspace-wide navigation
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
-    /// Document manager to access open documents
+    /// Document manager — the source of the document's shared recovered parse
     document_manager: Option<Arc<DocumentManager>>,
 }
 
 impl HoverProvider {
     pub fn new() -> Self {
         Self {
-            component_cache: Arc::new(DashMap::new()),
             cross_ref_manager: None,
             document_manager: None,
         }
@@ -160,24 +155,9 @@ impl HoverProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Update the cached components for a document
-    pub fn update_component(&self, uri: String, text: &str) {
-        let components = parse_all(text);
-        if !components.is_empty() {
-            self.component_cache.insert(uri, components);
-        } else {
-            // Remove from cache if parsing fails
-            self.component_cache.remove(&uri);
-        }
-    }
-
     /// Generate hover information for the given position
     pub fn hover(&self, params: &HoverParams, text: &str) -> Option<Hover> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_string();
+        let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
         // No hover inside comments: `:=` or a keyword in prose is not the
@@ -188,13 +168,19 @@ impl HoverProvider {
             return None;
         }
 
-        // Get hover context from the cached component under the cursor
-        let hover_ctx = self
-            .component_cache
-            .get(&uri)
-            .and_then(|entry| {
+        // Hover context from the component under the cursor, read from the
+        // document's shared parse (the single source of truth maintained by the
+        // document manager). Keywords and operators still hover without it.
+        let parsed = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let hover_ctx = parsed
+            .as_deref()
+            .map(|parsed| parsed.components())
+            .and_then(|components| {
                 let offset = position_to_offset(text, position).unwrap_or(text.len());
-                component_at_offset(&entry, offset).map(|component| {
+                component_at_offset(components, offset).map(|component| {
                     HoverContext::from_component_with_refs(
                         component,
                         self.cross_ref_manager.as_deref(),
@@ -1080,7 +1066,7 @@ mod tests {
     #[test]
     fn test_hover_provider_creation() {
         let provider = HoverProvider::new();
-        assert!(provider.component_cache.is_empty());
+        assert!(provider.document_manager.is_none());
     }
 
     #[test]
@@ -1187,13 +1173,39 @@ mod tests {
     }
 
     #[test]
-    fn test_component_caching() {
-        let provider = HoverProvider::new();
-        let source = "CONTEXT test\nCONSTANTS\n    max_value\nEND";
+    fn test_hover_reads_components_from_document_manager() {
+        // With the document open in the manager, hover resolves an identifier
+        // from the shared parse — no provider-local cache.
+        let uri = "file:///test.eventb";
+        let source = "CONTEXT test\nCONSTANTS\n    max_value\nAXIOMS\n    @axm1 max_value ∈ ℕ\nEND";
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(
+            Url::parse(uri).unwrap(),
+            "rossi".to_string(),
+            1,
+            source.to_string(),
+        );
+        let mut provider = HoverProvider::new();
+        provider.set_document_manager(Arc::clone(&dm));
 
-        provider.update_component("file:///test.eventb".to_string(), source);
-
-        assert!(provider.component_cache.contains_key("file:///test.eventb"));
+        let hover = provider
+            .hover(
+                &HoverParams {
+                    text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                        text_document: crate::lsp_types::TextDocumentIdentifier {
+                            uri: Url::parse(uri).unwrap(),
+                        },
+                        position: Position::new(2, 4), // `max_value`
+                    },
+                    work_done_progress_params: Default::default(),
+                },
+                source,
+            )
+            .expect("hover on max_value resolves via the shared parse");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected markup content");
+        };
+        assert!(content.value.contains("Constant"));
     }
 
     #[test]
@@ -1589,8 +1601,6 @@ mod tests {
 
     #[test]
     fn test_hover_full_model_with_constraints() {
-        let provider = HoverProvider::new();
-
         let source = r#"
 CONTEXT counter_ctx
 CONSTANTS
@@ -1602,7 +1612,15 @@ END
 "#;
 
         let uri = "file:///counter_ctx.eventb".to_string();
-        provider.update_component(uri.clone(), source);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(
+            Url::parse(&uri).unwrap(),
+            "rossi".to_string(),
+            1,
+            source.to_string(),
+        );
+        let mut provider = HoverProvider::new();
+        provider.set_document_manager(Arc::clone(&dm));
 
         // Hover on max_value should show axiom constraints
         let hover = provider.hover(
@@ -1686,7 +1704,6 @@ END
         let mut provider = HoverProvider::new();
         provider.set_cross_reference_manager(Arc::clone(&crm));
         provider.set_document_manager(Arc::clone(&dm));
-        provider.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
 
         // Hover on abstract_state in the invariant line (line 7 of raw string)
         // "    @inv1 abstract_state = concrete_state"
