@@ -16,6 +16,8 @@ pub use expression::{BuiltinFunction, Expression, IdentPattern};
 pub use machine::Machine;
 pub use predicate::{BuiltinPredicate, Predicate};
 
+use crate::keywords::KeywordId;
+
 /// A bound variable with an optional type annotation (e.g., `x⦂ℤ`)
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -200,6 +202,14 @@ impl Component {
             Component::Machine(m) => m.name_span,
         }
     }
+
+    /// The component's clause regions (textual parse only), whichever kind it is.
+    pub fn clauses(&self) -> &[ClauseRegion] {
+        match self {
+            Component::Context(ctx) => &ctx.clauses,
+            Component::Machine(m) => &m.clauses,
+        }
+    }
 }
 
 /// Source location information for error reporting and LSP features
@@ -245,5 +255,27 @@ impl Span {
             }
         }
         (line, col)
+    }
+}
+
+/// The source region of one clause section: its header keyword through its last
+/// member (the span of the clause's grammar rule).
+///
+/// `keyword` is the clause's header keyword (`SETS`, `INVARIANTS`, `EVENTS`, …),
+/// identifying the section so consumers (folding, outline) can tell them apart.
+/// Recorded for textual parses — both the strict parse and error recovery — so
+/// structural consumers can span a clause without re-deriving its bounds by line
+/// scanning. Absent for components built without location info (Rodin XML import).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ClauseRegion {
+    pub keyword: KeywordId,
+    pub span: Span,
+}
+
+impl ClauseRegion {
+    /// Create a clause region introduced by `keyword`, covering `span`.
+    pub fn new(keyword: KeywordId, span: Span) -> Self {
+        Self { keyword, span }
     }
 }

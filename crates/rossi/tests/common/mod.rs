@@ -12,6 +12,9 @@ pub fn clear_spans(component: &mut Component) {
         Component::Context(ctx) => {
             ctx.span = None;
             ctx.name_span = None;
+            // Clause regions are span-derived metadata; offsets shift when the
+            // source is reformatted, so drop them for AST comparison.
+            ctx.clauses.clear();
             for set in &mut ctx.sets {
                 *set.span_mut() = None;
             }
@@ -25,6 +28,9 @@ pub fn clear_spans(component: &mut Component) {
         Component::Machine(machine) => {
             machine.span = None;
             machine.name_span = None;
+            // Clause regions are span-derived metadata; offsets shift when the
+            // source is reformatted, so drop them for AST comparison.
+            machine.clauses.clear();
             for var in &mut machine.variables {
                 var.span = None;
             }
