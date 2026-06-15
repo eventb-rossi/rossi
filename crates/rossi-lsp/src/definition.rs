@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crate::component_util::{component_line_window, lines_in_window, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::position::span_to_range;
+use crate::position::{char_col_to_utf16, span_to_range, utf16_len};
 use crate::references::component_reference_clause;
 use crate::symbols::SymbolKind;
 use crate::text_utils;
@@ -275,7 +275,7 @@ impl DefinitionProvider {
                 uri: uri.clone(),
                 range: Range {
                     start: pos,
-                    end: Position::new(pos.line, pos.character + name.len() as u32),
+                    end: Position::new(pos.line, pos.character + utf16_len(name)),
                 },
             },
             component_lines: Some(window),
@@ -450,7 +450,7 @@ fn find_identifier_in_clause(
             if let Some(col) = char_find_substr(&chars, &id_chars, 0)
                 && is_whole_word_at(&chars, col, id_chars.len())
             {
-                return Some(Position::new(line_num as u32, col as u32));
+                return Some(Position::new(line_num as u32, char_col_to_utf16(line, col)));
             }
         }
     }
@@ -477,7 +477,10 @@ fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -
         let mut from = 0;
         while let Some(name_pos) = char_find_substr(&chars, &name_chars, from) {
             if is_whole_word_at(&chars, name_pos, name_chars.len()) {
-                return Some(Position::new(line_num as u32, name_pos as u32));
+                return Some(Position::new(
+                    line_num as u32,
+                    char_col_to_utf16(line, name_pos),
+                ));
             }
             from = name_pos + 1;
         }
@@ -502,7 +505,7 @@ fn find_initialisation_definition(text: &str, window: (usize, usize)) -> Option<
         }
         let upper: Vec<char> = line.chars().map(|c| c.to_ascii_uppercase()).collect();
         if let Some(pos) = char_find_substr(&upper, &kw_chars, 0) {
-            return Some(Position::new(line_num as u32, pos as u32));
+            return Some(Position::new(line_num as u32, char_col_to_utf16(line, pos)));
         }
     }
 
@@ -556,7 +559,7 @@ fn find_identifier_in_event(
             if let Some(col) = char_find_substr(&chars, &id_chars, 0)
                 && is_whole_word_at(&chars, col, id_chars.len())
             {
-                return Some(Position::new(line_num as u32, col as u32));
+                return Some(Position::new(line_num as u32, char_col_to_utf16(line, col)));
             }
         }
     }
@@ -787,7 +790,22 @@ mod tests {
         assert!(pos.is_some());
         let pos = pos.unwrap();
         assert_eq!(pos.line, 4);
-        assert_eq!(pos.character, 4); // char index, not byte index
+        assert_eq!(pos.character, 4); // BMP `∈`/`ℕ` are one UTF-16 unit, and only on a prior line
+    }
+
+    #[test]
+    fn test_find_identifier_in_clause_reports_utf16_after_astral() {
+        // An astral character (`𝔹`, U+1D539) on the identifier's own line is two
+        // UTF-16 code units but a single `char`. LSP columns are UTF-16, so the
+        // reported column must skip the surrogate pair, not the char count. (`𝔹`
+        // is code here, not a comment, so masking leaves it in place.) All four
+        // local finders convert with the same `char_col_to_utf16(line, col)`.
+        let text = "MACHINE test\nVARIABLES\n    𝔹 count\nEND";
+
+        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL).unwrap();
+        assert_eq!(pos.line, 2);
+        // 4 spaces + `𝔹` (2 units) + 1 space = column 7, not the char index 6.
+        assert_eq!(pos.character, 7);
     }
 
     #[test]
