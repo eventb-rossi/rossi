@@ -2295,30 +2295,40 @@ fn recover_labeled_predicates(
         return result;
     };
 
-    // Collect the byte offset where each labeled predicate begins: the clause
-    // keyword (the leading segment, which also covers a predicate written
-    // inline after the keyword) plus every later predicate start. Splitting on
-    // `\n` instead — as this once did — cut every multi-line label off from its
-    // body and reported each correct predicate as a failure, lighting up the
-    // whole clause in the editor.
+    // Collect the byte offset where each labeled predicate begins. The lexer's
+    // `@`-label spans ([`RecoveryText::labels`]) are the single source of truth
+    // for where labels are: a predicate begins at every label that falls inside
+    // the clause, pulled back over a `theorem` keyword that immediately precedes
+    // it (the grammar's `kw_theorem ~ label`). The leading segment — from the
+    // clause keyword to the first label — also covers a predicate written inline
+    // after the keyword (`AXIOMS @axm1 P`) or before the first label. Anchoring
+    // on labels rather than on `\n` keeps a predicate that spans several physical
+    // lines whole, since `WHITESPACE` includes `\n` in the grammar.
     //
-    // A predicate starts at a line whose first token is `@label` or `theorem`.
-    // When the clause has no such line it is a run of bare, label-less
-    // predicates (the grammar's `label?` is optional) — there, every line
-    // starts a predicate, so each is recovered rather than lumped into one
-    // segment the single-predicate parser would reject.
-    let body = &text.masked[span.start..span.end];
-    let any_label = body
-        .split_inclusive('\n')
-        .skip(1)
-        .any(line_starts_labeled_predicate);
+    // A clause with no labels is a run of bare, label-less predicates (the
+    // grammar's `label?` is optional). The grammar has no token to split
+    // consecutive bare predicates on — `WHITESPACE` includes `\n` — so recovery
+    // falls back to a per-line split: each line becomes its own predicate rather
+    // than one multi-predicate segment the single-predicate parser would reject
+    // (dropping them all). This per-line heuristic is deliberate; it is the best
+    // recovery can do without label anchors.
     let mut starts = vec![span.start];
-    let mut line_start = span.start;
-    for line in body.split_inclusive('\n') {
-        if line_start != span.start && (!any_label || line_starts_labeled_predicate(line)) {
-            starts.push(line_start);
+    let label_starts: Vec<usize> = text
+        .labels
+        .iter()
+        .filter(|label| span.contains(label.start))
+        .map(|label| predicate_start_for_label(&text.masked, span.start, label.start))
+        .collect();
+    if label_starts.is_empty() {
+        let mut line_start = span.start;
+        for line in text.masked[span.start..span.end].split_inclusive('\n') {
+            if line_start != span.start {
+                starts.push(line_start);
+            }
+            line_start += line.len();
         }
-        line_start += line.len();
+    } else {
+        starts.extend(label_starts);
     }
     starts.push(span.end);
 
@@ -2369,12 +2379,26 @@ fn recover_labeled_predicates(
     result
 }
 
-/// Whether `line` (a physical line, possibly indented) begins a new labeled
-/// predicate during recovery: its first token is a `@label` or the `theorem`
-/// keyword. A continuation line of a multi-line predicate begins with neither.
-fn line_starts_labeled_predicate(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with('@') || starts_with_keyword(t, "theorem")
+/// The byte offset where the labeled predicate at `label_start` begins, so its
+/// recovery segment stays grammar-whole. Normally the label itself, but pulled
+/// back over a `theorem` keyword that immediately precedes the label (the
+/// grammar's `kw_theorem ~ label`, e.g. `theorem @grd1 …`). Never scans before
+/// `floor`, the clause-keyword offset. `masked` is the comment-masked text the
+/// label offsets index; the returned offset is valid in all [`RecoveryText`]
+/// views (shared byte layout).
+fn predicate_start_for_label(masked: &str, floor: usize, label_start: usize) -> usize {
+    let prefix = masked[floor..label_start].trim_end();
+    // Start of the last whitespace-separated token, measured as its byte length
+    // back from the end of `prefix`. `rsplit` cuts on char boundaries, so a
+    // multibyte whitespace — a no-break space, a line separator — never lands the
+    // offset mid-char.
+    let last_token = prefix.rsplit(char::is_whitespace).next().unwrap_or(prefix);
+    let last_token_start = floor + (prefix.len() - last_token.len());
+    if starts_with_keyword(&masked[last_token_start..label_start], "theorem") {
+        last_token_start
+    } else {
+        label_start
+    }
 }
 
 /// Whether `s` begins with `kw` as a whole word (case-insensitive): the match
