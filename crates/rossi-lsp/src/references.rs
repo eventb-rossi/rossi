@@ -5,6 +5,7 @@
 //! and across the workspace.
 
 use crate::lsp_types::*;
+use rossi::keywords::KeywordId;
 use rossi::{Component, parse_components};
 
 use crate::component_util::{component_at_offset, parse_named};
@@ -472,7 +473,9 @@ fn non_empty(locations: Vec<Location>) -> Option<Vec<Location>> {
 
 fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     // Scan comment-masked lines: an `EVENT foo` or `END` inside a comment
-    // must not open or close the event's line range.
+    // must not open or close the event's line range. The terminator is matched
+    // through the keyword table ([`text_utils::line_keyword_is`]), so a labelled
+    // action whose label spells a keyword (`@end x := 0`) is not read as `END`.
     let masked = rossi::comments::mask_comments_chars(text);
     let lines: Vec<&str> = masked.lines().collect();
     let start_line = lines
@@ -484,10 +487,7 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
         .enumerate()
         .skip(start_line + 1)
         .find_map(|(line_idx, line)| {
-            text_utils::first_identifier_word(line)
-                .as_deref()
-                .is_some_and(|word| word.eq_ignore_ascii_case("END"))
-                .then_some(line_idx)
+            text_utils::line_keyword_is(line, KeywordId::End).then_some(line_idx)
         })
         .unwrap_or_else(|| lines.len().saturating_sub(1));
 
@@ -519,25 +519,21 @@ pub(crate) fn component_reference_clause(
             continue;
         }
 
-        let first_word = text_utils::first_identifier_word(line);
-        let first_word = first_word.as_deref();
-
-        match first_word {
-            Some(word) if word.eq_ignore_ascii_case("END") && in_event => {
-                in_event = false;
-                current_clause = None;
-            }
-            Some(word) if word.eq_ignore_ascii_case("SEES") && !in_event => {
-                current_clause = Some(ReferenceKind::Sees)
-            }
-            Some(word) if word.eq_ignore_ascii_case("EXTENDS") && !in_event => {
-                current_clause = Some(ReferenceKind::Extends)
-            }
-            Some(word) if word.eq_ignore_ascii_case("REFINES") && !in_event => {
-                current_clause = Some(ReferenceKind::Refines)
-            }
-            Some(word) if text_utils::is_clause_boundary_keyword(word) => current_clause = None,
-            _ => {}
+        // Each line's leading keyword is resolved through the keyword table
+        // ([`text_utils::line_keyword_is`] / [`is_declaration_scan_boundary`]),
+        // not a `@`-stripped first word: a labelled clause line such as
+        // `@end x := 0` or `@sees y` must not be read as the keyword it spells.
+        if text_utils::line_keyword_is(line, KeywordId::End) && in_event {
+            in_event = false;
+            current_clause = None;
+        } else if text_utils::line_keyword_is(line, KeywordId::Sees) && !in_event {
+            current_clause = Some(ReferenceKind::Sees);
+        } else if text_utils::line_keyword_is(line, KeywordId::Extends) && !in_event {
+            current_clause = Some(ReferenceKind::Extends);
+        } else if text_utils::line_keyword_is(line, KeywordId::Refines) && !in_event {
+            current_clause = Some(ReferenceKind::Refines);
+        } else if text_utils::is_declaration_scan_boundary(line) {
+            current_clause = None;
         }
     }
 
@@ -842,6 +838,45 @@ EVENTS
 END";
         assert_eq!(event_line_range(source, "end-update"), Some((2, 5)));
         assert_eq!(event_line_range(source, "end"), None);
+    }
+
+    #[test]
+    fn test_event_line_range_ignores_labelled_end_action() {
+        // An action labelled `end` (`@end x ≔ 0`) is not the `END` keyword: the
+        // range must extend to the real `END` on line 5, not stop at the action
+        // on line 4. `line_keyword_is` reads the whole `@end` token, which the
+        // keyword table does not resolve to `END`.
+        let source = "\
+MACHINE m
+EVENTS
+    EVENT step
+    THEN
+        @end x ≔ 0
+    END
+END";
+        assert_eq!(event_line_range(source, "step"), Some((2, 5)));
+    }
+
+    #[test]
+    fn test_component_reference_clause_ignores_labelled_sees() {
+        // `@sees x > 0` is an invariant labelled `sees`, not a SEES clause. The
+        // clause scanner resolves each line's leading keyword through the
+        // keyword table, so the `@sees` label is not mistaken for SEES and the
+        // cursor on it is not reported as a component-reference position.
+        let source = "\
+MACHINE m
+INVARIANTS
+    @sees x > 0
+EVENTS
+    EVENT e
+    THEN
+        @act1 x ≔ 1
+    END
+END";
+        assert!(!is_component_reference_position(
+            source,
+            Position::new(2, 4)
+        ));
     }
 
     #[test]
