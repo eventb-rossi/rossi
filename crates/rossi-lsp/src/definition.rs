@@ -19,9 +19,9 @@ use std::sync::Arc;
 use crate::component_util::{component_line_window, lines_in_window, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::position::{char_col_to_utf16, span_to_range, utf16_len};
+use crate::position::{span_to_range, utf16_len};
 use crate::references::component_reference_clause;
-use crate::symbol_scan::find_symbol_in_clause;
+use crate::symbol_scan::{find_event_header, find_symbol_in_clause};
 use crate::symbols::SymbolKind;
 use crate::text_utils;
 
@@ -313,7 +313,7 @@ impl DefinitionProvider {
 
                 // Extract events
                 for event in &machine.events {
-                    if let Some(pos) = find_event_definition(text, &event.name, window) {
+                    if let Some(pos) = find_event_header(text, &event.name, window) {
                         definitions.push(def_info(&event.name, SymbolKind::Event, pos));
                     }
 
@@ -329,7 +329,7 @@ impl DefinitionProvider {
 
                 // Handle INITIALISATION event
                 if machine.initialisation.is_some()
-                    && let Some(pos) = find_initialisation_definition(text, window)
+                    && let Some(pos) = find_event_header(text, "INITIALISATION", window)
                 {
                     definitions.push(def_info("INITIALISATION", SymbolKind::Event, pos));
                 }
@@ -400,80 +400,6 @@ impl Default for DefinitionProvider {
 
 use crate::identifier_utils::identifier_at_position;
 
-/// Find the first occurrence of `needle` (as chars) in `haystack` starting at `from`.
-/// Returns the char index of the match, or `None`.
-fn char_find_substr(haystack: &[char], needle: &[char], from: usize) -> Option<usize> {
-    if needle.is_empty() || from + needle.len() > haystack.len() {
-        return None;
-    }
-    (from..=haystack.len() - needle.len()).find(|&i| haystack[i..i + needle.len()] == *needle)
-}
-
-/// Check if a word is at a specific char position with proper word boundaries
-fn is_whole_word_at(chars: &[char], pos: usize, word_len: usize) -> bool {
-    if pos + word_len > chars.len() {
-        return false;
-    }
-    let before_ok = pos == 0 || !chars[pos - 1].is_alphanumeric() && chars[pos - 1] != '_';
-    let after_ok = pos + word_len >= chars.len()
-        || !chars[pos + word_len].is_alphanumeric() && chars[pos + word_len] != '_';
-    before_ok && after_ok
-}
-
-/// Find an event definition
-fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -> Option<Position> {
-    let name_chars: Vec<char> = event_name.chars().collect();
-
-    for (line_num, line) in lines_in_window(text, window) {
-        // Only a header line whose `EVENT` keyword (any casing) names this
-        // event — `event_name_from_line` reads the keyword case-insensitively
-        // and keeps a hyphenated name whole.
-        if text_utils::event_name_from_line(line).as_deref() != Some(event_name) {
-            continue;
-        }
-        // The name itself is case-sensitive; locate its first whole-word
-        // occurrence for the column. Scanning for whole words (not the first
-        // substring) avoids a false hit when the name is a substring of the
-        // EVENT keyword spelled before it (e.g. an event named `ent`).
-        let chars: Vec<char> = line.chars().collect();
-        let mut from = 0;
-        while let Some(name_pos) = char_find_substr(&chars, &name_chars, from) {
-            if is_whole_word_at(&chars, name_pos, name_chars.len()) {
-                return Some(Position::new(
-                    line_num as u32,
-                    char_col_to_utf16(line, name_pos),
-                ));
-            }
-            from = name_pos + 1;
-        }
-    }
-
-    None
-}
-
-/// Find INITIALISATION event definition
-fn find_initialisation_definition(text: &str, window: (usize, usize)) -> Option<Position> {
-    // The init event's header is `EVENT INITIALISATION` (any casing). Detect it
-    // by its event name (as `find_event_definition` does), then locate the
-    // INITIALISATION token's column case-insensitively (an ASCII-uppercased copy
-    // preserves char columns). Uppercasing only the matched header line.
-    let kw = rossi::keywords::spell(rossi::keywords::KeywordId::Initialisation);
-    let kw_chars: Vec<char> = kw.chars().collect();
-
-    for (line_num, line) in lines_in_window(text, window) {
-        if !text_utils::event_name_from_line(line).is_some_and(|name| name.eq_ignore_ascii_case(kw))
-        {
-            continue;
-        }
-        let upper: Vec<char> = line.chars().map(|c| c.to_ascii_uppercase()).collect();
-        if let Some(pos) = char_find_substr(&upper, &kw_chars, 0) {
-            return Some(Position::new(line_num as u32, char_col_to_utf16(line, pos)));
-        }
-    }
-
-    None
-}
-
 /// Find an identifier within an event (e.g., ANY clause)
 fn find_identifier_in_event(
     text: &str,
@@ -530,9 +456,6 @@ fn find_identifier_in_event(
 mod tests {
     use super::*;
     use crate::lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
-
-    /// Whole-file search window, the single-component default.
-    const FULL: (usize, usize) = (0, usize::MAX);
 
     #[test]
     fn test_definition_provider_creation() {
@@ -636,46 +559,6 @@ mod tests {
         let dec_def = cache.find_definition("decrement");
         assert!(dec_def.is_some());
         assert_eq!(dec_def.unwrap().kind, SymbolKind::Event);
-    }
-
-    #[test]
-    fn test_find_event_definition() {
-        let text = "MACHINE test\nEVENTS\n    EVENT increment\n    WHERE\n        count < 10\n    END\nEND";
-
-        let pos = find_event_definition(text, "increment", FULL);
-        assert!(pos.is_some());
-        let pos = pos.unwrap();
-        assert_eq!(pos.line, 2);
-    }
-
-    #[test]
-    fn test_find_initialisation_definition() {
-        let text = "MACHINE test\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        count := 0\n    END\nEND";
-
-        let pos = find_initialisation_definition(text, FULL);
-        assert!(pos.is_some());
-        let pos = pos.unwrap();
-        assert_eq!(pos.line, 2);
-    }
-
-    #[test]
-    fn test_local_finders_are_case_insensitive() {
-        // Lowercase keywords (Camille style) must resolve like UPPERCASE ones.
-        let text = "machine test\nvariables\n    count\nevents\n    event increment\n    then\n        count := count + 1\n    end\n    event initialisation\n    then\n        count := 0\n    end\nend";
-
-        assert_eq!(
-            find_symbol_in_clause(text, "VARIABLES", "count", FULL).map(|p| p.line),
-            Some(2)
-        );
-        assert_eq!(
-            find_event_definition(text, "increment", FULL).map(|p| p.line),
-            Some(4)
-        );
-        // The init header sits on the second `event ...` line.
-        assert_eq!(
-            find_initialisation_definition(text, FULL).map(|p| p.line),
-            Some(8)
-        );
     }
 
     #[test]
