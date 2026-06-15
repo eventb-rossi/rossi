@@ -263,8 +263,8 @@ well-definedness and refinement proof checks.
 
 - Diagnostics are immediate; `rossi.diagnostics.debounceMs` is parsed but not yet used.
 - LSP diagnostics are syntax-only until the semantic diagnostics adapter is added.
-- Some providers still use text-based lookup where full AST spans would be more precise.
-- Expression, predicate, action, initialisation, and individual identifier spans are still incomplete in the AST.
+- Declaration sites (sets, constants, variables, events, parameters, INITIALISATION) resolve from AST spans; usage-site lookup (find-references, rename, and the semantic-token fallbacks) is still text-based, pending per-identifier spans.
+- Expression, predicate, action, and individual identifier spans are still incomplete in the AST.
 - Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
 
 ## Development

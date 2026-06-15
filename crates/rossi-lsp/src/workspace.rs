@@ -4,9 +4,8 @@
 //! It maintains an index of all symbols (variables, constants, sets, events) and supports
 //! fuzzy search for quick navigation.
 
-use crate::component_util::component_line_window;
 use crate::lsp_types::*;
-use crate::symbol_scan;
+use crate::position::offset_to_position;
 use dashmap::DashMap;
 use rossi::ast::*;
 use std::sync::Arc;
@@ -115,9 +114,11 @@ impl WorkspaceSymbolProvider {
         results
     }
 
-    /// Extract all symbols from a component. Text searches are bounded to the
-    /// component's line window so symbols land in the right component of a
-    /// multi-component document.
+    /// Extract all symbols from a component, locating each at the span the
+    /// parser recorded for its declared name. Spans are absolute offsets into
+    /// `text`, so symbols land in the right component of a multi-component
+    /// document without bounding the search to a line window, and a name
+    /// spelled in a comment is never indexed (the parser does not tokenise it).
     fn extract_symbols_from_component(
         &self,
         component: &Component,
@@ -125,88 +126,47 @@ impl WorkspaceSymbolProvider {
         text: &str,
     ) -> Vec<SymbolEntry> {
         let mut symbols = Vec::new();
-        let window = component_line_window(component, text);
 
-        // Mask comments (char columns preserved) before the clause/event text
-        // scans below, so a clause header or symbol name spelled in a `//` or
-        // `/* */` comment never opens a clause or becomes a symbol's location.
-        let masked = rossi::comments::mask_comments_chars(text);
-        let text = masked.as_str();
+        let entry = |name: &str, kind: SymbolKind, container: &str, span: Option<Span>| {
+            Some(SymbolEntry {
+                name: name.to_string(),
+                kind,
+                container: container.to_string(),
+                location: self.locate_at(uri, text, span?.start)?,
+            })
+        };
 
         match component {
             Component::Context(ctx) => {
-                let container = ctx.name.clone();
-
-                // Extract sets
-                for set in &ctx.sets {
-                    let set_name = set.name();
-                    if let Some(location) =
-                        self.find_symbol_location(text, uri, "SETS", set_name, window)
-                    {
-                        symbols.push(SymbolEntry {
-                            name: set_name.to_string(),
-                            kind: SymbolKind::ENUM,
-                            container: container.clone(),
-                            location,
-                        });
-                    }
-                }
-
-                // Extract constants
-                for constant in &ctx.constants {
-                    if let Some(location) =
-                        self.find_symbol_location(text, uri, "CONSTANTS", &constant.name, window)
-                    {
-                        symbols.push(SymbolEntry {
-                            name: constant.name.clone(),
-                            kind: SymbolKind::CONSTANT,
-                            container: container.clone(),
-                            location,
-                        });
-                    }
-                }
+                symbols.extend(
+                    ctx.sets
+                        .iter()
+                        .filter_map(|s| entry(s.name(), SymbolKind::ENUM, &ctx.name, s.span())),
+                );
+                symbols.extend(
+                    ctx.constants
+                        .iter()
+                        .filter_map(|c| entry(&c.name, SymbolKind::CONSTANT, &ctx.name, c.span)),
+                );
             }
             Component::Machine(mch) => {
-                let container = mch.name.clone();
-
-                // Extract variables
-                for variable in &mch.variables {
-                    if let Some(location) =
-                        self.find_symbol_location(text, uri, "VARIABLES", &variable.name, window)
-                    {
-                        symbols.push(SymbolEntry {
-                            name: variable.name.clone(),
-                            kind: SymbolKind::VARIABLE,
-                            container: container.clone(),
-                            location,
-                        });
-                    }
-                }
-
-                // Extract events
-                for event in &mch.events {
-                    if let Some(location) = self.find_event_location(text, uri, &event.name, window)
-                    {
-                        symbols.push(SymbolEntry {
-                            name: event.name.clone(),
-                            kind: SymbolKind::EVENT,
-                            container: container.clone(),
-                            location,
-                        });
-                    }
-                }
-
-                // Extract initialisation event if present
-                if mch.initialisation.is_some()
-                    && let Some(location) =
-                        self.find_event_location(text, uri, "INITIALISATION", window)
-                {
-                    symbols.push(SymbolEntry {
-                        name: "INITIALISATION".to_string(),
-                        kind: SymbolKind::EVENT,
-                        container: container.clone(),
-                        location,
-                    });
+                symbols.extend(
+                    mch.variables
+                        .iter()
+                        .filter_map(|v| entry(&v.name, SymbolKind::VARIABLE, &mch.name, v.span)),
+                );
+                symbols.extend(
+                    mch.events
+                        .iter()
+                        .filter_map(|e| entry(&e.name, SymbolKind::EVENT, &mch.name, e.name_span)),
+                );
+                if let Some(init) = &mch.initialisation {
+                    symbols.extend(entry(
+                        "INITIALISATION",
+                        SymbolKind::EVENT,
+                        &mch.name,
+                        init.name_span,
+                    ));
                 }
             }
         }
@@ -221,33 +181,10 @@ impl WorkspaceSymbolProvider {
         symbols
     }
 
-    /// Find the location of a symbol in a clause, within an inclusive line window.
-    fn find_symbol_location(
-        &self,
-        text: &str,
-        uri: &str,
-        clause: &str,
-        identifier: &str,
-        window: (usize, usize),
-    ) -> Option<Location> {
-        let pos = symbol_scan::find_symbol_in_clause(text, clause, identifier, window)?;
-        self.locate(uri, pos)
-    }
-
-    /// Find the location of an event declaration, within an inclusive line window.
-    fn find_event_location(
-        &self,
-        text: &str,
-        uri: &str,
-        event_name: &str,
-        window: (usize, usize),
-    ) -> Option<Location> {
-        let pos = symbol_scan::find_event_header(text, event_name, window)?;
-        self.locate(uri, pos)
-    }
-
-    /// Wrap a [`Position`] into a zero-width [`Location`] in `uri`.
-    fn locate(&self, uri: &str, pos: Position) -> Option<Location> {
+    /// Wrap the position at byte offset `start` in `text` into a zero-width
+    /// [`Location`] in `uri`.
+    fn locate_at(&self, uri: &str, text: &str, start: usize) -> Option<Location> {
+        let pos = offset_to_position(text, start);
         Some(Location::new(Url::parse(uri).ok()?, Range::new(pos, pos)))
     }
 }
