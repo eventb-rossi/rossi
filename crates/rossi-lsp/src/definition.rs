@@ -16,14 +16,12 @@ use rossi::{Component, parse_components};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::component_util::{component_line_window, lines_in_window, parse_named};
+use crate::component_util::{component_line_window, parse_named};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::position::{span_to_range, utf16_len};
+use crate::position::{offset_to_position, span_to_range, utf16_len};
 use crate::references::component_reference_clause;
-use crate::symbol_scan::{find_event_header, find_symbol_in_clause};
 use crate::symbols::SymbolKind;
-use crate::text_utils;
 
 /// Information about where an identifier is defined
 #[derive(Debug, Clone)]
@@ -263,75 +261,71 @@ impl DefinitionProvider {
             Err(_) => return definitions, // Return empty if URI parsing fails
         };
 
-        // Mask comments once for all clause/event scans below: a declaration
-        // name or keyword mentioned in a comment must never become the
-        // definition site (char columns are unchanged by the mask).
-        let masked = rossi::comments::mask_comments_chars(text);
-        let text = masked.as_str();
-
-        let def_info = |name: &str, kind: SymbolKind, pos: Position| DefinitionInfo {
-            name: name.to_string(),
-            kind,
-            location: Location {
-                uri: uri.clone(),
-                range: Range {
-                    start: pos,
-                    end: Position::new(pos.line, pos.character + utf16_len(name)),
+        // The parser records each declared name's span, so the definition site
+        // is read straight from the AST. This is exact for any casing or spacing
+        // and never matches a name spelled in a comment (the parser does not
+        // tokenise comment text), so no source re-scan or comment masking is
+        // needed. A `None` span only occurs for components built without
+        // location info (Rodin XML import), which never reach this provider.
+        let def_at = |name: &str, kind: SymbolKind, start: usize| {
+            let pos = offset_to_position(text, start);
+            DefinitionInfo {
+                name: name.to_string(),
+                kind,
+                location: Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: pos,
+                        end: Position::new(pos.line, pos.character + utf16_len(name)),
+                    },
                 },
-            },
-            component_lines: Some(window),
+                component_lines: Some(window),
+            }
         };
 
         match component {
             Component::Context(context) => {
-                // Extract sets
                 for set in &context.sets {
-                    let set_name = set.name();
-                    if let Some(pos) = find_symbol_in_clause(text, "SETS", set_name, window) {
-                        definitions.push(def_info(set_name, SymbolKind::Set, pos));
+                    if let Some(span) = set.span() {
+                        definitions.push(def_at(set.name(), SymbolKind::Set, span.start));
                     }
                 }
 
-                // Extract constants
                 for constant in &context.constants {
-                    if let Some(pos) =
-                        find_symbol_in_clause(text, "CONSTANTS", &constant.name, window)
-                    {
-                        definitions.push(def_info(&constant.name, SymbolKind::Constant, pos));
+                    if let Some(span) = constant.span {
+                        definitions.push(def_at(&constant.name, SymbolKind::Constant, span.start));
                     }
                 }
             }
             Component::Machine(machine) => {
-                // Extract variables
                 for variable in &machine.variables {
-                    if let Some(pos) =
-                        find_symbol_in_clause(text, "VARIABLES", &variable.name, window)
-                    {
-                        definitions.push(def_info(&variable.name, SymbolKind::Variable, pos));
+                    if let Some(span) = variable.span {
+                        definitions.push(def_at(&variable.name, SymbolKind::Variable, span.start));
                     }
                 }
 
-                // Extract events
                 for event in &machine.events {
-                    if let Some(pos) = find_event_header(text, &event.name, window) {
-                        definitions.push(def_info(&event.name, SymbolKind::Event, pos));
+                    if let Some(span) = event.name_span {
+                        definitions.push(def_at(&event.name, SymbolKind::Event, span.start));
                     }
 
-                    // Extract event parameters
+                    // ANY-clause parameters: the AST holds exactly the declared
+                    // parameters, each with its own name span.
                     for param in &event.parameters {
-                        if let Some(pos) =
-                            find_identifier_in_event(text, &event.name, "ANY", &param.name, window)
-                        {
-                            definitions.push(def_info(&param.name, SymbolKind::Parameter, pos));
+                        if let Some(span) = param.span {
+                            definitions.push(def_at(
+                                &param.name,
+                                SymbolKind::Parameter,
+                                span.start,
+                            ));
                         }
                     }
                 }
 
-                // Handle INITIALISATION event
-                if machine.initialisation.is_some()
-                    && let Some(pos) = find_event_header(text, "INITIALISATION", window)
+                if let Some(init) = &machine.initialisation
+                    && let Some(span) = init.name_span
                 {
-                    definitions.push(def_info("INITIALISATION", SymbolKind::Event, pos));
+                    definitions.push(def_at("INITIALISATION", SymbolKind::Event, span.start));
                 }
             }
         }
@@ -399,58 +393,6 @@ impl Default for DefinitionProvider {
 // Helper functions
 
 use crate::identifier_utils::identifier_at_position;
-
-/// Find an identifier within an event (e.g., ANY clause)
-fn find_identifier_in_event(
-    text: &str,
-    event_name: &str,
-    clause: &str,
-    identifier: &str,
-    window: (usize, usize),
-) -> Option<Position> {
-    // Find the event first
-    let mut in_event = false;
-    let mut in_clause = false;
-
-    for (line_num, line) in lines_in_window(text, window) {
-        let trimmed = line.trim();
-
-        // Walk to the target event's header (EVENT keyword in any casing).
-        if !in_event {
-            if text_utils::event_name_from_line(line).as_deref() == Some(event_name) {
-                in_event = true;
-            }
-            continue;
-        }
-
-        // Check if we've left the event: its END or the next event's header.
-        if trimmed.eq_ignore_ascii_case("END") || text_utils::event_name_from_line(line).is_some() {
-            break;
-        }
-
-        // Check if we're entering the clause within the event
-        if text_utils::line_enters_clause(line, clause) {
-            in_clause = true;
-            continue;
-        }
-
-        // The clause runs until the next structural boundary; an event has at
-        // most one of each clause, so stop once it ends rather than clearing the
-        // flag — mirroring `symbol_scan::find_symbol_in_clause`, and keeping a
-        // later body line whose first token is the clause keyword from
-        // re-opening it.
-        if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
-            break;
-        }
-
-        // Search for identifier in this clause
-        if in_clause && let Some(col) = text_utils::whole_word_utf16_col(line, identifier) {
-            return Some(Position::new(line_num as u32, col));
-        }
-    }
-
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -591,15 +533,54 @@ mod tests {
     }
 
     #[test]
-    fn find_identifier_in_event_is_bounded_to_its_clause() {
-        // The ANY clause ends at WHERE; a later body line whose first token is
-        // the clause keyword must not re-open it. `p` is not an ANY parameter
-        // here, so the result is None — not the `p` inside the `any = p` guard.
-        let text = "MACHINE m\nEVENTS\n  EVENT e\n  ANY\n    q\n  WHERE\n    any = p\n    p > 0\n  THEN\n  END\nEND";
-        assert_eq!(
-            find_identifier_in_event(text, "e", "ANY", "p", (0, usize::MAX)),
-            None
+    fn any_parameter_resolves_but_a_guard_only_name_does_not() {
+        // The AST holds exactly the ANY-clause parameters, so a parameter (`q`)
+        // resolves to its declaration while a name that only appears in a guard
+        // (`k`) is not a definition at all — the property the old bounded text
+        // scan had to enforce by hand.
+        let provider = DefinitionProvider::new();
+        let source = "MACHINE m\nVARIABLES\n    v\nEVENTS\n  EVENT e\n  ANY\n    q\n  WHERE\n    q > k\n  THEN\n    v := 0\n  END\nEND";
+        provider.update_definitions("file:///m.eventb".to_string(), source);
+        let cache = provider.definition_cache.get("file:///m.eventb").unwrap();
+
+        let q = cache.find_definition("q").expect("q is an ANY parameter");
+        assert_eq!(q.kind, SymbolKind::Parameter);
+        assert_eq!(q.location.range.start, Position::new(6, 4));
+
+        assert!(
+            cache.find_definition("k").is_none(),
+            "k only appears in a guard, so it is not a definition"
         );
+    }
+
+    #[test]
+    fn event_name_that_is_a_substring_of_a_keyword_resolves_exactly() {
+        // An event named `ent` is a substring of `EVENT`; reading the name span
+        // from the AST lands on the name, never inside the keyword.
+        let provider = DefinitionProvider::new();
+        let source = "MACHINE m\nEVENTS\n    EVENT ent\n    END\nEND";
+        provider.update_definitions("file:///m.eventb".to_string(), source);
+        let cache = provider.definition_cache.get("file:///m.eventb").unwrap();
+
+        let ent = cache.find_definition("ent").expect("event ent resolves");
+        assert_eq!(ent.kind, SymbolKind::Event);
+        assert_eq!(ent.location.range.start, Position::new(2, 10)); // after "    EVENT "
+    }
+
+    #[test]
+    fn inline_sets_header_resolves_every_member() {
+        // `SETS s1` then `s2` on the next line: both are set declarations in the
+        // AST, each with its own span, so both resolve to their own positions.
+        let provider = DefinitionProvider::new();
+        let source = "CONTEXT c\nSETS s1\n    s2\nEND";
+        provider.update_definitions("file:///c.eventb".to_string(), source);
+        let cache = provider.definition_cache.get("file:///c.eventb").unwrap();
+
+        let s1 = cache.find_definition("s1").expect("s1 resolves");
+        assert_eq!(s1.kind, SymbolKind::Set);
+        assert_eq!(s1.location.range.start, Position::new(1, 5)); // after "SETS "
+        let s2 = cache.find_definition("s2").expect("s2 resolves");
+        assert_eq!(s2.location.range.start, Position::new(2, 4));
     }
 
     #[test]
