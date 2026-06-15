@@ -2238,7 +2238,8 @@ impl<'a> RecoveryText<'a> {
     }
 }
 
-/// Extract identifiers from a clause during error recovery.
+/// Extract identifiers (each with its source [`Span`]) from a clause during
+/// error recovery.
 ///
 /// Content written inline after the clause keyword (`VARIABLES x, y`) counts
 /// like any other line. Declaring clauses (keyed off `keyword`, mirroring
@@ -2246,7 +2247,14 @@ impl<'a> RecoveryText<'a> {
 /// the strict parse already reported them as ReservedWord errors, and keeping
 /// them would hand downstream consumers (LSP completion, rename) a
 /// declaration the parser itself forbids.
-fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<String> {
+///
+/// Spans are byte offsets into the recovery text (which shares its byte layout
+/// with the original input the [`RecoveryText`] was built from), so they point
+/// at the declared name exactly. Declaring clauses give navigation and symbol
+/// providers a definition site even inside a component the strict parse
+/// rejected; reference clauses (EXTENDS/SEES/REFINES) carry spans too, harmless
+/// for callers that only want the names.
+fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<(String, Span)> {
     let declares = matches!(keyword, "SETS" | "CONSTANTS" | "VARIABLES");
     // Keep only names the grammar would re-accept in this position, so a
     // recovered AST stays round-trippable — whitespace-split recovery would
@@ -2254,7 +2262,7 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
     // Declaring clauses (SETS/CONSTANTS/VARIABLES) take mathematical
     // identifiers (and reject reserved words, mirroring the strict path);
     // reference clauses (EXTENDS/SEES/REFINES) take component names.
-    let accepts = |name: &String| {
+    let accepts = |name: &str| {
         if declares {
             crate::names::is_valid_math_identifier(name) && !crate::builtins::is_reserved_word(name)
         } else {
@@ -2262,14 +2270,23 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
         }
     };
     let mut result = Vec::new();
-    if let Some(span) = extract_clause_content(text, keyword, bound) {
-        for line in text.masked[span.start..span.end].lines() {
-            let line = line.trim();
-            let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
-            if !content.is_empty() {
-                result.extend(extract_identifiers(content).into_iter().filter(&accepts));
-            }
+    let Some(span) = extract_clause_content(text, keyword, bound) else {
+        return result;
+    };
+    for line in text.masked[span.start..span.end].lines() {
+        let line = line.trim();
+        let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
+        if content.is_empty() {
+            continue;
         }
+        // `content` is a subslice of `text.masked`; its byte offset there is
+        // also its offset in the original (masking preserves byte layout).
+        let base = subslice_offset(&text.masked, content);
+        result.extend(
+            extract_identifiers(content, base)
+                .into_iter()
+                .filter(|(name, _)| accepts(name)),
+        );
     }
     result
 }
@@ -2349,8 +2366,7 @@ fn recover_labeled_predicates(
             Err(e) => {
                 // `content` is a subslice of `raw`; recover its absolute offset
                 // (masked and original share a byte layout).
-                let content_offset = content.as_ptr() as usize - raw.as_ptr() as usize;
-                let abs_start = seg_start + content_offset;
+                let abs_start = seg_start + subslice_offset(raw, content);
                 let abs_end = abs_start + content.len();
                 let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
                 let subject = leading_label(content)
@@ -2784,19 +2800,24 @@ fn parse_context_with_recovery(
     // Try to parse each clause independently. Contexts have no event
     // section, so the clause scan is unbounded.
     let bound = text.masked.len();
-    context.extends = recover_identifiers(text, "EXTENDS", bound);
-    context.sets.extend(
-        recover_identifiers(text, "SETS", bound)
-            .into_iter()
-            .map(|name| SetDeclaration::Deferred {
-                name,
-                comment: None,
-                span: None,
-            }),
-    );
+    context.extends = recover_identifiers(text, "EXTENDS", bound)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    context
+        .sets
+        .extend(
+            recover_identifiers(text, "SETS", bound)
+                .into_iter()
+                .map(|(name, span)| SetDeclaration::Deferred {
+                    name,
+                    comment: None,
+                    span: Some(span),
+                }),
+        );
     context.constants = recover_identifiers(text, "CONSTANTS", bound)
         .into_iter()
-        .map(NamedElement::new)
+        .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
     context.axioms = recover_labeled_predicates(text, "AXIOMS", "axiom", bound, &mut errors);
     context
@@ -2828,11 +2849,15 @@ fn parse_machine_with_recovery(
     let bound = first_event_region_start(text);
     machine.refines = recover_identifiers(text, "REFINES", bound)
         .into_iter()
-        .next();
-    machine.sees = recover_identifiers(text, "SEES", bound);
+        .next()
+        .map(|(name, _)| name);
+    machine.sees = recover_identifiers(text, "SEES", bound)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
     machine.variables = recover_identifiers(text, "VARIABLES", bound)
         .into_iter()
-        .map(NamedElement::new)
+        .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
     machine.invariants =
         recover_labeled_predicates(text, "INVARIANTS", "invariant", bound, &mut errors);
@@ -2993,19 +3018,39 @@ fn extract_identifier(s: &str) -> Result<String, ParseError> {
 }
 
 /// Extract multiple identifiers from a comma-separated string
-fn extract_identifiers(s: &str) -> Vec<String> {
+/// Split a clause line into declared identifiers, each paired with its [`Span`].
+///
+/// `base` is the byte offset of `s` within the text whose coordinates the
+/// returned spans should use. Each identifier is a subslice of `s`, so its
+/// offset within `s` (recovered by pointer arithmetic, always on a char
+/// boundary) added to `base` gives a byte-exact span over the name.
+fn extract_identifiers(s: &str, base: usize) -> Vec<(String, Span)> {
     s.split(',')
         .map(|part| part.trim())
         .filter(|part| !part.is_empty())
         .filter_map(|part| {
             let id = part.split(char::is_whitespace).next().unwrap_or("").trim();
             if !id.is_empty() && id.chars().next().is_some_and(|c| c.is_alphabetic()) {
-                Some(id.to_string())
+                let start = base + subslice_offset(s, id);
+                let span = Span {
+                    start,
+                    end: start + id.len(),
+                };
+                Some((id.to_string(), span))
             } else {
                 None
             }
         })
         .collect()
+}
+
+/// Byte offset of `sub` within `parent`. `sub` MUST be a subslice of `parent`
+/// (i.e. produced by slicing/`split`/`trim` of `parent`, sharing its
+/// allocation) — recovery maps a scanned fragment back to an absolute offset in
+/// the byte-layout-preserving masked text this way. The result is always on a
+/// char boundary because `sub` is a real subslice.
+fn subslice_offset(parent: &str, sub: &str) -> usize {
+    sub.as_ptr() as usize - parent.as_ptr() as usize
 }
 
 /// Parse a labeled predicate from a single line of text (used by error recovery)
