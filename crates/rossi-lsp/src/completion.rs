@@ -16,6 +16,7 @@ use rossi::{Component, keywords, operators};
 
 use crate::component_util::{component_at_offset, parse_all, parse_named};
 use crate::identifier_utils::position_to_offset;
+use crate::position::{line_run_to_range, utf16_to_char_col};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -228,7 +229,11 @@ impl CompletionProvider {
 
         // Analyze the text to determine context
         let line_text = get_line_text(&masked, position);
-        let word_at_cursor = get_word_at_position(&line_text, position.character as usize);
+        // `position.character` is a UTF-16 column; `get_word_at_position` slices
+        // by char, so convert first or an astral char before the cursor would
+        // truncate the word.
+        let char_col = utf16_to_char_col(&line_text, position.character as usize);
+        let word_at_cursor = get_word_at_position(&line_text, char_col);
 
         // Add keyword completions
         items.extend(self.get_keyword_completions(&line_text, &word_at_cursor));
@@ -689,7 +694,11 @@ fn get_word_at_position(line: &str, char_pos: usize) -> String {
 fn hyphenated_word_range(masked: &str, position: Position) -> Range {
     let line = masked.lines().nth(position.line as usize).unwrap_or("");
     let chars: Vec<char> = line.chars().collect();
-    let cursor = (position.character as usize).min(chars.len());
+    // The incoming `position.character` is a UTF-16 column; the scan below
+    // indexes `chars` by char, and the returned range is emitted as UTF-16
+    // columns — so convert in on the way down and back out on the way up.
+    // `utf16_to_char_col` already clamps to the line's char count.
+    let cursor = utf16_to_char_col(line, position.character as usize);
     let mut start = cursor;
     while start > 0 && keywords::is_structural_word_char(chars[start - 1]) {
         start -= 1;
@@ -699,10 +708,7 @@ fn hyphenated_word_range(masked: &str, position: Position) -> Range {
     while start < cursor && chars[start] == '-' {
         start += 1;
     }
-    Range::new(
-        Position::new(position.line, start as u32),
-        Position::new(position.line, cursor as u32),
-    )
+    line_run_to_range(line, position.line, start, cursor)
 }
 
 // Context detection functions
@@ -1021,6 +1027,21 @@ mod tests {
             }
             other => panic!("expected a plain TextEdit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hyphenated_word_range_is_utf16_after_astral() {
+        // An astral `𝔹` (U+1D539 — two UTF-16 code units, one `char`) before the
+        // word means the incoming UTF-16 cursor column and the emitted edit
+        // range must both account for the surrogate pair, not the single char it
+        // spans. LSP columns are UTF-16.
+        let masked = "    𝔹 abstract-";
+        // Cursor just past the trailing `-`: UTF-16 column 16
+        // (4 spaces + 𝔹(2) + 1 space + "abstract-"(9)).
+        let range = hyphenated_word_range(masked, Position::new(0, 16));
+        // The replaced `abstract-` starts at the `a` (UTF-16 col 7), ends at 16.
+        assert_eq!(range.start, Position::new(0, 7));
+        assert_eq!(range.end, Position::new(0, 16));
     }
 
     #[test]
