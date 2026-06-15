@@ -11,6 +11,7 @@ use tracing::debug;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::text_utils;
+use rossi::keywords::KeywordId;
 
 /// Provides document link functionality
 pub struct DocumentLinkProvider {
@@ -195,11 +196,10 @@ fn is_inside_event(lines: &[&str], line_idx: usize) -> bool {
             continue;
         }
 
-        let Some(first_word) = text_utils::first_identifier_word(line) else {
-            continue;
-        };
-
-        if first_word.eq_ignore_ascii_case("END") && in_event {
+        // Match the terminator through the keyword table, not a `@`-stripped
+        // first word: a labelled action `@end x := 0` is not the END keyword and
+        // must not close the event early.
+        if text_utils::line_keyword_is(line, KeywordId::End) && in_event {
             in_event = false;
         }
     }
@@ -431,6 +431,28 @@ END
             links[0].target.as_ref().unwrap().as_str(),
             "file:///M0.eventb"
         );
+    }
+
+    #[test]
+    fn test_is_inside_event_ignores_labelled_end_action() {
+        // A labelled action `@end …` must not be read as the END keyword and
+        // close the event early: a line after it but before the real END is
+        // still inside the event. Resolving the leading token through the
+        // keyword table (not a `@`-stripped word) keeps `@end` out of `END`.
+        let source = "\
+MACHINE m
+EVENTS
+    EVENT e
+    THEN
+        @end x := 0
+        @act y := 1
+    END
+END";
+        let lines: Vec<&str> = source.lines().collect();
+        // Line 5 (`@act y := 1`) sits after the `@end` action but inside event e.
+        assert!(is_inside_event(&lines, 5));
+        // Line 7 (the trailing machine END) is past the event's real END.
+        assert!(!is_inside_event(&lines, 7));
     }
 
     #[test]
