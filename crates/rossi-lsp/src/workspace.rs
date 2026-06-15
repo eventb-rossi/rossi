@@ -4,10 +4,9 @@
 //! It maintains an index of all symbols (variables, constants, sets, events) and supports
 //! fuzzy search for quick navigation.
 
-use crate::component_util::{component_line_window, lines_in_window};
+use crate::component_util::component_line_window;
 use crate::lsp_types::*;
 use crate::symbol_scan;
-use crate::text_utils;
 use dashmap::DashMap;
 use rossi::ast::*;
 use std::sync::Arc;
@@ -186,8 +185,7 @@ impl WorkspaceSymbolProvider {
 
                 // Extract events
                 for event in &mch.events {
-                    if let Some(location) =
-                        self.find_event_location(text, uri, &event.name, &container, window)
+                    if let Some(location) = self.find_event_location(text, uri, &event.name, window)
                     {
                         symbols.push(SymbolEntry {
                             name: event.name.clone(),
@@ -201,7 +199,7 @@ impl WorkspaceSymbolProvider {
                 // Extract initialisation event if present
                 if mch.initialisation.is_some()
                     && let Some(location) =
-                        self.find_event_location(text, uri, "INITIALISATION", &container, window)
+                        self.find_event_location(text, uri, "INITIALISATION", window)
                 {
                     symbols.push(SymbolEntry {
                         name: "INITIALISATION".to_string(),
@@ -236,47 +234,21 @@ impl WorkspaceSymbolProvider {
         self.locate(uri, pos)
     }
 
-    /// Wrap a [`Position`] into a zero-width [`Location`] in `uri`.
-    fn locate(&self, uri: &str, pos: Position) -> Option<Location> {
-        Some(Location::new(Url::parse(uri).ok()?, Range::new(pos, pos)))
-    }
-
-    /// Find the location of an event declaration, within an inclusive line window
+    /// Find the location of an event declaration, within an inclusive line window.
     fn find_event_location(
         &self,
         text: &str,
         uri: &str,
         event_name: &str,
-        _container: &str,
         window: (usize, usize),
     ) -> Option<Location> {
-        for (line_idx, line) in lines_in_window(text, window) {
-            // An `EVENT <name>` header in any casing (`event_name_from_line`
-            // reads the keyword case-insensitively and keeps a hyphenated name
-            // whole). The init event's name is the INITIALISATION *keyword*
-            // (case-insensitive); every other event name is a case-sensitive
-            // identifier.
-            let Some(name) = text_utils::event_name_from_line(line) else {
-                continue;
-            };
-            let is_init = rossi::keywords::lookup(event_name).map(|k| k.id)
-                == Some(rossi::keywords::KeywordId::Initialisation);
-            let matches = if is_init {
-                name.eq_ignore_ascii_case(event_name)
-            } else {
-                name == event_name
-            };
+        let pos = symbol_scan::find_event_header(text, event_name, window)?;
+        self.locate(uri, pos)
+    }
 
-            if matches && let Some(col_idx) = text_utils::whole_word_utf16_col(line, &name) {
-                let position = Position::new(line_idx as u32, col_idx);
-                return Some(Location::new(
-                    Url::parse(uri).ok()?,
-                    Range::new(position, position),
-                ));
-            }
-        }
-
-        None
+    /// Wrap a [`Position`] into a zero-width [`Location`] in `uri`.
+    fn locate(&self, uri: &str, pos: Position) -> Option<Location> {
+        Some(Location::new(Url::parse(uri).ok()?, Range::new(pos, pos)))
     }
 }
 
