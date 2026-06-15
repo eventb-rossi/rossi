@@ -36,7 +36,12 @@ END
         text_document: TextDocumentIdentifier { uri },
     };
 
-    let result = provider.semantic_tokens(&params, text);
+    let parsed = rossi::parse_components_with_recovery(text);
+    let result = provider.semantic_tokens(
+        &params,
+        text,
+        parsed.component.as_deref().unwrap_or_default(),
+    );
 
     assert!(result.is_some(), "Should return semantic tokens");
 
@@ -107,7 +112,12 @@ fn test_semantic_tokens_returns_none_for_unparseable_input() {
             partial_result_params: Default::default(),
             text_document: TextDocumentIdentifier { uri: uri.clone() },
         };
-        let result = provider.semantic_tokens(&params, text);
+        let parsed = rossi::parse_components_with_recovery(text);
+        let result = provider.semantic_tokens(
+            &params,
+            text,
+            parsed.component.as_deref().unwrap_or_default(),
+        );
         assert!(
             result.is_none(),
             "expected None for unparseable input {text:?}, got {result:?}"

@@ -55,28 +55,24 @@ impl SemanticTokensProvider {
         }
     }
 
-    /// Provide semantic tokens for a document
+    /// Provide semantic tokens for a document.
+    ///
+    /// `components` is the document's shared recovered parse (from the document
+    /// manager), so highlighting reflects the same AST as every other feature
+    /// and does not re-parse per request. Recovery keeps the highlight alive
+    /// (rather than flickering back to the TextMate grammar with the issue-#24
+    /// comment bug) through a mid-edit syntax error; comment and label tokens
+    /// come from a lexical scan and are emitted even when `components` is empty.
     pub fn semantic_tokens(
         &self,
         _params: &SemanticTokensParams,
         text: &str,
+        components: &[Component],
     ) -> Option<SemanticTokensResult> {
-        // Parse the document, falling back to error recovery: highlighting
-        // must not vanish (and flicker back to the TextMate grammar with the
-        // issue-#24 comment bug) on every mid-edit keystroke.
-        let parsed = rossi::parse_components_with_recovery(text);
-        let Some(components) = parsed.component else {
-            debug!(
-                "Failed to parse document for semantic tokens: {:?}",
-                parsed.errors.first()
-            );
-            return None;
-        };
-
         // Extract semantic tokens from the AST, one component at a time
         let mut builder = SemanticTokensBuilder::new(text);
 
-        for component in &components {
+        for component in components {
             match component {
                 Component::Context(ctx) => builder.visit_context(ctx),
                 Component::Machine(mch) => builder.visit_machine(mch),
@@ -89,6 +85,12 @@ impl SemanticTokensProvider {
         let tokens = builder.build();
 
         debug!("Generated {} semantic tokens", tokens.data.len() / 5);
+
+        // Nothing to highlight (unparseable input with no comments or labels):
+        // return None so the client falls back to its TextMate grammar.
+        if tokens.data.is_empty() {
+            return None;
+        }
 
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
