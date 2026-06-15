@@ -103,6 +103,34 @@ fn recovery_records_declaration_spans() {
 }
 
 #[test]
+fn trailing_operator_does_not_flag_the_following_predicate() {
+    // `@a … ∈` with nothing after `∈` makes the strict parser consume across the
+    // newline into `@b`'s label, so its error points at the innocent `@b`.
+    // Recovery flags `@a` precisely; the misleading strict error must be dropped,
+    // leaving exactly one error, located on `@a`'s predicate (not `@b`).
+    let source = "MACHINE m\nVARIABLES\n    x\n    y\nINVARIANTS\n    @a x ∈\n    @b y ∈ ℕ\nEND\n";
+    let result = parse_with_recovery(source);
+
+    assert!(result.has_recovered());
+    assert_eq!(
+        result.errors.len(),
+        1,
+        "exactly one error expected, got {:?}",
+        result.errors
+    );
+
+    let span = result.errors[0]
+        .span()
+        .expect("the surviving error carries a span");
+    let b_label = source.find("@b").unwrap();
+    assert!(
+        span.end <= b_label,
+        "error span {span:?} must stay on @a's predicate, not reach @b at {b_label}"
+    );
+    assert!(source[span.start..span.end].contains("@a"));
+}
+
+#[test]
 fn recovery_spans_are_absolute_in_multi_component_files() {
     // In a merged file a recovered declaration's span must be shifted out of its
     // per-component region into absolute document coordinates. Here C0 is healthy

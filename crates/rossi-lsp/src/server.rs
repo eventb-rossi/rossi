@@ -1107,6 +1107,38 @@ mod tests {
     }
 
     #[test]
+    fn trailing_operator_flags_only_the_broken_predicate() {
+        // The reported edit: a `… ∈` invariant left dangling. The strict parser
+        // runs past it into the next label, but only the broken predicate may be
+        // flagged — the following @RolesPartition must stay clean.
+        let text = concat!(
+            "MACHINE m\n",
+            "VARIABLES\n",
+            "    Roles\n",
+            "    AdmRoles\n",
+            "INVARIANTS\n",
+            "    @EntitiesPartition Roles ∈\n",
+            "    @RolesPartition Roles ⊆ AdmRoles\n",
+            "END\n",
+        );
+        let result = rossi::parse_components_with_recovery(text);
+        let diagnostics: Vec<_> = result
+            .errors
+            .iter()
+            .map(|e| parse_error_to_diagnostic(e, text))
+            .collect();
+
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "only the broken predicate is flagged, got {diagnostics:?}"
+        );
+        // The diagnostic stays on the @EntitiesPartition line (0-indexed 5),
+        // never reaching @RolesPartition on line 6.
+        assert!(diagnostics[0].range.end.line < 6);
+    }
+
+    #[test]
     fn operator_rows_are_well_formed() {
         let rows = operator_rows();
         assert!(!rows.is_empty(), "operator table must not be empty");
