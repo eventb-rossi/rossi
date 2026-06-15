@@ -23,75 +23,36 @@ pub struct RossiParser;
 /// A human-readable spelling for a grammar [`Rule`], used to rewrite pest's
 /// `expected …` lists from internal rule names (`op_in`, `lbrace`) into the
 /// Event-B symbols a user actually types (`∈`, `{`). Returns `None` for rules
-/// with no terser spelling, so the caller keeps pest's own name. Operators map
-/// to a canonical Event-B glyph (usually the Unicode form); the few Rodin
-/// private-use relations have no standard glyph, so they keep an ASCII
-/// spelling.
-#[rustfmt::skip]
+/// with no terser spelling, so the caller keeps pest's own name.
+///
+/// Operator glyphs are sourced from the canonical [`OPERATOR_SPELLINGS`] table
+/// via [`rule_to_operator_id`] + [`operators::spell`], so there is a single
+/// source of truth. The explicit arms below are the deliberate exceptions:
+///
+/// * The Rodin private-use relations (`op_total_relation` &c.) and the
+///   relational override store a private-use codepoint as their canonical
+///   glyph, which renders as nothing in an error; we show a typable form
+///   instead (`⊕` is U+2295, the displayable equivalent of the override's
+///   U+E103). `op_range_op` likewise reads better as `..` than the `‥` leader.
+/// * Bracketing and separator tokens (`comma`, `lparen`, …) are not modelled
+///   as operators, so they have no [`OperatorId`] to derive from.
+///
+/// [`OPERATOR_SPELLINGS`]: crate::operators::OPERATOR_SPELLINGS
+/// [`operators::spell`]: crate::operators::spell
+/// [`OperatorId`]: crate::operators::OperatorId
 pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
     Some(match rule {
-        Rule::op_and => "∧",
-        Rule::op_or => "∨",
-        Rule::op_implies => "⇒",
-        Rule::op_equivalent => "⇔",
-        Rule::op_not => "¬",
-        Rule::op_forall => "∀",
-        Rule::op_exists => "∃",
-        Rule::op_in => "∈",
-        Rule::op_notin => "∉",
-        Rule::op_subset => "⊆",
-        Rule::op_subset_strict => "⊂",
-        Rule::op_not_subset => "⊈",
-        Rule::op_not_subset_strict => "⊄",
-        Rule::op_union => "∪",
-        Rule::op_intersection => "∩",
-        Rule::op_difference => "∖",
-        Rule::op_cartesian => "×",
-        Rule::op_powerset => "ℙ",
-        Rule::op_powerset1 => "ℙ1",
-        Rule::op_emptyset => "∅",
-        Rule::op_oftype => "⦂",
-        Rule::op_maplet => "↦",
-        Rule::op_relation => "↔",
-        Rule::op_partial_fn => "⇸",
-        Rule::op_total_fn => "→",
-        Rule::op_partial_inj => "⤔",
-        Rule::op_total_inj => "↣",
-        Rule::op_partial_surj => "⤀",
-        Rule::op_total_surj => "↠",
-        Rule::op_bijection => "⤖",
-        Rule::op_domain => "dom",
-        Rule::op_range => "ran",
-        Rule::op_inverse => "∼",
-        Rule::op_semicolon => ";",
-        Rule::op_composition => "∘",
-        Rule::op_domain_restrict => "◁",
-        Rule::op_domain_subtract => "⩤",
-        Rule::op_range_restrict => "▷",
-        Rule::op_range_subtract => "⩥",
+        // Displayable spelling for operators whose canonical glyph (matching
+        // the kernel-language spec code points) is an unrenderable Rodin
+        // private-use code point — U+E100..=U+E103 — or the U+2025 `‥` leader.
+        // Error messages show the spec's ASCII form (or ⊕ U+2295 for the
+        // override's U+E103) instead.
         Rule::op_overwrite => "⊕",
-        Rule::op_direct_product => "⊗",
-        Rule::op_parallel_product => "∥",
-        Rule::op_total_surjective_relation => "<<->>",
-        Rule::op_surjective_relation => "<->>",
         Rule::op_total_relation => "<<->",
-        Rule::op_plus => "+",
-        Rule::op_minus => "−",
-        Rule::op_multiply => "∗",
-        Rule::op_divide => "÷",
-        Rule::op_modulo => "mod",
-        Rule::op_exponent => "^",
+        Rule::op_surjective_relation => "<->>",
+        Rule::op_total_surjective_relation => "<<->>",
         Rule::op_range_op => "..",
-        Rule::op_eq => "=",
-        Rule::op_neq => "≠",
-        Rule::op_lt => "<",
-        Rule::op_le => "≤",
-        Rule::op_gt => ">",
-        Rule::op_ge => "≥",
-        Rule::op_becomes_equal => "≔",
-        Rule::op_becomes_in => ":∈",
-        Rule::op_becomes_such => ":∣",
-        Rule::dot => "·",
+        // Syntax tokens that are not modelled as operators.
         Rule::comma => ",",
         Rule::colon => ":",
         Rule::lparen => "(",
@@ -101,6 +62,45 @@ pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
         Rule::lbracket => "[",
         Rule::rbracket => "]",
         Rule::pipe => "|",
+        _ => return rule_to_operator_id(rule).map(|id| crate::operators::spell(id, true)),
+    })
+}
+
+/// Bridge a grammar [`Rule`] to its canonical [`OperatorId`], reusing the maps
+/// already maintained for parsing (`rule_to_*`) and pretty-printing (`*_id`).
+/// Returns `None` for rules that do not denote an operator. This is the link
+/// that lets [`friendly_rule_name`] derive operator glyphs from the single
+/// [`OPERATOR_SPELLINGS`] table.
+///
+/// [`OperatorId`]: crate::operators::OperatorId
+/// [`OPERATOR_SPELLINGS`]: crate::operators::OPERATOR_SPELLINGS
+fn rule_to_operator_id(rule: Rule) -> Option<crate::operators::OperatorId> {
+    use crate::operators::{
+        OperatorId, binary_op_id, comparison_op_id, logical_op_id, quantifier_id, unary_op_id,
+    };
+    if let Some(op) = rule_to_binary_op(rule) {
+        return Some(binary_op_id(op));
+    }
+    if let Some(op) = rule_to_unary_op(rule) {
+        return Some(unary_op_id(op));
+    }
+    if let Some(op) = rule_to_comparison_op(rule) {
+        return Some(comparison_op_id(op));
+    }
+    if let Some(op) = rule_to_logical_op(rule) {
+        return Some(logical_op_id(op));
+    }
+    if let Some(q) = rule_to_quantifier(rule) {
+        return Some(quantifier_id(q));
+    }
+    // Operators that carry a spelling but no AST operator-enum representation.
+    Some(match rule {
+        Rule::op_not => OperatorId::Not,
+        Rule::op_emptyset => OperatorId::EmptySet,
+        Rule::op_becomes_equal => OperatorId::Assignment,
+        Rule::op_becomes_in => OperatorId::BecomesIn,
+        Rule::op_becomes_such => OperatorId::BecomesSuchThat,
+        Rule::dot => OperatorId::Dot,
         _ => return None,
     })
 }
@@ -3034,4 +3034,143 @@ fn try_parse_labeled_predicate_from_text(text: &str) -> Result<LabeledPredicate,
     }
 
     Err(strict_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The displayable glyph [`friendly_rule_name`] must return for every rule
+    /// it handles. This pins the observable behaviour and is the authoritative
+    /// enumeration the drift checks range over (pest's generated `Rule` has no
+    /// variant iterator, and the crate does not depend on `strum`).
+    #[rustfmt::skip]
+    const GOLDEN: &[(Rule, &str)] = &[
+        (Rule::op_and, "∧"),
+        (Rule::op_or, "∨"),
+        (Rule::op_implies, "⇒"),
+        (Rule::op_equivalent, "⇔"),
+        (Rule::op_not, "¬"),
+        (Rule::op_forall, "∀"),
+        (Rule::op_exists, "∃"),
+        (Rule::op_in, "∈"),
+        (Rule::op_notin, "∉"),
+        (Rule::op_subset, "⊆"),
+        (Rule::op_subset_strict, "⊂"),
+        (Rule::op_not_subset, "⊈"),
+        (Rule::op_not_subset_strict, "⊄"),
+        (Rule::op_union, "∪"),
+        (Rule::op_intersection, "∩"),
+        (Rule::op_difference, "∖"),
+        (Rule::op_cartesian, "×"),
+        (Rule::op_powerset, "ℙ"),
+        (Rule::op_powerset1, "ℙ1"),
+        (Rule::op_emptyset, "∅"),
+        (Rule::op_oftype, "⦂"),
+        (Rule::op_maplet, "↦"),
+        (Rule::op_relation, "↔"),
+        (Rule::op_partial_fn, "⇸"),
+        (Rule::op_total_fn, "→"),
+        (Rule::op_partial_inj, "⤔"),
+        (Rule::op_total_inj, "↣"),
+        (Rule::op_partial_surj, "⤀"),
+        (Rule::op_total_surj, "↠"),
+        (Rule::op_bijection, "⤖"),
+        (Rule::op_domain, "dom"),
+        (Rule::op_range, "ran"),
+        (Rule::op_inverse, "∼"),
+        (Rule::op_semicolon, ";"),
+        (Rule::op_composition, "∘"),
+        (Rule::op_domain_restrict, "◁"),
+        (Rule::op_domain_subtract, "⩤"),
+        (Rule::op_range_restrict, "▷"),
+        (Rule::op_range_subtract, "⩥"),
+        (Rule::op_overwrite, "⊕"),
+        (Rule::op_direct_product, "⊗"),
+        (Rule::op_parallel_product, "∥"),
+        (Rule::op_total_surjective_relation, "<<->>"),
+        (Rule::op_surjective_relation, "<->>"),
+        (Rule::op_total_relation, "<<->"),
+        (Rule::op_plus, "+"),
+        (Rule::op_minus, "−"),
+        (Rule::op_multiply, "∗"),
+        (Rule::op_divide, "÷"),
+        (Rule::op_modulo, "mod"),
+        (Rule::op_exponent, "^"),
+        (Rule::op_range_op, ".."),
+        (Rule::op_eq, "="),
+        (Rule::op_neq, "≠"),
+        (Rule::op_lt, "<"),
+        (Rule::op_le, "≤"),
+        (Rule::op_gt, ">"),
+        (Rule::op_ge, "≥"),
+        (Rule::op_becomes_equal, "≔"),
+        (Rule::op_becomes_in, ":∈"),
+        (Rule::op_becomes_such, ":∣"),
+        (Rule::dot, "·"),
+        (Rule::comma, ","),
+        (Rule::colon, ":"),
+        (Rule::lparen, "("),
+        (Rule::rparen, ")"),
+        (Rule::lbrace, "{"),
+        (Rule::rbrace, "}"),
+        (Rule::lbracket, "["),
+        (Rule::rbracket, "]"),
+        (Rule::pipe, "|"),
+    ];
+
+    /// Operators whose displayable glyph deliberately differs from the
+    /// canonical `OPERATOR_SPELLINGS` unicode (see [`friendly_rule_name`]).
+    const DIVERGENCES: &[Rule] = &[
+        Rule::op_overwrite,
+        Rule::op_total_relation,
+        Rule::op_surjective_relation,
+        Rule::op_total_surjective_relation,
+        Rule::op_range_op,
+    ];
+
+    #[test]
+    fn friendly_rule_name_matches_golden() {
+        for &(rule, expected) in GOLDEN {
+            assert_eq!(
+                friendly_rule_name(rule),
+                Some(expected),
+                "friendly_rule_name({rule:?})"
+            );
+        }
+    }
+
+    /// Single-source-of-truth guard: every operator rule listed in `GOLDEN`
+    /// carries the glyph from `OPERATOR_SPELLINGS`, except the documented
+    /// divergences — and each of those is still a genuine divergence, so the
+    /// override stays justified.
+    #[test]
+    fn friendly_derives_from_spellings() {
+        // Each divergence must be pinned in `GOLDEN`, otherwise the loop below
+        // would silently skip its override-still-justified check.
+        for &rule in DIVERGENCES {
+            assert!(
+                GOLDEN.iter().any(|&(r, _)| r == rule),
+                "divergence {rule:?} is missing from GOLDEN"
+            );
+        }
+        for &(rule, expected) in GOLDEN {
+            let Some(id) = rule_to_operator_id(rule) else {
+                continue; // syntax tokens have no OperatorId to derive from
+            };
+            let canonical = crate::operators::spell(id, true);
+            if DIVERGENCES.contains(&rule) {
+                assert_ne!(
+                    expected, canonical,
+                    "{rule:?} is listed as a divergence but now matches its \
+                     canonical spelling; drop the override"
+                );
+            } else {
+                assert_eq!(
+                    expected, canonical,
+                    "{rule:?} glyph drifted from OPERATOR_SPELLINGS"
+                );
+            }
+        }
+    }
 }
