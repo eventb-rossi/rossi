@@ -1190,3 +1190,102 @@ fn test_recovery_mixed_labelled_and_bare_predicates() {
         extra[0]
     );
 }
+
+#[test]
+fn recovery_records_events_variant_and_clause_regions() {
+    use rossi::keywords::KeywordId;
+
+    // The broken invariant forces the whole machine into recovery; the events,
+    // variant, and clause regions past it must still be recovered so structural
+    // LSP features (folding, outline) survive a syntax error mid-edit.
+    let source = "\
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @i invalid @#$ syntax
+VARIANT
+    x
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @a x := 0
+    END
+    EVENT step
+    WHEN
+        @g x > 0
+    THEN
+        @b x := 0
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let m = expect_machine(&result);
+
+    // The named event recovered, with a span covering its whole block.
+    assert_eq!(m.events.len(), 1, "one named event, got {:?}", m.events);
+    assert_eq!(m.events[0].name, "step");
+    let evt_span = m.events[0].span.expect("event carries a span");
+    let evt_text = &source[evt_span.start..evt_span.end];
+    assert!(evt_text.starts_with("EVENT step"), "got {evt_text:?}");
+    assert!(evt_text.trim_end().ends_with("END"), "got {evt_text:?}");
+
+    // The INITIALISATION recovered, its name span on the keyword.
+    let init = m.initialisation.as_ref().expect("initialisation recovered");
+    let name = init.name_span.expect("init name span");
+    assert_eq!(&source[name.start..name.end], "INITIALISATION");
+
+    // The variant expression recovered (best effort).
+    assert!(m.variant.is_some(), "variant recovered");
+
+    // Clause regions cover variant and events; the EVENTS region ends at the
+    // last event's END, not the machine END.
+    let keywords: Vec<KeywordId> = m.clauses.iter().map(|c| c.keyword).collect();
+    assert!(keywords.contains(&KeywordId::Variant), "got {keywords:?}");
+    assert!(keywords.contains(&KeywordId::Events), "got {keywords:?}");
+    let events = m
+        .clauses
+        .iter()
+        .find(|c| c.keyword == KeywordId::Events)
+        .expect("events region");
+    assert!(source[events.span.start..events.span.end].starts_with("EVENTS"));
+    // The region ends at the last event's END; the machine's own END follows it.
+    assert!(
+        source[events.span.end..].contains("END"),
+        "EVENTS region must end before the machine END"
+    );
+}
+
+#[test]
+fn recovery_clause_regions_are_absolute_in_multi_component_files() {
+    use rossi::keywords::KeywordId;
+
+    // A recovered clause region in a merged file must be shifted into absolute
+    // document coordinates, like declaration spans. M0 is broken, so it recovers
+    // from a non-zero region offset.
+    let source = "CONTEXT C0\nCONSTANTS\n    k\nEND\n\nMACHINE M0\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n";
+    let result = parse_components_with_recovery(source);
+    let components = result.component.expect("recovered components");
+    let machine = components
+        .iter()
+        .find_map(|c| match c {
+            Component::Machine(m) => Some(m),
+            Component::Context(_) => None,
+        })
+        .expect("machine M0 recovered");
+
+    let vars = machine
+        .clauses
+        .iter()
+        .find(|c| c.keyword == KeywordId::Variables)
+        .expect("variables region recovered");
+    // The region indexes into the full source at the second component, not the
+    // per-region slice.
+    assert!(
+        source[vars.span.start..vars.span.end].starts_with("VARIABLES"),
+        "got {:?}",
+        &source[vars.span.start..vars.span.end]
+    );
+    assert!(vars.span.start > source.find("MACHINE M0").unwrap());
+}
