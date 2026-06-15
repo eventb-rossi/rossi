@@ -97,6 +97,17 @@ impl NamedElement {
             span: None,
         }
     }
+
+    /// Create a new named element located at `span` (used by error recovery,
+    /// which records each declared name's source span so navigation and symbol
+    /// providers can resolve it even in a component the strict parse rejected).
+    pub fn with_span(name: String, span: Span) -> Self {
+        Self {
+            name,
+            comment: None,
+            span: Some(span),
+        }
+    }
 }
 
 impl From<String> for NamedElement {

@@ -84,6 +84,49 @@ fn test_recovery_machine_with_invalid_invariant() {
 }
 
 #[test]
+fn recovery_records_declaration_spans() {
+    // A recovered declaration carries the byte span of its name, so navigation
+    // and symbol providers resolve it even inside a component the strict parse
+    // rejected. The trailing `∈` forces the machine into recovery.
+    let source = "MACHINE m\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n";
+    let result = parse_with_recovery(source);
+
+    let m = expect_machine(&result);
+    assert_eq!(m.variables.len(), 1);
+    let span = m.variables[0]
+        .span
+        .expect("recovered variable carries a span");
+    // The span covers exactly the declared `counter` (line 2), not the use in
+    // the broken invariant.
+    assert_eq!(span.start, source.find("    counter\n").unwrap() + 4);
+    assert_eq!(&source[span.start..span.end], "counter");
+}
+
+#[test]
+fn recovery_spans_are_absolute_in_multi_component_files() {
+    // In a merged file a recovered declaration's span must be shifted out of its
+    // per-component region into absolute document coordinates. Here C0 is healthy
+    // and M0 is broken, so M0 recovers from a non-zero region offset.
+    let source = "CONTEXT C0\nCONSTANTS\n    k\nEND\n\nMACHINE M0\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n";
+    let result = parse_components_with_recovery(source);
+
+    let components = result.component.expect("recovered components");
+    let machine = components
+        .iter()
+        .find_map(|c| match c {
+            Component::Machine(m) => Some(m),
+            Component::Context(_) => None,
+        })
+        .expect("machine M0 recovered");
+    assert_eq!(machine.variables.len(), 1);
+    let span = machine.variables[0]
+        .span
+        .expect("recovered variable carries a span");
+    assert_eq!(span.start, source.find("    counter\n").unwrap() + 4);
+    assert_eq!(&source[span.start..span.end], "counter");
+}
+
+#[test]
 fn test_recovery_multiline_invariant_isolates_the_broken_one() {
     // Idiomatic Event-B writes each invariant as a `@label` on one line with
     // the predicate indented below. A syntax error in one predicate must not
