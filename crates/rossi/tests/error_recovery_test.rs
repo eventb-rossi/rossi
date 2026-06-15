@@ -1289,3 +1289,19 @@ fn recovery_clause_regions_are_absolute_in_multi_component_files() {
     );
     assert!(vars.span.start > source.find("MACHINE M0").unwrap());
 }
+
+#[test]
+fn recovery_spans_the_component_block() {
+    // A broken single component still carries a block span from its header
+    // keyword through its last content, so block-level consumers (e.g. folding)
+    // anchor it even when the strict parse failed.
+    let source = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @i broken @#$ syntax\nEND\n";
+    let result = parse_with_recovery(source);
+    let m = expect_machine(&result);
+    let span = m.span.expect("recovered machine carries a block span");
+    let text = &source[span.start..span.end];
+    assert!(text.starts_with("MACHINE"), "got {text:?}");
+    assert!(text.ends_with("END"), "got {text:?}");
+    // The span stops at the final END, not the trailing newline.
+    assert_eq!(span.end, source.trim_end().len());
+}
