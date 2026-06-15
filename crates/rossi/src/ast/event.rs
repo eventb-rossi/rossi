@@ -93,4 +93,6 @@ pub struct InitialisationEvent {
     pub witnesses: Vec<LabeledPredicate>,
     /// Source location of the whole INITIALISATION event (textual parse only)
     pub span: Option<Span>,
+    /// Source location of the INITIALISATION name token (textual parse only)
+    pub name_span: Option<Span>,
 }

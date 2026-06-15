@@ -786,6 +786,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -902,6 +903,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -927,6 +929,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -955,6 +958,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
@@ -1141,6 +1145,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
         let diags = run_component(&Component::Machine(m));
         let labels = dups_of(&diags, RuleId::DuplicateLabel);
@@ -1305,6 +1310,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
         let mut m2 = Machine::new("M2".into());
         m2.refines = Some("M1".into());
@@ -1456,6 +1462,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             span: None,
+            name_span: None,
         });
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));

@@ -145,8 +145,15 @@ pub struct LabeledAction {
 }
 
 /// An Event-B component (either a Context or a Machine)
+///
+/// A `Machine` is inherently larger than a `Context` (it carries events,
+/// invariants, and the initialisation), so the variants differ in size. This is
+/// the parser's top-level result, held and matched ubiquitously; boxing the
+/// `Machine` variant would add an allocation and a layer of indirection to every
+/// component for a heuristic size delta, so the lint is allowed here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[allow(clippy::large_enum_variant)]
 pub enum Component {
     Context(Context),
     Machine(Machine),
