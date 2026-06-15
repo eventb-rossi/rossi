@@ -137,8 +137,16 @@ fn extract_machine_symbols(machine: &Machine, source: &str) -> Vec<DocumentSymbo
             init_children.push(create_symbol(label, SymbolKind::PROPERTY, "Action", range));
         }
 
-        // InitialisationEvent doesn't have its own span, use default
-        let range = default_range();
+        // The whole event spans the outline row; the INITIALISATION name token
+        // is its selection range, mirroring a regular event.
+        let range = init
+            .span
+            .as_ref()
+            .map_or_else(default_range, |span| span_to_range(span, source));
+        let selection_range = init
+            .name_span
+            .as_ref()
+            .map_or_else(default_range, |span| span_to_range(span, source));
 
         let init_symbol = DocumentSymbol {
             name: "INITIALISATION".to_string(),
@@ -146,7 +154,7 @@ fn extract_machine_symbols(machine: &Machine, source: &str) -> Vec<DocumentSymbo
             kind: SymbolKind::CONSTRUCTOR,
             tags: None,
             range,
-            selection_range: range,
+            selection_range,
             children: if init_children.is_empty() {
                 None
             } else {
@@ -475,6 +483,31 @@ mod tests {
         let event_children = increment.children.as_ref().unwrap();
         assert!(event_children.iter().any(|s| s.name == "grd1"));
         assert!(event_children.iter().any(|s| s.name == "act1"));
+    }
+
+    #[test]
+    fn initialisation_document_symbol_selects_the_name() {
+        use crate::lsp_types::Position;
+
+        // The INITIALISATION outline entry's selection range is the name token,
+        // not the (0, 0) default it used to fall back to.
+        let source = "MACHINE m\nVARIABLES\n    v\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        v := 0\n    END\nEND";
+        let component = parse(source).unwrap();
+        let symbols = extract_symbols(&component, source);
+        let init = symbols[0]
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|s| s.name == "INITIALISATION")
+            .expect("INITIALISATION symbol present");
+
+        // `    EVENT INITIALISATION`: the name begins at column 10 on line 4 and
+        // runs the 14 columns of "INITIALISATION".
+        assert_eq!(init.selection_range.start, Position::new(4, 10));
+        assert_eq!(init.selection_range.end, Position::new(4, 24));
+        // The full-event range is real, not the (0, 0) default.
+        assert_ne!(init.range, default_range());
     }
 
     #[test]
