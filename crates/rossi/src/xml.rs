@@ -552,6 +552,7 @@ fn parse_context_xml_with_name(
         axioms,
         span: None,
         name_span: None,
+        clauses: Vec::new(),
         comment: context_comment,
         metadata,
     })
@@ -957,6 +958,7 @@ fn parse_machine_xml_with_name(
         events,
         span: None,
         name_span: None,
+        clauses: Vec::new(),
         comment: machine_comment,
         metadata,
     })
@@ -1881,6 +1883,7 @@ mod tests {
 
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -1915,6 +1918,7 @@ mod tests {
 
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -1947,6 +1951,7 @@ mod tests {
 
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -1972,6 +1977,7 @@ mod tests {
             events: vec![],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -1998,6 +2004,7 @@ mod tests {
             events: vec![],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2039,6 +2046,7 @@ mod tests {
             events: vec![],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2102,6 +2110,7 @@ mod tests {
             events: vec![event],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2213,6 +2222,7 @@ mod tests {
 
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2366,6 +2376,7 @@ mod tests {
             events: vec![ordinary_event, convergent_event, anticipated_event],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2421,6 +2432,7 @@ mod tests {
             events: vec![event],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };
@@ -2478,6 +2490,7 @@ mod tests {
             events: vec![event],
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         };

@@ -541,16 +541,22 @@ fn context_clause_order(rule: Rule) -> Option<usize> {
     }
 }
 
-/// Return the human-readable name for a context clause rule.
-fn context_clause_name(rule: Rule) -> &'static str {
+/// Map a context clause rule to its header [`KeywordId`] (None for non-clause
+/// rules such as `kw_end`).
+fn context_clause_keyword(rule: Rule) -> Option<KeywordId> {
     match rule {
-        Rule::context_clause_extends => "EXTENDS",
-        Rule::context_clause_sets => "SETS",
-        Rule::context_clause_constants => "CONSTANTS",
-        Rule::context_clause_axioms => "AXIOMS",
-        Rule::context_clause_theorems => "THEOREMS",
-        _ => "unknown",
+        Rule::context_clause_extends => Some(KeywordId::Extends),
+        Rule::context_clause_sets => Some(KeywordId::Sets),
+        Rule::context_clause_constants => Some(KeywordId::Constants),
+        Rule::context_clause_axioms => Some(KeywordId::Axioms),
+        Rule::context_clause_theorems => Some(KeywordId::Theorems),
+        _ => None,
     }
+}
+
+/// The clause keyword's canonical spelling (for clause-order error messages).
+fn context_clause_name(rule: Rule) -> &'static str {
+    context_clause_keyword(rule).map_or("unknown", crate::keywords::spell)
 }
 
 /// Return the canonical ordering index for a machine clause rule.
@@ -568,17 +574,35 @@ fn machine_clause_order(rule: Rule) -> Option<usize> {
     }
 }
 
-/// Return the human-readable name for a machine clause rule.
-fn machine_clause_name(rule: Rule) -> &'static str {
+/// Map a machine clause rule to its header [`KeywordId`] (None for non-clause
+/// rules such as `kw_end`).
+fn machine_clause_keyword(rule: Rule) -> Option<KeywordId> {
     match rule {
-        Rule::machine_clause_refines => "REFINES",
-        Rule::machine_clause_sees => "SEES",
-        Rule::machine_clause_variables => "VARIABLES",
-        Rule::machine_clause_invariants => "INVARIANTS",
-        Rule::machine_clause_theorems => "THEOREMS",
-        Rule::machine_clause_variant => "VARIANT",
-        Rule::machine_clause_events => "EVENTS",
-        _ => "unknown",
+        Rule::machine_clause_refines => Some(KeywordId::Refines),
+        Rule::machine_clause_sees => Some(KeywordId::Sees),
+        Rule::machine_clause_variables => Some(KeywordId::Variables),
+        Rule::machine_clause_invariants => Some(KeywordId::Invariants),
+        Rule::machine_clause_theorems => Some(KeywordId::Theorems),
+        Rule::machine_clause_variant => Some(KeywordId::Variant),
+        Rule::machine_clause_events => Some(KeywordId::Events),
+        _ => None,
+    }
+}
+
+/// The clause keyword's canonical spelling (for clause-order error messages).
+fn machine_clause_name(rule: Rule) -> &'static str {
+    machine_clause_keyword(rule).map_or("unknown", crate::keywords::spell)
+}
+
+/// The span of `matched` (which starts at byte `start`) with trailing whitespace
+/// dropped. A clause rule's span — strict (the pest rule absorbs whitespace up to
+/// the next clause) or recovered (it runs to the next clause keyword) — would
+/// otherwise carry the blank line(s) after its last member, so consumers record
+/// it tight: ending on the last content character, not the following header.
+fn trimmed_span(start: usize, matched: &str) -> Span {
+    Span {
+        start,
+        end: start + matched.trim_end().len(),
     }
 }
 
@@ -622,6 +646,16 @@ fn parse_context(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                 context_clause_order,
                 context_clause_name,
             )?;
+
+            // Record the clause's source region (header keyword through its last
+            // member) so structural consumers can fold it without line scanning.
+            if let Some(keyword) = context_clause_keyword(pair.as_rule()) {
+                let span = pair.as_span();
+                context.clauses.push(ClauseRegion::new(
+                    keyword,
+                    trimmed_span(span.start(), span.as_str()),
+                ));
+            }
 
             match pair.as_rule() {
                 Rule::context_clause_extends => {
@@ -703,6 +737,16 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                 machine_clause_order,
                 machine_clause_name,
             )?;
+
+            // Record the clause's source region (header keyword through its last
+            // member) so structural consumers can fold it without line scanning.
+            if let Some(keyword) = machine_clause_keyword(pair.as_rule()) {
+                let span = pair.as_span();
+                machine.clauses.push(ClauseRegion::new(
+                    keyword,
+                    trimmed_span(span.start(), span.as_str()),
+                ));
+            }
 
             match pair.as_rule() {
                 Rule::machine_clause_refines => {
@@ -3319,5 +3363,95 @@ mod tests {
                 "name span should be the event's own INITIALISATION token"
             );
         }
+    }
+
+    /// Clause regions are recorded for every clause in source order, each
+    /// spanning its header keyword through the clause's last member. Structural
+    /// LSP features (folding, outline) read them, so pin the kinds and the two
+    /// span boundaries that matter.
+    #[test]
+    fn clause_regions_are_recorded() {
+        let ctx_src = "\
+context C
+extends Base
+sets
+    S
+constants
+    c
+axioms
+    @a1 c ∈ S
+theorems
+    @t1 c = c
+end";
+        let Component::Context(ctx) = parse(ctx_src).expect("context parses") else {
+            panic!("expected a context");
+        };
+        let keywords: Vec<KeywordId> = ctx.clauses.iter().map(|c| c.keyword).collect();
+        assert_eq!(
+            keywords,
+            vec![
+                KeywordId::Extends,
+                KeywordId::Sets,
+                KeywordId::Constants,
+                KeywordId::Axioms,
+                KeywordId::Theorems,
+            ]
+        );
+
+        let mch_src = "\
+machine M
+refines N
+sees C
+variables
+    x
+invariants
+    @i1 x ∈ ℕ
+theorems
+    @t1 x = x
+variant
+    x
+events
+    event INITIALISATION
+    then
+        @act1 x ≔ 0
+    end
+end";
+        let Component::Machine(m) = parse(mch_src).expect("machine parses") else {
+            panic!("expected a machine");
+        };
+        let keywords: Vec<KeywordId> = m.clauses.iter().map(|c| c.keyword).collect();
+        assert_eq!(
+            keywords,
+            vec![
+                KeywordId::Refines,
+                KeywordId::Sees,
+                KeywordId::Variables,
+                KeywordId::Invariants,
+                KeywordId::Theorems,
+                KeywordId::Variant,
+                KeywordId::Events,
+            ]
+        );
+
+        // The VARIABLES region spans its header through the last variable.
+        let vars = m
+            .clauses
+            .iter()
+            .find(|c| c.keyword == KeywordId::Variables)
+            .expect("variables region");
+        let vars_text = &mch_src[vars.span.start..vars.span.end];
+        assert!(vars_text.starts_with("variables"));
+        assert!(vars_text.trim_end().ends_with('x'));
+
+        // The EVENTS region ends at the last event's END, not the machine END,
+        // so it is strictly shorter than the whole machine span.
+        let events = m
+            .clauses
+            .iter()
+            .find(|c| c.keyword == KeywordId::Events)
+            .expect("events region");
+        let machine_span = m.span.expect("machine span");
+        assert!(mch_src[events.span.start..events.span.end].starts_with("events"));
+        assert!(events.span.end < machine_span.end);
     }
 }

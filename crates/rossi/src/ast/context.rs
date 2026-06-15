@@ -3,7 +3,7 @@
 //! Contexts define the static properties of Event-B models including
 //! sets, constants, and axioms.
 
-use super::{FileMetadata, LabeledPredicate, NamedElement, Span};
+use super::{ClauseRegion, FileMetadata, LabeledPredicate, NamedElement, Span};
 
 /// A set declaration in an Event-B context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +104,11 @@ pub struct Context {
     /// Source location of the context name
     pub name_span: Option<Span>,
 
+    /// Source regions of the context's clause sections (textual parse only),
+    /// used by structural LSP features such as folding.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub clauses: Vec<ClauseRegion>,
+
     /// Comment from Rodin XML
     pub comment: Option<String>,
 
@@ -122,6 +127,7 @@ impl Context {
             axioms: Vec::new(),
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         }

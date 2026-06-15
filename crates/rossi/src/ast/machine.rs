@@ -4,7 +4,8 @@
 //! variables, invariants, and events.
 
 use super::{
-    Event, Expression, FileMetadata, InitialisationEvent, LabeledPredicate, NamedElement, Span,
+    ClauseRegion, Event, Expression, FileMetadata, InitialisationEvent, LabeledPredicate,
+    NamedElement, Span,
 };
 
 /// An Event-B Machine component
@@ -42,6 +43,11 @@ pub struct Machine {
     /// Source location of the machine name
     pub name_span: Option<Span>,
 
+    /// Source regions of the machine's clause sections (textual parse only),
+    /// used by structural LSP features such as folding.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub clauses: Vec<ClauseRegion>,
+
     /// Comment from Rodin XML
     pub comment: Option<String>,
 
@@ -63,6 +69,7 @@ impl Machine {
             events: Vec::new(),
             span: None,
             name_span: None,
+            clauses: Vec::new(),
             comment: None,
             metadata: None,
         }
