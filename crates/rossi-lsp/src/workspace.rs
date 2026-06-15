@@ -52,16 +52,15 @@ impl WorkspaceSymbolProvider {
     pub fn update_symbols(&self, uri: String, text: &str) {
         debug!("Updating workspace symbols for: {}", uri);
 
-        // Parse the document
-        let components = match rossi::parse_components(text) {
-            Ok(comps) => comps,
-            Err(e) => {
-                debug!("Failed to parse document for workspace symbols: {}", e);
-                // Remove old symbols for this document
-                self.symbol_index.remove(&uri);
-                return;
-            }
-        };
+        // Parse with error recovery (via the shared helper) so a local syntax
+        // error does not drop every symbol in the file — the healthy components
+        // keep their spans and stay indexed.
+        let components = crate::component_util::parse_all(text);
+        if components.is_empty() {
+            // Nothing recovered — remove any stale symbols for this document.
+            self.symbol_index.remove(&uri);
+            return;
+        }
 
         // Extract symbols from every component in the document
         let symbols = components
@@ -468,5 +467,19 @@ END
         // New symbol should be found
         let results = provider.search("new_symbol");
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn symbols_survive_a_broken_sibling_component() {
+        // A broken axiom in C0 must not drop M0's variable from the index:
+        // recovery indexes the healthy machine region (which keeps its spans).
+        let provider = WorkspaceSymbolProvider::new();
+        let source =
+            "CONTEXT C0\nAXIOMS\n    @a k ∈\nEND\n\nMACHINE M0\nVARIABLES\n    counter\nEND\n";
+        provider.update_symbols("file:///m.eventb".to_string(), source);
+
+        let results = provider.search("counter");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, SymbolKind::VARIABLE);
     }
 }

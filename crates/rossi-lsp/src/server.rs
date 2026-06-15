@@ -417,14 +417,15 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Parse the document; a multi-component file yields one root symbol
-        // per component
-        let components = match rossi::parse_components(&text) {
-            Ok(comps) => comps,
-            Err(e) => {
-                debug!("Failed to parse document for symbols: {}", e);
-                return Ok(None);
-            }
-        };
+        // per component. Recovery keeps the outline alive through a local
+        // syntax error instead of collapsing it to nothing.
+        let components = rossi::parse_components_with_recovery(&text)
+            .component
+            .unwrap_or_default();
+        if components.is_empty() {
+            debug!("No components recovered for document symbols: {}", uri);
+            return Ok(None);
+        }
 
         // Extract symbols with source text for accurate span information
         let symbols = components
