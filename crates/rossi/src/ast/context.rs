@@ -35,6 +35,16 @@ impl SetDeclaration {
         }
     }
 
+    /// The elements of an enumerated set, or an empty slice for a deferred
+    /// (carrier) set. In Event-B these elements are declared constants, sharing
+    /// the context's identifier namespace.
+    pub fn elements(&self) -> &[String] {
+        match self {
+            SetDeclaration::Deferred { .. } => &[],
+            SetDeclaration::Enumerated { elements, .. } => elements,
+        }
+    }
+
     /// Get the comment on this set declaration
     pub fn comment(&self) -> Option<&str> {
         match self {

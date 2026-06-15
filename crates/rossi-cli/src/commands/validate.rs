@@ -36,7 +36,7 @@ pub struct ValidateArgs {
 
     /// Skip rossi-build advisory lint passes (dead variable, unmodified
     /// variable, dead constant, incomplete INIT, duplicate component,
-    /// shadowed name).
+    /// duplicate identifier/label, shadowed name).
     #[arg(long)]
     no_lints: bool,
 

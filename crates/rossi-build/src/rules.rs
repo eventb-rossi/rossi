@@ -1,4 +1,4 @@
-//! Stable rule identifiers, mirroring the eventb-checker EB001–EB019 catalogue.
+//! Stable `EBnnn` rule identifiers for validation diagnostics.
 //!
 //! A diagnostic that carries a [`RuleId`] is one that downstream tools (CI
 //! gates, SARIF consumers, IDEs) can reason about by code. Internal
@@ -9,9 +9,10 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes follow the eventb-checker scheme (`"EB001"`..`"EB019"`); unused
-/// numbers correspond to rules not yet implemented in rossi (e.g. EB010 well-
-/// definedness, EB015–17 proof status).
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB023"`); gaps
+/// correspond to rules not yet implemented in rossi (e.g. EB010 well-
+/// definedness, EB015–17 proof status, EB020 unknown type). EB023 is a
+/// rossi-only extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -44,13 +45,19 @@ pub enum RuleId {
     UndeclaredIdentifier,
     /// EB019 — Same component name defined in more than one file.
     DuplicateComponent,
-    /// EB021 — Declared name collides with rossi's textual operator
-    /// vocabulary and can be silently re-lexed as a token.
+    /// EB021 — An identifier (variable, constant, carrier set, or event
+    /// parameter) is declared more than once within the same scope.
+    DuplicateIdentifier,
+    /// EB022 — A label (invariant, event, guard, action, axiom, or witness)
+    /// is used more than once within the same scope.
+    DuplicateLabel,
+    /// EB023 — Declared name collides with rossi's textual operator
+    /// vocabulary and can be silently re-lexed as a token. (rossi-only.)
     ShadowedName,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB019"`).
+    /// Stable string code (`"EB001"`..`"EB023"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -69,7 +76,9 @@ impl RuleId {
             RuleId::IncompleteInitialisation => "EB014",
             RuleId::UndeclaredIdentifier => "EB018",
             RuleId::DuplicateComponent => "EB019",
-            RuleId::ShadowedName => "EB021",
+            RuleId::DuplicateIdentifier => "EB021",
+            RuleId::DuplicateLabel => "EB022",
+            RuleId::ShadowedName => "EB023",
         }
     }
 
@@ -92,6 +101,8 @@ impl RuleId {
             RuleId::IncompleteInitialisation => "Incomplete INITIALISATION",
             RuleId::UndeclaredIdentifier => "Undeclared identifier",
             RuleId::DuplicateComponent => "Duplicate component",
+            RuleId::DuplicateIdentifier => "Duplicate identifier",
+            RuleId::DuplicateLabel => "Duplicate label",
             RuleId::ShadowedName => "Shadowed identifier",
         }
     }
@@ -141,6 +152,12 @@ impl RuleId {
             RuleId::DuplicateComponent => {
                 "The same component name is defined in more than one file in the project."
             }
+            RuleId::DuplicateIdentifier => {
+                "An identifier (variable, constant, carrier set, or event parameter) is declared more than once within the same scope."
+            }
+            RuleId::DuplicateLabel => {
+                "A label (invariant, event, guard, action, axiom, or witness) is used more than once within the same scope."
+            }
             RuleId::ShadowedName => {
                 "A declared identifier collides with rossi's textual operator vocabulary (an ASCII operator spelling like `POW`/`or`, or a case variant of a literal token like `Nat`); uses of it can silently parse as the built-in token instead of the identifier."
             }
@@ -161,7 +178,9 @@ impl RuleId {
             | RuleId::CircularExtends
             | RuleId::CircularRefines
             | RuleId::CrossReferenceNotFound
-            | RuleId::UndeclaredIdentifier => Severity::Error,
+            | RuleId::UndeclaredIdentifier
+            | RuleId::DuplicateIdentifier
+            | RuleId::DuplicateLabel => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
@@ -191,6 +210,8 @@ impl RuleId {
             RuleId::IncompleteInitialisation,
             RuleId::UndeclaredIdentifier,
             RuleId::DuplicateComponent,
+            RuleId::DuplicateIdentifier,
+            RuleId::DuplicateLabel,
             RuleId::ShadowedName,
         ]
     }
@@ -214,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn codes_match_eventb_checker_catalogue() {
+    fn codes_are_stable() {
         assert_eq!(RuleId::XmlParseError.code(), "EB001");
         assert_eq!(RuleId::XmlRootError.code(), "EB002");
         assert_eq!(RuleId::XmlAttributeError.code(), "EB003");
@@ -230,6 +251,8 @@ mod tests {
         assert_eq!(RuleId::IncompleteInitialisation.code(), "EB014");
         assert_eq!(RuleId::UndeclaredIdentifier.code(), "EB018");
         assert_eq!(RuleId::DuplicateComponent.code(), "EB019");
+        assert_eq!(RuleId::DuplicateIdentifier.code(), "EB021");
+        assert_eq!(RuleId::DuplicateLabel.code(), "EB022");
     }
 
     #[test]

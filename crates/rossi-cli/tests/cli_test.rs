@@ -1097,6 +1097,31 @@ fn validate_stdin_camille_error_reports_eb004() {
 }
 
 #[test]
+fn validate_stdin_duplicate_identifier_and_label_report_eb021_eb022() {
+    // A machine that declares `x` twice and reuses invariant label `inv1` is
+    // structurally invalid (Rodin's static checker rejects it). rossi reports
+    // EB021 (duplicate identifier) and EB022 (duplicate label) at Error
+    // severity, so the run exits non-zero.
+    let output = run_cli_with_stdin(
+        &["validate", "--format", "json", "-"],
+        "MACHINE M\nVARIABLES\n    x, x\nINVARIANTS\n    @inv1 x >= 0\n    @inv1 x <= 5\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND\n",
+    );
+    assert!(
+        !output.status.success(),
+        "duplicate identifier/label must fail validation"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"rule_id\": \"EB021\""),
+        "expected EB021 (duplicate identifier) in JSON: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"rule_id\": \"EB022\""),
+        "expected EB022 (duplicate label) in JSON: {stdout}"
+    );
+}
+
+#[test]
 fn validate_zip_bad_formula_reports_eb005() {
     // A formula attribute inside Rodin XML that the grammar rejects stays
     // EB005 — EB004 is reserved for whole-file Camille parse failures.
