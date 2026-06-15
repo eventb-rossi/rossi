@@ -275,13 +275,16 @@ impl<'a> SemanticTokensBuilder<'a> {
             .filter(|&(offset, len)| offset + len <= bound)
     }
 
-    /// Add a keyword token (keywords are ASCII, so byte length == char length)
+    /// Add a keyword token.
     fn add_keyword(&mut self, keyword: &str, offset: usize) {
         let (line, start) = self.position_from_offset(offset);
         self.tokens.push(SemanticTokenData {
             line,
             start,
-            length: keyword.len() as u32,
+            // UTF-16 code units, like every other token length. Keywords are
+            // ASCII, so this matches their byte length, but routing through the
+            // single source of truth keeps the convention from drifting.
+            length: crate::position::utf16_len(keyword),
             token_type: TokenType::Keyword as u32,
             token_modifiers: 0,
         });
