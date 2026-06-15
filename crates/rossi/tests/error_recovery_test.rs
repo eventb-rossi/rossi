@@ -715,6 +715,46 @@ fn test_recovery_error_names_label_with_position() {
 }
 
 #[test]
+fn test_recovery_span_is_byte_exact_under_multibyte() {
+    // A RecoverableError's byte span must slice exactly the offending
+    // `@label … predicate`, no matter how many multibyte (`∀ ∈ ℕ`) or astral
+    // (`𝔹`) characters precede it or sit inside it. The span is assembled from
+    // byte offsets (pointer arithmetic over the masked text), so a byte/char
+    // mismatch would mis-slice it — this pins the byte coordinate.
+    //
+    // Two broken axioms: the strict parse pinpoints the first, collapsing its
+    // recovery duplicate, so recovery's own span survives on the second.
+    let source = "CONTEXT c\nAXIOMS\n    @axm1 ∀x·x∈ℕ $$$\n    @axm2 ∀y·y∈ℕ ### 𝔹\nEND\n";
+
+    let result = parse_with_recovery(source);
+
+    let span = result
+        .errors
+        .iter()
+        .find_map(|e| match e {
+            rossi::ParseError::RecoverableError {
+                message,
+                span: Some(span),
+                ..
+            } if message.contains("@axm2") => Some(*span),
+            _ => None,
+        })
+        .expect("recovery reports the second broken axiom with a byte span");
+
+    assert_eq!(
+        &source[span.start..span.end],
+        "@axm2 ∀y·y∈ℕ ### 𝔹",
+        "the span must slice exactly the @axm2 predicate"
+    );
+    // The span begins past the multibyte first axiom: the preceding `∀ ∈ ℕ`
+    // bytes do not shift the offset off the `@axm2` boundary.
+    assert!(
+        span.start > source.find("@axm1").expect("fixture has @axm1"),
+        "span starts after the first axiom, not before it"
+    );
+}
+
+#[test]
 fn test_recovery_survives_bom_before_header() {
     // A UTF-8 BOM (not whitespace, common in Windows-saved files) before
     // MACHINE must not defeat recovery dispatch.
