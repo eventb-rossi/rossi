@@ -251,8 +251,8 @@ impl WorkspaceSymbolProvider {
             }
 
             // Search for the identifier in this line
-            if in_clause && let Some(col_idx) = self.find_whole_word_in_line(line, identifier) {
-                let position = Position::new(line_idx as u32, col_idx as u32);
+            if in_clause && let Some(col_idx) = text_utils::whole_word_utf16_col(line, identifier) {
+                let position = Position::new(line_idx as u32, col_idx);
                 return Some(Location::new(
                     Url::parse(uri).ok()?,
                     Range::new(position, position),
@@ -289,8 +289,8 @@ impl WorkspaceSymbolProvider {
                 name == event_name
             };
 
-            if matches && let Some(col_idx) = self.find_whole_word_in_line(line, &name) {
-                let position = Position::new(line_idx as u32, col_idx as u32);
+            if matches && let Some(col_idx) = text_utils::whole_word_utf16_col(line, &name) {
+                let position = Position::new(line_idx as u32, col_idx);
                 return Some(Location::new(
                     Url::parse(uri).ok()?,
                     Range::new(position, position),
@@ -298,38 +298,6 @@ impl WorkspaceSymbolProvider {
             }
         }
 
-        None
-    }
-
-    /// Find a whole word match in a line and return its UTF-16 column (the LSP
-    /// column convention; see [`crate::position`]).
-    fn find_whole_word_in_line(&self, line: &str, word: &str) -> Option<usize> {
-        let mut idx = 0;
-        while idx < line.len() {
-            if let Some(pos) = line[idx..].find(word) {
-                let abs_pos = idx + pos;
-                // Check word boundaries on the adjacent characters.
-                let before_ok = !line[..abs_pos]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                let after_idx = abs_pos + word.len();
-                let after_ok = !line[after_idx..]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
-
-                if before_ok && after_ok {
-                    return Some(crate::position::utf16_len(&line[..abs_pos]) as usize);
-                }
-
-                // Identifiers start with an ASCII character (grammar), so
-                // +1 stays on a char boundary.
-                idx = abs_pos + 1;
-            } else {
-                break;
-            }
-        }
         None
     }
 }
