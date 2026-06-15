@@ -1030,3 +1030,92 @@ END
         ctx.axioms
     );
 }
+
+#[test]
+fn test_recovery_unicode_whitespace_before_label_does_not_panic() {
+    // A multibyte Unicode whitespace (U+00A0, no-break space) between the clause
+    // keyword and a labelled predicate must not crash recovery: the segment-start
+    // scan walks chars, not raw bytes, so it never slices inside a multibyte
+    // whitespace. The U+00A0 itself fails the strict parse and drives recovery.
+    let source = "CONTEXT c\nAXIOMS\n\u{a0}theorem @thm1 broken $$$\nEND\n";
+    // Reaching this assertion at all is the regression check — the byte-index
+    // scan this once used panicked here. Recovery should also report the broken
+    // predicate against a partial parse.
+    let result = parse_with_recovery(source);
+    assert!(
+        result.has_recovered(),
+        "recovery should report the broken predicate, not panic"
+    );
+}
+
+#[test]
+fn test_recovery_multiline_theorem_orderings_stay_whole() {
+    // Label-anchored segmentation keeps a theorem-flagged predicate whole across
+    // a line break in both grammar orderings: a leading `theorem @label` (the
+    // segment start is pulled back over the keyword) and a trailing
+    // `@label theorem`, each with the predicate indented on the next line. A
+    // broken CONSTANTS clause forces recovery into the AXIOMS.
+    let source = r#"
+    CONTEXT c
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        theorem @thm1
+            c1 = 1
+        @thm2 theorem
+            c1 < 2
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let extra = recovery_errors(&result);
+    assert!(extra.is_empty(), "Expected no extra errors, got: {extra:?}");
+
+    let ctx = expect_context(&result);
+    let flags: Vec<(Option<&str>, bool)> = ctx
+        .axioms
+        .iter()
+        .map(|a| (a.label.as_deref(), a.is_theorem))
+        .collect();
+    assert_eq!(flags, [(Some("thm1"), true), (Some("thm2"), true)]);
+}
+
+#[test]
+fn test_recovery_mixed_labelled_and_bare_predicates() {
+    // A clause that mixes a leading bare predicate with labelled ones recovers
+    // each: the leading segment (clause keyword to first label) carries the bare
+    // predicate, and each label opens its own — possibly multi-line — segment.
+    // The one broken labelled predicate is the only reported failure.
+    let source = r#"
+    CONTEXT c
+    CONSTANTS
+        c1
+        +
+    AXIOMS
+        c0 = 0
+        @axm1
+            c1 = 1
+        @axm2 $$$
+    END
+    "#;
+
+    let result = parse_with_recovery(source);
+
+    let ctx = expect_context(&result);
+    let labels: Vec<Option<&str>> = ctx.axioms.iter().map(|a| a.label.as_deref()).collect();
+    assert_eq!(
+        labels,
+        [None, Some("axm1")],
+        "the bare predicate and @axm1 recover, @axm2 fails"
+    );
+
+    let extra = recovery_errors(&result);
+    assert_eq!(extra.len(), 1, "only @axm2 fails, got {extra:?}");
+    assert!(
+        extra[0].contains("@axm2"),
+        "the failure names @axm2, got: {}",
+        extra[0]
+    );
+}
