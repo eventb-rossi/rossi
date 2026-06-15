@@ -2692,6 +2692,12 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             s.end += delta;
         }
     }
+    fn shift_clauses(clauses: &mut [ClauseRegion], delta: usize) {
+        for clause in clauses {
+            clause.span.start += delta;
+            clause.span.end += delta;
+        }
+    }
     if delta == 0 {
         return;
     }
@@ -2699,6 +2705,7 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
         Component::Context(ctx) => {
             shift(&mut ctx.span, delta);
             shift(&mut ctx.name_span, delta);
+            shift_clauses(&mut ctx.clauses, delta);
             for set in &mut ctx.sets {
                 shift(set.span_mut(), delta);
             }
@@ -2712,6 +2719,7 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
         Component::Machine(machine) => {
             shift(&mut machine.span, delta);
             shift(&mut machine.name_span, delta);
+            shift_clauses(&mut machine.clauses, delta);
             for variable in &mut machine.variables {
                 shift(&mut variable.span, delta);
             }
@@ -2827,6 +2835,24 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
     }
 }
 
+/// Record a line-tight [`ClauseRegion`] for each clause keyword that is present.
+/// Shared by context and machine recovery, which differ only in their clause
+/// set; the spelling to scan for comes from the keyword table, never a literal.
+fn record_clause_regions(
+    text: &RecoveryText,
+    bound: usize,
+    keywords: &[KeywordId],
+) -> Vec<ClauseRegion> {
+    keywords
+        .iter()
+        .filter_map(|&keyword| {
+            let span = extract_clause_content(text, crate::keywords::spell(keyword), bound)?;
+            let span = trimmed_span(span.start, &text.masked[span.start..span.end]);
+            Some(ClauseRegion::new(keyword, span))
+        })
+        .collect()
+}
+
 /// Attempt to parse a context with error recovery
 fn parse_context_with_recovery(
     text: &RecoveryText,
@@ -2867,6 +2893,20 @@ fn parse_context_with_recovery(
     context
         .axioms
         .extend(recover_theorem_predicates(text, bound, &mut errors));
+
+    // Record each clause's source region (folding/outline consume these even in
+    // a component the strict parse rejected).
+    context.clauses = record_clause_regions(
+        text,
+        bound,
+        &[
+            KeywordId::Extends,
+            KeywordId::Sets,
+            KeywordId::Constants,
+            KeywordId::Axioms,
+            KeywordId::Theorems,
+        ],
+    );
 
     dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Context(context)), errors)
@@ -2909,8 +2949,53 @@ fn parse_machine_with_recovery(
         .invariants
         .extend(recover_theorem_predicates(text, bound, &mut errors));
 
-    // Note: VARIANT and EVENTS are more complex and would need specialized recovery
-    // For now, we'll skip them if they fail to parse
+    // Record each machine-level clause's source region (bounded by the event
+    // region, like the declaration scans above).
+    machine.clauses = record_clause_regions(
+        text,
+        bound,
+        &[
+            KeywordId::Refines,
+            KeywordId::Sees,
+            KeywordId::Variables,
+            KeywordId::Invariants,
+            KeywordId::Theorems,
+            KeywordId::Variant,
+        ],
+    );
+
+    // Best-effort recovery of the variant expression (for the outline): the
+    // region's content past the `VARIANT` keyword, if it parses.
+    if let Some(span) = machine
+        .clauses
+        .iter()
+        .find(|c| c.keyword == KeywordId::Variant)
+        .map(|c| c.span)
+    {
+        let kw_len = crate::keywords::spell(KeywordId::Variant).len();
+        let body = text.masked[span.start + kw_len..span.end].trim();
+        if !body.is_empty()
+            && let Ok(expr) = parse_expression_str(body)
+        {
+            machine.variant = Some(expr);
+        }
+    }
+
+    // Recover the events (span-only) and the EVENTS clause region. The region
+    // runs from the event-section start through the last recovered event's END
+    // (matching the strict parse, where it ends at the last event, not the
+    // machine END).
+    let (initialisation, events, events_end) = recover_events(text, bound);
+    machine.initialisation = initialisation;
+    machine.events = events;
+    if let Some(end) = events_end
+        && end > bound
+    {
+        machine.clauses.push(ClauseRegion::new(
+            KeywordId::Events,
+            Span { start: bound, end },
+        ));
+    }
 
     dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Machine(machine)), errors)
@@ -3017,6 +3102,100 @@ fn find_keyword_word(
         }
     }
     None
+}
+
+/// Byte offsets of every whole-word occurrence of `needle_upper` (an
+/// ASCII-uppercase keyword) in `[from, to)`, in source order.
+fn keyword_positions(
+    text: &RecoveryText,
+    needle_upper: &str,
+    from: usize,
+    to: usize,
+) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut search = from;
+    while let Some(pos) = find_keyword_word(text, needle_upper, search, to) {
+        positions.push(pos);
+        search = pos + needle_upper.len();
+    }
+    positions
+}
+
+/// Recover a machine's events from the event region, span-only.
+///
+/// Each `EVENT name … END` / `EVENT INITIALISATION … END` is located by
+/// whole-word keyword scanning, so a label such as `@end` never closes an
+/// event. Events do not nest, so each one closes at the first `END` after its
+/// header. Bodies are not re-parsed — recovery records each event's name and
+/// source span, which is what folding and the document outline consume from a
+/// component the strict parse rejected.
+fn recover_events(
+    text: &RecoveryText,
+    events_start: usize,
+) -> (Option<InitialisationEvent>, Vec<Event>, Option<usize>) {
+    let text_end = text.masked.len();
+    let end_kw = crate::keywords::spell(KeywordId::End);
+    let event_kw = crate::keywords::spell(KeywordId::Event);
+    let init_kw = crate::keywords::spell(KeywordId::Initialisation);
+
+    let ends = keyword_positions(text, end_kw, events_start, text_end);
+    let headers = keyword_positions(text, event_kw, events_start, text_end);
+
+    let mut initialisation = None;
+    let mut events = Vec::new();
+    // The EVENTS clause runs from its header through the last event's END.
+    let mut events_end = None;
+
+    for (i, &header) in headers.iter().enumerate() {
+        let kw_end = header + event_kw.len();
+        let next_header = headers.get(i + 1).copied().unwrap_or(text_end);
+        // The event closes at the first END after its header; a malformed event
+        // with no END before the next header spans up to that header.
+        let body_end = ends
+            .iter()
+            .copied()
+            .find(|&e| e >= kw_end && e < next_header)
+            .map_or(next_header, |e| (e + end_kw.len()).min(text_end));
+        let span = Span {
+            start: header,
+            end: body_end,
+        };
+        events_end = Some(events_end.map_or(body_end, |prev: usize| prev.max(body_end)));
+
+        // The rest of the header line distinguishes INITIALISATION from a named
+        // event.
+        let header_line = text.masked[kw_end..].lines().next().unwrap_or("");
+        let rest = header_line.trim_start();
+        if strip_keyword_prefix(rest, init_kw).is_some() {
+            // The name token is the event's own INITIALISATION keyword, at the
+            // start of the header tail — already located by the prefix check, so
+            // no second scan is needed.
+            let name_start = kw_end + (header_line.len() - rest.len());
+            initialisation = Some(InitialisationEvent {
+                actions: Vec::new(),
+                comment: None,
+                extended: false,
+                with: Vec::new(),
+                witnesses: Vec::new(),
+                span: Some(span),
+                name_span: Some(Span {
+                    start: name_start,
+                    end: name_start + init_kw.len(),
+                }),
+            });
+        } else {
+            let (name, name_span) = extract_identifiers(header_line, kw_end)
+                .into_iter()
+                .next()
+                .map_or_else(|| (String::from("unknown"), None), |(n, s)| (n, Some(s)));
+            let mut event = Event::new(name);
+            event.span = Some(span);
+            event.name_span = name_span;
+            events.push(event);
+        }
+    }
+
+    (initialisation, events, events_end)
 }
 
 /// If `line` starts with `keyword` as a whole word (case-insensitive),
