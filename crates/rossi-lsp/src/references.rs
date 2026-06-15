@@ -557,33 +557,6 @@ fn get_identifier_at_position(text: &str, position: Position) -> Option<String> 
     identifier_utils::identifier_at_position(&masked, position).map(|(identifier, _)| identifier)
 }
 
-/// Find a whole word match in a line and return its column index (in characters, not bytes)
-#[cfg(test)]
-fn find_whole_word_in_line(line: &str, word: &str) -> Option<usize> {
-    let chars: Vec<char> = line.chars().collect();
-    let word_chars: Vec<char> = word.chars().collect();
-
-    let mut idx = 0;
-    while idx + word_chars.len() <= chars.len() {
-        // Check if word matches at this position
-        let matches = chars[idx..idx + word_chars.len()] == word_chars;
-
-        if matches {
-            // Check word boundaries
-            let before_ok = idx == 0 || !text_utils::is_identifier_char(chars[idx - 1]);
-            let after_ok = idx + word_chars.len() >= chars.len()
-                || !text_utils::is_identifier_char(chars[idx + word_chars.len()]);
-
-            if before_ok && after_ok {
-                return Some(idx);
-            }
-        }
-
-        idx += 1;
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,33 +706,6 @@ END
         let refs = refs.unwrap();
         // Should find at least the declaration
         assert_eq!(refs.len(), 1);
-    }
-
-    #[test]
-    fn test_find_whole_word_in_line() {
-        let line = "count := count + counter";
-
-        // Should find 'count' at position 0
-        assert_eq!(find_whole_word_in_line(line, "count"), Some(0));
-
-        // Should find 'count' in "count + counter" (second occurrence)
-        assert_eq!(find_whole_word_in_line(&line[9..], "count"), Some(0));
-
-        // Should NOT find 'count' as part of 'counter'
-        let result = find_whole_word_in_line(line, "counter");
-        assert_eq!(result, Some(17));
-    }
-
-    #[test]
-    fn test_identifier_boundaries() {
-        let line = "my_var := my_var + my_variable";
-
-        // Find 'my_var' should not match 'my_variable'
-        assert_eq!(find_whole_word_in_line(line, "my_var"), Some(0));
-        assert_eq!(find_whole_word_in_line(&line[10..], "my_var"), Some(0));
-
-        // Find 'my_variable' should match at the end
-        assert_eq!(find_whole_word_in_line(line, "my_variable"), Some(19));
     }
 
     #[test]

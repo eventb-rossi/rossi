@@ -82,3 +82,73 @@ pub fn is_declaration_scan_boundary(line: &str) -> bool {
     let first = line.split_whitespace().next().unwrap_or("");
     is_clause_boundary_keyword(first) && !first.eq_ignore_ascii_case("STATUS")
 }
+
+/// UTF-16 column (the LSP convention; see [`crate::position`]) of the first
+/// whole-word occurrence of `word` in `line`, or `None` when it does not occur.
+///
+/// A match is a *whole word* when neither flanking character is an identifier
+/// character ([`is_identifier_char`]) — so `count` does not match inside
+/// `counter`, and a `-` flanks as a boundary. The scan continues past a rejected
+/// substring hit, so a later whole-word match is still found (e.g. `x` in
+/// `xs x`). The single source of truth for the LSP providers' word→column scan.
+pub fn whole_word_utf16_col(line: &str, word: &str) -> Option<u32> {
+    // Byte length of the word's first character. Every match begins with it, so
+    // stepping past a rejected hit by this much lands on a char boundary (the
+    // following `find` cannot slice mid-character). `?` also rejects an empty
+    // word, which has no first character and so no whole-word match.
+    let first_char_len = word.chars().next()?.len_utf8();
+    let mut idx = 0;
+    while let Some(rel) = line[idx..].find(word) {
+        let abs = idx + rel;
+        let before_ok = !line[..abs]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_char);
+        let after = abs + word.len();
+        let after_ok = !line[after..].chars().next().is_some_and(is_identifier_char);
+        if before_ok && after_ok {
+            return Some(crate::position::utf16_len(&line[..abs]));
+        }
+        idx = abs + first_char_len;
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whole_word_skips_substring_hits() {
+        // First `count` sits inside `counter`; the scan must keep going and
+        // return the standalone `count` rather than giving up (the bug the old
+        // definition.rs copy carried).
+        assert_eq!(whole_word_utf16_col("counter count", "count"), Some(8));
+        // Single char after a longer word: `x` in `xs x` is at column 3.
+        assert_eq!(whole_word_utf16_col("xs x", "x"), Some(3));
+        // No standalone occurrence at all.
+        assert_eq!(whole_word_utf16_col("counter", "count"), None);
+    }
+
+    #[test]
+    fn whole_word_respects_identifier_boundaries() {
+        let line = "my_var := my_var + my_variable";
+        assert_eq!(whole_word_utf16_col(line, "my_var"), Some(0));
+        assert_eq!(whole_word_utf16_col(line, "my_variable"), Some(19));
+    }
+
+    #[test]
+    fn whole_word_column_is_utf16() {
+        // BMP: `∈` is one UTF-16 unit, so `S` is at column 4.
+        assert_eq!(whole_word_utf16_col("x ∈ S", "S"), Some(4));
+        // Astral: `𝔹` is two UTF-16 units, so `count` after `𝔹x ` is at column
+        // 4 (its char index would be 3).
+        assert_eq!(whole_word_utf16_col("𝔹x count", "count"), Some(4));
+    }
+
+    #[test]
+    fn whole_word_empty_and_missing() {
+        assert_eq!(whole_word_utf16_col("count", ""), None);
+        assert_eq!(whole_word_utf16_col("count", "total"), None);
+    }
+}
