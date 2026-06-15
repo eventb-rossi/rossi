@@ -2620,14 +2620,10 @@ pub fn parse_components_with_recovery(input: &str) -> ParseResult<Vec<Component>
                         .map(|e| offset_error_lines(e, line_delta)),
                 );
                 if let Some(mut component) = result.component {
+                    // Recovery already spans each component from its header; here
+                    // we only translate those slice-relative spans into absolute
+                    // document coordinates.
                     shift_component_spans(&mut component, start);
-                    // Recovery builds span-less components; give them their
-                    // region as an approximate span so position-based
-                    // consumers (component-at-offset dispatch, semantic
-                    // tokens) still anchor to the right part of the file.
-                    if component.span().is_none() {
-                        set_component_span(&mut component, Span { start, end });
-                    }
                     components.push(component);
                 }
             }
@@ -2671,14 +2667,6 @@ fn component_header_starts(text: &RecoveryText) -> Vec<usize> {
 /// Byte offset of the start of the line containing `pos`.
 fn line_start(s: &str, pos: usize) -> usize {
     s[..pos].rfind('\n').map_or(0, |i| i + 1)
-}
-
-/// Set a component's top-level span (clause/event spans untouched).
-fn set_component_span(component: &mut Component, span: Span) {
-    match component {
-        Component::Context(ctx) => ctx.span = Some(span),
-        Component::Machine(machine) => machine.span = Some(span),
-    }
 }
 
 /// Shift every span in a component by `delta` bytes. Used to translate
@@ -2908,6 +2896,15 @@ fn parse_context_with_recovery(
         ],
     );
 
+    // Span the component from its header through its last non-blank content, so
+    // block-level span consumers (folding, component-at-offset) anchor it even
+    // when the strict parse failed. In a merged file this slice-relative span is
+    // shifted to absolute coordinates by `shift_component_spans`.
+    context.span = Some(Span {
+        start: header_pos,
+        end: text.masked.trim_end().len(),
+    });
+
     dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Context(context)), errors)
 }
@@ -2996,6 +2993,15 @@ fn parse_machine_with_recovery(
             Span { start: bound, end },
         ));
     }
+
+    // Span the component from its header through its last non-blank content, so
+    // block-level span consumers (folding, component-at-offset) anchor it even
+    // when the strict parse failed. In a merged file this slice-relative span is
+    // shifted to absolute coordinates by `shift_component_spans`.
+    machine.span = Some(Span {
+        start: header_pos,
+        end: text.masked.trim_end().len(),
+    });
 
     dedup_recovered_errors(&mut errors);
     ParseResult::with_errors(Some(Component::Machine(machine)), errors)
