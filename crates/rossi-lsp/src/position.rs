@@ -283,4 +283,38 @@ mod tests {
         // Past end clamps to the final position.
         assert_eq!(offset_to_position(text, 999), pos(2, 2));
     }
+
+    #[test]
+    fn recovery_span_round_trips_to_utf16_range() {
+        // A byte span produced by the parser's error recovery must map through
+        // `span_to_range` to the predicate's true UTF-16 location, even when the
+        // predicate sits behind a multibyte line and contains an astral char.
+        // This is the byte→UTF-16 leg of the same span the parser pins by bytes.
+        let source = "CONTEXT c\nAXIOMS\n    @axm1 ∀x·x∈ℕ $$$\n    @axm2 ∀y·y∈ℕ ### 𝔹\nEND\n";
+
+        let span = rossi::parse_with_recovery(source)
+            .errors
+            .iter()
+            .find_map(|e| match e {
+                rossi::ParseError::RecoverableError {
+                    message,
+                    span: Some(span),
+                    ..
+                } if message.contains("@axm2") => Some(*span),
+                _ => None,
+            })
+            .expect("recovery reports the second broken axiom with a byte span");
+
+        let range = span_to_range(&span, source);
+        // Start: the `@` of `@axm2`, four spaces into line 3 (0-indexed).
+        assert_eq!(range.start, pos(3, 4));
+        // Width equals the UTF-16 length of the sliced predicate — counting the
+        // astral `𝔹` as two units, so the end column is one past a naive char
+        // count. `utf16_len` is computed independently of the range walk.
+        assert_eq!(range.end.line, 3);
+        assert_eq!(
+            range.end.character - range.start.character,
+            utf16_len(&source[span.start..span.end])
+        );
+    }
 }
