@@ -284,10 +284,7 @@ pub fn find_whole_word_locations(
             if before_ok && after_ok {
                 locations.push(Location::new(
                     uri.clone(),
-                    Range::new(
-                        Position::new(line_idx as u32, col as u32),
-                        Position::new(line_idx as u32, (col + id_chars.len()) as u32),
-                    ),
+                    line_run_to_range(line, line_idx as u32, col, col + id_chars.len()),
                 ));
             }
         }
@@ -466,5 +463,22 @@ mod tests {
         );
         assert_eq!(hyphenated.len(), 1);
         assert_eq!(hyphenated[0].range.start, pos(1, 11));
+    }
+
+    #[test]
+    fn locations_report_utf16_columns_after_astral() {
+        // `find_whole_word_locations` backs both find-references and rename. An
+        // astral character (`𝔹`, U+1D539 — two UTF-16 code units, one `char`)
+        // before an occurrence must shift its range by two units, not the one
+        // char it spans, since LSP columns are UTF-16. (`𝔹` is code here, not a
+        // comment, so masking leaves it in place.)
+        let uri = Url::parse("file:///t.eventb").unwrap();
+        let text = "MACHINE m\nINVARIANTS\n  𝔹 count\n";
+        let locs =
+            find_whole_word_locations(text, "count", &uri, None, WordBoundary::MathIdentifier);
+        assert_eq!(locs.len(), 1);
+        // 2 spaces + `𝔹` (2 units) + 1 space = start col 5; +5 for "count" = 10.
+        assert_eq!(locs[0].range.start, pos(2, 5));
+        assert_eq!(locs[0].range.end, pos(2, 10));
     }
 }
