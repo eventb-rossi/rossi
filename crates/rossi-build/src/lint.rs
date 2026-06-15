@@ -6,14 +6,16 @@
 //! callers (today: `rossi validate`) opt in explicitly so the existing
 //! `rossi build` output stays stable.
 //!
-//! Coverage (rule IDs mirror eventb-checker's catalogue):
+//! Coverage (stable `EBnnn` rule IDs):
 //!
 //! - **EB011** dead variable     — declared, never referenced
 //! - **EB012** unmodified var    — referenced, never assigned by any event
 //! - **EB013** dead constant     — declared, never referenced in any axiom
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
 //! - **EB019** duplicate component — same name defined in more than one file
-//! - **EB021** shadowed name     — declared name re-lexes as a textual token
+//! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
+//! - **EB022** duplicate label   — invariant/event/guard/action/axiom/witness used twice
+//! - **EB023** shadowed name     — declared name re-lexes as a textual token
 //!
 //! EB010 (well-definedness) and EB015–17 (proof status) are deliberately
 //! out of scope here; they need their own modules.
@@ -62,8 +64,16 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
 #[must_use]
 pub fn run_component(component: &Component) -> Vec<Diagnostic> {
     match component {
-        Component::Machine(m) => lint_shadowed_names_machine(m),
-        Component::Context(c) => lint_shadowed_names_context(c),
+        Component::Machine(m) => [
+            lint_shadowed_names_machine(m),
+            lint_duplicate_names_machine(m),
+        ]
+        .concat(),
+        Component::Context(c) => [
+            lint_shadowed_names_context(c),
+            lint_duplicate_names_context(c),
+        ]
+        .concat(),
     }
 }
 
@@ -180,7 +190,7 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// EB021: a declared name that rossi's *textual* syntax can re-lex as a
+/// EB023: a declared name that rossi's *textual* syntax can re-lex as a
 /// token. The parser hard-rejects the kernel_lang §2.2 reserved words
 /// ([`rossi::builtins::is_reserved_word`]) but deliberately accepts the rest
 /// — Rodin allows them as identifiers, so imported models must load. The
@@ -207,10 +217,8 @@ fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for set in &c.sets {
         diags.extend(shadowed_name_diag(&c.name, "carrier set", set.name()));
-        if let rossi::SetDeclaration::Enumerated { elements, .. } = set {
-            for e in elements {
-                diags.extend(shadowed_name_diag(&c.name, "set element", e));
-            }
+        for e in set.elements() {
+            diags.extend(shadowed_name_diag(&c.name, "set element", e));
         }
     }
     for k in &c.constants {
@@ -233,6 +241,189 @@ fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
             ));
         }
     }
+    diags
+}
+
+// ---------- duplicate identifiers / labels (EB021 / EB022) ------------------
+//
+// Within the single scope where Event-B requires uniqueness, report
+// identifiers (EB021) and labels (EB022) that occur more than once. Identifiers
+// and labels are separate namespaces, so a variable `x` and an invariant
+// labelled `x` do not collide. Cross-component shadowing is out of scope —
+// that is EB023 / the type checker's scope rules.
+
+/// One `Error` diagnostic per name that occurs more than once in `names`
+/// (blank and whitespace-only names are skipped). Output is sorted by name for
+/// determinism. The verb in the message follows the rule: identifiers are
+/// "declared", labels "used".
+fn duplicate_diags<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    rule: RuleId,
+    kind: &str,
+    scope: &str,
+    origin_prefix: &str,
+) -> Vec<Diagnostic> {
+    let verb = if rule == RuleId::DuplicateIdentifier {
+        "declared"
+    } else {
+        "used"
+    };
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for n in names {
+        if n.trim().is_empty() {
+            continue;
+        }
+        *counts.entry(n).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, count)| Diagnostic {
+            severity: Severity::Error,
+            origin: format!("{origin_prefix}.{name}"),
+            message: format!("duplicate {kind} `{name}` in {scope} ({verb} {count} times)"),
+            rule_id: Some(rule),
+        })
+        .collect()
+}
+
+fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
+    let scope = format!("machine `{}`", m.name);
+    let mut diags = Vec::new();
+
+    // EB021 — variable identifiers.
+    diags.extend(duplicate_diags(
+        m.variables.iter().map(|v| v.name.as_str()),
+        RuleId::DuplicateIdentifier,
+        "variable identifier",
+        &scope,
+        &m.name,
+    ));
+
+    // EB022 — invariant labels.
+    diags.extend(duplicate_diags(
+        m.invariants.iter().filter_map(|i| i.label.as_deref()),
+        RuleId::DuplicateLabel,
+        "invariant label",
+        &scope,
+        &m.name,
+    ));
+
+    // EB022 — event labels. rossi stores INITIALISATION apart from `events`,
+    // but Event-B treats it as an event sharing the label namespace.
+    diags.extend(duplicate_diags(
+        m.events
+            .iter()
+            .map(|e| e.name.as_str())
+            .chain(m.initialisation.is_some().then_some("INITIALISATION")),
+        RuleId::DuplicateLabel,
+        "event label",
+        &scope,
+        &m.name,
+    ));
+
+    // Per-event identifier / label namespaces.
+    for e in &m.events {
+        diags.extend(duplicate_names_in_event(
+            &m.name,
+            &e.name,
+            e.parameters.iter().map(|p| p.name.as_str()),
+            // Event-B shares one label namespace across guards and actions.
+            e.guards
+                .iter()
+                .filter_map(|g| g.label.as_deref())
+                .chain(e.actions.iter().filter_map(|a| a.label.as_deref())),
+            // rossi splits witnesses into `with` (abstract vars) + `witnesses`
+            // (abstract params); Event-B treats them as one witness namespace.
+            e.with
+                .iter()
+                .chain(&e.witnesses)
+                .filter_map(|w| w.label.as_deref()),
+        ));
+    }
+
+    // INITIALISATION as an event: no parameters, no guards.
+    if let Some(init) = &m.initialisation {
+        diags.extend(duplicate_names_in_event(
+            &m.name,
+            "INITIALISATION",
+            std::iter::empty(),
+            init.actions.iter().filter_map(|a| a.label.as_deref()),
+            init.with
+                .iter()
+                .chain(&init.witnesses)
+                .filter_map(|w| w.label.as_deref()),
+        ));
+    }
+
+    diags
+}
+
+/// Check the three per-event namespaces (parameters; the shared guard+action
+/// label space; the shared witness label space) for duplicates.
+fn duplicate_names_in_event<'a>(
+    machine: &str,
+    event: &str,
+    parameters: impl IntoIterator<Item = &'a str>,
+    guard_action_labels: impl IntoIterator<Item = &'a str>,
+    witness_labels: impl IntoIterator<Item = &'a str>,
+) -> Vec<Diagnostic> {
+    let scope = format!("event `{event}` of machine `{machine}`");
+    let origin = format!("{machine}.{event}");
+    let mut diags = duplicate_diags(
+        parameters,
+        RuleId::DuplicateIdentifier,
+        "parameter identifier",
+        &scope,
+        &origin,
+    );
+    diags.extend(duplicate_diags(
+        guard_action_labels,
+        RuleId::DuplicateLabel,
+        "guard or action label",
+        &scope,
+        &origin,
+    ));
+    diags.extend(duplicate_diags(
+        witness_labels,
+        RuleId::DuplicateLabel,
+        "witness label",
+        &scope,
+        &origin,
+    ));
+    diags
+}
+
+fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
+    let scope = format!("context `{}`", c.name);
+    let mut diags = Vec::new();
+
+    // EB021 — carrier sets, their enumerated elements, and constants share one
+    // identifier namespace, so a set and a constant with the same name collide.
+    // (In Event-B, enumerated set elements are constants.)
+    let mut ids: Vec<&str> = Vec::new();
+    for set in &c.sets {
+        ids.push(set.name());
+        ids.extend(set.elements().iter().map(String::as_str));
+    }
+    ids.extend(c.constants.iter().map(|k| k.name.as_str()));
+    diags.extend(duplicate_diags(
+        ids,
+        RuleId::DuplicateIdentifier,
+        "carrier set or constant identifier",
+        &scope,
+        &c.name,
+    ));
+
+    // EB022 — axiom labels.
+    diags.extend(duplicate_diags(
+        c.axioms.iter().filter_map(|a| a.label.as_deref()),
+        RuleId::DuplicateLabel,
+        "axiom label",
+        &scope,
+        &c.name,
+    ));
+
     diags
 }
 
@@ -795,6 +986,264 @@ mod tests {
         assert_eq!(dups.len(), 1);
         assert!(dups[0].message.contains("a/M.bum"));
         assert!(dups[0].message.contains("b/M.bum"));
+    }
+
+    // ---------- duplicate identifiers / labels (EB021 / EB022) --------------
+
+    fn dups_of(diags: &[Diagnostic], rule: RuleId) -> Vec<&Diagnostic> {
+        diags.iter().filter(|d| d.rule_id == Some(rule)).collect()
+    }
+
+    fn labeled_action(label: &str) -> LabeledAction {
+        LabeledAction {
+            label: Some(label.into()),
+            action: Action::assignment("x", Expression::Integer(0)),
+            span: None,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_variable_identifier_is_flagged() {
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x"), nv("x"), nv("y")];
+        let diags = run_component(&Component::Machine(m));
+        let ids = dups_of(&diags, RuleId::DuplicateIdentifier);
+        assert_eq!(ids.len(), 1, "{diags:#?}");
+        assert_eq!(ids[0].severity, Severity::Error);
+        assert_eq!(ids[0].origin, "M.x");
+        assert!(
+            ids[0].message.contains("variable identifier `x`"),
+            "{}",
+            ids[0].message
+        );
+        assert!(ids[0].message.contains("(declared 2 times)"));
+    }
+
+    #[test]
+    fn duplicate_invariant_label_is_flagged() {
+        let mut m = Machine::new("M".into());
+        m.invariants = vec![
+            lp("inv1", eq_pred(ident("x"), Expression::Integer(0))),
+            lp("inv1", eq_pred(ident("y"), Expression::Integer(0))),
+        ];
+        let diags = run_component(&Component::Machine(m));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "M.inv1");
+        assert!(labels[0].message.contains("invariant label `inv1`"));
+        assert!(labels[0].message.contains("(used 2 times)"));
+    }
+
+    #[test]
+    fn duplicate_event_label_is_flagged() {
+        let mut m = Machine::new("M".into());
+        m.events = vec![Event::new("evt".into()), Event::new("evt".into())];
+        let diags = run_component(&Component::Machine(m));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "M.evt");
+        assert!(labels[0].message.contains("event label `evt`"));
+    }
+
+    #[test]
+    fn guard_and_action_sharing_label_is_flagged() {
+        // Event-B shares one label namespace across guards and actions, so a
+        // guard `lbl` and an action `lbl` in the same event collide.
+        let mut e = Event::new("evt".into());
+        e.guards = vec![lp("lbl", Predicate::True)];
+        e.actions = vec![labeled_action("lbl")];
+        let mut m = Machine::new("M".into());
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "M.evt.lbl");
+        assert!(labels[0].message.contains("guard or action label `lbl`"));
+        assert!(labels[0].message.contains("event `evt` of machine `M`"));
+    }
+
+    #[test]
+    fn duplicate_parameter_identifier_is_flagged() {
+        let mut e = Event::new("evt".into());
+        e.parameters = vec![nv("p"), nv("p")];
+        let mut m = Machine::new("M".into());
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        let ids = dups_of(&diags, RuleId::DuplicateIdentifier);
+        assert_eq!(ids.len(), 1, "{diags:#?}");
+        assert_eq!(ids[0].origin, "M.evt.p");
+        assert!(ids[0].message.contains("parameter identifier `p`"));
+    }
+
+    #[test]
+    fn carrier_set_and_constant_sharing_name_is_flagged_once() {
+        // Carrier sets and constants share one identifier namespace.
+        let mut c = Context::new("C".into());
+        c.sets = vec![rossi::SetDeclaration::Deferred {
+            name: "S".into(),
+            comment: None,
+            span: None,
+        }];
+        c.constants = vec![nv("S")];
+        let diags = run_component(&Component::Context(c));
+        let ids = dups_of(&diags, RuleId::DuplicateIdentifier);
+        assert_eq!(ids.len(), 1, "{diags:#?}");
+        assert_eq!(ids[0].origin, "C.S");
+        assert!(
+            ids[0]
+                .message
+                .contains("carrier set or constant identifier `S`")
+        );
+        assert!(ids[0].message.contains("context `C`"));
+    }
+
+    #[test]
+    fn duplicate_axiom_label_is_flagged() {
+        let mut c = Context::new("C".into());
+        c.axioms = vec![
+            lp("axm1", eq_pred(ident("k"), Expression::Integer(0))),
+            lp("axm1", eq_pred(ident("k"), Expression::Integer(1))),
+        ];
+        let diags = run_component(&Component::Context(c));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "C.axm1");
+        assert!(labels[0].message.contains("axiom label `axm1`"));
+    }
+
+    #[test]
+    fn duplicate_witness_label_across_with_and_witnesses_is_flagged() {
+        // `with` (abstract var) and `witnesses` (abstract param) share one
+        // witness-label namespace in Event-B; the same label in each collides.
+        let mut e = Event::new("evt".into());
+        e.with = vec![lp("w", Predicate::True)];
+        e.witnesses = vec![lp("w", Predicate::True)];
+        let mut m = Machine::new("M".into());
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "M.evt.w");
+        assert!(labels[0].message.contains("witness label `w`"));
+    }
+
+    #[test]
+    fn initialisation_duplicate_action_label_is_flagged() {
+        // INITIALISATION is treated as an event sharing the guard/action label
+        // namespace, even though rossi stores it apart from `events`.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.initialisation = Some(InitialisationEvent {
+            actions: vec![labeled_action("act1"), labeled_action("act1")],
+            comment: None,
+            extended: false,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+        });
+        let diags = run_component(&Component::Machine(m));
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:#?}");
+        assert_eq!(labels[0].origin, "M.INITIALISATION.act1");
+        assert!(labels[0].message.contains("guard or action label `act1`"));
+        assert!(
+            labels[0]
+                .message
+                .contains("event `INITIALISATION` of machine `M`")
+        );
+    }
+
+    #[test]
+    fn identifier_and_label_in_separate_namespaces_do_not_conflict() {
+        // A variable `x` and an invariant labelled `x` must NOT be reported:
+        // identifiers and labels are distinct namespaces.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![lp("x", eq_pred(ident("x"), Expression::Integer(0)))];
+        let diags = run_component(&Component::Machine(m));
+        assert!(
+            dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
+                && dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:#?}"
+        );
+    }
+
+    #[test]
+    fn context_identifier_and_label_in_separate_namespaces_do_not_conflict() {
+        // The symmetric context case: a constant `S` and an axiom labelled `S`
+        // must NOT collide — identifiers and labels are distinct namespaces.
+        let mut c = Context::new("C".into());
+        c.constants = vec![nv("S")];
+        c.axioms = vec![lp("S", eq_pred(ident("S"), Expression::Integer(0)))];
+        let diags = run_component(&Component::Context(c));
+        assert!(
+            dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
+                && dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:#?}"
+        );
+    }
+
+    #[test]
+    fn unlabeled_guards_are_not_duplicates() {
+        // Two guards with no explicit label must not be reported — blank names
+        // are skipped.
+        let blank = || LabeledPredicate {
+            label: None,
+            is_theorem: false,
+            predicate: Predicate::True,
+            span: None,
+            comment: None,
+        };
+        let mut e = Event::new("evt".into());
+        e.guards = vec![blank(), blank()];
+        let mut m = Machine::new("M".into());
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        assert!(
+            dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:#?}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_labels_are_not_duplicates() {
+        // Whitespace-only labels are blank and must be skipped, not just the
+        // empty string.
+        let ws = || LabeledPredicate {
+            label: Some("   ".into()),
+            is_theorem: false,
+            predicate: Predicate::True,
+            span: None,
+            comment: None,
+        };
+        let mut e = Event::new("evt".into());
+        e.guards = vec![ws(), ws()];
+        let mut m = Machine::new("M".into());
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        assert!(
+            dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:#?}"
+        );
+    }
+
+    #[test]
+    fn clean_model_produces_no_duplicate_findings() {
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x"), nv("y")];
+        m.invariants = vec![lp("inv1", Predicate::True), lp("inv2", Predicate::True)];
+        let mut e = Event::new("evt".into());
+        e.parameters = vec![nv("p"), nv("q")];
+        e.guards = vec![lp("grd1", Predicate::True)];
+        e.actions = vec![labeled_action("act1")];
+        m.events = vec![e];
+        let diags = run_component(&Component::Machine(m));
+        assert!(
+            dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
+                && dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:#?}"
+        );
     }
 
     #[test]
