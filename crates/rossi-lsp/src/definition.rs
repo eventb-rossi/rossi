@@ -626,6 +626,23 @@ mod tests {
         assert_eq!(def.location.range.start, Position::new(7, 4)); // after "VARIABLES\n    "
     }
 
+    #[test]
+    fn definition_resolves_inside_a_broken_component() {
+        // The component under the cursor is itself broken (trailing `∈`), yet
+        // its own variable still resolves — recovery records the declaration's
+        // span (L2), so goto works right next to the error.
+        let provider = DefinitionProvider::new();
+        let source = "MACHINE m\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n";
+        provider.update_definitions("file:///m.eventb".to_string(), source);
+
+        let cache = provider.definition_cache.get("file:///m.eventb").unwrap();
+        let def = cache
+            .find_definition("counter")
+            .expect("counter resolves despite the broken invariant");
+        assert_eq!(def.kind, SymbolKind::Variable);
+        assert_eq!(def.location.range.start, Position::new(2, 4));
+    }
+
     /// Helper to set up a provider with cross-ref and document managers, registering
     /// a context document so cross-file resolution works.
     fn setup_cross_file_provider(
