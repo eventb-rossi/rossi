@@ -345,8 +345,8 @@ impl LanguageServer for RossiLanguageServer {
         self.workspace_symbol_provider
             .update_symbols(uri.to_string(), &text);
 
-        // Parse and publish diagnostics
-        self.analyze_and_publish_diagnostics(uri, text, Some(version))
+        // Publish diagnostics from the parse stored by `open` above.
+        self.analyze_and_publish_diagnostics(uri, Some(version))
             .await;
     }
 
@@ -357,24 +357,25 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!("Document changed: {} (version {})", uri, version);
 
-        // Update document
+        // Update document (this reparses and stores the new snapshot).
         self.document_manager.change(&uri, version, changes);
 
-        // Get updated text and publish diagnostics
-        if let Some(text) = self.document_manager.get_text(&uri) {
+        // Feed the eager index providers from the stored snapshot's text rather
+        // than materializing the rope a second time.
+        if let Some(doc) = self.document_manager.parse_result(&uri) {
             // Update cross-reference manager
             self.cross_reference_manager
-                .update_component(uri.to_string(), &text);
+                .update_component(uri.to_string(), &doc.text);
 
             // Update definition cache
             self.definition_provider
-                .update_definitions(uri.to_string(), &text);
+                .update_definitions(uri.to_string(), &doc.text);
 
             // Update workspace symbols
             self.workspace_symbol_provider
-                .update_symbols(uri.to_string(), &text);
+                .update_symbols(uri.to_string(), &doc.text);
 
-            self.analyze_and_publish_diagnostics(uri, text, Some(version))
+            self.analyze_and_publish_diagnostics(uri, Some(version))
                 .await;
         }
     }
@@ -407,21 +408,16 @@ impl LanguageServer for RossiLanguageServer {
         let uri = params.text_document.uri;
         debug!("Document symbol request for: {}", uri);
 
-        // Get document text
-        let text = match self.document_manager.get_text(&uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
+        // Read the document's shared parse (no per-request re-parse). A
+        // multi-component file yields one root symbol per component, and
+        // recovery keeps the outline alive through a local syntax error instead
+        // of collapsing it to nothing. Symbols are sliced from the parse's own
+        // text, so spans always index in bounds.
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            debug!("Document not found: {}", uri);
+            return Ok(None);
         };
-
-        // Parse the document; a multi-component file yields one root symbol
-        // per component. Recovery keeps the outline alive through a local
-        // syntax error instead of collapsing it to nothing.
-        let components = rossi::parse_components_with_recovery(&text)
-            .component
-            .unwrap_or_default();
+        let components = doc.components();
         if components.is_empty() {
             debug!("No components recovered for document symbols: {}", uri);
             return Ok(None);
@@ -430,7 +426,7 @@ impl LanguageServer for RossiLanguageServer {
         // Extract symbols with source text for accurate span information
         let symbols = components
             .iter()
-            .flat_map(|component| analysis::extract_symbols(component, &text))
+            .flat_map(|component| analysis::extract_symbols(component, &doc.text))
             .collect();
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
@@ -899,7 +895,7 @@ impl RossiLanguageServer {
     }
 
     /// Analyze a document and publish diagnostics
-    async fn analyze_and_publish_diagnostics(&self, uri: Url, text: String, version: Option<i32>) {
+    async fn analyze_and_publish_diagnostics(&self, uri: Url, version: Option<i32>) {
         // Check if diagnostics are enabled
         let config = self.config_manager.get();
         if !config.diagnostics.enabled {
@@ -908,24 +904,25 @@ impl RossiLanguageServer {
             return;
         }
 
-        let diagnostics = self.analyze_document(&text);
+        // Diagnostics come straight from the document's stored parse (the single
+        // source of truth refreshed on this edit), so the document is not parsed
+        // a second time just to report errors. Error spans are mapped against
+        // that parse's own text, so a concurrent edit cannot make a span index
+        // past the text it is rendered into.
+        let diagnostics = self
+            .document_manager
+            .parse_result(&uri)
+            .map(|doc| {
+                doc.parse
+                    .errors
+                    .iter()
+                    .map(|e| parse_error_to_diagnostic(e, &doc.text))
+                    .collect()
+            })
+            .unwrap_or_default();
         self.client
             .publish_diagnostics(uri, diagnostics, version)
             .await;
-    }
-
-    /// Analyze a document and return diagnostics
-    fn analyze_document(&self, text: &str) -> Vec<Diagnostic> {
-        use rossi::parse_components_with_recovery;
-
-        let parse_result = parse_components_with_recovery(text);
-
-        // Convert parse errors to LSP diagnostics
-        parse_result
-            .errors
-            .iter()
-            .map(|e| parse_error_to_diagnostic(e, text))
-            .collect()
     }
 }
 

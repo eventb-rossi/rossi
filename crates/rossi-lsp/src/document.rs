@@ -6,11 +6,41 @@
 use crate::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
 use dashmap::DashMap;
 use ropey::Rope;
+use rossi::{Component, ParseResult};
+use std::sync::Arc;
 use std::time::Instant;
 
-/// Manages all open documents
+/// A document's text together with its recovered parse, captured as one
+/// snapshot. Bundling the two means every feature that reads the store gets
+/// spans that index the exact text they were produced from — there is no window
+/// where a reader pairs one version's `text` with another version's AST (which
+/// would slice out of bounds, since requests and `didChange` run concurrently).
+pub struct ParsedDocument {
+    /// The text this parse was produced from.
+    pub text: String,
+    /// Recovered components + errors for [`Self::text`].
+    pub parse: ParseResult<Vec<Component>>,
+}
+
+impl ParsedDocument {
+    /// The recovered components, or an empty slice when nothing parsed. Saves
+    /// every reader from spelling out `parse.component.as_deref().unwrap_or_default()`.
+    pub fn components(&self) -> &[Component] {
+        self.parse.component.as_deref().unwrap_or_default()
+    }
+}
+
+/// Manages all open documents.
+///
+/// Besides the text, the manager owns the document's recovered parse — the
+/// single source of truth every language feature reads. The document is parsed
+/// once whenever its text changes (open/change), so features never re-parse it
+/// themselves and always agree on the same (recovery-tolerant) AST.
 pub struct DocumentManager {
     documents: DashMap<Url, Document>,
+    /// Text + recovered parse of each open document, refreshed on every edit.
+    /// Wrapped in `Arc` so readers take a cheap, self-consistent snapshot.
+    parses: DashMap<Url, Arc<ParsedDocument>>,
 }
 
 /// Represents a single document
@@ -38,6 +68,7 @@ impl DocumentManager {
     pub fn new() -> Self {
         Self {
             documents: DashMap::new(),
+            parses: DashMap::new(),
         }
     }
 
@@ -51,7 +82,17 @@ impl DocumentManager {
             text: rope,
             last_modified: Instant::now(),
         };
-        self.documents.insert(uri, document);
+        self.documents.insert(uri.clone(), document);
+        self.store_parse(uri, text);
+    }
+
+    /// Parse `text` with recovery and store it as `uri`'s snapshot. The text is
+    /// kept alongside the parse so readers never pair it with a different
+    /// version's AST. Shared by `open` and `change` so both parse identically.
+    fn store_parse(&self, uri: Url, text: String) {
+        let parse = rossi::parse_components_with_recovery(&text);
+        self.parses
+            .insert(uri, Arc::new(ParsedDocument { text, parse }));
     }
 
     /// Update document with incremental changes
@@ -84,11 +125,28 @@ impl DocumentManager {
                 }
             }
         }
+
+        // Refresh the stored parse from the new text. The `get_mut` guard above
+        // is dropped, so `get_text` can take its own read lock without deadlock.
+        if let Some(text) = self.get_text(uri) {
+            self.store_parse(uri.clone(), text);
+        }
     }
 
     /// Close a document
     pub fn close(&self, uri: &Url) {
         self.documents.remove(uri);
+        self.parses.remove(uri);
+    }
+
+    /// The recovered parse of `uri` (text + components + errors), if the
+    /// document is open. A cheap `Arc` snapshot of the single source of truth:
+    /// the bundled text matches the AST exactly, so a reader slicing the text by
+    /// a component/error span can never go out of bounds — even if a concurrent
+    /// edit has since replaced the entry. Every feature reads this rather than
+    /// parsing (or re-`get_text`-ing) the document itself.
+    pub fn parse_result(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+        self.parses.get(uri).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Get document text as string
@@ -162,6 +220,78 @@ mod tests {
         // Close document
         manager.close(&uri);
         assert!(manager.get(&uri).is_none());
+    }
+
+    #[test]
+    fn stored_parse_tracks_the_document_lifecycle() {
+        let manager = DocumentManager::new();
+        let uri = Url::parse("file:///test.eventb").unwrap();
+
+        // Open populates the stored parse.
+        manager.open(
+            uri.clone(),
+            "rossi".to_string(),
+            1,
+            "CONTEXT C0\nCONSTANTS\n    k\nEND\n".to_string(),
+        );
+        let parsed = manager.parse_result(&uri).expect("parse stored on open");
+        // The bundled text matches what was opened (so span-indexing is safe).
+        assert_eq!(parsed.text, "CONTEXT C0\nCONSTANTS\n    k\nEND\n");
+        let names: Vec<&str> = parsed
+            .parse
+            .component
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|c| c.name())
+            .collect();
+        assert_eq!(names, vec!["C0"]);
+
+        // A full-document change refreshes both text and parse together.
+        manager.change(
+            &uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "MACHINE M1\nEND\n".to_string(),
+            }],
+        );
+        let parsed = manager
+            .parse_result(&uri)
+            .expect("parse refreshed on change");
+        assert_eq!(parsed.text, "MACHINE M1\nEND\n");
+        assert_eq!(
+            parsed.parse.component.as_deref().unwrap_or_default()[0].name(),
+            "M1"
+        );
+
+        // Close drops it.
+        manager.close(&uri);
+        assert!(manager.parse_result(&uri).is_none());
+    }
+
+    #[test]
+    fn stored_parse_recovers_a_local_error() {
+        // A document with a broken predicate still yields a partial parse and
+        // its errors from the store — the single source of truth diagnostics
+        // and the symbol features both read.
+        let manager = DocumentManager::new();
+        let uri = Url::parse("file:///broken.eventb").unwrap();
+        manager.open(
+            uri.clone(),
+            "rossi".to_string(),
+            1,
+            "MACHINE m\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n".to_string(),
+        );
+
+        let parsed = manager.parse_result(&uri).unwrap();
+        assert!(
+            !parsed.parse.errors.is_empty(),
+            "the broken invariant is reported"
+        );
+        let machine = parsed.parse.component.as_deref().unwrap_or_default();
+        assert_eq!(machine[0].name(), "m");
     }
 
     #[test]
