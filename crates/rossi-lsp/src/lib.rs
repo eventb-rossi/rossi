@@ -31,6 +31,7 @@ pub mod rename;
 pub mod selection_range;
 pub mod semantic_tokens;
 pub mod signature_help;
+pub mod symbol_scan;
 pub mod symbols;
 pub mod text_utils;
 pub mod workspace;
