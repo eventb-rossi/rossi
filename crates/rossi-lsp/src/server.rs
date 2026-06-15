@@ -494,11 +494,8 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Update component cache for this document
-        self.completion_provider
-            .update_component(uri.to_string(), &text);
-
-        // Get completions
+        // Completion reads the document's shared parse from the document
+        // manager — no per-request re-parse.
         let response = self.completion_provider.complete(&params, &text);
 
         debug!(
@@ -526,10 +523,8 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Update component cache for this document
-        self.hover_provider.update_component(uri.to_string(), &text);
-
-        // Get hover information
+        // Hover reads the document's shared parse from the document manager —
+        // no per-request re-parse.
         let response = self.hover_provider.hover(&params, &text);
 
         debug!(

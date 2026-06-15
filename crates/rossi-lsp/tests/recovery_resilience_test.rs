@@ -107,7 +107,6 @@ fn setup() -> (DefinitionProvider, HoverProvider) {
     let mut hov = HoverProvider::new();
     hov.set_cross_reference_manager(Arc::clone(&crm));
     hov.set_document_manager(Arc::clone(&dm));
-    hov.update_component(uri().to_string(), SOURCE);
 
     (def, hov)
 }

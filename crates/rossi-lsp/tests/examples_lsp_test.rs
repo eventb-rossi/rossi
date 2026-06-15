@@ -489,15 +489,11 @@ fn rename_provider(ws: &Workspace) -> RenameProvider {
 }
 
 fn hover_provider(ws: &Workspace) -> HoverProvider {
+    // Every workspace file is already open in `ws.dm`, so hover reads its
+    // components from the shared parse — no per-document priming needed.
     let mut provider = HoverProvider::new();
     provider.set_cross_reference_manager(Arc::clone(&ws.crm));
     provider.set_document_manager(Arc::clone(&ws.dm));
-    let mut seen = HashSet::new();
-    for file in &ws.files {
-        if seen.insert(&file.uri) {
-            provider.update_component(file.uri.to_string(), &file.text);
-        }
-    }
     provider
 }
 
