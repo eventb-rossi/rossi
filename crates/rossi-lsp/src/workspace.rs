@@ -482,4 +482,17 @@ END
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].kind, SymbolKind::VARIABLE);
     }
+
+    #[test]
+    fn symbols_resolve_inside_a_broken_component() {
+        // The component is itself broken (trailing `∈`), yet its own constant is
+        // still indexed — recovery records the declaration's span.
+        let provider = WorkspaceSymbolProvider::new();
+        let source = "CONTEXT c\nCONSTANTS\n    ceiling\nAXIOMS\n    @a ceiling ∈\nEND\n";
+        provider.update_symbols("file:///c.eventb".to_string(), source);
+
+        let results = provider.search("ceiling");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, SymbolKind::CONSTANT);
+    }
 }
