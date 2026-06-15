@@ -21,6 +21,7 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::position::{char_col_to_utf16, span_to_range, utf16_len};
 use crate::references::component_reference_clause;
+use crate::symbol_scan::find_symbol_in_clause;
 use crate::symbols::SymbolKind;
 use crate::text_utils;
 
@@ -286,7 +287,7 @@ impl DefinitionProvider {
                 // Extract sets
                 for set in &context.sets {
                     let set_name = set.name();
-                    if let Some(pos) = find_identifier_in_clause(text, "SETS", set_name, window) {
+                    if let Some(pos) = find_symbol_in_clause(text, "SETS", set_name, window) {
                         definitions.push(def_info(set_name, SymbolKind::Set, pos));
                     }
                 }
@@ -294,7 +295,7 @@ impl DefinitionProvider {
                 // Extract constants
                 for constant in &context.constants {
                     if let Some(pos) =
-                        find_identifier_in_clause(text, "CONSTANTS", &constant.name, window)
+                        find_symbol_in_clause(text, "CONSTANTS", &constant.name, window)
                     {
                         definitions.push(def_info(&constant.name, SymbolKind::Constant, pos));
                     }
@@ -304,7 +305,7 @@ impl DefinitionProvider {
                 // Extract variables
                 for variable in &machine.variables {
                     if let Some(pos) =
-                        find_identifier_in_clause(text, "VARIABLES", &variable.name, window)
+                        find_symbol_in_clause(text, "VARIABLES", &variable.name, window)
                     {
                         definitions.push(def_info(&variable.name, SymbolKind::Variable, pos));
                     }
@@ -419,45 +420,6 @@ fn is_whole_word_at(chars: &[char], pos: usize, word_len: usize) -> bool {
     before_ok && after_ok
 }
 
-/// Find an identifier within a clause (e.g., VARIABLES, CONSTANTS, SETS)
-fn find_identifier_in_clause(
-    text: &str,
-    clause: &str,
-    identifier: &str,
-    window: (usize, usize),
-) -> Option<Position> {
-    let id_chars: Vec<char> = identifier.chars().collect();
-
-    // Find the clause line
-    let mut in_clause = false;
-    for (line_num, line) in lines_in_window(text, window) {
-        let trimmed = line.trim();
-
-        // Check if we're entering the clause (keywords are case-insensitive).
-        if trimmed.eq_ignore_ascii_case(clause) {
-            in_clause = true;
-            continue;
-        }
-
-        // Check if we've left the clause (another keyword)
-        if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
-            break;
-        }
-
-        // Search for identifier in this clause
-        if in_clause {
-            let chars: Vec<char> = line.chars().collect();
-            if let Some(col) = char_find_substr(&chars, &id_chars, 0)
-                && is_whole_word_at(&chars, col, id_chars.len())
-            {
-                return Some(Position::new(line_num as u32, char_col_to_utf16(line, col)));
-            }
-        }
-    }
-
-    None
-}
-
 /// Find an event definition
 fn find_event_definition(text: &str, event_name: &str, window: (usize, usize)) -> Option<Position> {
     let name_chars: Vec<char> = event_name.chars().collect();
@@ -520,8 +482,6 @@ fn find_identifier_in_event(
     identifier: &str,
     window: (usize, usize),
 ) -> Option<Position> {
-    let id_chars: Vec<char> = identifier.chars().collect();
-
     // Find the event first
     let mut in_event = false;
     let mut in_clause = false;
@@ -543,24 +503,23 @@ fn find_identifier_in_event(
         }
 
         // Check if we're entering the clause within the event
-        if trimmed.eq_ignore_ascii_case(clause) {
+        if text_utils::line_enters_clause(line, clause) {
             in_clause = true;
             continue;
         }
 
-        // Check if we've left the clause
+        // The clause runs until the next structural boundary; an event has at
+        // most one of each clause, so stop once it ends rather than clearing the
+        // flag — mirroring `symbol_scan::find_symbol_in_clause`, and keeping a
+        // later body line whose first token is the clause keyword from
+        // re-opening it.
         if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
-            in_clause = false;
+            break;
         }
 
         // Search for identifier in this clause
-        if in_clause {
-            let chars: Vec<char> = line.chars().collect();
-            if let Some(col) = char_find_substr(&chars, &id_chars, 0)
-                && is_whole_word_at(&chars, col, id_chars.len())
-            {
-                return Some(Position::new(line_num as u32, char_col_to_utf16(line, col)));
-            }
+        if in_clause && let Some(col) = text_utils::whole_word_utf16_col(line, identifier) {
+            return Some(Position::new(line_num as u32, col));
         }
     }
 
@@ -680,22 +639,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_identifier_in_clause() {
-        let text = "MACHINE test\nVARIABLES\n    count\n    total\nEND";
-
-        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL);
-        assert!(pos.is_some());
-        let pos = pos.unwrap();
-        assert_eq!(pos.line, 2);
-        assert!(pos.character >= 4); // After indentation
-
-        let pos = find_identifier_in_clause(text, "VARIABLES", "total", FULL);
-        assert!(pos.is_some());
-        let pos = pos.unwrap();
-        assert_eq!(pos.line, 3);
-    }
-
-    #[test]
     fn test_find_event_definition() {
         let text = "MACHINE test\nEVENTS\n    EVENT increment\n    WHERE\n        count < 10\n    END\nEND";
 
@@ -721,7 +664,7 @@ mod tests {
         let text = "machine test\nvariables\n    count\nevents\n    event increment\n    then\n        count := count + 1\n    end\n    event initialisation\n    then\n        count := 0\n    end\nend";
 
         assert_eq!(
-            find_identifier_in_clause(text, "VARIABLES", "count", FULL).map(|p| p.line),
+            find_symbol_in_clause(text, "VARIABLES", "count", FULL).map(|p| p.line),
             Some(2)
         );
         assert_eq!(
@@ -732,23 +675,6 @@ mod tests {
         assert_eq!(
             find_initialisation_definition(text, FULL).map(|p| p.line),
             Some(8)
-        );
-    }
-
-    #[test]
-    fn test_clause_scan_keeps_status_as_a_set_name() {
-        // STATUS is a contextual keyword but a common set name; a SETS clause
-        // member named STATUS must be found, and must not end the scan early so
-        // a following member is still reachable. Lowercase header to boot.
-        let text = "context c\nsets\n    STATUS\n    Colours\nend";
-
-        assert_eq!(
-            find_identifier_in_clause(text, "SETS", "STATUS", FULL).map(|p| p.line),
-            Some(2)
-        );
-        assert_eq!(
-            find_identifier_in_clause(text, "SETS", "Colours", FULL).map(|p| p.line),
-            Some(3)
         );
     }
 
@@ -782,30 +708,15 @@ mod tests {
     }
 
     #[test]
-    fn test_find_identifier_in_clause_after_unicode() {
-        // Unicode characters on preceding lines shouldn't affect column positions
-        let text = "MACHINE test\nINVARIANTS\n    @inv1 x ∈ ℕ\nVARIABLES\n    count\nEND";
-
-        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL);
-        assert!(pos.is_some());
-        let pos = pos.unwrap();
-        assert_eq!(pos.line, 4);
-        assert_eq!(pos.character, 4); // BMP `∈`/`ℕ` are one UTF-16 unit, and only on a prior line
-    }
-
-    #[test]
-    fn test_find_identifier_in_clause_reports_utf16_after_astral() {
-        // An astral character (`𝔹`, U+1D539) on the identifier's own line is two
-        // UTF-16 code units but a single `char`. LSP columns are UTF-16, so the
-        // reported column must skip the surrogate pair, not the char count. (`𝔹`
-        // is code here, not a comment, so masking leaves it in place.) All four
-        // local finders convert with the same `char_col_to_utf16(line, col)`.
-        let text = "MACHINE test\nVARIABLES\n    𝔹 count\nEND";
-
-        let pos = find_identifier_in_clause(text, "VARIABLES", "count", FULL).unwrap();
-        assert_eq!(pos.line, 2);
-        // 4 spaces + `𝔹` (2 units) + 1 space = column 7, not the char index 6.
-        assert_eq!(pos.character, 7);
+    fn find_identifier_in_event_is_bounded_to_its_clause() {
+        // The ANY clause ends at WHERE; a later body line whose first token is
+        // the clause keyword must not re-open it. `p` is not an ANY parameter
+        // here, so the result is None — not the `p` inside the `any = p` guard.
+        let text = "MACHINE m\nEVENTS\n  EVENT e\n  ANY\n    q\n  WHERE\n    any = p\n    p > 0\n  THEN\n  END\nEND";
+        assert_eq!(
+            find_identifier_in_event(text, "e", "ANY", "p", (0, usize::MAX)),
+            None
+        );
     }
 
     #[test]

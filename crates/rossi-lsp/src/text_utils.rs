@@ -114,6 +114,21 @@ pub fn whole_word_utf16_col(line: &str, word: &str) -> Option<u32> {
     None
 }
 
+/// Whether `line` enters the clause named `clause`: its first
+/// whitespace-delimited token equals `clause`, case-insensitively.
+///
+/// Uses the whole first token — like [`line_keyword_is`] and unlike
+/// [`first_identifier_word`], which strips a leading `@` — so a labelled action
+/// `@any x := 0` is not read as entering the `ANY` clause. Matching the first
+/// token rather than the whole line keeps a header that carries inline
+/// declarations (`SETS S1 S2`) recognised as entering the clause, and is
+/// consistent with [`is_declaration_scan_boundary`], the matching exit check.
+pub fn line_enters_clause(line: &str, clause: &str) -> bool {
+    line.split_whitespace()
+        .next()
+        .is_some_and(|token| token.eq_ignore_ascii_case(clause))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +165,15 @@ mod tests {
     fn whole_word_empty_and_missing() {
         assert_eq!(whole_word_utf16_col("count", ""), None);
         assert_eq!(whole_word_utf16_col("count", "total"), None);
+    }
+
+    #[test]
+    fn line_enters_clause_matches_first_token() {
+        assert!(line_enters_clause("SETS", "SETS"));
+        assert!(line_enters_clause("  sets", "SETS")); // leading ws + casing
+        assert!(line_enters_clause("SETS S1 S2", "SETS")); // inline declarations
+        assert!(!line_enters_clause("@any x := 0", "ANY")); // labelled action
+        assert!(!line_enters_clause("setsX", "SETS")); // not a separate token
+        assert!(!line_enters_clause("", "SETS"));
     }
 }

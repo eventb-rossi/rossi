@@ -6,6 +6,7 @@
 
 use crate::component_util::{component_line_window, lines_in_window};
 use crate::lsp_types::*;
+use crate::symbol_scan;
 use crate::text_utils;
 use dashmap::DashMap;
 use rossi::ast::*;
@@ -222,7 +223,7 @@ impl WorkspaceSymbolProvider {
         symbols
     }
 
-    /// Find the location of a symbol in a clause, within an inclusive line window
+    /// Find the location of a symbol in a clause, within an inclusive line window.
     fn find_symbol_location(
         &self,
         text: &str,
@@ -231,36 +232,13 @@ impl WorkspaceSymbolProvider {
         identifier: &str,
         window: (usize, usize),
     ) -> Option<Location> {
-        let mut in_clause = false;
+        let pos = symbol_scan::find_symbol_in_clause(text, clause, identifier, window)?;
+        self.locate(uri, pos)
+    }
 
-        for (line_idx, line) in lines_in_window(text, window) {
-            let trimmed = line.trim();
-
-            // Check if we're entering the target clause (keywords are
-            // case-insensitive, per the grammar's `^"sets"` rules).
-            if text_utils::first_identifier_word(trimmed)
-                .is_some_and(|word| word.eq_ignore_ascii_case(clause))
-            {
-                in_clause = true;
-                continue;
-            }
-
-            // Check if we're exiting the clause
-            if in_clause && text_utils::is_declaration_scan_boundary(trimmed) {
-                break;
-            }
-
-            // Search for the identifier in this line
-            if in_clause && let Some(col_idx) = text_utils::whole_word_utf16_col(line, identifier) {
-                let position = Position::new(line_idx as u32, col_idx);
-                return Some(Location::new(
-                    Url::parse(uri).ok()?,
-                    Range::new(position, position),
-                ));
-            }
-        }
-
-        None
+    /// Wrap a [`Position`] into a zero-width [`Location`] in `uri`.
+    fn locate(&self, uri: &str, pos: Position) -> Option<Location> {
+        Some(Location::new(Url::parse(uri).ok()?, Range::new(pos, pos)))
     }
 
     /// Find the location of an event declaration, within an inclusive line window
