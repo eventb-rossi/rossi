@@ -12,7 +12,7 @@ use crate::lsp_types::{
     GotoDefinitionParams, GotoDefinitionResponse, Location, Position, Range, Url,
 };
 use dashmap::DashMap;
-use rossi::{Component, parse_components};
+use rossi::Component;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -124,28 +124,32 @@ impl DefinitionProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Update the definition cache for a document
+    /// Update the definition cache for a document.
+    ///
+    /// Parses with error recovery so a local syntax error does not drop every
+    /// definition in the file: the healthy components keep their real spans and
+    /// still resolve. A recovered component's own declarations only become
+    /// navigable once recovery records their spans.
     pub fn update_definitions(&self, uri: String, text: &str) {
-        match parse_components(text) {
-            Ok(components) if !components.is_empty() => {
-                let mut ctx = DefinitionContext::new();
-                // Sibling components of a merged file typically see the same
-                // contexts/machines — extract each visible component once per
-                // update, not once per sibling.
-                let mut cross_cache = HashMap::new();
-                for component in &components {
-                    ctx.definitions.extend(
-                        self.extract_definitions(component, text, &uri, &mut cross_cache)
-                            .definitions,
-                    );
-                }
-                self.definition_cache.insert(uri, ctx);
-            }
-            _ => {
-                // Remove from cache if parsing fails
-                self.definition_cache.remove(&uri);
-            }
+        let components = crate::component_util::parse_all(text);
+        if components.is_empty() {
+            // Nothing recovered — drop any stale definitions for this document.
+            self.definition_cache.remove(&uri);
+            return;
         }
+
+        let mut ctx = DefinitionContext::new();
+        // Sibling components of a merged file typically see the same
+        // contexts/machines — extract each visible component once per
+        // update, not once per sibling.
+        let mut cross_cache = HashMap::new();
+        for component in &components {
+            ctx.definitions.extend(
+                self.extract_definitions(component, text, &uri, &mut cross_cache)
+                    .definitions,
+            );
+        }
+        self.definition_cache.insert(uri, ctx);
     }
 
     /// Handle go-to-definition request
@@ -602,6 +606,24 @@ mod tests {
                 .definition_cache
                 .contains_key("file:///test.eventb")
         );
+    }
+
+    #[test]
+    fn definitions_survive_a_broken_sibling_component() {
+        // A broken axiom in C0 must not wipe M0's variable definition: recovery
+        // parses the healthy machine region with real spans, so goto-definition
+        // keeps working everywhere except inside the broken clause itself.
+        let provider = DefinitionProvider::new();
+        let source =
+            "CONTEXT C0\nAXIOMS\n    @a k ∈\nEND\n\nMACHINE M0\nVARIABLES\n    counter\nEND\n";
+        provider.update_definitions("file:///m.eventb".to_string(), source);
+
+        let cache = provider.definition_cache.get("file:///m.eventb").unwrap();
+        let def = cache
+            .find_definition("counter")
+            .expect("counter resolves despite C0's broken axiom");
+        assert_eq!(def.kind, SymbolKind::Variable);
+        assert_eq!(def.location.range.start, Position::new(7, 4)); // after "VARIABLES\n    "
     }
 
     /// Helper to set up a provider with cross-ref and document managers, registering

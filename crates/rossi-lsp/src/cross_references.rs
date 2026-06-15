@@ -12,7 +12,6 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::deps::{DependencyGraph, kind_and_name};
-use rossi::parse_components;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
@@ -106,15 +105,17 @@ impl CrossReferenceManager {
     pub fn update_component(&self, uri: String, text: &str) {
         debug!("Updating components for URI: {}", uri);
 
-        let components = match parse_components(text) {
-            Ok(comps) => comps,
-            Err(e) => {
-                debug!("Failed to parse components for cross-references: {}", e);
-                // Drop any previously-indexed components for this URI.
-                self.remove_component(&uri);
-                return;
-            }
-        };
+        // Parse with error recovery (via the shared helper) so a local syntax
+        // error does not tear the file out of the dependency graph:
+        // SEES/REFINES/EXTENDS edges are recovered from the clause text even
+        // when a predicate fails to parse.
+        let components = crate::component_util::parse_all(text);
+        if components.is_empty() {
+            debug!("No components recovered for cross-references in {uri}");
+            // Drop any previously-indexed components for this URI.
+            self.remove_component(&uri);
+            return;
+        }
 
         // Component names are unique per project; within one file, keep the
         // first occurrence of a duplicated name (the maps can hold only one).
@@ -469,6 +470,24 @@ END
 
         assert_eq!(manager.all_component_names(), vec!["m".to_string()]);
         assert_eq!(manager.find_component_uri("m"), Some(uri));
+    }
+
+    #[test]
+    fn sees_edge_survives_a_local_error() {
+        // A machine with a broken invariant must still be indexed with its
+        // SEES edge intact — recovery extracts the clause names even when a
+        // predicate fails to parse, so cross-file navigation keeps working.
+        let manager = CrossReferenceManager::new();
+        let source = "CONTEXT C\nEND\n\nMACHINE M\nSEES C\nINVARIANTS\n    @i x ∈\nEND\n";
+        manager.update_component("file:///model.eventb".to_string(), source);
+
+        assert!(manager.find_component_uri("M").is_some());
+        assert!(manager.find_component_uri("C").is_some());
+        let m = manager.get_component("M").unwrap();
+        assert_eq!(
+            m.references.get(&ReferenceKind::Sees).unwrap(),
+            &vec!["C".to_string()]
+        );
     }
 
     #[test]

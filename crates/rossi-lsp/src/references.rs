@@ -5,10 +5,10 @@
 //! and across the workspace.
 
 use crate::lsp_types::*;
+use rossi::Component;
 use rossi::keywords::KeywordId;
-use rossi::{Component, parse_components};
 
-use crate::component_util::{component_at_offset, parse_named};
+use crate::component_util::{component_at_offset, parse_all, parse_named};
 use crate::identifier_utils::position_to_offset;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -240,7 +240,10 @@ impl ReferenceProvider {
         identifier: &str,
         manager: &CrossReferenceManager,
     ) -> Option<SymbolIdentity> {
-        let components = parse_components(text).ok()?;
+        // Recover from local errors (via the shared helper) so a symbol
+        // elsewhere in a broken document is still resolvable; an empty result
+        // resolves to no component below.
+        let components = parse_all(text);
         let offset = position_to_offset(text, position).unwrap_or(text.len());
         let component = component_at_offset(&components, offset)?;
         self.resolve_symbol_identity_at_position(component, text, position, identifier, manager)
