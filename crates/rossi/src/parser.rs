@@ -966,6 +966,7 @@ fn parse_initialisation_event(
     let span = Some(Span::from_pest(pair.as_span()));
     let mut actions = Vec::new();
     let mut extended = false;
+    let mut name_span = None;
 
     for p in pair.into_inner() {
         match p.as_rule() {
@@ -975,7 +976,15 @@ fn parse_initialisation_event(
             Rule::kw_extends => {
                 extended = true;
             }
-            Rule::kw_event | Rule::kw_initialisation | Rule::kw_then | Rule::kw_end => {}
+            // The INITIALISATION event has no identifier; its name is the
+            // keyword itself, so record that token's span as the name span. An
+            // extended init (`EVENT INITIALISATION extends INITIALISATION`) has
+            // two such tokens — keep the first (the event's own name), not the
+            // abstract event named after `extends`.
+            Rule::kw_initialisation => {
+                name_span.get_or_insert_with(|| Span::from_pest(p.as_span()));
+            }
+            Rule::kw_event | Rule::kw_then | Rule::kw_end => {}
             _ => {
                 return Err(ParseError::UnexpectedRule {
                     expected: "action_list or keyword".to_string(),
@@ -992,6 +1001,7 @@ fn parse_initialisation_event(
         with: Vec::new(),
         witnesses: Vec::new(),
         span,
+        name_span,
     })
 }
 
@@ -2626,6 +2636,7 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             }
             if let Some(init) = &mut machine.initialisation {
                 shift(&mut init.span, delta);
+                shift(&mut init.name_span, delta);
                 for action in &mut init.actions {
                     shift(&mut action.span, delta);
                 }
@@ -3171,6 +3182,43 @@ mod tests {
                     "{rule:?} glyph drifted from OPERATOR_SPELLINGS"
                 );
             }
+        }
+    }
+
+    /// The INITIALISATION event has no identifier of its own — its name is the
+    /// keyword — so its name span is the `INITIALISATION` token. LSP navigation
+    /// (go-to-definition, the document outline) reads it, so pin that it is
+    /// captured and covers exactly that keyword, in either casing.
+    #[test]
+    fn initialisation_name_span_covers_the_keyword() {
+        for source in [
+            "MACHINE m\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND",
+            "machine m\nevents\n    event initialisation\n    then\n        x := 0\n    end\nend",
+            // An extended init carries two INITIALISATION tokens; the name span
+            // must be the event's own header keyword, not the abstract event
+            // named after `extends`.
+            "MACHINE m\nREFINES n\nEVENTS\n    EVENT INITIALISATION extends INITIALISATION\n    THEN\n        x := 0\n    END\nEND",
+        ] {
+            let Component::Machine(machine) = parse(source).expect("parses") else {
+                panic!("expected a machine");
+            };
+            let init = machine.initialisation.expect("initialisation present");
+            let span = init.name_span.expect("initialisation name span captured");
+            assert!(
+                source[span.start..span.end].eq_ignore_ascii_case("INITIALISATION"),
+                "name span should cover the INITIALISATION keyword, got {:?}",
+                &source[span.start..span.end]
+            );
+            // The event's own name is the first INITIALISATION token, not a
+            // later one (e.g. the `extends` target).
+            let first = source
+                .to_ascii_uppercase()
+                .find("INITIALISATION")
+                .expect("source mentions INITIALISATION");
+            assert_eq!(
+                span.start, first,
+                "name span should be the event's own INITIALISATION token"
+            );
         }
     }
 }

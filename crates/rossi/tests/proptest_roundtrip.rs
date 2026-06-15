@@ -659,6 +659,7 @@ fn arb_initialisation() -> impl Strategy<Value = InitialisationEvent> {
         with: Vec::new(),
         witnesses: Vec::new(),
         span: None,
+        name_span: None,
     })
 }
 

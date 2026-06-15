@@ -33,6 +33,7 @@ pub fn clear_spans(component: &mut Component) {
             }
             if let Some(init) = &mut machine.initialisation {
                 init.span = None;
+                init.name_span = None;
                 for action in &mut init.actions {
                     action.span = None;
                 }

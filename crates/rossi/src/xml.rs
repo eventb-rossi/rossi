@@ -708,6 +708,7 @@ fn parse_machine_xml_with_name(
                                 with: Vec::new(),
                                 witnesses: Vec::new(),
                                 span: None,
+                                name_span: None,
                             });
                         } else {
                             let event_name = validate_component_name(
@@ -905,6 +906,7 @@ fn parse_machine_xml_with_name(
                                 with: event_builder.with,
                                 witnesses: event_builder.witnesses,
                                 span: None,
+                                name_span: None,
                             });
                         } else {
                             let event_name = validate_component_name(
@@ -2032,6 +2034,7 @@ mod tests {
                 with: Vec::new(),
                 witnesses: Vec::new(),
                 span: None,
+                name_span: None,
             }),
             events: vec![],
             span: None,
