@@ -30,7 +30,9 @@ pub fn decode_tokens(text: &str) -> Vec<(u32, u32, u32, u32)> {
             uri: Url::parse("file:///decode-probe.eventb").unwrap(),
         },
     };
-    let data = match provider.semantic_tokens(&params, text) {
+    let parsed = rossi::parse_components_with_recovery(text);
+    let components = parsed.component.as_deref().unwrap_or_default();
+    let data = match provider.semantic_tokens(&params, text, components) {
         Some(SemanticTokensResult::Tokens(tokens)) => tokens.data,
         other => panic!("expected tokens, got {other:?}"),
     };

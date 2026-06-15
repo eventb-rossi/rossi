@@ -709,19 +709,17 @@ impl LanguageServer for RossiLanguageServer {
         let uri = &params.text_document.uri;
         debug!("Semantic tokens request for: {}", uri);
 
-        // Get document text
-        let text = match self.document_manager.get_text(uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
+        // Highlight from the document's shared parse (no per-request re-parse).
+        // The builder slices text by component spans, so it must use the parse's
+        // own text — never a separately fetched snapshot that a concurrent edit
+        // could have advanced past those spans.
+        let Some(doc) = self.document_manager.parse_result(uri) else {
+            debug!("Document not found: {}", uri);
+            return Ok(None);
         };
-
-        // Get semantic tokens
-        let response = self
-            .semantic_tokens_provider
-            .semantic_tokens(&params, &text);
+        let response =
+            self.semantic_tokens_provider
+                .semantic_tokens(&params, &doc.text, doc.components());
 
         debug!(
             "Semantic tokens returned: {}",
