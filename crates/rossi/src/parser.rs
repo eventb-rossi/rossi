@@ -2872,29 +2872,59 @@ fn parse_machine_with_recovery(
     ParseResult::with_errors(Some(Component::Machine(machine)), errors)
 }
 
-/// Drop a recovered-predicate error that merely re-flags a predicate the
-/// strict parse already pinpointed. The strict failure (`errors[0]`) carries a
-/// byte position at the exact offending token; a [`ParseError::RecoverableError`]
-/// spanning the predicate that contains that token would underline it a second
-/// time, so keep the precise strict error and discard the coarser duplicate.
-/// Recovery errors for *other* broken predicates (which the strict parse never
-/// reached) keep their span and survive.
+/// Reconcile the strict failure (`errors[0]`) with the recovered-predicate
+/// errors so a single broken predicate is flagged once, in the right place.
+///
+/// Two cases turn on where the strict error's byte position falls relative to
+/// the recovered-predicate spans:
+///
+/// * **Inside** a recovered predicate's span — the strict parse stopped on the
+///   exact offending token. Keep that precise position and drop the coarser
+///   [`ParseError::RecoverableError`] that re-flags the same predicate.
+/// * **Past** a recovered predicate, landing in a *later* one — a trailing
+///   operator (`@a x ∈` with nothing after `∈`) makes the strict parser consume
+///   across the newline into the next predicate's `@label`, so its position
+///   points at an innocent predicate. Recovery already pinpointed the real
+///   culprit with a byte-exact segment span, so drop the misleading strict
+///   error and keep the recovered ones.
+///
+/// Recovery errors for predicates the strict parse never reached always survive.
 fn dedup_recovered_errors(errors: &mut Vec<ParseError>) {
     let Some(strict) = errors.first().and_then(ParseError::span) else {
         return;
     };
-    let mut is_strict = true;
-    errors.retain(|e| {
-        if is_strict {
-            is_strict = false;
-            return true; // never drop the strict error itself
-        }
-        !matches!(
-            e,
-            ParseError::RecoverableError { span: Some(s), .. }
-                if s.start <= strict.start && strict.end <= s.end
-        )
-    });
+    // Whether a recovered predicate's span encloses the strict error's position.
+    let contains_strict = |s: &Span| s.start <= strict.start && strict.end <= s.end;
+
+    let recovered_spans: Vec<Span> = errors
+        .iter()
+        .skip(1)
+        .filter_map(|e| match e {
+            ParseError::RecoverableError { span: Some(s), .. } => Some(*s),
+            _ => None,
+        })
+        .collect();
+
+    if recovered_spans.iter().any(&contains_strict) {
+        // Strict error sits inside a recovered predicate: keep it, drop the
+        // recovery error(s) that merely re-flag that same predicate.
+        let mut is_strict = true;
+        errors.retain(|e| {
+            if is_strict {
+                is_strict = false;
+                return true; // never drop the strict error itself
+            }
+            !matches!(
+                e,
+                ParseError::RecoverableError { span: Some(s), .. } if contains_strict(s)
+            )
+        });
+    } else if recovered_spans.iter().any(|s| s.end <= strict.start) {
+        // Strict error fell through past a broken predicate into a later one;
+        // recovery's segment error is the accurate report, so drop the strict
+        // error that points at the wrong predicate.
+        errors.remove(0);
+    }
 }
 
 /// Byte offset where the event section begins: the first whole-word
