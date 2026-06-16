@@ -481,3 +481,30 @@ fn test_label_token_excludes_trailing_colon() {
         "label token must cover `axm1` (col 5, len 4), not the trailing colon"
     );
 }
+
+#[test]
+fn formula_body_identifiers_are_classified() {
+    // Per-identifier spans let semantic tokens colour identifiers inside formula
+    // bodies, not just declarations: a variable used in an invariant is a
+    // VARIABLE token, and a quantifier binder with its bound use are PARAMETER
+    // tokens (this machine has no event parameters, so any PARAMETER token can
+    // only come from the formula walk).
+    let text =
+        "MACHINE m\nVARIABLES\ncount\nINVARIANTS\n@inv1 count >= 0\n@inv2 ∀ q · q ∈ ℕ\nEND\n";
+    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
+
+    let tokens = decode_tokens(text);
+    let variable = token_type_index("variable");
+    let parameter = token_type_index("parameter");
+
+    // The `count` declaration plus its use in @inv1.
+    let variables = tokens.iter().filter(|t| t.3 == variable).count();
+    assert!(
+        variables >= 2,
+        "expected the count declaration and its body use: {tokens:?}"
+    );
+
+    // The quantifier binder `q` and its bound use in @inv2.
+    let parameters = tokens.iter().filter(|t| t.3 == parameter).count();
+    assert_eq!(parameters, 2, "binder q and its bound use: {tokens:?}");
+}

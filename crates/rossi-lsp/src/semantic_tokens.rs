@@ -8,12 +8,17 @@ use crate::lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SemanticTokensParams, SemanticTokensResult,
 };
+use rossi::ast::walk::IdentRole;
 use rossi::ast::{
     Component, Context, Event, InitialisationEvent, LabeledAction, LabeledPredicate, Machine, Span,
 };
 use rossi::comments::{LexicalSpans, lexical_spans, span_containing};
 use rossi::keywords::{self, KeywordId};
+use std::collections::HashMap;
 use tracing::debug;
+
+use crate::formula_walk;
+use crate::symbols::{SymbolKind, enumerate_symbols};
 
 /// Semantic tokens provider
 pub struct SemanticTokensProvider;
@@ -77,6 +82,10 @@ impl SemanticTokensProvider {
                 Component::Context(ctx) => builder.visit_context(ctx),
                 Component::Machine(mch) => builder.visit_machine(mch),
             }
+            // Identifier uses inside formula bodies, coloured from their AST
+            // spans. `build()` sorts all tokens by position, so emitting these
+            // out of document order is fine.
+            builder.visit_formula_identifiers(component);
         }
 
         builder.emit_comment_tokens();
@@ -333,6 +342,55 @@ impl<'a> SemanticTokensBuilder<'a> {
             token_type,
             is_declaration,
         );
+    }
+
+    /// Colour every identifier occurrence inside the component's formula bodies
+    /// from its AST span. Each name is classified against the component's
+    /// declared symbols; binders and binder-bound uses (quantifier / lambda /
+    /// comprehension locals and event parameters) are coloured as parameters,
+    /// and names that don't resolve (built-ins, free predicate calls) are left
+    /// for the TextMate grammar.
+    fn visit_formula_identifiers(&mut self, component: &Component) {
+        let mut kinds: HashMap<String, TokenType> = HashMap::new();
+        for symbol in enumerate_symbols(component) {
+            let token_type = match symbol.kind {
+                SymbolKind::Set => TokenType::Set,
+                SymbolKind::Constant => TokenType::Constant,
+                SymbolKind::Variable => TokenType::Variable,
+                // Parameters are coloured via their binding; events are not
+                // formula identifiers.
+                SymbolKind::Parameter | SymbolKind::Event => continue,
+            };
+            kinds.entry(symbol.name).or_insert(token_type);
+        }
+
+        for occ in formula_walk::collect_all_occurrences(component) {
+            // A component recovered from a broken region can carry formula spans
+            // relative to that region, not the served document. Emit a body
+            // token only when the span actually slices to this occurrence's name
+            // in `self.text`; otherwise skip (no worse than the pre-AST state).
+            let span = occ.span;
+            if span.end > self.text.len()
+                || !self.text.is_char_boundary(span.start)
+                || !self.text.is_char_boundary(span.end)
+                || self.text[span.start..span.end] != occ.name
+            {
+                continue;
+            }
+            // Match a before-after read `x'` against its unprimed declaration.
+            let base = occ.name.strip_suffix('\'').unwrap_or(&occ.name);
+            let token_type = if occ.bound || occ.role == IdentRole::Binder {
+                TokenType::Parameter
+            } else if occ.role == IdentRole::PredicateCall {
+                kinds.get(base).copied().unwrap_or(TokenType::Function)
+            } else {
+                match kinds.get(base) {
+                    Some(token_type) => *token_type,
+                    None => continue,
+                }
+            };
+            self.add_identifier_span(occ.span, token_type, occ.role == IdentRole::Binder);
+        }
     }
 
     /// The `(cursor, bound)` to scan a construct with: its own span when the
@@ -810,6 +868,7 @@ impl<'a> SemanticTokensBuilder<'a> {
 }
 
 /// Token type indices (must match the legend order)
+#[derive(Clone, Copy)]
 #[repr(u32)]
 #[allow(dead_code)]
 enum TokenType {
