@@ -485,7 +485,7 @@ fn ast_symbol_references(
         spans.push(decl);
     }
     spans.extend(formula_walk::free_occurrence_spans(component, name));
-    spans_to_locations(spans, text, uri)
+    spans_to_locations(spans, text, uri, name)
 }
 
 /// References to an event parameter: its declaration plus every free occurrence
@@ -510,12 +510,17 @@ fn ast_parameter_references(
         spans.push(s);
     }
     spans.extend(formula_walk::parameter_occurrence_spans(event, name));
-    spans_to_locations(spans, text, uri)
+    spans_to_locations(spans, text, uri, name)
 }
 
-fn spans_to_locations(spans: Vec<Span>, text: &str, uri: &Url) -> Vec<Location> {
+/// Convert spans to locations, dropping any span that does not slice to `name`
+/// (or its `x'` form) in `text` — a deeper recovery bug could leave a span
+/// relative to its region, and a reference at the wrong position is worse than a
+/// missing one.
+fn spans_to_locations(spans: Vec<Span>, text: &str, uri: &Url, name: &str) -> Vec<Location> {
     spans
         .into_iter()
+        .filter(|span| formula_walk::span_matches(text, *span, name))
         .map(|span| Location {
             uri: uri.clone(),
             range: span_to_range(&span, text),

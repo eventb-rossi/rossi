@@ -347,6 +347,13 @@ impl Span {
         offset >= self.start && offset < self.end
     }
 
+    /// Shift both endpoints by `delta` bytes (error recovery lifts a span parsed
+    /// from a region slice into absolute document coordinates).
+    pub fn shift(&mut self, delta: usize) {
+        self.start += delta;
+        self.end += delta;
+    }
+
     /// Convert the start byte offset to (line, column), both 0-indexed.
     ///
     /// Line 0 is the first line, column 0 is the first character on that line.

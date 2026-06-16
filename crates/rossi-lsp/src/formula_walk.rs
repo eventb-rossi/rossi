@@ -36,8 +36,21 @@ pub struct Hit {
 
 /// Strip a single trailing apostrophe so the after-state form `x'` is matched
 /// against the unprimed declaration `x`.
-fn canonical(name: &str) -> &str {
+pub(crate) fn canonical(name: &str) -> &str {
     name.strip_suffix('\'').unwrap_or(name)
+}
+
+/// True if `span` slices to `name` (or its after-state form `name'`) in `text`.
+///
+/// Guards the find-references / rename consumers against a span that does not
+/// map to the served document — a deeper recovery bug could leave a formula
+/// span relative to its region rather than absolute — so a stale span can never
+/// panic a slice or produce an edit over unrelated text.
+pub fn span_matches(text: &str, span: Span, name: &str) -> bool {
+    span.end <= text.len()
+        && text.is_char_boundary(span.start)
+        && text.is_char_boundary(span.end)
+        && canonical(&text[span.start..span.end]) == name
 }
 
 struct Collector<'a> {
@@ -112,29 +125,35 @@ pub fn collect_in_component(component: &Component, target: &str) -> Vec<Hit> {
     c.hits
 }
 
-/// Walk a single event's formulas with `outer` binders already in scope, seeding
-/// the event's own parameters on top.
-fn collect_in_event<V: IdentVisitor>(event: &Event, outer: &mut Vec<Binder>, c: &mut V) {
-    let depth = outer.len();
-    outer.extend(event.parameters.iter().map(|p| Binder {
-        name: p.name.clone(),
-        span: p.span,
-    }));
+/// Walk an event's guards, `with` / witness predicates, and actions with the
+/// given binders in scope.
+fn walk_event_body<V: IdentVisitor>(event: &Event, binders: &mut Vec<Binder>, v: &mut V) {
     for lp in event
         .guards
         .iter()
         .chain(&event.with)
         .chain(&event.witnesses)
     {
-        let _ = walk::walk_predicate(&lp.predicate, outer, c);
+        let _ = walk::walk_predicate(&lp.predicate, binders, v);
     }
     for la in &event.actions {
-        let _ = walk::walk_action(&la.action, outer, c);
+        let _ = walk::walk_action(&la.action, binders, v);
     }
+}
+
+/// Walk a single event's body with `outer` binders already in scope, seeding the
+/// event's own parameters on top.
+fn collect_in_event<V: IdentVisitor>(event: &Event, outer: &mut Vec<Binder>, c: &mut V) {
+    let depth = outer.len();
+    outer.extend(event.parameters.iter().map(|p| Binder {
+        name: p.name.clone(),
+        span: p.span,
+    }));
+    walk_event_body(event, outer, c);
     outer.truncate(depth);
 }
 
-/// Walk one event's formulas **without** seeding its parameters, collecting
+/// Walk one event's body **without** seeding its parameters, collecting
 /// occurrences of `target`. Used to find references to a parameter: its uses
 /// are free at event scope (an inner quantifier rebinding the name shadows it).
 pub fn collect_in_event_body(event: &Event, target: &str) -> Vec<Hit> {
@@ -142,19 +161,18 @@ pub fn collect_in_event_body(event: &Event, target: &str) -> Vec<Hit> {
         target,
         hits: Vec::new(),
     };
-    let mut binders: Vec<Binder> = Vec::new();
-    for lp in event
-        .guards
-        .iter()
-        .chain(&event.with)
-        .chain(&event.witnesses)
-    {
-        let _ = walk::walk_predicate(&lp.predicate, &mut binders, &mut c);
-    }
-    for la in &event.actions {
-        let _ = walk::walk_action(&la.action, &mut binders, &mut c);
-    }
+    walk_event_body(event, &mut Vec::new(), &mut c);
     c.hits
+}
+
+/// The binder-shadowing exclusion rule shared by find-references and rename: a
+/// free use / write target / predicate-call name of the component-level symbol,
+/// dropping binder declarations and binder-shadowed uses.
+pub(crate) fn free_spans(hits: Vec<Hit>) -> Vec<Span> {
+    hits.into_iter()
+        .filter(|h| h.scope == Scope::Free && h.role != IdentRole::Binder)
+        .map(|h| h.span)
+        .collect()
 }
 
 /// Spans of every **free** occurrence of `target` in the component — uses,
@@ -162,20 +180,12 @@ pub fn collect_in_event_body(event: &Event, target: &str) -> Vec<Hit> {
 /// symbol (binder declarations and binder-shadowed uses are excluded). This is
 /// the reference set for a global variable / constant / set.
 pub fn free_occurrence_spans(component: &Component, target: &str) -> Vec<Span> {
-    collect_in_component(component, target)
-        .into_iter()
-        .filter(|h| h.scope == Scope::Free && h.role != IdentRole::Binder)
-        .map(|h| h.span)
-        .collect()
+    free_spans(collect_in_component(component, target))
 }
 
 /// Spans of every free occurrence of a parameter `target` within `event`.
 pub fn parameter_occurrence_spans(event: &Event, target: &str) -> Vec<Span> {
-    collect_in_event_body(event, target)
-        .into_iter()
-        .filter(|h| h.scope == Scope::Free && h.role != IdentRole::Binder)
-        .map(|h| h.span)
-        .collect()
+    free_spans(collect_in_event_body(event, target))
 }
 
 /// Any identifier occurrence in a component's formulas (used to colour every

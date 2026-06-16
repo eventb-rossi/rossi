@@ -2528,12 +2528,19 @@ fn recover_labeled_predicates(
         if content.is_empty() {
             continue;
         }
+        // `content` is a subslice of `raw`; its absolute document offset (masked
+        // and original share a byte layout).
+        let abs_start = seg_start + subslice_offset(raw, content);
         match try_parse_labeled_predicate_from_text(content) {
-            Ok(pred) => result.push(pred),
+            Ok(mut pred) => {
+                // The segment was parsed in isolation, so its spans are relative
+                // to `content`; lift them to absolute document coordinates (as
+                // shift_component_spans does for the multi-component path).
+                shift_opt_span(&mut pred.span, abs_start);
+                shift_pred_spans(&mut pred.predicate, abs_start);
+                result.push(pred);
+            }
             Err(e) => {
-                // `content` is a subslice of `raw`; recover its absolute offset
-                // (masked and original share a byte layout).
-                let abs_start = seg_start + subslice_offset(raw, content);
                 let abs_end = abs_start + content.len();
                 let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
                 let subject = leading_label(content)
@@ -2796,17 +2803,223 @@ fn line_start(s: &str, pos: usize) -> usize {
 /// slice-relative spans from a per-region strict parse back into absolute
 /// input positions. Recovered components carry no spans, so a `None` span
 /// stays `None`.
-fn shift_component_spans(component: &mut Component, delta: usize) {
-    fn shift(span: &mut Option<Span>, delta: usize) {
-        if let Some(s) = span {
-            s.start += delta;
-            s.end += delta;
+/// Add `delta` to an optional span (recovery shifts a component parsed from a
+/// region slice into absolute document coordinates).
+fn shift_opt_span(span: &mut Option<Span>, delta: usize) {
+    if let Some(s) = span {
+        s.shift(delta);
+    }
+}
+
+/// Shift every span inside an expression — the node's own span and those of all
+/// nested expressions, predicates, binders, and patterns.
+fn shift_expr_spans(expr: &mut Expression, delta: usize) {
+    shift_opt_span(&mut expr.span, delta);
+    match &mut expr.kind {
+        ExpressionKind::Integer(_)
+        | ExpressionKind::Identifier(_)
+        | ExpressionKind::True
+        | ExpressionKind::False
+        | ExpressionKind::EmptySet
+        | ExpressionKind::Naturals
+        | ExpressionKind::Naturals1
+        | ExpressionKind::Integers
+        | ExpressionKind::BoolType
+        | ExpressionKind::StringLiteral(_) => {}
+        ExpressionKind::SetEnumeration(items) => {
+            for e in items {
+                shift_expr_spans(e, delta);
+            }
+        }
+        ExpressionKind::SetComprehension {
+            identifiers,
+            predicate,
+            expression,
+        } => {
+            for ti in identifiers {
+                shift_typed_ident_spans(ti, delta);
+            }
+            shift_pred_spans(predicate, delta);
+            if let Some(e) = expression {
+                shift_expr_spans(e, delta);
+            }
+        }
+        ExpressionKind::SetBuilder {
+            member_expression,
+            predicate,
+        } => {
+            shift_expr_spans(member_expression, delta);
+            shift_pred_spans(predicate, delta);
+        }
+        ExpressionKind::RelationalImage { relation, set } => {
+            shift_expr_spans(relation, delta);
+            shift_expr_spans(set, delta);
+        }
+        ExpressionKind::QuantifiedUnion {
+            identifiers,
+            predicate,
+            expression,
+        }
+        | ExpressionKind::QuantifiedInter {
+            identifiers,
+            predicate,
+            expression,
+        } => {
+            for ti in identifiers {
+                shift_typed_ident_spans(ti, delta);
+            }
+            shift_pred_spans(predicate, delta);
+            shift_expr_spans(expression, delta);
+        }
+        ExpressionKind::Lambda {
+            pattern,
+            predicate,
+            expression,
+        } => {
+            shift_pattern_spans(pattern, delta);
+            shift_pred_spans(predicate, delta);
+            shift_expr_spans(expression, delta);
+        }
+        ExpressionKind::Binary { left, right, .. } => {
+            shift_expr_spans(left, delta);
+            shift_expr_spans(right, delta);
+        }
+        ExpressionKind::Unary { operand, .. } => shift_expr_spans(operand, delta),
+        ExpressionKind::FunctionApplication {
+            function,
+            arguments,
+        } => {
+            shift_expr_spans(function, delta);
+            for a in arguments {
+                shift_expr_spans(a, delta);
+            }
+        }
+        ExpressionKind::BuiltinApplication { arguments, .. } => {
+            for a in arguments {
+                shift_expr_spans(a, delta);
+            }
+        }
+        ExpressionKind::Bool(p) => shift_pred_spans(p, delta),
+        ExpressionKind::IfThenElse {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            shift_pred_spans(condition, delta);
+            shift_expr_spans(then_expr, delta);
+            shift_expr_spans(else_expr, delta);
         }
     }
+}
+
+/// Shift every span inside a predicate.
+fn shift_pred_spans(pred: &mut Predicate, delta: usize) {
+    shift_opt_span(&mut pred.span, delta);
+    match &mut pred.kind {
+        PredicateKind::True | PredicateKind::False => {}
+        PredicateKind::Comparison { left, right, .. } => {
+            shift_expr_spans(left, delta);
+            shift_expr_spans(right, delta);
+        }
+        PredicateKind::Not(inner) => shift_pred_spans(inner, delta),
+        PredicateKind::Logical { left, right, .. } => {
+            shift_pred_spans(left, delta);
+            shift_pred_spans(right, delta);
+        }
+        PredicateKind::Quantified {
+            identifiers,
+            predicate,
+            ..
+        } => {
+            for ti in identifiers {
+                shift_typed_ident_spans(ti, delta);
+            }
+            shift_pred_spans(predicate, delta);
+        }
+        PredicateKind::Application {
+            function,
+            arguments,
+        } => {
+            shift_opt_span(&mut function.span, delta);
+            for a in arguments {
+                shift_expr_spans(a, delta);
+            }
+        }
+        PredicateKind::BuiltinApplication { arguments, .. } => {
+            for a in arguments {
+                shift_expr_spans(a, delta);
+            }
+        }
+    }
+}
+
+/// Shift every span inside an action (write targets and right-hand side).
+fn shift_action_spans(action: &mut Action, delta: usize) {
+    shift_opt_span(&mut action.span, delta);
+    match &mut action.kind {
+        ActionKind::Skip => {}
+        ActionKind::Assignment {
+            variables,
+            expressions,
+        } => {
+            for v in variables {
+                shift_opt_span(&mut v.span, delta);
+            }
+            for e in expressions {
+                shift_expr_spans(e, delta);
+            }
+        }
+        ActionKind::BecomesIn { variables, set } => {
+            for v in variables {
+                shift_opt_span(&mut v.span, delta);
+            }
+            shift_expr_spans(set, delta);
+        }
+        ActionKind::BecomesSuchThat {
+            variables,
+            predicate,
+        } => {
+            for v in variables {
+                shift_opt_span(&mut v.span, delta);
+            }
+            shift_pred_spans(predicate, delta);
+        }
+        ActionKind::FunctionOverride {
+            function,
+            arguments,
+            expression,
+        } => {
+            shift_opt_span(&mut function.span, delta);
+            for a in arguments {
+                shift_expr_spans(a, delta);
+            }
+            shift_expr_spans(expression, delta);
+        }
+    }
+}
+
+fn shift_typed_ident_spans(ti: &mut TypedIdentifier, delta: usize) {
+    shift_opt_span(&mut ti.span, delta);
+    if let Some(t) = &mut ti.type_expr {
+        shift_expr_spans(t, delta);
+    }
+}
+
+fn shift_pattern_spans(pattern: &mut IdentPattern, delta: usize) {
+    match pattern {
+        IdentPattern::Identifier(ti) => shift_typed_ident_spans(ti, delta),
+        IdentPattern::Maplet(l, r) => {
+            shift_pattern_spans(l, delta);
+            shift_pattern_spans(r, delta);
+        }
+    }
+}
+
+fn shift_component_spans(component: &mut Component, delta: usize) {
+    let shift = shift_opt_span;
     fn shift_clauses(clauses: &mut [ClauseRegion], delta: usize) {
         for clause in clauses {
-            clause.span.start += delta;
-            clause.span.end += delta;
+            clause.span.shift(delta);
         }
     }
     if delta == 0 {
@@ -2825,6 +3038,7 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             }
             for axiom in &mut ctx.axioms {
                 shift(&mut axiom.span, delta);
+                shift_pred_spans(&mut axiom.predicate, delta);
             }
         }
         Component::Machine(machine) => {
@@ -2836,15 +3050,21 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             }
             for invariant in &mut machine.invariants {
                 shift(&mut invariant.span, delta);
+                shift_pred_spans(&mut invariant.predicate, delta);
+            }
+            if let Some(variant) = &mut machine.variant {
+                shift_expr_spans(variant, delta);
             }
             if let Some(init) = &mut machine.initialisation {
                 shift(&mut init.span, delta);
                 shift(&mut init.name_span, delta);
                 for action in &mut init.actions {
                     shift(&mut action.span, delta);
+                    shift_action_spans(&mut action.action, delta);
                 }
                 for predicate in init.with.iter_mut().chain(&mut init.witnesses) {
                     shift(&mut predicate.span, delta);
+                    shift_pred_spans(&mut predicate.predicate, delta);
                 }
             }
             for event in &mut machine.events {
@@ -2860,9 +3080,11 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
                     .chain(&mut event.witnesses)
                 {
                     shift(&mut predicate.span, delta);
+                    shift_pred_spans(&mut predicate.predicate, delta);
                 }
                 for action in &mut event.actions {
                     shift(&mut action.span, delta);
+                    shift_action_spans(&mut action.action, delta);
                 }
             }
         }

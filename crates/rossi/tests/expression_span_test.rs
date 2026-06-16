@@ -13,6 +13,60 @@ fn slice(src: &str, span: Span) -> &str {
 }
 
 #[test]
+fn recovered_component_has_absolute_formula_spans() {
+    // A broken first component forces multi-component error recovery; the later
+    // component is parsed from a region slice and then shifted to absolute
+    // document coordinates. The inner formula identifier spans must be shifted
+    // too, not left relative to the region.
+    let src = "CONTEXT C0\nAXIOMS\n@a xxxxx ∈\nEND\n\nMACHINE M0\nVARIABLES\ncount\nINVARIANTS\n@i1 count > 0\nEND\n";
+    let parsed = rossi::parse_components_with_recovery(src);
+    let components = parsed.component.expect("recovers components");
+    let machine = components
+        .iter()
+        .find_map(|c| match c {
+            rossi::Component::Machine(m) => Some(m),
+            _ => None,
+        })
+        .expect("machine recovered");
+    let PredicateKind::Comparison { left, .. } = &machine.invariants[0].predicate.kind else {
+        panic!("expected comparison invariant");
+    };
+    let span = left.span.expect("count span");
+    assert_eq!(
+        &src[span.start..span.end],
+        "count",
+        "inner formula span must be absolute after recovery"
+    );
+}
+
+#[test]
+fn recovered_labeled_predicate_has_absolute_inner_spans() {
+    // A single component with one broken axiom triggers clause-level recovery,
+    // which re-parses each labeled predicate from its own text segment. The
+    // recovered (healthy) predicate's inner identifier spans must be lifted to
+    // absolute document coordinates, not left relative to the segment.
+    let src = "CONTEXT c\nCONSTANTS\nk\nAXIOMS\n@a1 +++ broken\n@a2 k ∈ ℕ\nEND\n";
+    let parsed = rossi::parse_components_with_recovery(src);
+    let components = parsed.component.expect("recovers components");
+    let rossi::Component::Context(ctx) = &components[0] else {
+        panic!("expected a context");
+    };
+    let recovered = ctx
+        .axioms
+        .iter()
+        .find_map(|ax| match &ax.predicate.kind {
+            PredicateKind::Comparison { left, .. } => left.span,
+            _ => None,
+        })
+        .expect("recovered @a2 with a spanned identifier");
+    assert_eq!(
+        &src[recovered.start..recovered.end],
+        "k",
+        "inner span must be absolute after clause recovery"
+    );
+}
+
+#[test]
 fn comparison_identifier_leaves_are_spanned() {
     let src = "x ∈ S";
     let pred = parse_predicate_str(src).expect("parses");
