@@ -19,37 +19,42 @@
 //!    [`collect_referenced_in_action_rhs`]. Walks the whole tree and inserts
 //!    every free identifier into a [`BTreeSet`]. Used by the lint module.
 //!
-//! Both flavours implement the [`Visitor`] trait. The walker threads a
-//! binder stack through the tree, so callers only need to provide the
-//! *outer* type environment. The env is used for membership checks only;
-//! binder types coming from quantifiers / lambdas don't need to be
-//! inferred to answer "is this name bound?".
+//! Both flavours implement [`rossi::ast::walk::IdentVisitor`] over the shared
+//! AST walker in the core crate (so the static checker, lint, and the language
+//! server resolve identifiers through one traversal). The walker threads a
+//! binder stack through the tree, so callers only need to provide the *outer*
+//! type environment. The env is used for membership checks only; binder types
+//! coming from quantifiers / lambdas don't need to be inferred to answer "is
+//! this name bound?".
 //!
-//! Identifiers in binder type annotations (`∀x⦂T·…`) are visited in the
-//! enclosing scope (before the binder is pushed), so a carrier set or
-//! constant used only as a bound-variable type is correctly recorded.
+//! The shared walker reports every identifier occurrence — reads, binder
+//! declarations, write targets, and predicate-call names. These read-side
+//! consumers act only on [`IdentRole::Usage`] occurrences, preserving the
+//! original "free identifiers on the read side" semantics: write targets and
+//! binder names are ignored, and `x'` is canonicalised to `x` by the collector.
+//!
+//! Identifiers in binder type annotations (`∀x⦂T·…`) are reported in the
+//! enclosing scope (before the binder is pushed), so a carrier set or constant
+//! used only as a bound-variable type is correctly recorded.
 
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
-use rossi::{
-    Action, ActionKind, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind,
-    TypedIdentifier,
-};
+use rossi::ast::walk::{self, Binder, IdentOccurrence, IdentRole, IdentVisitor};
+use rossi::{Action, Expression, Predicate};
 
 use crate::type_env::TypeEnv;
 
-/// Visitor invoked for every free identifier the walker encounters.
-///
-/// `name` is the identifier's textual form (apostrophe-suffixed for the
-/// after-state form `x'` in BeforeAfter predicates). `locals` is the
-/// snapshot of binder names currently in scope, innermost last.
-///
-/// Returning [`ControlFlow::Break`] aborts the rest of the traversal —
-/// useful for first-hit finders. Returning [`ControlFlow::Continue`] keeps
-/// walking.
-pub trait Visitor {
-    fn visit_ident(&mut self, name: &str, locals: &[String]) -> ControlFlow<()>;
+/// Binder frame for the shared walker built from event-parameter names; these
+/// outer locals carry no span (they come from declarations, not the formula).
+fn locals_from(names: &[&str]) -> Vec<Binder> {
+    names
+        .iter()
+        .map(|n| Binder {
+            name: (*n).to_string(),
+            span: None,
+        })
+        .collect()
 }
 
 // ---------- Public API: find-first variants --------------------------------
@@ -58,14 +63,14 @@ pub trait Visitor {
 /// locally-bound quantifier variables.
 pub fn free_identifier_in_predicate(pred: &Predicate, env: &TypeEnv) -> Option<String> {
     let mut v = FreeFinder { env, found: None };
-    let _ = walk_pred(pred, &mut Vec::new(), &mut v);
+    let _ = walk::walk_predicate(pred, &mut Vec::new(), &mut v);
     v.found
 }
 
 /// Locate the first free identifier in `expr`.
 pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option<String> {
     let mut v = FreeFinder { env, found: None };
-    let _ = walk_expr(expr, &mut Vec::new(), &mut v);
+    let _ = walk::walk_expression(expr, &mut Vec::new(), &mut v);
     v.found
 }
 
@@ -73,7 +78,7 @@ pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option
 /// plus locally-bound quantifier variables.
 pub fn free_identifier_in_action_rhs(a: &Action, env: &TypeEnv) -> Option<String> {
     let mut v = FreeFinder { env, found: None };
-    let _ = walk_action_rhs(a, &mut Vec::new(), &mut v);
+    let _ = walk::walk_action(a, &mut Vec::new(), &mut v);
     v.found
 }
 
@@ -89,7 +94,7 @@ pub fn first_forbidden_identifier_in_predicate(
         forbidden,
         found: None,
     };
-    let _ = walk_pred(pred, &mut Vec::new(), &mut v);
+    let _ = walk::walk_predicate(pred, &mut Vec::new(), &mut v);
     v.found
 }
 
@@ -103,7 +108,7 @@ pub fn first_forbidden_identifier_in_action_rhs(
         forbidden,
         found: None,
     };
-    let _ = walk_action_rhs(a, &mut Vec::new(), &mut v);
+    let _ = walk::walk_action(a, &mut Vec::new(), &mut v);
     v.found
 }
 
@@ -114,14 +119,14 @@ pub fn first_forbidden_identifier_in_action_rhs(
 /// unprimed form before insertion, so `x'` counts as a use of `x`.
 pub fn collect_referenced_in_predicate(pred: &Predicate, acc: &mut BTreeSet<String>) {
     let mut v = IdentifierCollector { acc };
-    let _ = walk_pred(pred, &mut Vec::new(), &mut v);
+    let _ = walk::walk_predicate(pred, &mut Vec::new(), &mut v);
 }
 
 /// Insert every free identifier in `expr` into `acc`. Same
 /// canonicalisation as [`collect_referenced_in_predicate`].
 pub fn collect_referenced_in_expression(expr: &Expression, acc: &mut BTreeSet<String>) {
     let mut v = IdentifierCollector { acc };
-    let _ = walk_expr(expr, &mut Vec::new(), &mut v);
+    let _ = walk::walk_expression(expr, &mut Vec::new(), &mut v);
 }
 
 /// Insert every free identifier on an action's read side into `acc`.
@@ -142,9 +147,9 @@ pub fn collect_referenced_in_predicate_with_locals(
     initial_locals: &[&str],
     acc: &mut BTreeSet<String>,
 ) {
-    let mut locals: Vec<String> = initial_locals.iter().map(|s| s.to_string()).collect();
+    let mut locals = locals_from(initial_locals);
     let mut v = IdentifierCollector { acc };
-    let _ = walk_pred(pred, &mut locals, &mut v);
+    let _ = walk::walk_predicate(pred, &mut locals, &mut v);
 }
 
 /// Same as [`collect_referenced_in_action_rhs`] with initial bound
@@ -154,9 +159,9 @@ pub fn collect_referenced_in_action_rhs_with_locals(
     initial_locals: &[&str],
     acc: &mut BTreeSet<String>,
 ) {
-    let mut locals: Vec<String> = initial_locals.iter().map(|s| s.to_string()).collect();
+    let mut locals = locals_from(initial_locals);
     let mut v = IdentifierCollector { acc };
-    let _ = walk_action_rhs(a, &mut locals, &mut v);
+    let _ = walk::walk_action(a, &mut locals, &mut v);
 }
 
 /// Event-B built-in function names that are always "in scope" even though
@@ -169,15 +174,29 @@ pub fn is_builtin_ident(name: &str) -> bool {
 }
 
 // ---------- Visitor implementations ----------------------------------------
+//
+// These read-side consumers act only on `IdentRole::Usage`. Binder
+// declarations, write targets, and predicate-call names reported by the shared
+// walker are ignored here, which keeps the "free identifiers on the read side"
+// semantics these callers have always relied on.
+
+/// Is this name bound by an enclosing binder?
+fn shadowed(name: &str, binders: &[Binder]) -> bool {
+    binders.iter().any(|b| b.name == name)
+}
 
 struct FreeFinder<'a> {
     env: &'a TypeEnv,
     found: Option<String>,
 }
 
-impl Visitor for FreeFinder<'_> {
-    fn visit_ident(&mut self, name: &str, locals: &[String]) -> ControlFlow<()> {
-        if locals.iter().any(|l| l == name) || self.env.contains(name) || is_builtin_ident(name) {
+impl IdentVisitor for FreeFinder<'_> {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        if occ.role != IdentRole::Usage {
+            return ControlFlow::Continue(());
+        }
+        let name = occ.name;
+        if shadowed(name, occ.binders) || self.env.contains(name) || is_builtin_ident(name) {
             ControlFlow::Continue(())
         } else {
             self.found = Some(name.to_string());
@@ -191,9 +210,13 @@ struct ForbiddenFinder<'a> {
     found: Option<String>,
 }
 
-impl Visitor for ForbiddenFinder<'_> {
-    fn visit_ident(&mut self, name: &str, locals: &[String]) -> ControlFlow<()> {
-        if locals.iter().any(|l| l == name) {
+impl IdentVisitor for ForbiddenFinder<'_> {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        if occ.role != IdentRole::Usage {
+            return ControlFlow::Continue(());
+        }
+        let name = occ.name;
+        if shadowed(name, occ.binders) {
             ControlFlow::Continue(())
         } else if self.forbidden.contains(name) {
             self.found = Some(name.to_string());
@@ -208,9 +231,13 @@ struct IdentifierCollector<'a> {
     acc: &'a mut BTreeSet<String>,
 }
 
-impl Visitor for IdentifierCollector<'_> {
-    fn visit_ident(&mut self, name: &str, locals: &[String]) -> ControlFlow<()> {
-        if locals.iter().any(|l| l == name) || is_builtin_ident(name) {
+impl IdentVisitor for IdentifierCollector<'_> {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        if occ.role != IdentRole::Usage {
+            return ControlFlow::Continue(());
+        }
+        let name = occ.name;
+        if shadowed(name, occ.binders) || is_builtin_ident(name) {
             return ControlFlow::Continue(());
         }
         // Strip the trailing apostrophe so `x'` in a BecomesSuchThat
@@ -222,236 +249,6 @@ impl Visitor for IdentifierCollector<'_> {
         self.acc.insert(canonical.to_string());
         ControlFlow::Continue(())
     }
-}
-
-// ---------- Internal walkers -----------------------------------------------
-
-fn walk_action_rhs<V: Visitor>(
-    action: &Action,
-    locals: &mut Vec<String>,
-    v: &mut V,
-) -> ControlFlow<()> {
-    match &action.kind {
-        ActionKind::Skip => ControlFlow::Continue(()),
-        ActionKind::Assignment { expressions, .. } => {
-            for e in expressions {
-                walk_expr(e, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-        ActionKind::BecomesIn { set, .. } => walk_expr(set, locals, v),
-        ActionKind::BecomesSuchThat { predicate, .. } => walk_pred(predicate, locals, v),
-        ActionKind::FunctionOverride {
-            arguments,
-            expression,
-            ..
-        } => {
-            for a in arguments {
-                walk_expr(a, locals, v)?;
-            }
-            walk_expr(expression, locals, v)
-        }
-    }
-}
-
-fn walk_pred<V: Visitor>(p: &Predicate, locals: &mut Vec<String>, v: &mut V) -> ControlFlow<()> {
-    use PredicateKind as P;
-    match &p.kind {
-        P::True | P::False => ControlFlow::Continue(()),
-        P::Comparison { left, right, .. } => {
-            walk_expr(left, locals, v)?;
-            walk_expr(right, locals, v)
-        }
-        P::Not(inner) => walk_pred(inner, locals, v),
-        P::Logical { left, right, .. } => {
-            walk_pred(left, locals, v)?;
-            walk_pred(right, locals, v)
-        }
-        P::Quantified {
-            identifiers,
-            predicate,
-            ..
-        } => {
-            walk_binder_types(identifiers, locals, v)?;
-            with_binders(
-                locals,
-                identifiers.iter().map(|ti| ti.name.as_str()),
-                |locals| walk_pred(predicate, locals, v),
-            )
-        }
-        P::Application { arguments, .. } | P::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                walk_expr(a, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-    }
-}
-
-fn walk_expr<V: Visitor>(e: &Expression, locals: &mut Vec<String>, v: &mut V) -> ControlFlow<()> {
-    use ExpressionKind as E;
-    match &e.kind {
-        E::Identifier(n) => v.visit_ident(n, locals),
-        E::Integer(_)
-        | E::True
-        | E::False
-        | E::EmptySet
-        | E::Naturals
-        | E::Naturals1
-        | E::Integers
-        | E::BoolType
-        | E::StringLiteral(_) => ControlFlow::Continue(()),
-        E::Binary { left, right, .. } => {
-            walk_expr(left, locals, v)?;
-            walk_expr(right, locals, v)
-        }
-        E::Unary { operand, .. } => walk_expr(operand, locals, v),
-        E::FunctionApplication {
-            function,
-            arguments,
-        } => {
-            walk_expr(function, locals, v)?;
-            for a in arguments {
-                walk_expr(a, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-        E::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                walk_expr(a, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-        E::SetEnumeration(items) => {
-            for a in items {
-                walk_expr(a, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-        E::Bool(p) => walk_pred(p, locals, v),
-        E::RelationalImage { relation, set } => {
-            walk_expr(relation, locals, v)?;
-            walk_expr(set, locals, v)
-        }
-        E::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            walk_pred(condition, locals, v)?;
-            walk_expr(then_expr, locals, v)?;
-            walk_expr(else_expr, locals, v)
-        }
-        E::SetComprehension {
-            identifiers,
-            predicate,
-            expression,
-        } => {
-            walk_binder_types(identifiers, locals, v)?;
-            with_binders(
-                locals,
-                identifiers.iter().map(|ti| ti.name.as_str()),
-                |locals| {
-                    walk_pred(predicate, locals, v)?;
-                    if let Some(e) = expression {
-                        walk_expr(e, locals, v)?;
-                    }
-                    ControlFlow::Continue(())
-                },
-            )
-        }
-        E::SetBuilder {
-            member_expression,
-            predicate,
-        } => {
-            walk_expr(member_expression, locals, v)?;
-            walk_pred(predicate, locals, v)
-        }
-        E::Lambda {
-            pattern,
-            predicate,
-            expression,
-        } => {
-            walk_pattern_types(pattern, locals, v)?;
-            let names = pattern.identifiers();
-            with_binders(locals, names, |locals| {
-                walk_pred(predicate, locals, v)?;
-                walk_expr(expression, locals, v)
-            })
-        }
-        E::QuantifiedUnion {
-            identifiers,
-            predicate,
-            expression,
-        }
-        | E::QuantifiedInter {
-            identifiers,
-            predicate,
-            expression,
-        } => {
-            walk_binder_types(identifiers, locals, v)?;
-            with_binders(
-                locals,
-                identifiers.iter().map(|ti| ti.name.as_str()),
-                |locals| {
-                    walk_pred(predicate, locals, v)?;
-                    walk_expr(expression, locals, v)
-                },
-            )
-        }
-    }
-}
-
-/// Walk the optional `type_expr` of each binder in the *outer* scope —
-/// type annotations like `∀x⦂T·…` can reference identifiers that must be
-/// declared in the enclosing environment, not introduced by the binder.
-fn walk_binder_types<V: Visitor>(
-    binders: &[TypedIdentifier],
-    locals: &mut Vec<String>,
-    v: &mut V,
-) -> ControlFlow<()> {
-    for ti in binders {
-        if let Some(t) = &ti.type_expr {
-            walk_expr(t, locals, v)?;
-        }
-    }
-    ControlFlow::Continue(())
-}
-
-/// Walk the `type_expr` of every leaf `TypedIdentifier` in a lambda
-/// pattern, in the *outer* scope.
-fn walk_pattern_types<V: Visitor>(
-    pattern: &IdentPattern,
-    locals: &mut Vec<String>,
-    v: &mut V,
-) -> ControlFlow<()> {
-    match pattern {
-        IdentPattern::Identifier(ti) => {
-            if let Some(t) = &ti.type_expr {
-                walk_expr(t, locals, v)?;
-            }
-            ControlFlow::Continue(())
-        }
-        IdentPattern::Maplet(l, r) => {
-            walk_pattern_types(l, locals, v)?;
-            walk_pattern_types(r, locals, v)
-        }
-    }
-}
-
-/// Scope guard: push `names` onto `locals`, run `body`, then truncate back.
-fn with_binders<'a, I, F>(locals: &mut Vec<String>, names: I, body: F) -> ControlFlow<()>
-where
-    I: IntoIterator<Item = &'a str>,
-    F: FnOnce(&mut Vec<String>) -> ControlFlow<()>,
-{
-    let depth = locals.len();
-    for n in names {
-        locals.push(n.to_string());
-    }
-    let r = body(locals);
-    locals.truncate(depth);
-    r
 }
 
 #[cfg(test)]
