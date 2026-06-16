@@ -48,9 +48,18 @@ fn arb_quantifier_identifier() -> impl Strategy<Value = TypedIdentifier> {
         Just(TypedIdentifier::untyped("q1".into())),
         Just(TypedIdentifier::untyped("q2".into())),
         Just(TypedIdentifier::untyped("q3".into())),
-        Just(TypedIdentifier::typed("p1".into(), Expression::Integers)),
-        Just(TypedIdentifier::typed("p2".into(), Expression::Naturals)),
-        Just(TypedIdentifier::typed("q1".into(), Expression::BoolType)),
+        Just(TypedIdentifier::typed(
+            "p1".into(),
+            ExpressionKind::Integers.into()
+        )),
+        Just(TypedIdentifier::typed(
+            "p2".into(),
+            ExpressionKind::Naturals.into()
+        )),
+        Just(TypedIdentifier::typed(
+            "q1".into(),
+            ExpressionKind::BoolType.into()
+        )),
     ]
 }
 
@@ -167,18 +176,21 @@ fn arb_leaf_expression() -> impl Strategy<Value = Expression> {
     // at parse boundaries (e.g. as LHS of a comparison). They are still reachable
     // inside set enumerations, function arguments, etc. via other AST paths.
     prop_oneof![
-        (0i64..1000).prop_map(Expression::Integer),
-        arb_identifier().prop_map(Expression::Identifier),
-        Just(Expression::EmptySet),
-        Just(Expression::Naturals),
-        Just(Expression::Naturals1),
-        Just(Expression::Integers),
-        Just(Expression::BoolType),
+        (0i64..1000).prop_map(|n| ExpressionKind::Integer(n).into()),
+        arb_identifier().prop_map(|s| ExpressionKind::Identifier(s).into()),
+        Just(ExpressionKind::EmptySet.into()),
+        Just(ExpressionKind::Naturals.into()),
+        Just(ExpressionKind::Naturals1.into()),
+        Just(ExpressionKind::Integers.into()),
+        Just(ExpressionKind::BoolType.into()),
         // Bool(predicate) — inline simple predicates to avoid circular type dependency
-        prop_oneof![Just(Predicate::True), Just(Predicate::False)]
-            .prop_map(|p| Expression::Bool(Box::new(p))),
+        prop_oneof![
+            Just(Predicate::from(PredicateKind::True)),
+            Just(Predicate::from(PredicateKind::False))
+        ]
+        .prop_map(|p| ExpressionKind::Bool(Box::new(p)).into()),
         // StringLiteral — safe characters only
-        "[a-zA-Z0-9_]{0,10}".prop_map(Expression::StringLiteral),
+        "[a-zA-Z0-9_]{0,10}".prop_map(|s| ExpressionKind::StringLiteral(s).into()),
     ]
 }
 
@@ -193,39 +205,46 @@ fn arb_expression_with(
         prop_oneof![
             // Binary expression
             (bin_ops.clone(), inner.clone(), inner.clone()).prop_map(|(op, left, right)| {
-                Expression::Binary {
+                ExpressionKind::Binary {
                     op,
                     left: Box::new(left),
                     right: Box::new(right),
                 }
+                .into()
             }),
             // Unary expression
-            (arb_unary_op(), inner.clone()).prop_map(|(op, operand)| Expression::Unary {
+            (arb_unary_op(), inner.clone()).prop_map(|(op, operand)| ExpressionKind::Unary {
                 op,
                 operand: Box::new(operand),
-            }),
+            }
+            .into()),
             // SetEnumeration (non-empty to avoid EmptySet mismatch)
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(Expression::SetEnumeration),
+            proptest::collection::vec(inner.clone(), 1..4)
+                .prop_map(|v| ExpressionKind::SetEnumeration(v).into()),
             // BuiltinApplication (respecting arity)
             arb_builtin_application(boxed.clone()),
             // FunctionApplication (function must not be a builtin name)
             arb_function_application(boxed),
             // RelationalImage: r[S]
             (inner.clone(), inner.clone()).prop_map(|(relation, set)| {
-                Expression::RelationalImage {
+                ExpressionKind::RelationalImage {
                     relation: Box::new(relation),
                     set: Box::new(set),
                 }
+                .into()
             }),
             // SetComprehension basic: {ids | P}
             (
                 proptest::collection::vec(arb_quantifier_identifier(), 1..3),
                 arb_leaf_predicate(),
             )
-                .prop_map(|(identifiers, predicate)| Expression::SetComprehension {
-                    identifiers,
-                    predicate: Box::new(predicate),
-                    expression: None,
+                .prop_map(|(identifiers, predicate)| {
+                    ExpressionKind::SetComprehension {
+                        identifiers,
+                        predicate: Box::new(predicate),
+                        expression: None,
+                    }
+                    .into()
                 }),
             // SetComprehension extended: {ids · P | E}
             (
@@ -234,19 +253,21 @@ fn arb_expression_with(
                 inner.clone(),
             )
                 .prop_map(|(identifiers, predicate, expr)| {
-                    Expression::SetComprehension {
+                    ExpressionKind::SetComprehension {
                         identifiers,
                         predicate: Box::new(predicate),
                         expression: Some(Box::new(expr)),
                     }
+                    .into()
                 }),
             // Lambda: λ pattern · P | E
             (arb_ident_pattern(), arb_leaf_predicate(), inner.clone(),).prop_map(
-                |(pattern, predicate, expression)| Expression::Lambda {
+                |(pattern, predicate, expression)| ExpressionKind::Lambda {
                     pattern,
                     predicate: Box::new(predicate),
                     expression: Box::new(expression),
                 }
+                .into()
             ),
             // QuantifiedUnion: ⋃ids · P | E
             (
@@ -255,11 +276,12 @@ fn arb_expression_with(
                 inner.clone(),
             )
                 .prop_map(|(identifiers, predicate, expression)| {
-                    Expression::QuantifiedUnion {
+                    ExpressionKind::QuantifiedUnion {
                         identifiers,
                         predicate: Box::new(predicate),
                         expression: Box::new(expression),
                     }
+                    .into()
                 }),
             // QuantifiedInter: ⋂ids · P | E
             (
@@ -268,11 +290,12 @@ fn arb_expression_with(
                 inner,
             )
                 .prop_map(|(identifiers, predicate, expression)| {
-                    Expression::QuantifiedInter {
+                    ExpressionKind::QuantifiedInter {
                         identifiers,
                         predicate: Box::new(predicate),
                         expression: Box::new(expression),
                     }
+                    .into()
                 }),
         ]
     })
@@ -287,10 +310,11 @@ fn arb_builtin_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Va
     arb_builtin_function().prop_flat_map(move |func| {
         let arity = func.arity();
         proptest::collection::vec(inner.clone(), arity..=arity).prop_map(move |arguments| {
-            Expression::BuiltinApplication {
+            ExpressionKind::BuiltinApplication {
                 function: func,
                 arguments,
             }
+            .into()
         })
     })
 }
@@ -299,10 +323,11 @@ fn arb_builtin_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Va
 /// All names in `arb_identifier()` already avoid builtins and keywords.
 fn arb_function_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Value = Expression> {
     (arb_identifier(), proptest::collection::vec(inner, 1..4)).prop_map(|(name, arguments)| {
-        Expression::FunctionApplication {
-            function: Box::new(Expression::Identifier(name)),
+        ExpressionKind::FunctionApplication {
+            function: Box::new(ExpressionKind::Identifier(name).into()),
             arguments,
         }
+        .into()
     })
 }
 
@@ -312,14 +337,14 @@ fn arb_function_application(inner: BoxedStrategy<Expression>) -> impl Strategy<V
 
 fn arb_leaf_predicate() -> impl Strategy<Value = Predicate> {
     prop_oneof![
-        Just(Predicate::True),
-        Just(Predicate::False),
+        Just(Predicate::from(PredicateKind::True)),
+        Just(Predicate::from(PredicateKind::False)),
         (
             arb_comparison_op(),
             arb_leaf_expression(),
             arb_leaf_expression()
         )
-            .prop_map(|(op, left, right)| Predicate::Comparison { op, left, right }),
+            .prop_map(|(op, left, right)| PredicateKind::Comparison { op, left, right }.into()),
     ]
 }
 
@@ -332,17 +357,21 @@ fn arb_predicate() -> impl Strategy<Value = Predicate> {
             prop_oneof![
                 // Logical { op, left, right }
                 (arb_logical_op(), inner.clone(), inner.clone()).prop_map(|(op, left, right)| {
-                    Predicate::Logical {
+                    PredicateKind::Logical {
                         op,
                         left: Box::new(left),
                         right: Box::new(right),
                     }
+                    .into()
                 }),
                 // Not(pred)
-                inner.clone().prop_map(|p| Predicate::Not(Box::new(p))),
+                inner
+                    .clone()
+                    .prop_map(|p| PredicateKind::Not(Box::new(p)).into()),
                 // Comparison with recursive expressions
-                (arb_comparison_op(), arb_expression(), arb_expression())
-                    .prop_map(|(op, left, right)| Predicate::Comparison { op, left, right }),
+                (arb_comparison_op(), arb_expression(), arb_expression()).prop_map(
+                    |(op, left, right)| PredicateKind::Comparison { op, left, right }.into()
+                ),
                 // Quantified predicate
                 (
                     prop_oneof![Just(Quantifier::ForAll), Just(Quantifier::Exists)],
@@ -350,11 +379,12 @@ fn arb_predicate() -> impl Strategy<Value = Predicate> {
                     inner.clone(),
                 )
                     .prop_map(|(quantifier, identifiers, predicate)| {
-                        Predicate::Quantified {
+                        PredicateKind::Quantified {
                             quantifier,
                             identifiers,
                             predicate: Box::new(predicate),
                         }
+                        .into()
                     }),
                 // BuiltinApplication: finite(expr) or partition(expr, expr, ...)
                 arb_builtin_predicate_application(),
@@ -363,10 +393,11 @@ fn arb_predicate() -> impl Strategy<Value = Predicate> {
                     arb_identifier(),
                     proptest::collection::vec(arb_leaf_expression(), 1..3)
                 )
-                    .prop_map(|(function, arguments)| Predicate::Application {
+                    .prop_map(|(function, arguments)| PredicateKind::Application {
                         function,
                         arguments,
-                    }),
+                    }
+                    .into()),
             ]
         },
     )
@@ -375,16 +406,18 @@ fn arb_predicate() -> impl Strategy<Value = Predicate> {
 fn arb_builtin_predicate_application() -> impl Strategy<Value = Predicate> {
     prop_oneof![
         // finite(S) — 1 argument
-        arb_leaf_expression().prop_map(|expr| Predicate::BuiltinApplication {
+        arb_leaf_expression().prop_map(|expr| PredicateKind::BuiltinApplication {
             predicate: BuiltinPredicate::Finite,
             arguments: vec![expr],
-        }),
+        }
+        .into()),
         // partition(S, A, B, ...) — 2..4 arguments
         proptest::collection::vec(arb_leaf_expression(), 2..5).prop_map(|args| {
-            Predicate::BuiltinApplication {
+            PredicateKind::BuiltinApplication {
                 predicate: BuiltinPredicate::Partition,
                 arguments: args,
             }
+            .into()
         }),
     ]
 }
@@ -403,14 +436,14 @@ fn arb_action_expression() -> impl Strategy<Value = Expression> {
 /// Predicate strategy for action RHS (BecomesSuchThat) — uses action expressions.
 fn arb_action_predicate() -> impl Strategy<Value = Predicate> {
     prop_oneof![
-        Just(Predicate::True),
-        Just(Predicate::False),
+        Just(Predicate::from(PredicateKind::True)),
+        Just(Predicate::from(PredicateKind::False)),
         (
             arb_comparison_op(),
             arb_action_expression(),
             arb_action_expression()
         )
-            .prop_map(|(op, left, right)| Predicate::Comparison { op, left, right }),
+            .prop_map(|(op, left, right)| PredicateKind::Comparison { op, left, right }.into()),
     ]
 }
 
@@ -714,11 +747,12 @@ fn wrap_expression_in_context(expr: &Expression) -> Component {
     ctx.axioms = vec![LabeledPredicate {
         label: Some("axm1".into()),
         is_theorem: false,
-        predicate: Predicate::Comparison {
+        predicate: PredicateKind::Comparison {
             op: ComparisonOp::Equal,
-            left: Expression::Identifier("propvar".into()),
+            left: ExpressionKind::Identifier("propvar".into()).into(),
             right: expr.clone(),
-        },
+        }
+        .into(),
         span: None,
         comment: None,
     }];

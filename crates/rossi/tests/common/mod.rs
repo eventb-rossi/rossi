@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use rossi::{
-    Component, Context, Expression, Machine, Predicate, parse, to_string, to_string_ascii,
+    Component, Context, Expression, Machine, PredicateKind, parse, to_string, to_string_ascii,
 };
 
 /// Clear all spans from a Component for AST comparison (spans differ after roundtrip).
@@ -122,7 +122,7 @@ pub fn parse_machine(source: &str) -> Machine {
 /// Parse a Context source and return the RHS expression of the first axiom's comparison.
 pub fn parse_axiom_rhs(source: &str) -> Expression {
     let ctx = parse_context(source);
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
         return right.clone();
     }
     panic!("Expected Context with comparison axiom");
@@ -131,7 +131,7 @@ pub fn parse_axiom_rhs(source: &str) -> Expression {
 /// Parse a Context source and return the LHS expression of the first axiom's comparison.
 pub fn parse_expr_axiom(source: &str) -> Expression {
     let ctx = parse_context(source);
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
         return left.clone();
     }
     panic!("Expected Context with comparison axiom");

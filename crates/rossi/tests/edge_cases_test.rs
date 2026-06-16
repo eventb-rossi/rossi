@@ -4,7 +4,7 @@ mod common;
 
 use rossi::ast::expression::{BinaryOp, UnaryOp};
 use rossi::ast::predicate::Quantifier;
-use rossi::{Action, EventStatus, Expression, Predicate};
+use rossi::{Action, EventStatus, Expression, ExpressionKind, Predicate, PredicateKind};
 
 // ============================================================================
 // HIGH priority: Action::BecomesIn
@@ -36,7 +36,7 @@ fn test_becomes_in_unicode() {
         Action::BecomesIn { variables, set } => {
             assert_eq!(variables, &["x"]);
             assert!(
-                matches!(set, Expression::SetEnumeration(_)),
+                matches!(set.kind, ExpressionKind::SetEnumeration(_)),
                 "Expected SetEnumeration, got {:?}",
                 set
             );
@@ -71,7 +71,7 @@ fn test_becomes_in_ascii() {
         Action::BecomesIn { variables, set } => {
             assert_eq!(variables, &["x"]);
             assert!(
-                matches!(set, Expression::SetEnumeration(_)),
+                matches!(set.kind, ExpressionKind::SetEnumeration(_)),
                 "Expected SetEnumeration, got {:?}",
                 set
             );
@@ -113,7 +113,7 @@ fn test_becomes_such_that() {
         } => {
             assert_eq!(variables, &["x"]);
             assert!(
-                matches!(predicate, Predicate::Comparison { .. }),
+                matches!(predicate.kind, PredicateKind::Comparison { .. }),
                 "Expected Comparison predicate, got {:?}",
                 predicate
             );
@@ -131,10 +131,10 @@ fn test_inverse_tilde() {
     // Postfix ∼ (U+223C) — the only spec-defined form
     let source = common::axiom_context("f, r", "r = f\u{223C}");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Unary { op, operand } => {
+    match &rhs.kind {
+        ExpressionKind::Unary { op, operand } => {
             assert_eq!(*op, UnaryOp::Inverse);
-            assert!(matches!(operand.as_ref(), Expression::Identifier(n) if n == "f"));
+            assert!(matches!(&operand.kind, ExpressionKind::Identifier(n) if n == "f"));
         }
         other => panic!("Expected Unary Inverse, got {:?}", other),
     }
@@ -145,16 +145,16 @@ fn test_inverse_repeated() {
     // r∼∼ should parse as (r∼)∼
     let source = common::axiom_context("r, s", "s = r\u{223C}\u{223C}");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Unary {
+    match &rhs.kind {
+        ExpressionKind::Unary {
             op: UnaryOp::Inverse,
             operand,
-        } => match operand.as_ref() {
-            Expression::Unary {
+        } => match &operand.kind {
+            ExpressionKind::Unary {
                 op: UnaryOp::Inverse,
                 operand: inner,
             } => {
-                assert!(matches!(inner.as_ref(), Expression::Identifier(n) if n == "r"));
+                assert!(matches!(&inner.kind, ExpressionKind::Identifier(n) if n == "r"));
             }
             other => panic!("Expected nested Inverse, got {:?}", other),
         },
@@ -168,8 +168,8 @@ fn test_inverse_relational_image() {
     let source = common::axiom_context("r, S, T", "T = r\u{223C}[S]");
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
-        matches!(&rhs, Expression::RelationalImage { relation, .. }
-            if matches!(relation.as_ref(), Expression::Unary { op: UnaryOp::Inverse, .. })),
+        matches!(&rhs.kind, ExpressionKind::RelationalImage { relation, .. }
+            if matches!(&relation.kind, ExpressionKind::Unary { op: UnaryOp::Inverse, .. })),
         "Expected RelationalImage with Inverse relation, got {:?}",
         rhs
     );
@@ -181,8 +181,8 @@ fn test_inverse_function_application() {
     let source = common::axiom_context("f, x, y", "y = f\u{223C}(x)");
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
-        matches!(&rhs, Expression::FunctionApplication { function, .. }
-            if matches!(function.as_ref(), Expression::Unary { op: UnaryOp::Inverse, .. })),
+        matches!(&rhs.kind, ExpressionKind::FunctionApplication { function, .. }
+            if matches!(&function.kind, ExpressionKind::Unary { op: UnaryOp::Inverse, .. })),
         "Expected FunctionApplication with Inverse function, got {:?}",
         rhs
     );
@@ -193,10 +193,10 @@ fn test_inverse_tilde_ascii() {
     // Postfix ASCII ~ (U+007E) must parse identically to the Unicode ∼ form.
     let source = common::axiom_context("f, r", "r = f~");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Unary { op, operand } => {
+    match &rhs.kind {
+        ExpressionKind::Unary { op, operand } => {
             assert_eq!(*op, UnaryOp::Inverse);
-            assert!(matches!(operand.as_ref(), Expression::Identifier(n) if n == "f"));
+            assert!(matches!(&operand.kind, ExpressionKind::Identifier(n) if n == "f"));
         }
         other => panic!("Expected Unary Inverse, got {:?}", other),
     }
@@ -211,11 +211,11 @@ fn test_forward_composition() {
     // In expression context (not action), semicolon is forward composition
     let source = common::axiom_context("f, g, r", "r = f ; g");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Semicolon);
-            assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "f"));
-            assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "g"));
+            assert!(matches!(&left.kind, ExpressionKind::Identifier(n) if n == "f"));
+            assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "g"));
         }
         other => panic!("Expected Binary Semicolon, got {:?}", other),
     }
@@ -254,8 +254,8 @@ fn test_forward_composition_parenthesized_in_action() {
             // The parenthesized (f ; g) should parse as forward composition
             assert!(
                 matches!(
-                    &expressions[0],
-                    Expression::Binary {
+                    &expressions[0].kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Semicolon,
                         ..
                     }
@@ -283,12 +283,12 @@ fn test_standalone_action_forward_composition_unparenthesized() {
     };
     assert_eq!(variables, &["x"]);
     assert_eq!(expressions.len(), 1);
-    let Expression::Binary { op, left, right } = &expressions[0] else {
+    let ExpressionKind::Binary { op, left, right } = &expressions[0].kind else {
         panic!("Expected Binary, got {:?}", expressions[0]);
     };
     assert_eq!(*op, BinaryOp::Semicolon);
-    assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "f"));
-    assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "g"));
+    assert!(matches!(&left.kind, ExpressionKind::Identifier(n) if n == "f"));
+    assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "g"));
 }
 
 #[test]
@@ -299,18 +299,18 @@ fn test_standalone_action_chained_composition_with_inverse() {
     let Action::Assignment { expressions, .. } = &action else {
         panic!("Expected Assignment, got {:?}", action);
     };
-    let Expression::Binary { op, left, right } = &expressions[0] else {
+    let ExpressionKind::Binary { op, left, right } = &expressions[0].kind else {
         panic!("Expected Binary, got {:?}", expressions[0]);
     };
     assert_eq!(*op, BinaryOp::Semicolon);
-    assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "h"));
-    let Expression::Binary { op, left, .. } = left.as_ref() else {
+    assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "h"));
+    let ExpressionKind::Binary { op, left, .. } = &left.kind else {
         panic!("Expected nested Binary, got {:?}", left);
     };
     assert_eq!(*op, BinaryOp::Semicolon);
     assert!(matches!(
-        left.as_ref(),
-        Expression::Unary {
+        &left.kind,
+        ExpressionKind::Unary {
             op: UnaryOp::Inverse,
             ..
         }
@@ -339,12 +339,12 @@ fn test_standalone_becomes_such_that_with_composition() {
     let Action::BecomesSuchThat { predicate, .. } = &action else {
         panic!("Expected BecomesSuchThat, got {:?}", action);
     };
-    let Predicate::Comparison { right, .. } = predicate else {
+    let PredicateKind::Comparison { right, .. } = &predicate.kind else {
         panic!("Expected Comparison, got {:?}", predicate);
     };
     assert!(matches!(
-        right,
-        Expression::Binary {
+        right.kind,
+        ExpressionKind::Binary {
             op: BinaryOp::Semicolon,
             ..
         }
@@ -394,8 +394,8 @@ fn test_composition_circ_ascii() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Composition,
                 ..
             }
@@ -419,8 +419,8 @@ fn test_forall_multiple_variables() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Quantified {
             quantifier,
             identifiers,
             predicate,
@@ -430,7 +430,7 @@ fn test_forall_multiple_variables() {
             assert_eq!(identifiers[0], "x");
             assert_eq!(identifiers[1], "y");
             assert!(
-                matches!(predicate.as_ref(), Predicate::Logical { .. }),
+                matches!(&predicate.kind, PredicateKind::Logical { .. }),
                 "Expected Logical predicate body, got {:?}",
                 predicate
             );
@@ -449,8 +449,8 @@ fn test_exists_multiple_variables() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Quantified {
             quantifier,
             identifiers,
             predicate,
@@ -459,7 +459,7 @@ fn test_exists_multiple_variables() {
             assert_eq!(identifiers.len(), 2);
             assert_eq!(identifiers[0], "x");
             assert_eq!(identifiers[1], "y");
-            assert!(matches!(predicate.as_ref(), Predicate::Logical { .. }));
+            assert!(matches!(&predicate.kind, PredicateKind::Logical { .. }));
         }
         other => panic!("Expected Quantified Exists, got {:?}", other),
     }
@@ -475,8 +475,8 @@ fn test_nested_quantifiers() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Quantified {
             quantifier,
             identifiers,
             predicate,
@@ -485,8 +485,8 @@ fn test_nested_quantifiers() {
             assert_eq!(identifiers, &["x"]);
             assert!(
                 matches!(
-                    predicate.as_ref(),
-                    Predicate::Quantified {
+                    &predicate.kind,
+                    PredicateKind::Quantified {
                         quantifier: Quantifier::Exists,
                         ..
                     }
@@ -558,9 +558,9 @@ fn test_lambda_maplet_pattern() {
     "#;
 
     let ctx = common::parse_context(source);
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        match right {
-            Expression::Lambda {
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        match &right.kind {
+            ExpressionKind::Lambda {
                 pattern,
                 predicate,
                 expression,
@@ -573,8 +573,8 @@ fn test_lambda_maplet_pattern() {
                         if matches!(l.as_ref(), IdentPattern::Identifier(n) if n == "x")
                         && matches!(r.as_ref(), IdentPattern::Identifier(n) if n == "y")
                 ));
-                assert!(matches!(predicate.as_ref(), Predicate::Logical { .. }));
-                assert!(matches!(expression.as_ref(), Expression::Binary { .. }));
+                assert!(matches!(&predicate.kind, PredicateKind::Logical { .. }));
+                assert!(matches!(&expression.kind, ExpressionKind::Binary { .. }));
             }
             other => panic!("Expected Lambda, got {:?}", other),
         }
@@ -598,9 +598,9 @@ fn test_lambda_parenthesized_maplet_pattern() {
     "#;
 
     let ctx = common::parse_context(source);
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        match right {
-            Expression::Lambda { pattern, .. } => {
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        match &right.kind {
+            ExpressionKind::Lambda { pattern, .. } => {
                 let ids = pattern.identifiers();
                 assert_eq!(ids, vec!["x", "y"]);
                 assert!(matches!(
@@ -631,9 +631,9 @@ fn test_lambda_triple_maplet_left_assoc() {
     "#;
 
     let ctx = common::parse_context(source);
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        match right {
-            Expression::Lambda { pattern, .. } => {
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        match &right.kind {
+            ExpressionKind::Lambda { pattern, .. } => {
                 let ids = pattern.identifiers();
                 assert_eq!(ids, vec!["x", "y", "z"]);
                 // Left-assoc: (x ↦ y) ↦ z
@@ -670,9 +670,9 @@ fn test_lambda_triple_maplet_left_assoc() {
 fn test_set_comprehension_multiple_vars() {
     let source = common::invariant_machine("s", "s = {x, y · x ∈ ℕ ∧ y ∈ ℕ | x + y}");
     let m = common::parse_machine(&source);
-    if let Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
-        match right {
-            Expression::SetComprehension {
+    if let PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
+        match &right.kind {
+            ExpressionKind::SetComprehension {
                 identifiers,
                 predicate,
                 expression,
@@ -680,7 +680,7 @@ fn test_set_comprehension_multiple_vars() {
                 assert_eq!(identifiers.len(), 2);
                 assert_eq!(identifiers[0], "x");
                 assert_eq!(identifiers[1], "y");
-                assert!(matches!(predicate.as_ref(), Predicate::Logical { .. }));
+                assert!(matches!(&predicate.kind, PredicateKind::Logical { .. }));
                 assert!(expression.is_some());
             }
             other => panic!("Expected SetComprehension, got {:?}", other),
@@ -715,20 +715,20 @@ fn test_primed_identifier_in_becomes_such_that() {
             assert_eq!(variables, &["abstract_state"]);
             // The predicate should contain abstract_state' as an identifier
             fn contains_primed_ident(pred: &Predicate) -> bool {
-                match pred {
-                    Predicate::Comparison { left, right, .. } => {
+                match &pred.kind {
+                    PredicateKind::Comparison { left, right, .. } => {
                         has_primed_expr(left) || has_primed_expr(right)
                     }
-                    Predicate::Logical { left, right, .. } => {
+                    PredicateKind::Logical { left, right, .. } => {
                         contains_primed_ident(left) || contains_primed_ident(right)
                     }
                     _ => false,
                 }
             }
             fn has_primed_expr(expr: &Expression) -> bool {
-                match expr {
-                    Expression::Identifier(name) => name.ends_with('\''),
-                    Expression::Binary { left, right, .. } => {
+                match &expr.kind {
+                    ExpressionKind::Identifier(name) => name.ends_with('\''),
+                    ExpressionKind::Binary { left, right, .. } => {
                         has_primed_expr(left) || has_primed_expr(right)
                     }
                     _ => false,

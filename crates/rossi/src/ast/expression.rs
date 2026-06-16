@@ -3,7 +3,7 @@
 //! Expressions represent values in Event-B, including sets, numbers,
 //! functions, relations, and arithmetic expressions.
 
-use super::{Predicate, TypedIdentifier};
+use super::{Predicate, Span, TypedIdentifier};
 
 /// Pattern for lambda abstraction parameters (per Event-B kernel language spec §3.3.6).
 ///
@@ -183,10 +183,56 @@ impl BuiltinFunction {
     }
 }
 
-/// An Event-B expression
+/// An Event-B expression together with its source location.
+///
+/// The expression variant lives in [`ExpressionKind`]; `span` records where the
+/// expression came from in the source text. `span` is `None` for nodes that were
+/// synthesized (e.g. normalisation rewrites) or built from Rodin XML, where no
+/// document offset is meaningful.
+///
+/// Equality and hashing intentionally ignore `span`: two expressions are equal
+/// iff their kinds are structurally equal, regardless of where they appear. This
+/// keeps round-trip and hand-built-AST comparisons span-insensitive.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Expression {
+    /// The expression variant.
+    pub kind: ExpressionKind,
+    /// Source span of this expression, if known.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub span: Option<Span>,
+}
+
+impl Expression {
+    /// Wrap a kind with an explicit (optional) span.
+    pub fn new(kind: ExpressionKind, span: Option<Span>) -> Self {
+        Self { kind, span }
+    }
+}
+
+/// Equality compares the kind only; the span is positional metadata.
+impl PartialEq for Expression {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Eq for Expression {}
+
+impl From<ExpressionKind> for Expression {
+    /// Build a span-less expression from its kind.
+    fn from(kind: ExpressionKind) -> Self {
+        Self { kind, span: None }
+    }
+}
+
+/// The variants of an Event-B [`Expression`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Expression {
+pub enum ExpressionKind {
     /// Integer literal
     Integer(i64),
 
@@ -304,28 +350,30 @@ pub enum Expression {
 impl Expression {
     /// Create an identifier expression
     pub fn identifier(name: impl Into<String>) -> Self {
-        Expression::Identifier(name.into())
+        ExpressionKind::Identifier(name.into()).into()
     }
 
     /// Create an integer expression
     pub fn integer(value: i64) -> Self {
-        Expression::Integer(value)
+        ExpressionKind::Integer(value).into()
     }
 
     /// Create a binary operation
     pub fn binary(op: BinaryOp, left: Expression, right: Expression) -> Self {
-        Expression::Binary {
+        ExpressionKind::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
         }
+        .into()
     }
 
     /// Create a unary operation
     pub fn unary(op: UnaryOp, operand: Expression) -> Self {
-        Expression::Unary {
+        ExpressionKind::Unary {
             op,
             operand: Box::new(operand),
         }
+        .into()
     }
 }

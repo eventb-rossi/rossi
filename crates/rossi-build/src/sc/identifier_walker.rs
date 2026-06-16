@@ -32,7 +32,9 @@
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
-use rossi::{Action, Expression, IdentPattern, Predicate, TypedIdentifier};
+use rossi::{
+    Action, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind, TypedIdentifier,
+};
 
 use crate::type_env::TypeEnv;
 
@@ -252,8 +254,8 @@ fn walk_action_rhs<V: Visitor>(
 }
 
 fn walk_pred<V: Visitor>(p: &Predicate, locals: &mut Vec<String>, v: &mut V) -> ControlFlow<()> {
-    use Predicate as P;
-    match p {
+    use PredicateKind as P;
+    match &p.kind {
         P::True | P::False => ControlFlow::Continue(()),
         P::Comparison { left, right, .. } => {
             walk_expr(left, locals, v)?;
@@ -286,8 +288,8 @@ fn walk_pred<V: Visitor>(p: &Predicate, locals: &mut Vec<String>, v: &mut V) -> 
 }
 
 fn walk_expr<V: Visitor>(e: &Expression, locals: &mut Vec<String>, v: &mut V) -> ControlFlow<()> {
-    use Expression as E;
-    match e {
+    use ExpressionKind as E;
+    match &e.kind {
         E::Identifier(n) => v.visit_ident(n, locals),
         E::Integer(_)
         | E::True

@@ -60,8 +60,9 @@ pub mod xml;
 // Re-export main types for convenience
 pub use ast::{
     Action, BuiltinFunction, BuiltinPredicate, Component, Context, Event, EventStatus, Expression,
-    FileMetadata, IdentPattern, InitialisationEvent, LabeledAction, LabeledPredicate, Machine,
-    NamedElement, Predicate, SetDeclaration, TypedIdentifier,
+    ExpressionKind, FileMetadata, IdentPattern, InitialisationEvent, LabeledAction,
+    LabeledPredicate, Machine, NamedElement, Predicate, PredicateKind, SetDeclaration,
+    TypedIdentifier,
 };
 pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
 pub use error::{ParseError, ParseResult, Result};

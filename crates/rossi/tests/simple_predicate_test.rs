@@ -2,13 +2,13 @@
 
 mod common;
 
-use rossi::{Action, Expression, parse, parse_action_str, parse_expression_str};
+use rossi::{Action, ExpressionKind, parse, parse_action_str, parse_expression_str};
 
 #[test]
 fn test_binary_addition_ast_structure() {
     use rossi::ast::expression::BinaryOp;
     use rossi::ast::predicate::ComparisonOp;
-    use rossi::{Expression, Predicate};
+    use rossi::{ExpressionKind, PredicateKind};
 
     let source = r#"
     CONTEXT test
@@ -24,23 +24,23 @@ fn test_binary_addition_ast_structure() {
     let pred = &ctx.axioms[0].predicate;
 
     // The predicate should be: c = (a + b)
-    match pred {
-        Predicate::Comparison { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Comparison { op, left, right } => {
             assert_eq!(*op, ComparisonOp::Equal);
-            assert!(matches!(left, Expression::Identifier(name) if name == "c"));
+            assert!(matches!(&left.kind, ExpressionKind::Identifier(name) if name == "c"));
             // right should be Binary { op: Add, left: a, right: b }
-            match right {
-                Expression::Binary {
+            match &right.kind {
+                ExpressionKind::Binary {
                     op: bin_op,
                     left: bin_left,
                     right: bin_right,
                 } => {
                     assert_eq!(*bin_op, BinaryOp::Add);
                     assert!(
-                        matches!(bin_left.as_ref(), Expression::Identifier(name) if name == "a")
+                        matches!(&bin_left.kind, ExpressionKind::Identifier(name) if name == "a")
                     );
                     assert!(
-                        matches!(bin_right.as_ref(), Expression::Identifier(name) if name == "b")
+                        matches!(&bin_right.kind, ExpressionKind::Identifier(name) if name == "b")
                     );
                 }
                 other => panic!("Expected Binary expression, got {:?}", other),
@@ -52,7 +52,7 @@ fn test_binary_addition_ast_structure() {
 
 #[test]
 fn test_chained_binary_operations() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     let source = r#"
@@ -65,29 +65,29 @@ fn test_chained_binary_operations() {
     "#;
 
     let ctx = common::parse_context(source);
-    if let rossi::Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
         // a + b + c should be ((a + b) + c) - left associative
-        match right {
-            Expression::Binary {
+        match &right.kind {
+            ExpressionKind::Binary {
                 op,
                 left,
                 right: right_c,
             } => {
                 assert_eq!(*op, BinaryOp::Add);
-                assert!(matches!(right_c.as_ref(), Expression::Identifier(name) if name == "c"));
+                assert!(matches!(&right_c.kind, ExpressionKind::Identifier(name) if name == "c"));
                 // left should be (a + b)
-                match left.as_ref() {
-                    Expression::Binary {
+                match &left.kind {
+                    ExpressionKind::Binary {
                         op: inner_op,
                         left: inner_left,
                         right: inner_right,
                     } => {
                         assert_eq!(*inner_op, BinaryOp::Add);
                         assert!(
-                            matches!(inner_left.as_ref(), Expression::Identifier(name) if name == "a")
+                            matches!(&inner_left.kind, ExpressionKind::Identifier(name) if name == "a")
                         );
                         assert!(
-                            matches!(inner_right.as_ref(), Expression::Identifier(name) if name == "b")
+                            matches!(&inner_right.kind, ExpressionKind::Identifier(name) if name == "b")
                         );
                     }
                     other => panic!("Expected inner Binary, got {:?}", other),
@@ -100,7 +100,7 @@ fn test_chained_binary_operations() {
 
 #[test]
 fn test_binary_predicate_conjunction() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::LogicalOp;
 
     let m = common::parse_machine(
@@ -116,11 +116,11 @@ fn test_binary_predicate_conjunction() {
     assert_eq!(m.invariants.len(), 1);
     let pred = &m.invariants[0].predicate;
 
-    match pred {
-        Predicate::Logical { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Logical { op, left, right } => {
             assert_eq!(*op, LogicalOp::And);
-            assert!(matches!(left.as_ref(), Predicate::Comparison { .. }));
-            assert!(matches!(right.as_ref(), Predicate::Comparison { .. }));
+            assert!(matches!(&left.kind, PredicateKind::Comparison { .. }));
+            assert!(matches!(&right.kind, PredicateKind::Comparison { .. }));
         }
         other => panic!("Expected Logical predicate, got {:?}", other),
     }
@@ -128,7 +128,7 @@ fn test_binary_predicate_conjunction() {
 
 #[test]
 fn test_chained_binary_predicates() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::LogicalOp;
 
     let m = common::parse_machine(
@@ -144,19 +144,22 @@ fn test_chained_binary_predicates() {
     let pred = &m.invariants[0].predicate;
 
     // Should be ((x > 0) ∧ (y > 0)) ∧ (z > 0) - left associative
-    match pred {
-        Predicate::Logical { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Logical { op, left, right } => {
             assert_eq!(*op, LogicalOp::And);
-            assert!(matches!(right.as_ref(), Predicate::Comparison { .. }));
-            match left.as_ref() {
-                Predicate::Logical {
+            assert!(matches!(&right.kind, PredicateKind::Comparison { .. }));
+            match &left.kind {
+                PredicateKind::Logical {
                     op: inner_op,
                     left: inner_left,
                     right: inner_right,
                 } => {
                     assert_eq!(*inner_op, LogicalOp::And);
-                    assert!(matches!(inner_left.as_ref(), Predicate::Comparison { .. }));
-                    assert!(matches!(inner_right.as_ref(), Predicate::Comparison { .. }));
+                    assert!(matches!(&inner_left.kind, PredicateKind::Comparison { .. }));
+                    assert!(matches!(
+                        &inner_right.kind,
+                        PredicateKind::Comparison { .. }
+                    ));
                 }
                 other => panic!("Expected inner Logical, got {:?}", other),
             }
@@ -167,7 +170,7 @@ fn test_chained_binary_predicates() {
 
 #[test]
 fn test_lambda_expression() {
-    use rossi::{Expression, IdentPattern};
+    use rossi::{ExpressionKind, IdentPattern};
 
     let source = r#"
     CONTEXT test
@@ -185,19 +188,19 @@ fn test_lambda_expression() {
     assert!(result.is_ok(), "Lambda expression should parse correctly");
 
     let ctx = common::parse_context(source);
-    if let rossi::Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        match right {
-            Expression::Lambda {
+    if let rossi::PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        match &right.kind {
+            ExpressionKind::Lambda {
                 pattern,
                 predicate,
                 expression,
             } => {
                 assert!(matches!(pattern, IdentPattern::Identifier(name) if name == "x"));
                 assert!(matches!(
-                    predicate.as_ref(),
-                    rossi::Predicate::Comparison { .. }
+                    predicate.kind,
+                    rossi::PredicateKind::Comparison { .. }
                 ));
-                assert!(matches!(expression.as_ref(), Expression::Binary { .. }));
+                assert!(matches!(expression.kind, ExpressionKind::Binary { .. }));
             }
             other => panic!("Expected Lambda expression, got {:?}", other),
         }
@@ -213,12 +216,12 @@ macro_rules! test_unary_op {
         #[test]
         fn $name() {
             use rossi::ast::expression::UnaryOp;
-            use rossi::Expression;
+            use rossi::ExpressionKind;
 
             let source = common::axiom_context($constants, $axiom);
             let rhs = common::parse_axiom_rhs(&source);
             assert!(
-                matches!(&rhs, Expression::Unary { op, .. } if *op == $expected),
+                matches!(&rhs.kind, ExpressionKind::Unary { op, .. } if *op == $expected),
                 "Expected {:?}, got {:?}",
                 $expected,
                 rhs
@@ -240,23 +243,23 @@ test_unary_op!(test_unary_minus, "x, y", "y = -x", UnaryOp::Minus);
 
 #[test]
 fn test_nested_unary() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::UnaryOp;
 
     let source = common::axiom_context("f, r", "r = dom(ran(f))");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Unary { op, operand } => {
+    match &rhs.kind {
+        ExpressionKind::Unary { op, operand } => {
             assert_eq!(*op, UnaryOp::Domain);
-            match operand.as_ref() {
-                Expression::Unary {
+            match &operand.kind {
+                ExpressionKind::Unary {
                     op: inner_op,
                     operand: inner_operand,
                 } => {
                     assert_eq!(*inner_op, UnaryOp::Range);
                     assert!(matches!(
-                        inner_operand.as_ref(),
-                        Expression::Identifier(name) if name == "f"
+                        &inner_operand.kind,
+                        ExpressionKind::Identifier(name) if name == "f"
                     ));
                 }
                 other => panic!("Expected inner Unary, got {:?}", other),
@@ -268,24 +271,24 @@ fn test_nested_unary() {
 
 #[test]
 fn test_unary_in_binary() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::{BinaryOp, UnaryOp};
 
     let source = common::axiom_context("f, g, result", "result = dom(f) \u{222A} ran(g)");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Union);
             assert!(matches!(
-                left.as_ref(),
-                Expression::Unary {
+                &left.kind,
+                ExpressionKind::Unary {
                     op: UnaryOp::Domain,
                     ..
                 }
             ));
             assert!(matches!(
-                right.as_ref(),
-                Expression::Unary {
+                &right.kind,
+                ExpressionKind::Unary {
                     op: UnaryOp::Range,
                     ..
                 }
@@ -302,14 +305,14 @@ fn test_unary_in_binary() {
 #[test_case::test_case("¬(x > 0)" ; "unicode")]
 #[test_case::test_case("not(x > 0)" ; "ascii")]
 fn test_negation(invariant_body: &str) {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
 
     let source = common::invariant_machine("x", invariant_body);
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    match pred {
-        Predicate::Not(inner) => {
-            assert!(matches!(inner.as_ref(), Predicate::Comparison { .. }));
+    match &pred.kind {
+        PredicateKind::Not(inner) => {
+            assert!(matches!(&inner.kind, PredicateKind::Comparison { .. }));
         }
         other => panic!("Expected Not predicate, got {:?}", other),
     }
@@ -317,7 +320,7 @@ fn test_negation(invariant_body: &str) {
 
 #[test]
 fn test_double_negation() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
 
     let m = common::parse_machine(
         r#"
@@ -330,10 +333,10 @@ fn test_double_negation() {
     "#,
     );
     let pred = &m.invariants[0].predicate;
-    match pred {
-        Predicate::Not(inner) => match inner.as_ref() {
-            Predicate::Not(inner2) => {
-                assert!(matches!(inner2.as_ref(), Predicate::Comparison { .. }));
+    match &pred.kind {
+        PredicateKind::Not(inner) => match &inner.kind {
+            PredicateKind::Not(inner2) => {
+                assert!(matches!(&inner2.kind, PredicateKind::Comparison { .. }));
             }
             other => panic!("Expected inner Not, got {:?}", other),
         },
@@ -350,12 +353,12 @@ macro_rules! test_binary_op {
         #[test]
         fn $name() {
             use rossi::ast::expression::BinaryOp;
-            use rossi::Expression;
+            use rossi::ExpressionKind;
 
             let source = common::axiom_context($constants, $axiom);
             let rhs = common::parse_axiom_rhs(&source);
             assert!(
-                matches!(&rhs, Expression::Binary { op, .. } if *op == $expected),
+                matches!(&rhs.kind, ExpressionKind::Binary { op, .. } if *op == $expected),
                 "Expected {:?}, got {:?}",
                 $expected,
                 rhs
@@ -366,16 +369,16 @@ macro_rules! test_binary_op {
 
 #[test]
 fn test_maplet_ascii() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     let source = common::axiom_context("x, y, r", "r = x |-> y");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Maplet);
-            assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "x"));
-            assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "y"));
+            assert!(matches!(&left.kind, ExpressionKind::Identifier(n) if n == "x"));
+            assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "y"));
         }
         other => panic!("Expected Maplet, got {:?}", other),
     }
@@ -390,25 +393,25 @@ test_binary_op!(
 
 #[test]
 fn test_maplet_left_associative() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     let source = common::axiom_context("a, b, c, r", "r = a |-> b |-> c");
     let rhs = common::parse_axiom_rhs(&source);
     // Left-associative per spec p.18: a |-> b |-> c = (a |-> b) |-> c
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Maplet);
-            assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "c"));
-            match left.as_ref() {
-                Expression::Binary {
+            assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "c"));
+            match &left.kind {
+                ExpressionKind::Binary {
                     op: inner_op,
                     left: inner_left,
                     right: inner_right,
                 } => {
                     assert_eq!(*inner_op, BinaryOp::Maplet);
-                    assert!(matches!(inner_left.as_ref(), Expression::Identifier(n) if n == "a"));
-                    assert!(matches!(inner_right.as_ref(), Expression::Identifier(n) if n == "b"));
+                    assert!(matches!(&inner_left.kind, ExpressionKind::Identifier(n) if n == "a"));
+                    assert!(matches!(&inner_right.kind, ExpressionKind::Identifier(n) if n == "b"));
                 }
                 other => panic!("Expected inner Maplet, got {:?}", other),
             }
@@ -419,26 +422,26 @@ fn test_maplet_left_associative() {
 
 #[test]
 fn test_maplet_binds_looser_than_relation_arrow() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // kernel_lang Table 3.1: pair constructor binds looser than relation
     // arrows, so a ↦ b ↔ c = a ↦ (b ↔ c).
     let source = common::axiom_context("a, b, c, r", "r = a \u{21A6} b \u{2194} c");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Maplet);
-            assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "a"));
-            match right.as_ref() {
-                Expression::Binary {
+            assert!(matches!(&left.kind, ExpressionKind::Identifier(n) if n == "a"));
+            match &right.kind {
+                ExpressionKind::Binary {
                     op: inner_op,
                     left: inner_left,
                     right: inner_right,
                 } => {
                     assert_eq!(*inner_op, BinaryOp::Relation);
-                    assert!(matches!(inner_left.as_ref(), Expression::Identifier(n) if n == "b"));
-                    assert!(matches!(inner_right.as_ref(), Expression::Identifier(n) if n == "c"));
+                    assert!(matches!(&inner_left.kind, ExpressionKind::Identifier(n) if n == "b"));
+                    assert!(matches!(&inner_right.kind, ExpressionKind::Identifier(n) if n == "c"));
                 }
                 other => panic!("Expected inner Relation, got {:?}", other),
             }
@@ -449,18 +452,18 @@ fn test_maplet_binds_looser_than_relation_arrow() {
 
 #[test]
 fn test_maplet_binds_looser_than_total_fn_arrow() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // a ↦ b → c = a ↦ (b → c)
     let source = common::axiom_context("a, b, c, r", "r = a \u{21A6} b \u{2192} c");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, right, .. } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, right, .. } => {
             assert_eq!(*op, BinaryOp::Maplet);
             assert!(matches!(
-                right.as_ref(),
-                Expression::Binary {
+                &right.kind,
+                ExpressionKind::Binary {
                     op: BinaryOp::TotalFunction,
                     ..
                 }
@@ -483,23 +486,23 @@ fn test_maplet_binds_looser_than_relation_arrow_ascii() {
 
 #[test]
 fn test_parenthesized_maplet_keeps_grouping_under_arrow() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // Explicit parens override precedence: (a ↦ b) ↔ c stays a Relation.
     let source = common::axiom_context("a, b, c, r", "r = (a \u{21A6} b) \u{2194} c");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Relation);
             assert!(matches!(
-                left.as_ref(),
-                Expression::Binary {
+                &left.kind,
+                ExpressionKind::Binary {
                     op: BinaryOp::Maplet,
                     ..
                 }
             ));
-            assert!(matches!(right.as_ref(), Expression::Identifier(n) if n == "c"));
+            assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "c"));
         }
         other => panic!("Expected Relation, got {:?}", other),
     }
@@ -507,7 +510,7 @@ fn test_parenthesized_maplet_keeps_grouping_under_arrow() {
 
 #[test]
 fn test_maplet_chain_with_arrow_operands() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // Pair-expression operands may each contain one (non-associative) arrow:
@@ -515,19 +518,19 @@ fn test_maplet_chain_with_arrow_operands() {
     // (inverted-precedence) grammar, which allowed only one arrow per chain.
     let source = common::axiom_context("a, b, c, d, r", "r = a \u{2194} b \u{21A6} c \u{2194} d");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary { op, left, right } => {
+    match &rhs.kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(*op, BinaryOp::Maplet);
             assert!(matches!(
-                left.as_ref(),
-                Expression::Binary {
+                &left.kind,
+                ExpressionKind::Binary {
                     op: BinaryOp::Relation,
                     ..
                 }
             ));
             assert!(matches!(
-                right.as_ref(),
-                Expression::Binary {
+                &right.kind,
+                ExpressionKind::Binary {
                     op: BinaryOp::Relation,
                     ..
                 }
@@ -539,7 +542,7 @@ fn test_maplet_chain_with_arrow_operands() {
 
 #[test]
 fn test_maplet_binds_looser_than_arrow_in_action() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // Same precedence through the _no_semi expression twins used in actions.
@@ -558,12 +561,12 @@ fn test_maplet_binds_looser_than_arrow_in_action() {
     );
     let event = &m.events[0];
     match &event.actions[0].action {
-        Action::Assignment { expressions, .. } => match &expressions[0] {
-            Expression::Binary { op, right, .. } => {
+        Action::Assignment { expressions, .. } => match &expressions[0].kind {
+            ExpressionKind::Binary { op, right, .. } => {
                 assert_eq!(*op, BinaryOp::Maplet);
                 assert!(matches!(
-                    right.as_ref(),
-                    Expression::Binary {
+                    &right.kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Relation,
                         ..
                     }
@@ -637,15 +640,15 @@ fn test_exponent_precedence_vs_additive() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Add,
                 left,
                 right,
             } if matches!(
-                left.as_ref(),
-                Expression::Binary { op: BinaryOp::Exponent, .. }
-            ) && matches!(right.as_ref(), Expression::Integer(4))
+                &left.kind,
+                ExpressionKind::Binary { op: BinaryOp::Exponent, .. }
+            ) && matches!(&right.kind, ExpressionKind::Integer(4))
         ),
         "2 ^ 3 + 4 should parse as (2^3)+4, got {:?}",
         rhs
@@ -661,13 +664,13 @@ fn test_exponent_precedence_vs_multiplicative() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Multiply,
                 left,
                 right,
-            } if matches!(left.as_ref(), Expression::Identifier(id) if id == "a")
-              && matches!(right.as_ref(), Expression::Binary { op: BinaryOp::Exponent, .. })
+            } if matches!(&left.kind, ExpressionKind::Identifier(id) if id == "a")
+              && matches!(&right.kind, ExpressionKind::Binary { op: BinaryOp::Exponent, .. })
         ),
         "a * b ^ c should parse as a*(b^c), got {:?}",
         rhs
@@ -683,7 +686,7 @@ test_binary_op!(
 
 #[test]
 fn test_multiply_vs_cartesian_product() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::BinaryOp;
 
     // ASCII "*" should parse as Multiply
@@ -691,8 +694,8 @@ fn test_multiply_vs_cartesian_product() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Multiply,
                 ..
             }
@@ -706,8 +709,8 @@ fn test_multiply_vs_cartesian_product() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::CartesianProduct,
                 ..
             }
@@ -721,8 +724,8 @@ fn test_multiply_vs_cartesian_product() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Binary {
+            &rhs.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::CartesianProduct,
                 ..
             }
@@ -734,7 +737,7 @@ fn test_multiply_vs_cartesian_product() {
 
 #[test]
 fn test_nat1_ascii() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let m = common::parse_machine(
         r#"
@@ -746,10 +749,10 @@ fn test_nat1_ascii() {
     END
     "#,
     );
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Naturals1,
+            ExpressionKind::Naturals1.into(),
             "NAT1 should parse as Naturals1, not Identifier"
         );
     } else {
@@ -759,14 +762,14 @@ fn test_nat1_ascii() {
 
 #[test]
 fn test_nat1_unicode() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let source = common::invariant_machine("x", "x \u{2208} \u{2115}1");
     let m = common::parse_machine(&source);
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Naturals1,
+            ExpressionKind::Naturals1.into(),
             "\u{2115}1 should parse as Naturals1"
         );
     } else {
@@ -776,7 +779,7 @@ fn test_nat1_unicode() {
 
 #[test]
 fn test_int_ascii() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let m = common::parse_machine(
         r#"
@@ -788,10 +791,10 @@ fn test_int_ascii() {
     END
     "#,
     );
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Integers,
+            ExpressionKind::Integers.into(),
             "INT should parse as Integers, not Identifier"
         );
     } else {
@@ -801,14 +804,14 @@ fn test_int_ascii() {
 
 #[test]
 fn test_int_unicode() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let source = common::invariant_machine("x", "x \u{2208} \u{2124}");
     let m = common::parse_machine(&source);
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Integers,
+            ExpressionKind::Integers.into(),
             "\u{2124} should parse as Integers"
         );
     } else {
@@ -818,7 +821,7 @@ fn test_int_unicode() {
 
 #[test]
 fn test_nat_still_works() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let m = common::parse_machine(
         r#"
@@ -830,10 +833,10 @@ fn test_nat_still_works() {
     END
     "#,
     );
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Naturals,
+            ExpressionKind::Naturals.into(),
             "NAT should still parse as Naturals"
         );
     } else {
@@ -843,7 +846,7 @@ fn test_nat_still_works() {
 
 #[test]
 fn test_nat1_case_insensitive() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let m = common::parse_machine(
         r#"
@@ -855,10 +858,10 @@ fn test_nat1_case_insensitive() {
     END
     "#,
     );
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::Naturals1,
+            ExpressionKind::Naturals1.into(),
             "nat1 should parse as Naturals1"
         );
     } else {
@@ -868,7 +871,7 @@ fn test_nat1_case_insensitive() {
 
 #[test]
 fn test_int_case_insensitive() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let m = common::parse_machine(
         r#"
@@ -880,8 +883,12 @@ fn test_int_case_insensitive() {
     END
     "#,
     );
-    if let rossi::Predicate::Comparison { right, .. } = &m.invariants[0].predicate {
-        assert_eq!(*right, Expression::Integers, "int should parse as Integers");
+    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
+        assert_eq!(
+            *right,
+            ExpressionKind::Integers.into(),
+            "int should parse as Integers"
+        );
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -889,14 +896,14 @@ fn test_int_case_insensitive() {
 
 #[test]
 fn test_word_boundaries_not_keywords() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     // NATX should parse as an identifier, not as NAT + X
     let source = common::axiom_context("NATX", "NATX = NATX");
     let lhs = common::parse_expr_axiom(&source);
     assert_eq!(
         lhs,
-        Expression::Identifier("NATX".to_string()),
+        ExpressionKind::Identifier("NATX".to_string()).into(),
         "NATX should be Identifier"
     );
 
@@ -905,7 +912,7 @@ fn test_word_boundaries_not_keywords() {
     let lhs = common::parse_expr_axiom(&source);
     assert_eq!(
         lhs,
-        Expression::Identifier("NAT1X".to_string()),
+        ExpressionKind::Identifier("NAT1X".to_string()).into(),
         "NAT1X should be Identifier"
     );
 
@@ -914,7 +921,7 @@ fn test_word_boundaries_not_keywords() {
     let lhs = common::parse_expr_axiom(&source);
     assert_eq!(
         lhs,
-        Expression::Identifier("INTVAL".to_string()),
+        ExpressionKind::Identifier("INTVAL".to_string()).into(),
         "INTVAL should be Identifier"
     );
 }
@@ -954,11 +961,15 @@ macro_rules! test_identifier_not_keyword {
     ($name:ident, $ident:expr, $msg:expr) => {
         #[test]
         fn $name() {
-            use rossi::Expression;
+            use rossi::ExpressionKind;
 
             let source = common::axiom_context($ident, &format!("{} = 5", $ident));
             let lhs = common::parse_expr_axiom(&source);
-            assert_eq!(lhs, Expression::Identifier($ident.to_string()), $msg);
+            assert_eq!(
+                lhs,
+                ExpressionKind::Identifier($ident.to_string()).into(),
+                $msg
+            );
         }
     };
 }
@@ -1011,7 +1022,7 @@ test_identifier_not_keyword!(
 
 #[test]
 fn test_keywords_still_work_after_boundary_guards() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
     use rossi::ast::expression::UnaryOp;
 
     // dom(f) should still work
@@ -1019,8 +1030,8 @@ fn test_keywords_still_work_after_boundary_guards() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Unary {
+            &rhs.kind,
+            ExpressionKind::Unary {
                 op: UnaryOp::Domain,
                 ..
             }
@@ -1033,8 +1044,8 @@ fn test_keywords_still_work_after_boundary_guards() {
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Unary {
+            &rhs.kind,
+            ExpressionKind::Unary {
                 op: UnaryOp::Range,
                 ..
             }
@@ -1045,15 +1056,19 @@ fn test_keywords_still_work_after_boundary_guards() {
     // TRUE should still work as expression
     let source = common::axiom_context("x", "x = TRUE");
     let rhs = common::parse_axiom_rhs(&source);
-    assert_eq!(rhs, Expression::True, "TRUE should parse as True");
+    assert_eq!(
+        rhs,
+        ExpressionKind::True.into(),
+        "TRUE should parse as True"
+    );
 
     // POW(S) should still work
     let source = common::axiom_context("S, P", "P = POW(S)");
     let rhs = common::parse_axiom_rhs(&source);
     assert!(
         matches!(
-            &rhs,
-            Expression::Unary {
+            &rhs.kind,
+            ExpressionKind::Unary {
                 op: UnaryOp::PowerSet,
                 ..
             }
@@ -1068,7 +1083,7 @@ fn test_keywords_still_work_after_boundary_guards() {
 
 #[test]
 fn test_conjunction_ascii_ampersand() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::LogicalOp;
 
     let m = common::parse_machine(
@@ -1082,11 +1097,17 @@ fn test_conjunction_ascii_ampersand() {
     "#,
     );
     let pred = &m.invariants[0].predicate;
-    match pred {
-        Predicate::Logical { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Logical { op, left, right } => {
             assert_eq!(*op, LogicalOp::And);
-            assert!(matches!(left.as_ref(), Predicate::Comparison { .. }));
-            assert!(matches!(right.as_ref(), Predicate::Comparison { .. }));
+            assert!(matches!(
+                left.as_ref().kind,
+                PredicateKind::Comparison { .. }
+            ));
+            assert!(matches!(
+                right.as_ref().kind,
+                PredicateKind::Comparison { .. }
+            ));
         }
         other => panic!("Expected Logical AND, got {:?}", other),
     }
@@ -1094,7 +1115,7 @@ fn test_conjunction_ascii_ampersand() {
 
 #[test]
 fn test_disjunction_ascii_or() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::LogicalOp;
 
     let m = common::parse_machine(
@@ -1108,11 +1129,17 @@ fn test_disjunction_ascii_or() {
     "#,
     );
     let pred = &m.invariants[0].predicate;
-    match pred {
-        Predicate::Logical { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Logical { op, left, right } => {
             assert_eq!(*op, LogicalOp::Or);
-            assert!(matches!(left.as_ref(), Predicate::Comparison { .. }));
-            assert!(matches!(right.as_ref(), Predicate::Comparison { .. }));
+            assert!(matches!(
+                left.as_ref().kind,
+                PredicateKind::Comparison { .. }
+            ));
+            assert!(matches!(
+                right.as_ref().kind,
+                PredicateKind::Comparison { .. }
+            ));
         }
         other => panic!("Expected Logical OR, got {:?}", other),
     }
@@ -1120,33 +1147,33 @@ fn test_disjunction_ascii_or() {
 
 #[test]
 fn test_or_word_boundary_order_identifier() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let source = common::axiom_context("order", "order = 5");
     let lhs = common::parse_expr_axiom(&source);
     assert_eq!(
         lhs,
-        Expression::Identifier("order".to_string()),
+        ExpressionKind::Identifier("order".to_string()).into(),
         "\"order\" should parse as Identifier, not 'or' operator"
     );
 }
 
 #[test]
 fn test_or_word_boundary_org_identifier() {
-    use rossi::Expression;
+    use rossi::ExpressionKind;
 
     let source = common::axiom_context("org", "org = 5");
     let lhs = common::parse_expr_axiom(&source);
     assert_eq!(
         lhs,
-        Expression::Identifier("org".to_string()),
+        ExpressionKind::Identifier("org".to_string()).into(),
         "\"org\" should parse as Identifier, not 'or' operator"
     );
 }
 
 #[test]
 fn test_negation_in_conjunction() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::LogicalOp;
 
     let m = common::parse_machine(
@@ -1160,11 +1187,14 @@ fn test_negation_in_conjunction() {
     "#,
     );
     let pred = &m.invariants[0].predicate;
-    match pred {
-        Predicate::Logical { op, left, right } => {
+    match &pred.kind {
+        PredicateKind::Logical { op, left, right } => {
             assert_eq!(*op, LogicalOp::And);
-            assert!(matches!(left.as_ref(), Predicate::Not(_)));
-            assert!(matches!(right.as_ref(), Predicate::Comparison { .. }));
+            assert!(matches!(left.as_ref().kind, PredicateKind::Not(_)));
+            assert!(matches!(
+                right.as_ref().kind,
+                PredicateKind::Comparison { .. }
+            ));
         }
         other => panic!("Expected Logical predicate, got {:?}", other),
     }
@@ -1228,16 +1258,16 @@ fn test_range_cartesian_product() {
     // 1‥2 × 1‥3 should parse as (1‥2) × (1‥3), not 1 ‥ (2×1) ‥ 3
     let source = common::axiom_context("S", "S = 1‥2 × 1‥3");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary {
+    match &rhs.kind {
+        ExpressionKind::Binary {
             op: BinaryOp::CartesianProduct,
             left,
             right,
         } => {
             assert!(
                 matches!(
-                    left.as_ref(),
-                    Expression::Binary {
+                    left.as_ref().kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Range,
                         ..
                     }
@@ -1247,8 +1277,8 @@ fn test_range_cartesian_product() {
             );
             assert!(
                 matches!(
-                    right.as_ref(),
-                    Expression::Binary {
+                    right.as_ref().kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Range,
                         ..
                     }
@@ -1266,16 +1296,16 @@ fn test_arithmetic_before_range() {
     // a + b .. c should parse as (a + b) .. c
     let source = common::axiom_context("a, b, c, S", "S = a + b .. c");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary {
+    match &rhs.kind {
+        ExpressionKind::Binary {
             op: BinaryOp::Range,
             left,
             ..
         } => {
             assert!(
                 matches!(
-                    left.as_ref(),
-                    Expression::Binary {
+                    left.as_ref().kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Add,
                         ..
                     }
@@ -1293,16 +1323,16 @@ fn test_range_before_union() {
     // a .. b ∪ C should parse as (a .. b) ∪ C
     let source = common::axiom_context("a, b, C, S", "S = a .. b ∪ C");
     let rhs = common::parse_axiom_rhs(&source);
-    match &rhs {
-        Expression::Binary {
+    match &rhs.kind {
+        ExpressionKind::Binary {
             op: BinaryOp::Union,
             left,
             ..
         } => {
             assert!(
                 matches!(
-                    left.as_ref(),
-                    Expression::Binary {
+                    left.as_ref().kind,
+                    ExpressionKind::Binary {
                         op: BinaryOp::Range,
                         ..
                     }
@@ -1320,18 +1350,18 @@ fn test_range_before_union() {
 #[test]
 fn test_true_in_set_predicate() {
     // TRUE ∈ {queue_1, queue_2} — TRUE is an expression, not predicate constant
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::ComparisonOp;
     let source = "CONTEXT test\nAXIOMS\n    @axm1 TRUE ∈ {queue_1, queue_2}\nEND\n";
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Comparison {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Comparison {
             op: ComparisonOp::In,
             left,
             ..
         } => {
             assert!(
-                matches!(left, Expression::True),
+                matches!(left.kind, ExpressionKind::True),
                 "Expected Expression::True, got {:?}",
                 left
             );
@@ -1342,18 +1372,18 @@ fn test_true_in_set_predicate() {
 
 #[test]
 fn test_false_in_set_predicate() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::ComparisonOp;
     let source = "CONTEXT test\nAXIOMS\n    @axm1 FALSE ∈ {queue_1, queue_2}\nEND\n";
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Comparison {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Comparison {
             op: ComparisonOp::In,
             left,
             ..
         } => {
             assert!(
-                matches!(left, Expression::False),
+                matches!(left.kind, ExpressionKind::False),
                 "Expected Expression::False, got {:?}",
                 left
             );
@@ -1364,11 +1394,11 @@ fn test_false_in_set_predicate() {
 
 #[test]
 fn test_bare_true_predicate() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     let source = "CONTEXT test\nAXIOMS\n    @axm1 ⊤\nEND\n";
     let ctx = common::parse_context(source);
     assert!(
-        matches!(&ctx.axioms[0].predicate, Predicate::True),
+        matches!(&ctx.axioms[0].predicate.kind, PredicateKind::True),
         "Expected Predicate::True, got {:?}",
         ctx.axioms[0].predicate
     );
@@ -1376,11 +1406,11 @@ fn test_bare_true_predicate() {
 
 #[test]
 fn test_bare_false_predicate() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     let source = "CONTEXT test\nAXIOMS\n    @axm1 ⊥\nEND\n";
     let ctx = common::parse_context(source);
     assert!(
-        matches!(&ctx.axioms[0].predicate, Predicate::False),
+        matches!(&ctx.axioms[0].predicate.kind, PredicateKind::False),
         "Expected Predicate::False, got {:?}",
         ctx.axioms[0].predicate
     );
@@ -1388,18 +1418,18 @@ fn test_bare_false_predicate() {
 
 #[test]
 fn test_true_eq_comparison() {
-    use rossi::Predicate;
+    use rossi::PredicateKind;
     use rossi::ast::predicate::ComparisonOp;
     let source = common::axiom_context("x", "TRUE = x");
     let ctx = common::parse_context(&source);
-    match &ctx.axioms[0].predicate {
-        Predicate::Comparison {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Comparison {
             op: ComparisonOp::Equal,
             left,
             ..
         } => {
             assert!(
-                matches!(left, Expression::True),
+                matches!(left.kind, ExpressionKind::True),
                 "Expected Expression::True, got {:?}",
                 left
             );
@@ -1453,8 +1483,8 @@ fn test_postfix_function_update_set_enumeration_unaffected() {
     // A bare set enumeration is still set_enumeration — only postfix
     // application after a primary_expr triggers the new branch.
     let bare = parse_expression_str("{x ↦ y}").expect("bare set enum parses");
-    match bare {
-        Expression::SetEnumeration(_) => {}
+    match bare.kind {
+        ExpressionKind::SetEnumeration(_) => {}
         other => panic!("Expected SetEnumeration, got {:?}", other),
     }
 }

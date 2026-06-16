@@ -21,7 +21,9 @@ use std::collections::BTreeMap;
 
 use rossi::ast::expression::BinaryOp;
 use rossi::ast::predicate::ComparisonOp;
-use rossi::{Action, Expression, IdentPattern, Predicate, TypedIdentifier};
+use rossi::{
+    Action, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind, TypedIdentifier,
+};
 
 use crate::ast_util::left_assoc_maplet;
 use crate::infer::{
@@ -59,8 +61,8 @@ pub fn enrich_action(action: Action, env: &TypeEnv) -> Action {
 // ---------------------------------------------------------------------
 
 fn enrich_predicate_in(pred: Predicate, env: &mut TypeEnv) -> Predicate {
-    match pred {
-        Predicate::Quantified {
+    match pred.kind {
+        PredicateKind::Quantified {
             quantifier,
             identifiers,
             predicate,
@@ -70,19 +72,23 @@ fn enrich_predicate_in(pred: Predicate, env: &mut TypeEnv) -> Predicate {
                 bind_typed_identifiers(env, &new_identifiers);
                 Box::new(enrich_predicate_in(*predicate, env))
             });
-            Predicate::Quantified {
+            PredicateKind::Quantified {
                 quantifier,
                 identifiers: new_identifiers,
                 predicate,
             }
+            .into()
         }
-        Predicate::Logical { op, left, right } => Predicate::Logical {
+        PredicateKind::Logical { op, left, right } => PredicateKind::Logical {
             op,
             left: Box::new(enrich_predicate_in(*left, env)),
             right: Box::new(enrich_predicate_in(*right, env)),
-        },
-        Predicate::Not(inner) => Predicate::Not(Box::new(enrich_predicate_in(*inner, env))),
-        Predicate::Comparison { op, left, right } => {
+        }
+        .into(),
+        PredicateKind::Not(inner) => {
+            PredicateKind::Not(Box::new(enrich_predicate_in(*inner, env))).into()
+        }
+        PredicateKind::Comparison { op, left, right } => {
             // Bidirectional binder typing (Group S): for `=` and `≠`, if
             // one side has a resolvable type, pass it as the expected
             // type when recursing into the other side. This lets an
@@ -98,33 +104,36 @@ fn enrich_predicate_in(pred: Predicate, env: &mut TypeEnv) -> Predicate {
                 ),
                 _ => (None, None),
             };
-            Predicate::Comparison {
+            PredicateKind::Comparison {
                 op,
                 left: enrich_expression_in_with_expected(left, env, left_expected.as_ref()),
                 right: enrich_expression_in_with_expected(right, env, right_expected.as_ref()),
             }
+            .into()
         }
-        Predicate::Application {
+        PredicateKind::Application {
             function,
             arguments,
-        } => Predicate::Application {
+        } => PredicateKind::Application {
             function,
             arguments: arguments
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        },
-        Predicate::BuiltinApplication {
+        }
+        .into(),
+        PredicateKind::BuiltinApplication {
             predicate,
             arguments,
-        } => Predicate::BuiltinApplication {
+        } => PredicateKind::BuiltinApplication {
             predicate,
             arguments: arguments
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        },
-        Predicate::True | Predicate::False => pred,
+        }
+        .into(),
+        kind @ (PredicateKind::True | PredicateKind::False) => kind.into(),
     }
 }
 
@@ -137,8 +146,8 @@ fn enrich_expression_in_with_expected(
     env: &mut TypeEnv,
     expected: Option<&Type>,
 ) -> Expression {
-    match expr {
-        Expression::Lambda {
+    match expr.kind {
+        ExpressionKind::Lambda {
             pattern,
             predicate,
             expression,
@@ -163,13 +172,14 @@ fn enrich_expression_in_with_expected(
                     Box::new(enrich_expression_in(*expression, env)),
                 )
             });
-            Expression::Lambda {
+            ExpressionKind::Lambda {
                 pattern: new_pattern,
                 predicate,
                 expression,
             }
+            .into()
         }
-        Expression::QuantifiedUnion {
+        ExpressionKind::QuantifiedUnion {
             identifiers,
             predicate,
             expression,
@@ -182,13 +192,14 @@ fn enrich_expression_in_with_expected(
                     Box::new(enrich_expression_in(*expression, env)),
                 )
             });
-            Expression::QuantifiedUnion {
+            ExpressionKind::QuantifiedUnion {
                 identifiers: new_identifiers,
                 predicate,
                 expression,
             }
+            .into()
         }
-        Expression::QuantifiedInter {
+        ExpressionKind::QuantifiedInter {
             identifiers,
             predicate,
             expression,
@@ -201,13 +212,14 @@ fn enrich_expression_in_with_expected(
                     Box::new(enrich_expression_in(*expression, env)),
                 )
             });
-            Expression::QuantifiedInter {
+            ExpressionKind::QuantifiedInter {
                 identifiers: new_identifiers,
                 predicate,
                 expression,
             }
+            .into()
         }
-        Expression::SetComprehension {
+        ExpressionKind::SetComprehension {
             identifiers,
             predicate,
             expression,
@@ -225,19 +237,20 @@ fn enrich_expression_in_with_expected(
             let expression = expression.or_else(|| {
                 let names: Vec<Expression> = new_identifiers
                     .iter()
-                    .map(|t| Expression::Identifier(t.name.clone()))
+                    .map(|t| ExpressionKind::Identifier(t.name.clone()).into())
                     .collect();
                 // Grammar guarantees ≥1 binder, but `SetComprehension`
                 // is `pub`, so guard `left_assoc_maplet`'s panic anyway.
                 (!names.is_empty()).then(|| Box::new(left_assoc_maplet(&names)))
             });
-            Expression::SetComprehension {
+            ExpressionKind::SetComprehension {
                 identifiers: new_identifiers,
                 predicate,
                 expression,
             }
+            .into()
         }
-        Expression::SetBuilder {
+        ExpressionKind::SetBuilder {
             member_expression,
             predicate,
         } => {
@@ -262,19 +275,21 @@ fn enrich_expression_in_with_expected(
                     Box::new(enrich_expression_in(*member_expression, env)),
                 )
             });
-            Expression::SetComprehension {
+            ExpressionKind::SetComprehension {
                 identifiers: new_identifiers,
                 predicate,
                 expression: Some(member_expression),
             }
+            .into()
         }
-        Expression::SetEnumeration(items) => Expression::SetEnumeration(
+        ExpressionKind::SetEnumeration(items) => ExpressionKind::SetEnumeration(
             items
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        ),
-        Expression::Binary { op, left, right } => {
+        )
+        .into(),
+        ExpressionKind::Binary { op, left, right } => {
             // `∪`/`∩`/`∖` are type-preserving: both operands share the
             // chain's expected type. Pass it through so a Lambda nested
             // inside one of these ops can pick up the binder type from
@@ -284,7 +299,7 @@ fn enrich_expression_in_with_expected(
                 BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference => expected,
                 _ => None,
             };
-            Expression::Binary {
+            ExpressionKind::Binary {
                 op,
                 left: Box::new(enrich_expression_in_with_expected(
                     *left,
@@ -297,37 +312,42 @@ fn enrich_expression_in_with_expected(
                     operand_expected,
                 )),
             }
+            .into()
         }
-        Expression::Unary { op, operand } => Expression::Unary {
+        ExpressionKind::Unary { op, operand } => ExpressionKind::Unary {
             op,
             operand: Box::new(enrich_expression_in(*operand, env)),
-        },
-        Expression::FunctionApplication {
+        }
+        .into(),
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
-        } => Expression::FunctionApplication {
+        } => ExpressionKind::FunctionApplication {
             function: Box::new(enrich_expression_in(*function, env)),
             arguments: arguments
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        },
-        Expression::BuiltinApplication {
+        }
+        .into(),
+        ExpressionKind::BuiltinApplication {
             function,
             arguments,
-        } => Expression::BuiltinApplication {
+        } => ExpressionKind::BuiltinApplication {
             function,
             arguments: arguments
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        },
-        Expression::RelationalImage { relation, set } => Expression::RelationalImage {
+        }
+        .into(),
+        ExpressionKind::RelationalImage { relation, set } => ExpressionKind::RelationalImage {
             relation: Box::new(enrich_expression_in(*relation, env)),
             set: Box::new(enrich_expression_in(*set, env)),
-        },
+        }
+        .into(),
         // Leaves: nothing to recurse into.
-        _ => expr,
+        kind => kind.into(),
     }
 }
 
@@ -505,8 +525,8 @@ mod tests {
     fn quantifier_binder_typed_from_membership_in_body() {
         let p = parse_predicate_str("∀x·x∈ℤ⇒x>0").unwrap();
         let enriched = enrich_predicate(p, &empty_env());
-        match enriched {
-            Predicate::Quantified { identifiers, .. } => {
+        match enriched.kind {
+            PredicateKind::Quantified { identifiers, .. } => {
                 assert_eq!(identifiers.len(), 1);
                 assert!(identifiers[0].type_expr.is_some());
             }
@@ -518,8 +538,8 @@ mod tests {
     fn lambda_pattern_typed_from_membership_in_body() {
         let e = parse_expression_str("λx ↦ y·x∈ℤ∧y∈ℤ ∣ x + y").unwrap();
         let enriched = enrich_expression(e, &empty_env());
-        match enriched {
-            Expression::Lambda { pattern, .. } => {
+        match enriched.kind {
+            ExpressionKind::Lambda { pattern, .. } => {
                 let mut all_typed = true;
                 walk_check_typed(&pattern, &mut all_typed);
                 assert!(all_typed, "all leaves should be typed: {:?}", pattern);
@@ -545,13 +565,13 @@ mod tests {
     #[test]
     fn already_typed_identifiers_unchanged() {
         let p = parse_predicate_str("∀x⦂ℤ·x>0").unwrap();
-        let original = match &p {
-            Predicate::Quantified { identifiers, .. } => identifiers.clone(),
+        let original = match &p.kind {
+            PredicateKind::Quantified { identifiers, .. } => identifiers.clone(),
             _ => panic!(),
         };
         let enriched = enrich_predicate(p, &empty_env());
-        match enriched {
-            Predicate::Quantified { identifiers, .. } => {
+        match enriched.kind {
+            PredicateKind::Quantified { identifiers, .. } => {
                 assert_eq!(identifiers, original);
             }
             _ => panic!(),
@@ -565,8 +585,8 @@ mod tests {
         // binder as ℤ, the way Rodin does).
         let p = parse_predicate_str("∀x·x=x").unwrap();
         let enriched = enrich_predicate(p, &empty_env());
-        match enriched {
-            Predicate::Quantified { identifiers, .. } => {
+        match enriched.kind {
+            PredicateKind::Quantified { identifiers, .. } => {
                 assert!(identifiers[0].type_expr.is_none());
             }
             _ => panic!(),
@@ -588,13 +608,13 @@ mod tests {
         let p =
             parse_predicate_str("integral = (λ x · x = ∅ ∣ 0) ∪ (λ x⦂ℙ(ℤ×ℤ) · x = ∅ ∣ 1)").unwrap();
         let enriched = enrich_predicate(p, &env);
-        let Predicate::Comparison { right, .. } = enriched else {
+        let PredicateKind::Comparison { right, .. } = enriched.kind else {
             panic!("expected Comparison")
         };
-        let Expression::Binary { left, .. } = right else {
+        let ExpressionKind::Binary { left, .. } = right.kind else {
             panic!("expected Binary union")
         };
-        let Expression::Lambda { pattern, .. } = *left else {
+        let ExpressionKind::Lambda { pattern, .. } = left.kind else {
             panic!("expected Lambda on the left of the union")
         };
         let IdentPattern::Identifier(ti) = pattern else {
@@ -613,41 +633,41 @@ mod tests {
         // existing Group J pass.
         let e = parse_expression_str("{x ∣ x ∈ ℤ}").unwrap();
         let enriched = enrich_expression(e, &empty_env());
-        let Expression::SetComprehension {
+        let ExpressionKind::SetComprehension {
             identifiers,
             expression,
             ..
-        } = enriched
+        } = enriched.kind
         else {
             panic!("expected SetComprehension");
         };
         assert_eq!(identifiers.len(), 1);
         assert!(identifiers[0].type_expr.is_some(), "binder should be typed");
         let member = expression.expect("expression should be promoted to Some");
-        assert_eq!(*member, Expression::Identifier("x".into()));
+        assert_eq!(member.kind, ExpressionKind::Identifier("x".into()));
     }
 
     #[test]
     fn setcomp_short_form_multi_binder_uses_left_assoc_maplet() {
         let e = parse_expression_str("{x, y ∣ x ∈ ℤ ∧ y ∈ ℤ}").unwrap();
         let enriched = enrich_expression(e, &empty_env());
-        let Expression::SetComprehension { expression, .. } = enriched else {
+        let ExpressionKind::SetComprehension { expression, .. } = enriched.kind else {
             panic!("expected SetComprehension");
         };
         let member = expression.expect("expression should be promoted to Some");
-        let Expression::Binary { op, left, right } = *member else {
+        let ExpressionKind::Binary { op, left, right } = member.kind else {
             panic!("expected Binary maplet");
         };
         assert_eq!(op, BinaryOp::Maplet);
-        assert_eq!(*left, Expression::Identifier("x".into()));
-        assert_eq!(*right, Expression::Identifier("y".into()));
+        assert_eq!(left.kind, ExpressionKind::Identifier("x".into()));
+        assert_eq!(right.kind, ExpressionKind::Identifier("y".into()));
     }
 
     #[test]
     fn setcomp_long_form_member_survives_untouched() {
         let e = parse_expression_str("{x ⦂ ℤ · x > 0 ∣ x + 1}").unwrap();
         let enriched = enrich_expression(e, &empty_env());
-        let Expression::SetComprehension { expression, .. } = enriched else {
+        let ExpressionKind::SetComprehension { expression, .. } = enriched.kind else {
             panic!("expected SetComprehension");
         };
         let member = expression.expect("explicit member must survive");
@@ -655,8 +675,8 @@ mod tests {
         // NOT just `Identifier("x")`, which is what the promotion would
         // produce if it incorrectly fired here.
         assert!(matches!(
-            *member,
-            Expression::Binary {
+            member.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Add,
                 ..
             }
@@ -671,10 +691,10 @@ mod tests {
         env.insert("f", Type::relation(Type::Integer, Type::Integer));
         let p = parse_predicate_str("f = (λ x⦂BOOL · x = TRUE ∣ 0)").unwrap();
         let enriched = enrich_predicate(p, &env);
-        let Predicate::Comparison { right, .. } = enriched else {
+        let PredicateKind::Comparison { right, .. } = enriched.kind else {
             panic!("expected Comparison")
         };
-        let Expression::Lambda { pattern, .. } = right else {
+        let ExpressionKind::Lambda { pattern, .. } = right.kind else {
             panic!("expected Lambda")
         };
         let IdentPattern::Identifier(ti) = pattern else {

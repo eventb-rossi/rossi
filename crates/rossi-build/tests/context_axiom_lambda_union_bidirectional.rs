@@ -39,28 +39,28 @@ fn lambda_binder_typed_via_typed_sibling_across_union() {
 
     // Walk the parsed predicate AST to find both lambdas inside the
     // union — both binders should now be typed.
-    use rossi::{Expression, IdentPattern, Predicate, ast::predicate::ComparisonOp};
-    let Predicate::Comparison {
+    use rossi::{ExpressionKind, IdentPattern, PredicateKind, ast::predicate::ComparisonOp};
+    let PredicateKind::Comparison {
         op: ComparisonOp::Equal,
         right,
         ..
-    } = axiom.predicate.clone()
+    } = axiom.predicate.clone().kind
     else {
         panic!(
             "expected `integral = …` Comparison; got {:?}",
             axiom.predicate
         );
     };
-    let Expression::Binary {
+    let ExpressionKind::Binary {
         op: rossi::ast::expression::BinaryOp::Union,
         left,
         right,
-    } = right
+    } = right.kind
     else {
         panic!("expected union on RHS")
     };
     for (label, lambda) in [("first", *left), ("second", *right)] {
-        let Expression::Lambda { pattern, .. } = lambda else {
+        let ExpressionKind::Lambda { pattern, .. } = lambda.kind else {
             panic!("{label} operand should be a Lambda; got {lambda:?}")
         };
         let IdentPattern::Identifier(ti) = pattern else {

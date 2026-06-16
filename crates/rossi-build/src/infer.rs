@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use rossi::ast::TypedIdentifier;
 use rossi::ast::expression::{BinaryOp, BuiltinFunction, IdentPattern, UnaryOp};
 use rossi::ast::predicate::{BuiltinPredicate, ComparisonOp, LogicalOp};
-use rossi::{Expression, Predicate};
+use rossi::{Expression, ExpressionKind, Predicate, PredicateKind};
 
 use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
@@ -291,23 +291,23 @@ fn unify_or_either(u: &mut Unifier, a: Option<ITy>, b: Option<ITy>) -> Option<IT
 /// need to cross a top-level boundary (binder bodies and equality
 /// propagation see concrete types by the time they read a sub-result).
 fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
-    match expr {
-        Expression::Integer(_) => Some(ITy::Integer),
-        Expression::True | Expression::False => Some(ITy::Boolean),
-        Expression::Integers | Expression::Naturals | Expression::Naturals1 => {
+    match &expr.kind {
+        ExpressionKind::Integer(_) => Some(ITy::Integer),
+        ExpressionKind::True | ExpressionKind::False => Some(ITy::Boolean),
+        ExpressionKind::Integers | ExpressionKind::Naturals | ExpressionKind::Naturals1 => {
             Some(ITy::pow(ITy::Integer))
         }
-        Expression::BoolType => Some(ITy::pow(ITy::Boolean)),
+        ExpressionKind::BoolType => Some(ITy::pow(ITy::Boolean)),
         // A reserved relational atom (`succ`/`pred`/`id`/`prj1`/`prj2`) wins
         // over an env lookup; everything else is an env-typed identifier.
-        Expression::Identifier(name) => {
+        ExpressionKind::Identifier(name) => {
             reserved_atom(name, u).or_else(|| env.get(name).map(ITy::from))
         }
         // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
         // keeps a free variable and drops; in context (`∅ ∪ r`, `∅ ⦂ T`)
         // the variable is solved.
-        Expression::EmptySet => Some(ITy::pow(u.fresh())),
-        Expression::Unary { op, operand } => {
+        ExpressionKind::EmptySet => Some(ITy::pow(u.fresh())),
+        ExpressionKind::Unary { op, operand } => {
             let inner = synth(env, operand, u)?;
             match op {
                 UnaryOp::Minus => Some(ITy::Integer),
@@ -332,7 +332,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
                 }
             }
         }
-        Expression::SetEnumeration(items) => {
+        ExpressionKind::SetEnumeration(items) => {
             // `{e₁, e₂, …}` has type ℙ(T) where T is the common element
             // type. A polymorphic item (`∅`) contributes a fresh variable
             // that unifies with its typed siblings (so `{x, ∅}` types as
@@ -349,7 +349,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             }
             ty.map(ITy::pow)
         }
-        Expression::Binary { op, left, right } => match op {
+        ExpressionKind::Binary { op, left, right } => match op {
             BinaryOp::Add
             | BinaryOp::Subtract
             | BinaryOp::Multiply
@@ -452,7 +452,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // [`Type`] rather than as a set value.
             BinaryOp::OfType => parse_type_from_expression(right).map(|t| ITy::from(&t)),
         },
-        Expression::FunctionApplication {
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
         } => {
@@ -471,7 +471,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             }
             Some(codomain)
         }
-        Expression::BuiltinApplication {
+        ExpressionKind::BuiltinApplication {
             function,
             arguments,
         } => match function {
@@ -527,7 +527,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         // `r[A]` — relational image: `r : ℙ(α × β)`, `A : ℙ(α)` ⇒ `ℙ(β)`.
         // Unifying A's element type with the domain pins a polymorphic
         // relation (e.g. `id[S] : ℙ(S)`).
-        Expression::RelationalImage { relation, set } => {
+        ExpressionKind::RelationalImage { relation, set } => {
             let rel = synth(env, relation, u)?;
             let (dom, ran) = u.as_relation(&rel)?;
             let set_t = synth(env, set, u);
@@ -535,9 +535,9 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             Some(ITy::pow(ran))
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
-        Expression::Bool(_) => Some(ITy::Boolean),
+        ExpressionKind::Bool(_) => Some(ITy::Boolean),
         // `if P then E1 else E2` — both branches share the same type.
-        Expression::IfThenElse {
+        ExpressionKind::IfThenElse {
             condition: _,
             then_expr,
             else_expr,
@@ -548,7 +548,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         }
         // λ pattern · P ∣ E. Bind the pattern names from explicit type
         // ascriptions or from `P`, then return ℙ(dom × typeof(E)).
-        Expression::Lambda {
+        ExpressionKind::Lambda {
             pattern,
             predicate,
             expression,
@@ -567,7 +567,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         // each binder from explicit `T` if present, else from `P`. Body
         // type is typeof(E) for the extended form, else the
         // left-associative maplet of the binders for the basic form.
-        Expression::SetComprehension {
+        ExpressionKind::SetComprehension {
             identifiers,
             predicate,
             expression,
@@ -586,7 +586,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         }
         // `{ E ∣ P }` — set builder. Bound identifiers are the free
         // identifiers of `E` not already in scope; bind them from `P`.
-        Expression::SetBuilder {
+        ExpressionKind::SetBuilder {
             member_expression,
             predicate,
         } => {
@@ -604,12 +604,12 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         }
         // `⋃ x ⦂ T · P ∣ E` and `⋂ x ⦂ T · P ∣ E`. Bind binders, then
         // return typeof(E) — the body must already be a set.
-        Expression::QuantifiedUnion {
+        ExpressionKind::QuantifiedUnion {
             identifiers,
             predicate,
             expression,
         }
-        | Expression::QuantifiedInter {
+        | ExpressionKind::QuantifiedInter {
             identifiers,
             predicate,
             expression,
@@ -685,15 +685,15 @@ fn bind_names(
 /// quantifiers / set comprehensions, where the RHS expression encodes a
 /// type literal: `ℤ`, `BOOL`, a carrier-set name, `ℙ(T)`, or `T × U`.
 pub(crate) fn parse_type_from_expression(expr: &Expression) -> Option<Type> {
-    match expr {
-        Expression::Integers => Some(Type::Integer),
-        Expression::BoolType => Some(Type::Boolean),
-        Expression::Identifier(n) => Some(Type::GivenSet(n.clone())),
-        Expression::Unary {
+    match &expr.kind {
+        ExpressionKind::Integers => Some(Type::Integer),
+        ExpressionKind::BoolType => Some(Type::Boolean),
+        ExpressionKind::Identifier(n) => Some(Type::GivenSet(n.clone())),
+        ExpressionKind::Unary {
             op: UnaryOp::PowerSet | UnaryOp::PowerSet1,
             operand,
         } => Some(Type::pow(parse_type_from_expression(operand)?)),
-        Expression::Binary {
+        ExpressionKind::Binary {
             op: BinaryOp::CartesianProduct,
             left,
             right,
@@ -766,8 +766,8 @@ pub(crate) fn collect_binder_types(
     names: &[&str],
     out: &mut BTreeMap<String, Type>,
 ) {
-    match pred {
-        Predicate::Comparison {
+    match &pred.kind {
+        PredicateKind::Comparison {
             op: ComparisonOp::In | ComparisonOp::NotIn,
             left,
             right,
@@ -780,8 +780,8 @@ pub(crate) fn collect_binder_types(
                 out.insert(name.to_string(), *elem);
             }
             if matches!(
-                left,
-                Expression::Binary {
+                &left.kind,
+                ExpressionKind::Binary {
                     op: BinaryOp::Maplet,
                     ..
                 }
@@ -790,13 +790,13 @@ pub(crate) fn collect_binder_types(
                 collect_from_maplet(left, &pair, names, out);
             }
         }
-        Predicate::Comparison {
+        PredicateKind::Comparison {
             op: ComparisonOp::Equal | ComparisonOp::NotEqual,
             left,
             right,
         } => {
             for (a, b) in [(left, right), (right, left)] {
-                if let Expression::Identifier(n) = a
+                if let ExpressionKind::Identifier(n) = &a.kind
                     && names.contains(&n.as_str())
                     && !out.contains_key(n)
                     && let Some(t) = type_of_expression(env, b)
@@ -810,7 +810,7 @@ pub(crate) fn collect_binder_types(
         // either side is ℤ. Mirrors `infer_constant_from_predicate`'s
         // ordering rule. (Covers corpus lambda guards `λp· p ≥ 0 ∣ …`
         // / `λp· p < 0 ∣ …`.)
-        Predicate::Comparison {
+        PredicateKind::Comparison {
             op:
                 ComparisonOp::LessThan
                 | ComparisonOp::LessEqual
@@ -820,14 +820,14 @@ pub(crate) fn collect_binder_types(
             right,
         } => {
             for side in [left, right] {
-                if let Expression::Identifier(n) = side
+                if let ExpressionKind::Identifier(n) = &side.kind
                     && names.contains(&n.as_str())
                 {
                     out.entry(n.clone()).or_insert(Type::Integer);
                 }
             }
         }
-        Predicate::Logical {
+        PredicateKind::Logical {
             op: LogicalOp::And,
             left,
             right,
@@ -837,7 +837,7 @@ pub(crate) fn collect_binder_types(
         }
         // Implication: typing constraints in the antecedent carry over
         // to the binder. (Common shape: `∀x · x∈ℤ ⇒ P`.)
-        Predicate::Logical {
+        PredicateKind::Logical {
             op: LogicalOp::Implies,
             left,
             ..
@@ -848,7 +848,7 @@ pub(crate) fn collect_binder_types(
         // `∀a,t · a ∈ policies(t) ⇔ a ∈ POLICYSETS` — the left
         // typing predicate types `a`, which the right side then uses to
         // type `POLICYSETS`.)
-        Predicate::Logical {
+        PredicateKind::Logical {
             op: LogicalOp::Equivalent,
             left,
             right,
@@ -856,7 +856,7 @@ pub(crate) fn collect_binder_types(
             collect_binder_types(env, left, names, out);
             collect_binder_types(env, right, names, out);
         }
-        Predicate::Quantified {
+        PredicateKind::Quantified {
             identifiers,
             predicate: body,
             ..
@@ -884,9 +884,9 @@ fn collect_from_maplet(
     names: &[&str],
     out: &mut BTreeMap<String, Type>,
 ) {
-    match (maplet, pair) {
+    match (&maplet.kind, pair) {
         (
-            Expression::Binary {
+            ExpressionKind::Binary {
                 op: BinaryOp::Maplet,
                 left,
                 right,
@@ -896,7 +896,7 @@ fn collect_from_maplet(
             collect_from_maplet(left, lty, names, out);
             collect_from_maplet(right, rty, names, out);
         }
-        (Expression::Identifier(n), _) if names.contains(&n.as_str()) => {
+        (ExpressionKind::Identifier(n), _) if names.contains(&n.as_str()) => {
             out.entry(n.clone()).or_insert_with(|| pair.clone());
         }
         _ => {}
@@ -925,23 +925,23 @@ fn collect_free_idents_expr<'a>(
     shadow: &mut Vec<&'a str>,
     out: &mut Vec<&'a str>,
 ) {
-    match expr {
-        Expression::Identifier(n)
+    match &expr.kind {
+        ExpressionKind::Identifier(n)
             if !shadow.contains(&n.as_str()) && !out.contains(&n.as_str()) =>
         {
             out.push(n.as_str());
         }
-        Expression::Binary { left, right, .. } => {
+        ExpressionKind::Binary { left, right, .. } => {
             collect_free_idents_expr(left, shadow, out);
             collect_free_idents_expr(right, shadow, out);
         }
-        Expression::Unary { operand, .. } => collect_free_idents_expr(operand, shadow, out),
-        Expression::SetEnumeration(items) => {
+        ExpressionKind::Unary { operand, .. } => collect_free_idents_expr(operand, shadow, out),
+        ExpressionKind::SetEnumeration(items) => {
             for i in items {
                 collect_free_idents_expr(i, shadow, out);
             }
         }
-        Expression::FunctionApplication {
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
         } => {
@@ -950,17 +950,17 @@ fn collect_free_idents_expr<'a>(
                 collect_free_idents_expr(a, shadow, out);
             }
         }
-        Expression::BuiltinApplication { arguments, .. } => {
+        ExpressionKind::BuiltinApplication { arguments, .. } => {
             for a in arguments {
                 collect_free_idents_expr(a, shadow, out);
             }
         }
-        Expression::RelationalImage { relation, set } => {
+        ExpressionKind::RelationalImage { relation, set } => {
             collect_free_idents_expr(relation, shadow, out);
             collect_free_idents_expr(set, shadow, out);
         }
-        Expression::Bool(p) => collect_free_idents_pred(p, shadow, out),
-        Expression::IfThenElse {
+        ExpressionKind::Bool(p) => collect_free_idents_pred(p, shadow, out),
+        ExpressionKind::IfThenElse {
             condition,
             then_expr,
             else_expr,
@@ -978,17 +978,17 @@ fn collect_free_idents_pred<'a>(
     shadow: &mut Vec<&'a str>,
     out: &mut Vec<&'a str>,
 ) {
-    match pred {
-        Predicate::Comparison { left, right, .. } => {
+    match &pred.kind {
+        PredicateKind::Comparison { left, right, .. } => {
             collect_free_idents_expr(left, shadow, out);
             collect_free_idents_expr(right, shadow, out);
         }
-        Predicate::Logical { left, right, .. } => {
+        PredicateKind::Logical { left, right, .. } => {
             collect_free_idents_pred(left, shadow, out);
             collect_free_idents_pred(right, shadow, out);
         }
-        Predicate::Not(inner) => collect_free_idents_pred(inner, shadow, out),
-        Predicate::Quantified {
+        PredicateKind::Not(inner) => collect_free_idents_pred(inner, shadow, out),
+        PredicateKind::Quantified {
             identifiers,
             predicate,
             ..
@@ -1000,13 +1000,13 @@ fn collect_free_idents_pred<'a>(
             collect_free_idents_pred(predicate, shadow, out);
             shadow.truncate(prev);
         }
-        Predicate::Application { arguments, .. }
-        | Predicate::BuiltinApplication { arguments, .. } => {
+        PredicateKind::Application { arguments, .. }
+        | PredicateKind::BuiltinApplication { arguments, .. } => {
             for a in arguments {
                 collect_free_idents_expr(a, shadow, out);
             }
         }
-        Predicate::True | Predicate::False => {}
+        PredicateKind::True | PredicateKind::False => {}
     }
 }
 
@@ -1021,8 +1021,8 @@ pub fn infer_constant_from_predicate(
     predicate: &Predicate,
     constant_name: &str,
 ) -> Option<Type> {
-    match predicate {
-        Predicate::Comparison { op, left, right } => match op {
+    match &predicate.kind {
+        PredicateKind::Comparison { op, left, right } => match op {
             ComparisonOp::In | ComparisonOp::NotIn => {
                 // `c ∈ S` and `c ∉ S` constrain `c` to S's element
                 // type identically — negation doesn't change typing.
@@ -1044,10 +1044,10 @@ pub fn infer_constant_from_predicate(
                 // `p ↦ v ∈ relation` where `relation : ℙ(T × U)`:
                 // infer `p : T` if constant_name is p, `v : U` if v.
                 // This generalises to nested maplets `p ↦ q ↦ v`.
-                if let Expression::Binary {
+                if let ExpressionKind::Binary {
                     op: BinaryOp::Maplet,
                     ..
-                } = left
+                } = &left.kind
                     && let Some(Type::PowerSet(pair)) = type_of_expression(env, right)
                     && let Some(ty) = infer_from_maplet_pattern(left, &pair, constant_name)
                 {
@@ -1059,11 +1059,11 @@ pub fn infer_constant_from_predicate(
                 // argument type to S's element type. (Covers the corpus
                 // shape `∀i · i ∈ 0‥7 ⇒ P(i) ∈ 0‥6`, which types
                 // `P : ℙ(ℤ × ℤ)` in Rodin.)
-                if let Expression::FunctionApplication {
+                if let ExpressionKind::FunctionApplication {
                     function,
                     arguments,
-                } = left
-                    && matches!(function.as_ref(), Expression::Identifier(n) if n == constant_name)
+                } = &left.kind
+                    && matches!(&function.kind, ExpressionKind::Identifier(n) if n == constant_name)
                     && !arguments.is_empty()
                     && let Some(arg_t) = type_of_expression(env, &left_assoc_maplet(arguments))
                     && let Some(Type::PowerSet(elem)) = type_of_expression(env, right)
@@ -1096,8 +1096,8 @@ pub fn infer_constant_from_predicate(
             | ComparisonOp::LessEqual
             | ComparisonOp::GreaterThan
             | ComparisonOp::GreaterEqual => {
-                if matches!(left, Expression::Identifier(n) if n == constant_name)
-                    || matches!(right, Expression::Identifier(n) if n == constant_name)
+                if matches!(&left.kind, ExpressionKind::Identifier(n) if n == constant_name)
+                    || matches!(&right.kind, ExpressionKind::Identifier(n) if n == constant_name)
                 {
                     Some(Type::Integer)
                 } else {
@@ -1105,7 +1105,7 @@ pub fn infer_constant_from_predicate(
                 }
             }
         },
-        Predicate::BuiltinApplication {
+        PredicateKind::BuiltinApplication {
             predicate: BuiltinPredicate::Partition,
             arguments,
         } => infer_from_partition(env, arguments, constant_name),
@@ -1122,7 +1122,7 @@ pub fn infer_constant_from_predicate(
         //     (constant-typing dual of `collect_binder_types`'s
         //     antecedent-only rule — binders are introduced by `⇒`,
         //     constants aren't).
-        Predicate::Logical {
+        PredicateKind::Logical {
             op: LogicalOp::And | LogicalOp::Or | LogicalOp::Implies | LogicalOp::Equivalent,
             left,
             right,
@@ -1137,7 +1137,7 @@ pub fn infer_constant_from_predicate(
         // the constant on one side and a binder on the other (e.g.
         // `a ∈ POLICYSETS` where `a` is a quantifier-bound variable
         // with type `ACCESSES`) need the binder typed in scope.
-        Predicate::Quantified {
+        PredicateKind::Quantified {
             identifiers,
             predicate: body,
             ..
@@ -1160,7 +1160,7 @@ pub fn infer_constant_from_predicate(
     .or_else(|| infer_from_function_argument(env, predicate, constant_name))
 }
 
-/// Last-resort typing: scan `pred` for an [`Expression::FunctionApplication`] whose
+/// Last-resort typing: scan `pred` for an [`ExpressionKind::FunctionApplication`] whose
 /// function has a known relation type and one of whose arguments is
 /// `constant_name`. Lift the constant's type from the function's
 /// domain. Covers parameters that only appear as keys to known
@@ -1180,17 +1180,17 @@ fn walk_pred_for_arg(env: &TypeEnv, p: &Predicate, target: &str, found: &mut Opt
     if found.is_some() {
         return;
     }
-    match p {
-        Predicate::Comparison { left, right, .. } => {
+    match &p.kind {
+        PredicateKind::Comparison { left, right, .. } => {
             walk_expr_for_arg(env, left, target, found);
             walk_expr_for_arg(env, right, target, found);
         }
-        Predicate::Logical { left, right, .. } => {
+        PredicateKind::Logical { left, right, .. } => {
             walk_pred_for_arg(env, left, target, found);
             walk_pred_for_arg(env, right, target, found);
         }
-        Predicate::Not(inner) => walk_pred_for_arg(env, inner, target, found),
-        Predicate::Quantified {
+        PredicateKind::Not(inner) => walk_pred_for_arg(env, inner, target, found),
+        PredicateKind::Quantified {
             identifiers,
             predicate: body,
             ..
@@ -1201,13 +1201,13 @@ fn walk_pred_for_arg(env: &TypeEnv, p: &Predicate, target: &str, found: &mut Opt
             }
             walk_pred_for_arg(env, body, target, found);
         }
-        Predicate::Application { arguments, .. }
-        | Predicate::BuiltinApplication { arguments, .. } => {
+        PredicateKind::Application { arguments, .. }
+        | PredicateKind::BuiltinApplication { arguments, .. } => {
             for a in arguments {
                 walk_expr_for_arg(env, a, target, found);
             }
         }
-        Predicate::True | Predicate::False => {}
+        PredicateKind::True | PredicateKind::False => {}
     }
 }
 
@@ -1215,8 +1215,8 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
     if found.is_some() {
         return;
     }
-    match e {
-        Expression::FunctionApplication {
+    match &e.kind {
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
         } => {
@@ -1239,15 +1239,15 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
                 }
             }
         }
-        Expression::Binary { left, right, .. } => {
+        ExpressionKind::Binary { left, right, .. } => {
             walk_expr_for_arg(env, left, target, found);
             if found.is_some() {
                 return;
             }
             walk_expr_for_arg(env, right, target, found);
         }
-        Expression::Unary { operand, .. } => walk_expr_for_arg(env, operand, target, found),
-        Expression::SetEnumeration(items) => {
+        ExpressionKind::Unary { operand, .. } => walk_expr_for_arg(env, operand, target, found),
+        ExpressionKind::SetEnumeration(items) => {
             for i in items {
                 walk_expr_for_arg(env, i, target, found);
                 if found.is_some() {
@@ -1255,7 +1255,7 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
                 }
             }
         }
-        Expression::BuiltinApplication { arguments, .. } => {
+        ExpressionKind::BuiltinApplication { arguments, .. } => {
             for a in arguments {
                 walk_expr_for_arg(env, a, target, found);
                 if found.is_some() {
@@ -1263,15 +1263,15 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
                 }
             }
         }
-        Expression::RelationalImage { relation, set } => {
+        ExpressionKind::RelationalImage { relation, set } => {
             walk_expr_for_arg(env, relation, target, found);
             if found.is_some() {
                 return;
             }
             walk_expr_for_arg(env, set, target, found);
         }
-        Expression::Bool(p) => walk_pred_for_arg(env, p, target, found),
-        Expression::IfThenElse {
+        ExpressionKind::Bool(p) => walk_pred_for_arg(env, p, target, found),
+        ExpressionKind::IfThenElse {
             condition,
             then_expr,
             else_expr,
@@ -1291,8 +1291,8 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
 }
 
 fn as_ident(e: &Expression) -> Option<&str> {
-    match e {
-        Expression::Identifier(n) => Some(n.as_str()),
+    match &e.kind {
+        ExpressionKind::Identifier(n) => Some(n.as_str()),
         _ => None,
     }
 }
@@ -1306,9 +1306,9 @@ fn infer_from_maplet_pattern(
     pair: &Type,
     constant_name: &str,
 ) -> Option<Type> {
-    match (maplet, pair) {
+    match (&maplet.kind, pair) {
         (
-            Expression::Binary {
+            ExpressionKind::Binary {
                 op: BinaryOp::Maplet,
                 left,
                 right,
@@ -1316,7 +1316,7 @@ fn infer_from_maplet_pattern(
             Type::Product(lty, rty),
         ) => infer_from_maplet_pattern(left, lty, constant_name)
             .or_else(|| infer_from_maplet_pattern(right, rty, constant_name)),
-        (Expression::Identifier(n), _) if n == constant_name => Some(pair.clone()),
+        (ExpressionKind::Identifier(n), _) if n == constant_name => Some(pair.clone()),
         _ => None,
     }
 }
@@ -1341,13 +1341,13 @@ fn infer_from_equality(
     constant_name: &str,
 ) -> Option<Type> {
     // Direct: c = expr
-    if let Expression::Identifier(n) = lhs
+    if let ExpressionKind::Identifier(n) = &lhs.kind
         && n == constant_name
         && let Some(t) = type_of_expression(env, rhs)
     {
         return Some(t);
     }
-    if let Expression::Identifier(n) = rhs
+    if let ExpressionKind::Identifier(n) = &rhs.kind
         && n == constant_name
         && let Some(t) = type_of_expression(env, lhs)
     {
@@ -1356,8 +1356,8 @@ fn infer_from_equality(
     // Maplet-equality: `(p ↦ q) = expr` where typeof(expr) = T × U.
     let try_maplet_eq = |maplet: &Expression, other: &Expression| -> Option<Type> {
         if !matches!(
-            maplet,
-            Expression::Binary {
+            &maplet.kind,
+            ExpressionKind::Binary {
                 op: BinaryOp::Maplet,
                 ..
             }
@@ -1372,12 +1372,12 @@ fn infer_from_equality(
     }
     // Set-equality: `S = {e₁, …}`. Either side may be the typed Set.
     let try_set_eq = |set: &Expression, enum_: &Expression| -> Option<Type> {
-        let Expression::SetEnumeration(items) = enum_ else {
+        let ExpressionKind::SetEnumeration(items) = &enum_.kind else {
             return None;
         };
         if !items
             .iter()
-            .any(|e| matches!(e, Expression::Identifier(n) if n == constant_name))
+            .any(|e| matches!(&e.kind, ExpressionKind::Identifier(n) if n == constant_name))
         {
             return None;
         }
@@ -1410,9 +1410,9 @@ fn infer_from_equality(
 /// `Difference` binary nodes. Other operators (e.g., maplets, function
 /// applications) terminate the descent — we don't try to invert them.
 fn contains_unknown_atom(expr: &Expression, constant_name: &str) -> bool {
-    match expr {
-        Expression::Identifier(n) => n == constant_name,
-        Expression::Binary {
+    match &expr.kind {
+        ExpressionKind::Identifier(n) => n == constant_name,
+        ExpressionKind::Binary {
             op: BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference,
             left,
             right,
@@ -1443,15 +1443,16 @@ fn infer_from_partition(
     // tail (as singletons or as bare subset names).
     if let Some(Type::PowerSet(elem)) = type_of_expression(env, head) {
         for arg in tail {
-            match arg {
-                Expression::SetEnumeration(items) => {
+            match &arg.kind {
+                ExpressionKind::SetEnumeration(items) => {
                     for item in items {
-                        if matches!(item, Expression::Identifier(n) if n == constant_name) {
+                        if matches!(&item.kind, ExpressionKind::Identifier(n) if n == constant_name)
+                        {
                             return Some(*elem.clone());
                         }
                     }
                 }
-                Expression::Identifier(n) if n == constant_name => {
+                ExpressionKind::Identifier(n) if n == constant_name => {
                     return Some(Type::pow(*elem.clone()));
                 }
                 _ => {}
@@ -1461,10 +1462,10 @@ fn infer_from_partition(
     // Path 2: head IS the unknown — type it from any tail entry whose
     // type is known. Singletons `{x}` give `head : ℙ(typeof(x))`; bare
     // subsets `X : ℙ(T)` give `head : ℙ(T)`.
-    if matches!(head, Expression::Identifier(n) if n == constant_name) {
+    if matches!(&head.kind, ExpressionKind::Identifier(n) if n == constant_name) {
         for arg in tail {
-            match arg {
-                Expression::SetEnumeration(items) => {
+            match &arg.kind {
+                ExpressionKind::SetEnumeration(items) => {
                     for item in items {
                         if let Some(t) = type_of_expression(env, item) {
                             return Some(Type::pow(t));
@@ -1538,15 +1539,15 @@ mod tests {
     fn literal_types() {
         let env = TypeEnv::new();
         assert_eq!(
-            type_of_expression(&env, &Expression::Integer(42)),
+            type_of_expression(&env, &ExpressionKind::Integer(42).into()),
             Some(Type::Integer)
         );
         assert_eq!(
-            type_of_expression(&env, &Expression::True),
+            type_of_expression(&env, &ExpressionKind::True.into()),
             Some(Type::Boolean)
         );
         assert_eq!(
-            type_of_expression(&env, &Expression::Integers),
+            type_of_expression(&env, &ExpressionKind::Integers.into()),
             Some(Type::pow(Type::Integer))
         );
     }
@@ -1555,7 +1556,7 @@ mod tests {
     fn identifier_lookup() {
         let env = env_with(&[("n", Type::Integer)]);
         assert_eq!(
-            type_of_expression(&env, &Expression::Identifier("n".into())),
+            type_of_expression(&env, &ExpressionKind::Identifier("n".into()).into()),
             Some(Type::Integer)
         );
     }
