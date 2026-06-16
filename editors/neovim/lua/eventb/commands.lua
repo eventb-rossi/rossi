@@ -135,6 +135,26 @@ end
 
 -- Decode `rossi validate --format json` output and publish it onto `diag_ns`,
 -- grouped by file. Mirrors applyValidationDiagnostics() in rossiCommands.ts.
+-- Byte offset (0-indexed) of the CHAR0-th character on line LINE0 of BUFNR.
+-- vim.diagnostic wants byte columns, but `rossi validate` reports character
+-- columns, so multi-byte Event-B operators (∈, ⊆, …) earlier on the line would
+-- otherwise shift the highlight. Falls back to the character index when the
+-- line or the conversion is unavailable, so it never errors.
+local function char_to_byte(bufnr, line0, char0)
+  if char0 <= 0 then
+    return 0
+  end
+  local line = vim.api.nvim_buf_get_lines(bufnr, line0, line0 + 1, false)[1]
+  if not line then
+    return char0
+  end
+  local ok, byte = pcall(vim.str_byteindex, line, char0)
+  if ok and byte then
+    return byte
+  end
+  return char0
+end
+
 local function apply_validation(stdout, cwd)
   local ok, rows = pcall(vim.json.decode, stdout)
   if not ok or type(rows) ~= "table" then
@@ -161,9 +181,19 @@ local function apply_validation(stdout, cwd)
       local bufnr = vim.fn.bufadd(target or cwd)
       vim.fn.bufload(bufnr)
       by_buf[bufnr] = by_buf[bufnr] or {}
+      -- `rossi validate` reports a 1-indexed region; vim.diagnostic wants
+      -- 0-indexed positions, with col/end_col as byte offsets (the CLI's are
+      -- character columns — convert via the buffer line). Without a region
+      -- (XML-sourced or project-level diagnostics) fall back to the file start.
+      local region = row.region
+      local lnum = region and math.max(region.start_line - 1, 0) or 0
+      local end_lnum = region and math.max(region.end_line - 1, 0) or nil
       table.insert(by_buf[bufnr], {
-        lnum = 0,
-        col = 0,
+        lnum = lnum,
+        col = region and char_to_byte(bufnr, lnum, region.start_column - 1) or 0,
+        end_lnum = end_lnum,
+        -- end_lnum is already nil whenever there is no region, so it alone gates this.
+        end_col = end_lnum and char_to_byte(bufnr, end_lnum, region.end_column - 1) or nil,
         message = validation_message(row),
         severity = severity_of(row.severity),
         source = "rossi",
