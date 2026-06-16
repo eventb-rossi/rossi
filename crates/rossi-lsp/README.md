@@ -263,8 +263,8 @@ well-definedness and refinement proof checks.
 
 - Diagnostics are immediate; `rossi.diagnostics.debounceMs` is parsed but not yet used.
 - LSP diagnostics are syntax-only until the semantic diagnostics adapter is added.
-- Declaration sites (sets, constants, variables, events, parameters, INITIALISATION) resolve from AST spans; usage-site lookup (find-references, rename, and the semantic-token fallbacks) is still text-based, pending per-identifier spans.
-- Expression, predicate, action, and individual identifier spans are still incomplete in the AST.
+- Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
+- Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
 - Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
 
 ## Development

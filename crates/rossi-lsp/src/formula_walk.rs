@@ -68,47 +68,53 @@ impl IdentVisitor for Collector<'_> {
     }
 }
 
-/// Walk every formula in `component`, seeding each event's parameters as
-/// binders, and collect every occurrence of `target` (canonicalised for the
-/// `x'` form) with its role and scope.
+/// Drive the shared walker over every formula in `component`, seeding each
+/// event's parameters as binders. The single traversal both the targeted and
+/// the collect-all consumers share.
+fn drive<V: IdentVisitor>(component: &Component, v: &mut V) {
+    let mut binders: Vec<Binder> = Vec::new();
+    match component {
+        Component::Context(ctx) => {
+            for ax in &ctx.axioms {
+                let _ = walk::walk_predicate(&ax.predicate, &mut binders, v);
+            }
+        }
+        Component::Machine(m) => {
+            for inv in &m.invariants {
+                let _ = walk::walk_predicate(&inv.predicate, &mut binders, v);
+            }
+            if let Some(variant) = &m.variant {
+                let _ = walk::walk_expression(variant, &mut binders, v);
+            }
+            if let Some(init) = &m.initialisation {
+                for lp in init.with.iter().chain(&init.witnesses) {
+                    let _ = walk::walk_predicate(&lp.predicate, &mut binders, v);
+                }
+                for la in &init.actions {
+                    let _ = walk::walk_action(&la.action, &mut binders, v);
+                }
+            }
+            for event in &m.events {
+                collect_in_event(event, &mut binders, v);
+            }
+        }
+    }
+}
+
+/// Walk every formula in `component` and collect every occurrence of `target`
+/// (canonicalised for the `x'` form) with its role and scope.
 pub fn collect_in_component(component: &Component, target: &str) -> Vec<Hit> {
     let mut c = Collector {
         target,
         hits: Vec::new(),
     };
-    let mut binders: Vec<Binder> = Vec::new();
-    match component {
-        Component::Context(ctx) => {
-            for ax in &ctx.axioms {
-                let _ = walk::walk_predicate(&ax.predicate, &mut binders, &mut c);
-            }
-        }
-        Component::Machine(m) => {
-            for inv in &m.invariants {
-                let _ = walk::walk_predicate(&inv.predicate, &mut binders, &mut c);
-            }
-            if let Some(variant) = &m.variant {
-                let _ = walk::walk_expression(variant, &mut binders, &mut c);
-            }
-            if let Some(init) = &m.initialisation {
-                for lp in init.with.iter().chain(&init.witnesses) {
-                    let _ = walk::walk_predicate(&lp.predicate, &mut binders, &mut c);
-                }
-                for la in &init.actions {
-                    let _ = walk::walk_action(&la.action, &mut binders, &mut c);
-                }
-            }
-            for event in &m.events {
-                collect_in_event(event, &mut binders, &mut c);
-            }
-        }
-    }
+    drive(component, &mut c);
     c.hits
 }
 
 /// Walk a single event's formulas with `outer` binders already in scope, seeding
 /// the event's own parameters on top.
-fn collect_in_event(event: &Event, outer: &mut Vec<Binder>, c: &mut Collector<'_>) {
+fn collect_in_event<V: IdentVisitor>(event: &Event, outer: &mut Vec<Binder>, c: &mut V) {
     let depth = outer.len();
     outer.extend(event.parameters.iter().map(|p| Binder {
         name: p.name.clone(),
@@ -170,6 +176,50 @@ pub fn parameter_occurrence_spans(event: &Event, target: &str) -> Vec<Span> {
         .filter(|h| h.scope == Scope::Free && h.role != IdentRole::Binder)
         .map(|h| h.span)
         .collect()
+}
+
+/// Any identifier occurrence in a component's formulas (used to colour every
+/// formula identifier as a semantic token).
+#[derive(Debug, Clone)]
+pub struct AnyOccurrence {
+    /// The identifier text, verbatim (a primed read keeps its `'`).
+    pub name: String,
+    /// Source span of the occurrence.
+    pub span: Span,
+    /// What this occurrence is.
+    pub role: IdentRole,
+    /// True if bound by an enclosing binder of the same name (a local / parameter).
+    pub bound: bool,
+}
+
+struct AllCollector {
+    occurrences: Vec<AnyOccurrence>,
+}
+
+impl IdentVisitor for AllCollector {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        if let Some(span) = occ.span {
+            let base = canonical(occ.name);
+            let bound = occ.binders.iter().any(|b| b.name == base);
+            self.occurrences.push(AnyOccurrence {
+                name: occ.name.to_string(),
+                span,
+                role: occ.role,
+                bound,
+            });
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Every identifier occurrence in `component`'s formulas, in document order
+/// modulo the walker's traversal.
+pub fn collect_all_occurrences(component: &Component) -> Vec<AnyOccurrence> {
+    let mut c = AllCollector {
+        occurrences: Vec::new(),
+    };
+    drive(component, &mut c);
+    c.occurrences
 }
 
 /// Declaration span of a set / constant / variable named `name`, if this
