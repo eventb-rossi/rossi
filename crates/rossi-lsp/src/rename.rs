@@ -9,9 +9,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
 
+use rossi::Component;
+use rossi::ast::Span;
+use rossi::ast::walk::IdentRole;
+
+use crate::component_util::{component_at_offset, parse_all};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::formula_walk::{self, Scope};
 use crate::identifier_utils;
+use crate::identifier_utils::position_to_offset;
+use crate::position::span_to_range;
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -112,34 +120,12 @@ impl RenameProvider {
             // Rename only in the current document. A hyphenated symbol (an
             // event name) gets the component boundary; a math symbol the math one.
             debug!("Renaming symbol '{}' in current document", identifier);
-            let locations = find_all_references(
-                text,
-                &identifier,
-                uri,
-                identifier_utils::WordBoundary::for_name(&identifier),
-            )?;
-
-            if locations.is_empty() {
-                return None;
-            }
-
-            // Create text edits for all references
-            let mut edits: Vec<TextEdit> = locations
-                .into_iter()
-                .map(|loc| TextEdit {
-                    range: loc.range,
-                    new_text: new_name.clone(),
-                })
-                .collect();
-
-            // Sort edits in reverse order (bottom to top, right to left)
-            edits.sort_by(|a, b| {
-                b.range
-                    .start
-                    .line
-                    .cmp(&a.range.start.line)
-                    .then(b.range.start.character.cmp(&a.range.start.character))
-            });
+            // Resolve the rename from the AST: a binder of the same name keeps
+            // its own scope, and the after-state form `x'` is renamed at its
+            // base. Fall back to a whole-word scan when the document doesn't
+            // parse far enough to resolve the cursor.
+            let edits = ast_rename_edits(text, position, &identifier, new_name)
+                .or_else(|| text_rename_edits(text, &identifier, uri, new_name))?;
 
             changes.insert(uri.clone(), edits);
         }
@@ -289,6 +275,140 @@ fn find_all_references(
     } else {
         Some(locations)
     }
+}
+
+/// Fallback rename edits via a whole-word text scan, for documents the parser
+/// cannot resolve a symbol in.
+fn text_rename_edits(
+    text: &str,
+    identifier: &str,
+    uri: &Url,
+    new_name: &str,
+) -> Option<Vec<TextEdit>> {
+    let locations = find_all_references(
+        text,
+        identifier,
+        uri,
+        identifier_utils::WordBoundary::for_name(identifier),
+    )?;
+    let mut edits: Vec<TextEdit> = locations
+        .into_iter()
+        .map(|loc| TextEdit {
+            range: loc.range,
+            new_text: new_name.to_string(),
+        })
+        .collect();
+    sort_edits_reverse(&mut edits);
+    Some(edits)
+}
+
+/// AST-driven rename of the symbol at `position` within the current document.
+///
+/// The cursor occurrence is resolved through the shared walker: if it is (or is
+/// bound by) a quantifier / lambda / comprehension binder or an event
+/// parameter, only that binder's declaration and its in-scope uses are renamed;
+/// otherwise the component-level symbol's declaration and free uses are renamed.
+/// A binder of the same name in another scope, and same-named globals, are left
+/// untouched. The after-state form `x'` is renamed at its base, preserving `'`.
+fn ast_rename_edits(
+    text: &str,
+    position: Position,
+    identifier: &str,
+    new_name: &str,
+) -> Option<Vec<TextEdit>> {
+    let offset = position_to_offset(text, position)?;
+    let components = parse_all(text);
+    let component = component_at_offset(&components, offset)?;
+
+    let spans = rename_spans(component, identifier, offset);
+    if spans.is_empty() {
+        return None;
+    }
+
+    let mut edits: Vec<TextEdit> = spans
+        .into_iter()
+        .map(|span| TextEdit {
+            range: span_to_range(&base_span(text, span), text),
+            new_text: new_name.to_string(),
+        })
+        .collect();
+    // A binder declaration and a use can coincide in degenerate inputs; dedup by
+    // range after sorting so an edit is never applied twice.
+    sort_edits_reverse(&mut edits);
+    edits.dedup_by(|a, b| a.range == b.range);
+    Some(edits)
+}
+
+/// The byte spans to rewrite when renaming the identifier at `offset`.
+fn rename_spans(component: &Component, identifier: &str, offset: usize) -> Vec<Span> {
+    let hits = formula_walk::collect_in_component(component, identifier);
+    let cursor = hits.iter().find(|h| h.span.contains(offset));
+
+    // Determine the binder this rename is scoped to, if any.
+    let binder: Option<Span> = match cursor {
+        // Cursor on a binder declaration: scope to the binder introduced here.
+        Some(h) if h.role == IdentRole::Binder => Some(h.span),
+        // Cursor on a use bound by a binder of the same name: scope to it.
+        Some(h) => match h.scope {
+            Scope::Bound(b) => b,
+            Scope::Free => None,
+        },
+        // Cursor on a declaration site (not a formula occurrence): global.
+        None => None,
+    };
+
+    if let Some(b) = binder {
+        // Bound-local rename: the binder declaration plus uses it binds.
+        let mut spans: Vec<Span> = hits
+            .iter()
+            .filter(|h| {
+                (h.role == IdentRole::Binder && h.span == b) || h.scope == Scope::Bound(Some(b))
+            })
+            .map(|h| h.span)
+            .collect();
+        // Event parameters are seeded as binders but not emitted as formula
+        // occurrences, so add the binder declaration span explicitly.
+        if !spans.contains(&b) {
+            spans.push(b);
+        }
+        return spans;
+    }
+
+    // Bound by a binder with no recorded span: only the cursor token is safe.
+    if matches!(cursor.map(|h| h.scope), Some(Scope::Bound(None))) {
+        return cursor.map(|h| vec![h.span]).unwrap_or_default();
+    }
+
+    // Global symbol: its declaration plus every free use.
+    let mut spans = formula_walk::free_occurrence_spans(component, identifier);
+    if let Some(decl) = formula_walk::declaration_span(component, identifier) {
+        spans.push(decl);
+    }
+    spans
+}
+
+/// Trim a trailing apostrophe so renaming `x'` rewrites only the base `x`.
+fn base_span(text: &str, span: Span) -> Span {
+    if text[span.start..span.end].ends_with('\'') {
+        Span {
+            start: span.start,
+            end: span.end - 1,
+        }
+    } else {
+        span
+    }
+}
+
+/// Sort edits bottom-to-top, right-to-left so applying them never shifts a
+/// not-yet-applied edit's offsets.
+fn sort_edits_reverse(edits: &mut [TextEdit]) {
+    edits.sort_by(|a, b| {
+        b.range
+            .start
+            .line
+            .cmp(&a.range.start.line)
+            .then(b.range.start.character.cmp(&a.range.start.character))
+    });
 }
 
 #[cfg(test)]
@@ -724,5 +844,78 @@ END
 
         let params = make_rename_params(3, 4, uri, "TRUE".to_string());
         assert!(provider.rename(&params, source).is_none());
+    }
+
+    // ---- scope-aware rename (AST-driven) -----------------------------------
+
+    fn pos_at(text: &str, byte: usize) -> Position {
+        crate::position::offset_to_position(text, byte)
+    }
+
+    fn apply(text: &str, edits: &[TextEdit]) -> String {
+        // The provider returns edits sorted bottom-to-top, right-to-left, so
+        // applying them in order never invalidates a later edit's offsets.
+        let mut out = text.to_string();
+        for e in edits {
+            let start = position_to_offset(&out, e.range.start).unwrap();
+            let end = position_to_offset(&out, e.range.end).unwrap();
+            out.replace_range(start..end, &e.new_text);
+        }
+        out
+    }
+
+    fn rename_at(source: &str, byte: usize, new_name: &str) -> String {
+        let provider = RenameProvider::new();
+        let uri = make_uri();
+        let pos = pos_at(source, byte);
+        let params = make_rename_params(pos.line, pos.character, uri.clone(), new_name.to_string());
+        let edit = provider
+            .rename(&params, source)
+            .expect("rename produces edits");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        apply(source, &edits)
+    }
+
+    #[test]
+    fn rename_global_skips_shadowing_binder() {
+        let source = "MACHINE m\nVARIABLES\nx\nINVARIANTS\n@i1 x ∈ ℕ\n@i2 ∀ x · x ∈ ℕ\nEND\n";
+        // Cursor on the free use in @i1.
+        let byte = source.find("@i1 x").unwrap() + "@i1 ".len();
+        let out = rename_at(source, byte, "y");
+        // The quantifier and its bound body keep `x`; the free use becomes `y`.
+        assert!(out.contains("@i1 y ∈ ℕ"), "{out}");
+        assert!(out.contains("∀ x · x ∈ ℕ"), "bound x untouched: {out}");
+    }
+
+    #[test]
+    fn rename_bound_local_keeps_global() {
+        let source = "MACHINE m\nVARIABLES\nx\nINVARIANTS\n@i1 x ∈ ℕ\n@i2 ∀ x · x ∈ ℕ\nEND\n";
+        // Cursor on the quantifier binder `x`.
+        let byte = source.find("∀ x").unwrap() + "∀ ".len();
+        let out = rename_at(source, byte, "y");
+        // Only the binder and its bound body use are renamed.
+        assert!(out.contains("∀ y · y ∈ ℕ"), "{out}");
+        assert!(out.contains("@i1 x ∈ ℕ"), "global x untouched: {out}");
+    }
+
+    #[test]
+    fn rename_lambda_leaf_keeps_sibling() {
+        let source =
+            "CONTEXT c\nCONSTANTS\nf\nAXIOMS\n@a1 f = (λ x ↦ y · x ∈ ℕ ∧ y ∈ ℕ ∣ x)\nEND\n";
+        // Cursor on the lambda binder `x`.
+        let byte = source.find("λ x").unwrap() + "λ ".len();
+        let out = rename_at(source, byte, "z");
+        assert!(out.contains("λ z ↦ y · z ∈ ℕ ∧ y ∈ ℕ ∣ z"), "{out}");
+    }
+
+    #[test]
+    fn rename_primed_after_state_preserves_prime() {
+        let source =
+            "MACHINE m\nVARIABLES\nx\nEVENTS\nEVENT e\nTHEN\n@a1 x :∣ x' = x + 1\nEND\nEND\n";
+        // Cursor on the write target.
+        let byte = source.find("@a1 x").unwrap() + "@a1 ".len();
+        let out = rename_at(source, byte, "y");
+        // The base of `x'` is renamed; the prime is preserved.
+        assert!(out.contains("y :∣ y' = y + 1"), "{out}");
     }
 }

@@ -481,7 +481,7 @@ fn ast_symbol_references(
     name: &str,
 ) -> Vec<Location> {
     let mut spans: Vec<Span> = Vec::new();
-    if let Some(decl) = declaration_span(component, name) {
+    if let Some(decl) = formula_walk::declaration_span(component, name) {
         spans.push(decl);
     }
     spans.extend(formula_walk::free_occurrence_spans(component, name));
@@ -511,29 +511,6 @@ fn ast_parameter_references(
     }
     spans.extend(formula_walk::parameter_occurrence_spans(event, name));
     spans_to_locations(spans, text, uri)
-}
-
-/// Declaration span of a set / constant / variable named `name`, if this
-/// component declares it.
-fn declaration_span(component: &Component, name: &str) -> Option<Span> {
-    match component {
-        Component::Context(ctx) => ctx
-            .sets
-            .iter()
-            .find(|s| s.name() == name)
-            .and_then(|s| s.span())
-            .or_else(|| {
-                ctx.constants
-                    .iter()
-                    .find(|c| c.name == name)
-                    .and_then(|c| c.span)
-            }),
-        Component::Machine(m) => m
-            .variables
-            .iter()
-            .find(|v| v.name == name)
-            .and_then(|v| v.span),
-    }
 }
 
 fn spans_to_locations(spans: Vec<Span>, text: &str, uri: &Url) -> Vec<Location> {
