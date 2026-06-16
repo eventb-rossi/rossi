@@ -47,3 +47,6 @@ walkdir.workspace = true
 # `ServiceExt::ready` for driving the LspService in the rossi/operatorTable
 # wire-level test. Pinned to the 0.4 line tower-lsp uses internally.
 tower = { version = "0.5", features = ["util"] }
+# `StreamExt::next` for reading server-to-client notifications (the
+# `ClientSocket` stream) in the debounce wire-level test.
+futures = "0.3"
