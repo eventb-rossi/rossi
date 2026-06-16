@@ -89,6 +89,13 @@ impl<'a> EventKind<'a> {
             EventKind::Ordinary(e) => e.refines.as_deref(),
         }
     }
+    /// Span of the event's name token, for diagnostics about the event itself.
+    fn name_span(&self) -> Option<rossi::ast::Span> {
+        match self {
+            EventKind::Init(i) => i.name_span,
+            EventKind::Ordinary(e) => e.name_span,
+        }
+    }
 }
 
 fn convergence_code(status: Option<EventStatus>) -> &'static str {
@@ -125,6 +132,7 @@ pub(super) fn build_event_decl(
             origin: format!("{machine_name}.{label}"),
             message: format!("refines target '{refines}' not found in parent — event dropped"),
             rule_id: Some(crate::RuleId::CrossReferenceNotFound),
+            span: kind.name_span(),
         });
         return None;
     }
@@ -262,6 +270,7 @@ fn build_event_scope(
             origin: format!("{machine_name}.{label}.{name}"),
             message: "could not infer parameter type from guards".to_string(),
             rule_id: Some(crate::RuleId::TypeError),
+            span: crate::ast_util::named_element_span(kind.parameters(), name),
         });
         accurate = false;
     }
@@ -317,6 +326,7 @@ fn build_event_buckets(
                 ),
                 message: format!("guard references abstract-only variable '{bad}' — dropped"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+                span: g.span,
             });
             accurate = false;
             continue;
@@ -336,6 +346,7 @@ fn build_event_buckets(
                 ),
                 message: "guard predicate is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
+                span: g.span,
             });
             accurate = false;
             continue;
@@ -381,6 +392,7 @@ fn build_event_buckets(
                 ),
                 message: format!("LHS variable '{bad}' is not declared"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+                span: act.span,
             });
             accurate = false;
             continue;
@@ -402,6 +414,7 @@ fn build_event_buckets(
                 ),
                 message: format!("action references abstract-only variable '{bad}' — dropped"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+                span: act.span,
             });
             accurate = false;
             continue;
@@ -421,6 +434,7 @@ fn build_event_buckets(
                 ),
                 message: "action is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
+                span: act.span,
             });
             accurate = false;
             continue;

@@ -31,6 +31,7 @@ use crate::enrich::{enrich_action, enrich_expression, enrich_predicate};
 use crate::normalize::{canonical_action_with_env, canonical_expression, canonical_predicate};
 use crate::sc::identifier_walker::{
     free_identifier_in_action_rhs, free_identifier_in_expression, free_identifier_in_predicate,
+    usage_span_in_predicate,
 };
 use crate::type_env::TypeEnv;
 use crate::{Diagnostic, Severity};
@@ -146,11 +147,16 @@ pub fn check_labeled_predicate(
         .clone()
         .unwrap_or_else(|| default_label.to_string());
     if let Some(bad) = &pc.free_identifier {
+        // Anchor on the offending identifier in the *source* predicate (the
+        // enriched form may have rebuilt nodes without spans); fall back to the
+        // labeled predicate's own span.
+        let span = usage_span_in_predicate(&raw.predicate, bad).or(raw.span);
         return Err(Diagnostic {
             severity: Severity::Error,
             origin: origin(&label),
             message: format!("unknown identifier '{bad}' in {kind_name} predicate"),
             rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+            span,
         });
     }
     Ok((label, pc))

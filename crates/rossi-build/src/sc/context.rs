@@ -53,6 +53,9 @@ pub fn check_context(
                     origin: ctx.name.clone(),
                     message: format!("EXTENDS unknown context '{parent_name}'"),
                     rule_id: Some(crate::RuleId::CrossReferenceNotFound),
+                    // EXTENDS targets carry no per-entry span; anchor on the
+                    // context name.
+                    span: ctx.name_span,
                 });
                 accurate = false;
             }
@@ -71,6 +74,7 @@ pub fn check_context(
             origin: format!("{}.{}", ctx.name, name),
             message: "could not infer type from axioms (no typing axiom found)".to_string(),
             rule_id: Some(crate::RuleId::TypeError),
+            span: crate::ast_util::named_element_span(&ctx.constants, name),
         });
         accurate = false;
     }

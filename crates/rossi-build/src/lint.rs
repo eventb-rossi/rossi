@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rossi::ast::Span;
 use rossi::{ActionKind, Component, Context, Machine};
 
 use crate::ast_util::lhs_variables;
@@ -88,6 +89,7 @@ fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<String>) -> Vec<Diagnos
             origin: format!("{}.{}", m.name, v.name),
             message: format!("variable `{}` is declared but never referenced", v.name),
             rule_id: Some(RuleId::DeadVariable),
+            span: v.span,
         })
         .collect()
 }
@@ -108,6 +110,7 @@ fn lint_unmodified_variable(
                 v.name
             ),
             rule_id: Some(RuleId::UnmodifiedVariable),
+            span: v.span,
         })
         .collect()
 }
@@ -124,6 +127,7 @@ fn lint_dead_constant(c: &Context, referenced: &BTreeSet<String>) -> Vec<Diagnos
                 k.name
             ),
             rule_id: Some(RuleId::DeadConstant),
+            span: k.span,
         })
         .collect()
 }
@@ -142,6 +146,7 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
                     v.name
                 ),
                 rule_id: Some(RuleId::IncompleteInitialisation),
+                span: v.span,
             })
             .collect();
     };
@@ -165,6 +170,7 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
             origin: format!("{}.INITIALISATION", m.name),
             message: format!("variable `{}` is not assigned by INITIALISATION", v.name),
             rule_id: Some(RuleId::IncompleteInitialisation),
+            span: v.span,
         })
         .collect()
 }
@@ -186,6 +192,9 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
                 files.join(", ")
             ),
             rule_id: Some(RuleId::DuplicateComponent),
+            // A duplicate-component finding is about file paths, not a single
+            // source location — no span to attach.
+            span: None,
         })
         .collect()
 }
@@ -197,7 +206,12 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
 /// trap is silent: a constant `POW` declares fine and `POW = f` works, but
 /// `POW(f)` parses as the powerset `ℙ(f)`; a constant `Nat` can never be
 /// referenced at all (`Nat` lexes as `ℕ`). Warn at the declaration.
-fn shadowed_name_diag(component: &str, kind: &str, name: &str) -> Option<Diagnostic> {
+fn shadowed_name_diag(
+    component: &str,
+    kind: &str,
+    name: &str,
+    span: Option<Span>,
+) -> Option<Diagnostic> {
     if !rossi::builtins::is_reserved_name(name) || rossi::builtins::is_reserved_word(name) {
         return None;
     }
@@ -210,19 +224,26 @@ fn shadowed_name_diag(component: &str, kind: &str, name: &str) -> Option<Diagnos
              identifier (e.g. `POW(S)` is the powerset, `Nat` is ℕ) — rename it"
         ),
         rule_id: Some(RuleId::ShadowedName),
+        span,
     })
 }
 
 fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for set in &c.sets {
-        diags.extend(shadowed_name_diag(&c.name, "carrier set", set.name()));
+        diags.extend(shadowed_name_diag(
+            &c.name,
+            "carrier set",
+            set.name(),
+            set.span(),
+        ));
+        // Enumerated elements have no per-element span; anchor on the set.
         for e in set.elements() {
-            diags.extend(shadowed_name_diag(&c.name, "set element", e));
+            diags.extend(shadowed_name_diag(&c.name, "set element", e, set.span()));
         }
     }
     for k in &c.constants {
-        diags.extend(shadowed_name_diag(&c.name, "constant", &k.name));
+        diags.extend(shadowed_name_diag(&c.name, "constant", &k.name, k.span));
     }
     diags
 }
@@ -230,7 +251,7 @@ fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
 fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for v in &m.variables {
-        diags.extend(shadowed_name_diag(&m.name, "variable", &v.name));
+        diags.extend(shadowed_name_diag(&m.name, "variable", &v.name, v.span));
     }
     for event in &m.events {
         for p in &event.parameters {
@@ -238,6 +259,7 @@ fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
                 &format!("{}.{}", m.name, event.name),
                 "parameter",
                 &p.name,
+                p.span,
             ));
         }
     }
@@ -257,7 +279,7 @@ fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
 /// determinism. The verb in the message follows the rule: identifiers are
 /// "declared", labels "used".
 fn duplicate_diags<'a>(
-    names: impl IntoIterator<Item = &'a str>,
+    names: impl IntoIterator<Item = (&'a str, Option<Span>)>,
     rule: RuleId,
     kind: &str,
     scope: &str,
@@ -268,21 +290,30 @@ fn duplicate_diags<'a>(
     } else {
         "used"
     };
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for n in names {
+    // Count occurrences per name, remembering the first source span seen (the
+    // declaration the reader should jump to). A later occurrence upgrades a
+    // still-unknown span so a name spanned only on its second mention is still
+    // located.
+    let mut counts: BTreeMap<&str, (usize, Option<Span>)> = BTreeMap::new();
+    for (n, span) in names {
         if n.trim().is_empty() {
             continue;
         }
-        *counts.entry(n).or_default() += 1;
+        let entry = counts.entry(n).or_insert((0, None));
+        entry.0 += 1;
+        if entry.1.is_none() {
+            entry.1 = span;
+        }
     }
     counts
         .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(name, count)| Diagnostic {
+        .filter(|(_, (count, _))| *count > 1)
+        .map(|(name, (count, span))| Diagnostic {
             severity: Severity::Error,
             origin: format!("{origin_prefix}.{name}"),
             message: format!("duplicate {kind} `{name}` in {scope} ({verb} {count} times)"),
             rule_id: Some(rule),
+            span,
         })
         .collect()
 }
@@ -293,7 +324,7 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
 
     // EB021 — variable identifiers.
     diags.extend(duplicate_diags(
-        m.variables.iter().map(|v| v.name.as_str()),
+        m.variables.iter().map(|v| (v.name.as_str(), v.span)),
         RuleId::DuplicateIdentifier,
         "variable identifier",
         &scope,
@@ -302,7 +333,9 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
 
     // EB022 — invariant labels.
     diags.extend(duplicate_diags(
-        m.invariants.iter().filter_map(|i| i.label.as_deref()),
+        m.invariants
+            .iter()
+            .filter_map(|i| i.label.as_deref().map(|l| (l, i.span))),
         RuleId::DuplicateLabel,
         "invariant label",
         &scope,
@@ -312,10 +345,11 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
     // EB022 — event labels. rossi stores INITIALISATION apart from `events`,
     // but Event-B treats it as an event sharing the label namespace.
     diags.extend(duplicate_diags(
-        m.events
-            .iter()
-            .map(|e| e.name.as_str())
-            .chain(m.initialisation.is_some().then_some("INITIALISATION")),
+        m.events.iter().map(|e| (e.name.as_str(), e.span)).chain(
+            m.initialisation
+                .as_ref()
+                .map(|i| ("INITIALISATION", i.span)),
+        ),
         RuleId::DuplicateLabel,
         "event label",
         &scope,
@@ -327,18 +361,22 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
         diags.extend(duplicate_names_in_event(
             &m.name,
             &e.name,
-            e.parameters.iter().map(|p| p.name.as_str()),
+            e.parameters.iter().map(|p| (p.name.as_str(), p.span)),
             // Event-B shares one label namespace across guards and actions.
             e.guards
                 .iter()
-                .filter_map(|g| g.label.as_deref())
-                .chain(e.actions.iter().filter_map(|a| a.label.as_deref())),
+                .filter_map(|g| g.label.as_deref().map(|l| (l, g.span)))
+                .chain(
+                    e.actions
+                        .iter()
+                        .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
+                ),
             // rossi splits witnesses into `with` (abstract vars) + `witnesses`
             // (abstract params); Event-B treats them as one witness namespace.
             e.with
                 .iter()
                 .chain(&e.witnesses)
-                .filter_map(|w| w.label.as_deref()),
+                .filter_map(|w| w.label.as_deref().map(|l| (l, w.span))),
         ));
     }
 
@@ -348,11 +386,13 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
             &m.name,
             "INITIALISATION",
             std::iter::empty(),
-            init.actions.iter().filter_map(|a| a.label.as_deref()),
+            init.actions
+                .iter()
+                .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
             init.with
                 .iter()
                 .chain(&init.witnesses)
-                .filter_map(|w| w.label.as_deref()),
+                .filter_map(|w| w.label.as_deref().map(|l| (l, w.span))),
         ));
     }
 
@@ -364,9 +404,9 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
 fn duplicate_names_in_event<'a>(
     machine: &str,
     event: &str,
-    parameters: impl IntoIterator<Item = &'a str>,
-    guard_action_labels: impl IntoIterator<Item = &'a str>,
-    witness_labels: impl IntoIterator<Item = &'a str>,
+    parameters: impl IntoIterator<Item = (&'a str, Option<Span>)>,
+    guard_action_labels: impl IntoIterator<Item = (&'a str, Option<Span>)>,
+    witness_labels: impl IntoIterator<Item = (&'a str, Option<Span>)>,
 ) -> Vec<Diagnostic> {
     let scope = format!("event `{event}` of machine `{machine}`");
     let origin = format!("{machine}.{event}");
@@ -400,13 +440,14 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
 
     // EB021 — carrier sets, their enumerated elements, and constants share one
     // identifier namespace, so a set and a constant with the same name collide.
-    // (In Event-B, enumerated set elements are constants.)
-    let mut ids: Vec<&str> = Vec::new();
+    // (In Event-B, enumerated set elements are constants.) Enumerated elements
+    // have no per-element span, so they anchor on the set declaration.
+    let mut ids: Vec<(&str, Option<Span>)> = Vec::new();
     for set in &c.sets {
-        ids.push(set.name());
-        ids.extend(set.elements().iter().map(String::as_str));
+        ids.push((set.name(), set.span()));
+        ids.extend(set.elements().iter().map(|e| (e.as_str(), set.span())));
     }
-    ids.extend(c.constants.iter().map(|k| k.name.as_str()));
+    ids.extend(c.constants.iter().map(|k| (k.name.as_str(), k.span)));
     diags.extend(duplicate_diags(
         ids,
         RuleId::DuplicateIdentifier,
@@ -417,7 +458,9 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
 
     // EB022 — axiom labels.
     diags.extend(duplicate_diags(
-        c.axioms.iter().filter_map(|a| a.label.as_deref()),
+        c.axioms
+            .iter()
+            .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
         RuleId::DuplicateLabel,
         "axiom label",
         &scope,
@@ -871,6 +914,57 @@ mod tests {
         assert_eq!(shadowed.len(), 2, "{shadowed:?}");
         assert!(shadowed.iter().any(|d| d.origin == "C.POW"));
         assert!(shadowed.iter().any(|d| d.origin == "C.Nat"));
+    }
+
+    #[test]
+    fn shadowed_name_diag_carries_the_declaration_span() {
+        // The EB023 diagnostic must anchor on the declaring element's span so a
+        // caller can place it on the right line. A carrier set takes the set's
+        // span; a constant takes the identifier's span.
+        let set_span = Span { start: 11, end: 14 };
+        let const_span = Span { start: 30, end: 33 };
+        let mut c = Context::new("C".into());
+        c.sets = vec![rossi::SetDeclaration::Deferred {
+            name: "POW".into(),
+            comment: None,
+            span: Some(set_span),
+        }];
+        c.constants = vec![rossi::NamedElement::with_span("Nat".into(), const_span)];
+
+        let diags = run_component(&Component::Context(c));
+        let shadowed: Vec<_> = diags
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::ShadowedName))
+            .collect();
+        assert_eq!(shadowed.len(), 2, "{shadowed:?}");
+        assert_eq!(
+            shadowed.iter().find(|d| d.origin == "C.POW").unwrap().span,
+            Some(set_span)
+        );
+        assert_eq!(
+            shadowed.iter().find(|d| d.origin == "C.Nat").unwrap().span,
+            Some(const_span)
+        );
+    }
+
+    #[test]
+    fn duplicate_identifier_diag_carries_first_occurrence_span() {
+        // EB021 anchors on the first declaration of the duplicated name.
+        let first = Span { start: 4, end: 5 };
+        let second = Span { start: 9, end: 10 };
+        let mut m = Machine::new("M".into());
+        m.variables = vec![
+            rossi::NamedElement::with_span("x".into(), first),
+            rossi::NamedElement::with_span("x".into(), second),
+            nv("y"),
+        ];
+        let diags = run_component(&Component::Machine(m));
+        let ids: Vec<_> = diags
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::DuplicateIdentifier))
+            .collect();
+        assert_eq!(ids.len(), 1, "{ids:?}");
+        assert_eq!(ids[0].span, Some(first));
     }
 
     #[test]

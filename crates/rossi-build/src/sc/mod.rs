@@ -167,6 +167,8 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
                 origin: "project".into(),
                 message: format!("circular EXTENDS: {}", cycle.join(" → ")),
                 rule_id: Some(crate::RuleId::CircularExtends),
+                // Project-level cycle: no single source element to anchor on.
+                span: None,
             });
             return (result, ScModel::default());
         }
@@ -190,6 +192,7 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
                     origin: ctx.name.clone(),
                     message: format!("failed to check context: {e}"),
                     rule_id: None,
+                    span: ctx.name_span,
                 });
             }
         }
@@ -206,6 +209,8 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
                 origin: "project".into(),
                 message: format!("circular REFINES: {}", cycle.join(" → ")),
                 rule_id: Some(crate::RuleId::CircularRefines),
+                // Project-level cycle: no single source element to anchor on.
+                span: None,
             });
             return (
                 result,
@@ -237,6 +242,7 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
                     origin: m.name.clone(),
                     message: format!("failed to check machine: {e}"),
                     rule_id: None,
+                    span: m.name_span,
                 });
             }
         }
