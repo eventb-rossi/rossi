@@ -16,7 +16,8 @@ use rossi::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::component_util::{component_at_offset, parse_named};
+use crate::component_loader::ComponentLoader;
+use crate::component_util::component_at_offset;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::identifier_utils::position_to_offset;
@@ -44,11 +45,7 @@ impl HoverContext {
         }
     }
 
-    fn from_component_with_refs(
-        component: &Component,
-        cross_ref_manager: Option<&CrossReferenceManager>,
-        document_manager: Option<&DocumentManager>,
-    ) -> Self {
+    fn from_component_with_refs(component: &Component, loader: Option<&ComponentLoader>) -> Self {
         let mut ctx = Self::new();
 
         match component {
@@ -71,14 +68,13 @@ impl HoverContext {
                 }
 
                 // Resolve EXTENDS chain transitively
-                if let Some(crm) = cross_ref_manager {
+                if let Some(loader) = loader {
                     let mut visited = HashSet::new();
                     visited.insert(context.name.clone());
                     for parent_name in &context.extends {
                         resolve_context_symbols_with_source(
                             parent_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.constants,
                             &mut ctx.sets,
                             &mut ctx.constraints,
@@ -97,13 +93,12 @@ impl HoverContext {
                 }
 
                 // Resolve SEES contexts and REFINES machines
-                if let Some(crm) = cross_ref_manager {
+                if let Some(loader) = loader {
                     let mut visited = HashSet::new();
                     for ctx_name in &machine.sees {
                         resolve_context_symbols_with_source(
                             ctx_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.constants,
                             &mut ctx.sets,
                             &mut ctx.constraints,
@@ -113,8 +108,7 @@ impl HoverContext {
                     if let Some(ref refines_name) = machine.refines {
                         resolve_machine_symbols_with_source(
                             refines_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.variables,
                             &mut ctx.constants,
                             &mut ctx.sets,
@@ -176,17 +170,23 @@ impl HoverProvider {
             .document_manager
             .as_ref()
             .and_then(|dm| dm.parse_result(uri));
+        // One loader per request: each visible context/machine in the SEES /
+        // EXTENDS / REFINES walk is parsed at most once, reusing open documents'
+        // stored parses.
+        let loader = ComponentLoader::optional(
+            self.cross_ref_manager.as_deref(),
+            self.document_manager.as_deref(),
+        );
+        // Select the cursor's component against the stored parse's own text, so
+        // the offset and the component spans index one snapshot — the handler
+        // `text` is a separate copy a concurrent edit can desync from the parse.
         let hover_ctx = parsed
             .as_deref()
-            .map(|parsed| parsed.components())
-            .and_then(|components| {
-                let offset = position_to_offset(text, position).unwrap_or(text.len());
-                component_at_offset(components, offset).map(|component| {
-                    HoverContext::from_component_with_refs(
-                        component,
-                        self.cross_ref_manager.as_deref(),
-                        self.document_manager.as_deref(),
-                    )
+            .and_then(|parsed| {
+                let offset =
+                    position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
+                component_at_offset(parsed.components(), offset).map(|component| {
+                    HoverContext::from_component_with_refs(component, loader.as_ref())
                 })
             })
             .unwrap_or_else(HoverContext::new);
@@ -323,8 +323,7 @@ impl Default for HoverProvider {
 /// EXTENDS parents transitively. Uses a visited set to prevent cycles; caps depth at 10.
 fn resolve_context_symbols_with_source(
     context_name: &str,
-    cross_ref_manager: &CrossReferenceManager,
-    document_manager: Option<&DocumentManager>,
+    loader: &ComponentLoader,
     constants: &mut Vec<(String, String)>,
     sets: &mut Vec<(String, String)>,
     constraints: &mut HashMap<String, Vec<String>>,
@@ -335,17 +334,12 @@ fn resolve_context_symbols_with_source(
     }
     visited.insert(context_name.to_string());
 
-    let text = match cross_ref_manager.load_component_text(context_name, document_manager) {
-        Some(t) => t,
+    let loaded = match loader.load(context_name) {
+        Some(l) => l,
         None => return,
     };
 
-    let component = match parse_named(&text, context_name) {
-        Some(c) => c,
-        None => return,
-    };
-
-    if let Component::Context(ctx) = &component {
+    if let Component::Context(ctx) = loaded.component() {
         for constant in &ctx.constants {
             constants.push((constant.name.clone(), ctx.name.clone()));
             let c = collect_constraints(&ctx.axioms, &constant.name);
@@ -365,8 +359,7 @@ fn resolve_context_symbols_with_source(
         for parent_name in &ctx.extends {
             resolve_context_symbols_with_source(
                 parent_name,
-                cross_ref_manager,
-                document_manager,
+                loader,
                 constants,
                 sets,
                 constraints,
@@ -381,8 +374,7 @@ fn resolve_context_symbols_with_source(
 #[allow(clippy::too_many_arguments)]
 fn resolve_machine_symbols_with_source(
     machine_name: &str,
-    cross_ref_manager: &CrossReferenceManager,
-    document_manager: Option<&DocumentManager>,
+    loader: &ComponentLoader,
     variables: &mut Vec<(String, String)>,
     constants: &mut Vec<(String, String)>,
     sets: &mut Vec<(String, String)>,
@@ -394,17 +386,12 @@ fn resolve_machine_symbols_with_source(
     }
     visited.insert(machine_name.to_string());
 
-    let text = match cross_ref_manager.load_component_text(machine_name, document_manager) {
-        Some(t) => t,
+    let loaded = match loader.load(machine_name) {
+        Some(l) => l,
         None => return,
     };
 
-    let component = match parse_named(&text, machine_name) {
-        Some(c) => c,
-        None => return,
-    };
-
-    if let Component::Machine(m) = &component {
+    if let Component::Machine(m) = loaded.component() {
         for var in &m.variables {
             variables.push((var.name.clone(), m.name.clone()));
             let c = collect_constraints(&m.invariants, &var.name);
@@ -417,8 +404,7 @@ fn resolve_machine_symbols_with_source(
         for ctx_name in &m.sees {
             resolve_context_symbols_with_source(
                 ctx_name,
-                cross_ref_manager,
-                document_manager,
+                loader,
                 constants,
                 sets,
                 constraints,
@@ -430,8 +416,7 @@ fn resolve_machine_symbols_with_source(
         if let Some(ref refines_name) = m.refines {
             resolve_machine_symbols_with_source(
                 refines_name,
-                cross_ref_manager,
-                document_manager,
+                loader,
                 variables,
                 constants,
                 sets,
