@@ -224,7 +224,8 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             if !cli.no_lints {
                 for component in &components {
                     for diag in rossi_build::lint::run_component(component) {
-                        results.push(fold_diagnostic(display, diag));
+                        // Loose text is a single source; every span indexes into it.
+                        results.push(fold_diagnostic(display, diag, None, Some(source)));
                     }
                 }
             }
@@ -341,11 +342,11 @@ fn fold_semantic(
 ) {
     let build = rossi_build::build(project);
     for diag in build.diagnostics {
-        out.push(fold_diagnostic(file, diag));
+        out.push(fold_project_diagnostic(file, diag, project));
     }
     if !cli.no_lints {
         for diag in rossi_build::lint::run(project) {
-            out.push(fold_diagnostic(file, diag));
+            out.push(fold_project_diagnostic(file, diag, project));
         }
     }
 }
@@ -369,19 +370,48 @@ fn success_result(file: &Path, inner: Option<String>, component: &Component) -> 
     }
 }
 
-fn fold_diagnostic(file: &Path, diag: Diagnostic) -> ValidationResult {
+/// Fold a build/lint [`Diagnostic`] into a [`ValidationResult`], resolving its
+/// byte span to a 1-indexed [`Region`] against `source` — the text of the
+/// component the span indexes into — when both are present. `inner_filename`
+/// names the component file inside a directory/archive so editors open it.
+fn fold_diagnostic(
+    file: &Path,
+    diag: Diagnostic,
+    inner_filename: Option<String>,
+    source: Option<&str>,
+) -> ValidationResult {
+    let region = diag
+        .span
+        .zip(source)
+        .map(|(span, src)| span_to_region(src, span));
     ValidationResult {
         file: file.to_path_buf(),
         success: diag.severity != Severity::Error,
-        inner_filename: None,
+        inner_filename,
         error: Some(diag.message),
         component_type: None,
         component_name: None,
         severity: Some(diag.severity),
         rule_id: diag.rule_id,
         origin: Some(diag.origin),
-        region: None,
+        region,
     }
+}
+
+/// Fold a project (build/lint) diagnostic, resolving it against the component
+/// it belongs to: the leading dot-separated segment of `origin` is the
+/// component name, which yields that component's source (for the region) and
+/// filename (for `inner_filename`). Components imported from Rodin XML carry no
+/// source, so their diagnostics stay region-less.
+fn fold_project_diagnostic(file: &Path, diag: Diagnostic, project: &Project) -> ValidationResult {
+    let component = diag.origin.split('.').next().unwrap_or(&diag.origin);
+    let pc = project
+        .components
+        .iter()
+        .find(|pc| pc.component.name() == component);
+    let inner = pc.map(|pc| pc.filename.clone());
+    let source = pc.and_then(|pc| pc.source.as_deref());
+    fold_diagnostic(file, diag, inner, source)
 }
 
 /// Pick the right [`RuleId`] for an XML-path [`ParseError`] surfaced by
@@ -477,6 +507,20 @@ fn line_col_1_indexed(source: &str, byte_offset: usize) -> (usize, usize) {
     (line + 1, col + 1)
 }
 
+/// Resolve an AST byte [`span`](rossi::ast::Span) to a 1-indexed source
+/// [`Region`]. Both ends are mapped through `source`; a zero-width span yields
+/// a point region.
+fn span_to_region(source: &str, span: rossi::ast::Span) -> Region {
+    let (start_line, start_column) = line_col_1_indexed(source, span.start);
+    let (end_line, end_column) = line_col_1_indexed(source, span.end);
+    Region {
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+    }
+}
+
 fn print_text_result(result: &ValidationResult, quiet: bool) {
     let mut file_info = match &result.inner_filename {
         Some(inner) => format!("{}:{}", result.file.display(), inner),
@@ -566,5 +610,56 @@ mod tests {
             (region.start_line, region.start_column),
             (region.end_line, region.end_column)
         );
+    }
+
+    #[test]
+    fn span_to_region_maps_both_ends_one_indexed() {
+        let source = "line one\nUnion x\n";
+        let start = source.find("Union").unwrap();
+        let region = span_to_region(
+            source,
+            rossi::ast::Span {
+                start,
+                end: start + "Union".len(),
+            },
+        );
+        assert_eq!((region.start_line, region.start_column), (2, 1));
+        assert_eq!((region.end_line, region.end_column), (2, 6));
+    }
+
+    #[test]
+    fn loose_lint_diagnostic_is_positioned() {
+        // The reported bug: a lint diagnostic must land on the declaration
+        // line, not line 1. Validating the source directly resolves the span
+        // the lint attached.
+        let source = "CONTEXT C\nSETS\n    Union\nEND\n";
+        let components = rossi::parse_components(source).unwrap();
+        let diag = rossi_build::lint::run_component(&components[0])
+            .into_iter()
+            .find(|d| d.rule_id == Some(RuleId::ShadowedName))
+            .expect("Union shadows the powerset token");
+        let result = fold_diagnostic(Path::new("c.eventb"), diag, None, Some(source));
+        let region = result.region.expect("region resolved from the lint span");
+        assert_eq!((region.start_line, region.start_column), (3, 5));
+        assert_eq!((region.end_line, region.end_column), (3, 10));
+    }
+
+    #[test]
+    fn project_diagnostic_resolves_component_source_and_file() {
+        // A semantic diagnostic over an .eventb project is attributed to its
+        // component: the region comes from that component's source and the
+        // inner filename points the editor at the file.
+        let source = "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 ⊤\nEND\n";
+        let components = rossi_build::ProjectComponent::from_eventb("C.eventb", source).unwrap();
+        let project = rossi_build::Project::new("p", components);
+        let diag = rossi_build::build(&project)
+            .diagnostics
+            .into_iter()
+            .find(|d| d.message.contains("could not infer type"))
+            .expect("untyped constant is flagged");
+        let result = fold_project_diagnostic(Path::new("proj"), diag, &project);
+        assert_eq!(result.inner_filename.as_deref(), Some("C.eventb"));
+        let region = result.region.expect("region from the component source");
+        assert_eq!((region.start_line, region.start_column), (3, 5));
     }
 }
