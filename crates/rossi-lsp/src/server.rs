@@ -1,8 +1,11 @@
 //! LSP Server implementation
 
 use crate::lsp_types::*;
+use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinHandle;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
@@ -61,6 +64,10 @@ pub struct RossiLanguageServer {
     selection_range_provider: Arc<SelectionRangeProvider>,
     /// Signature help provider
     signature_help_provider: Arc<SignatureHelpProvider>,
+    /// Pending debounced analyze tasks, keyed by document URI. Each `didChange`
+    /// aborts the prior task and schedules a new one, so only the latest burst's
+    /// reparse + index refresh + diagnostics runs.
+    pending_analysis: DashMap<Url, JoinHandle<()>>,
 }
 
 impl RossiLanguageServer {
@@ -119,6 +126,7 @@ impl RossiLanguageServer {
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
             signature_help_provider: Arc::new(SignatureHelpProvider::new()),
+            pending_analysis: DashMap::new(),
         }
     }
 }
@@ -325,32 +333,13 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!("Document opened: {}", uri);
 
-        // Store document (this parses and stores the snapshot).
+        // Store the document; its parse is produced lazily on first read below.
         self.document_manager
             .open(uri.clone(), params.text_document.language_id, version, text);
 
-        // Feed the eager index providers from the document's stored parse rather
-        // than reparsing its text.
-        if let Some(doc) = self.document_manager.parse_result(&uri) {
-            // Update cross-reference manager
-            self.cross_reference_manager
-                .index_components(uri.to_string(), doc.components());
-
-            // Update definition cache
-            self.definition_provider
-                .index_components(uri.to_string(), doc.components(), &doc.text);
-
-            // Update workspace symbols
-            self.workspace_symbol_provider.index_components(
-                uri.to_string(),
-                doc.components(),
-                &doc.text,
-            );
-        }
-
-        // Publish diagnostics from the parse stored by `open` above.
-        self.analyze_and_publish_diagnostics(uri, Some(version))
-            .await;
+        // Opening analyzes promptly (not debounced): refresh the eager indexes
+        // and publish diagnostics from the document's stored parse.
+        self.run_analysis(uri, Some(version)).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -360,29 +349,44 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!("Document changed: {} (version {})", uri, version);
 
-        // Update document (this reparses and stores the new snapshot).
+        // Apply the text edit synchronously (cheap); the (re)parse is deferred
+        // to the analysis below so a burst of keystrokes parses at most once.
         self.document_manager.change(&uri, version, changes);
 
-        // Feed the eager index providers from the stored snapshot rather than
-        // reparsing its text a second time.
-        if let Some(doc) = self.document_manager.parse_result(&uri) {
-            // Update cross-reference manager
-            self.cross_reference_manager
-                .index_components(uri.to_string(), doc.components());
+        // Coalesce rapid edits: defer the reparse + index refresh + diagnostics
+        // behind the configured debounce window, cancelling any pending run for
+        // this document so only the latest burst is analyzed. A zero window
+        // analyzes inline (the previous behaviour).
+        let debounce_ms = self.config_manager.get().diagnostics.debounce_ms;
+        if debounce_ms == 0 {
+            self.run_analysis(uri, Some(version)).await;
+            return;
+        }
 
-            // Update definition cache
-            self.definition_provider
-                .index_components(uri.to_string(), doc.components(), &doc.text);
-
-            // Update workspace symbols
-            self.workspace_symbol_provider.index_components(
-                uri.to_string(),
-                doc.components(),
-                &doc.text,
-            );
-
-            self.analyze_and_publish_diagnostics(uri, Some(version))
-                .await;
+        let document_manager = Arc::clone(&self.document_manager);
+        let cross_reference_manager = Arc::clone(&self.cross_reference_manager);
+        let definition_provider = Arc::clone(&self.definition_provider);
+        let workspace_symbol_provider = Arc::clone(&self.workspace_symbol_provider);
+        let config_manager = Arc::clone(&self.config_manager);
+        let client = self.client.clone();
+        let task_uri = uri.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(debounce_ms as u64)).await;
+            Self::analyze(
+                &document_manager,
+                &cross_reference_manager,
+                &definition_provider,
+                &workspace_symbol_provider,
+                &config_manager,
+                &client,
+                task_uri,
+                Some(version),
+            )
+            .await;
+        });
+        // Replace (and cancel) any earlier pending run for this document.
+        if let Some(previous) = self.pending_analysis.insert(uri, handle) {
+            previous.abort();
         }
     }
 
@@ -392,6 +396,12 @@ impl LanguageServer for RossiLanguageServer {
 
         // Remove document from open-document tracking
         self.document_manager.close(&uri);
+
+        // Cancel any pending debounced analysis so it cannot publish diagnostics
+        // for the document after this close clears them.
+        if let Some((_, handle)) = self.pending_analysis.remove(&uri) {
+            handle.abort();
+        }
 
         // Retain cross-reference data so that other open documents (machines/contexts)
         // can still resolve SEES/EXTENDS/REFINES references to this component.
@@ -892,23 +902,70 @@ impl RossiLanguageServer {
         info!("Configuration applied to all providers");
     }
 
-    /// Analyze a document and publish diagnostics
-    async fn analyze_and_publish_diagnostics(&self, uri: Url, version: Option<i32>) {
-        // Check if diagnostics are enabled
-        let config = self.config_manager.get();
-        if !config.diagnostics.enabled {
-            // Clear diagnostics if disabled
-            self.client.publish_diagnostics(uri, vec![], version).await;
+    /// Refresh the eager indexes and publish diagnostics for `uri`, reading the
+    /// document's (lazily produced) stored parse once. A thin `&self` wrapper
+    /// over [`Self::analyze`] for the inline callers; the debounced task calls
+    /// the associated form directly with cloned handles.
+    async fn run_analysis(&self, uri: Url, version: Option<i32>) {
+        Self::analyze(
+            &self.document_manager,
+            &self.cross_reference_manager,
+            &self.definition_provider,
+            &self.workspace_symbol_provider,
+            &self.config_manager,
+            &self.client,
+            uri,
+            version,
+        )
+        .await;
+    }
+
+    /// Refresh the cross-reference, definition, and workspace-symbol indexes
+    /// from `uri`'s stored parse, then publish its diagnostics. Takes the shared
+    /// handles by reference so it can run either inline or inside a spawned
+    /// (debounced) task that owns clones of them.
+    #[allow(clippy::too_many_arguments)]
+    async fn analyze(
+        document_manager: &DocumentManager,
+        cross_reference_manager: &CrossReferenceManager,
+        definition_provider: &DefinitionProvider,
+        workspace_symbol_provider: &WorkspaceSymbolProvider,
+        config_manager: &ConfigManager,
+        client: &Client,
+        uri: Url,
+        version: Option<i32>,
+    ) {
+        // The single source of truth: parsed once here for the burst, then fanned
+        // out to every eager index (none of which re-parses).
+        if let Some(doc) = document_manager.parse_result(&uri) {
+            cross_reference_manager.index_components(uri.to_string(), doc.components());
+            definition_provider.index_components(uri.to_string(), doc.components(), &doc.text);
+            workspace_symbol_provider.index_components(
+                uri.to_string(),
+                doc.components(),
+                &doc.text,
+            );
+        }
+        Self::publish_diagnostics(document_manager, config_manager, client, uri, version).await;
+    }
+
+    /// Publish `uri`'s diagnostics from its stored parse, or clear them when
+    /// diagnostics are disabled. Error spans are mapped against that parse's own
+    /// text, so a concurrent edit cannot make a span index past the text it is
+    /// rendered into.
+    async fn publish_diagnostics(
+        document_manager: &DocumentManager,
+        config_manager: &ConfigManager,
+        client: &Client,
+        uri: Url,
+        version: Option<i32>,
+    ) {
+        if !config_manager.get().diagnostics.enabled {
+            client.publish_diagnostics(uri, vec![], version).await;
             return;
         }
 
-        // Diagnostics come straight from the document's stored parse (the single
-        // source of truth refreshed on this edit), so the document is not parsed
-        // a second time just to report errors. Error spans are mapped against
-        // that parse's own text, so a concurrent edit cannot make a span index
-        // past the text it is rendered into.
-        let diagnostics = self
-            .document_manager
+        let diagnostics = document_manager
             .parse_result(&uri)
             .map(|doc| {
                 doc.parse
@@ -918,9 +975,7 @@ impl RossiLanguageServer {
                     .collect()
             })
             .unwrap_or_default();
-        self.client
-            .publish_diagnostics(uri, diagnostics, version)
-            .await;
+        client.publish_diagnostics(uri, diagnostics, version).await;
     }
 }
 
