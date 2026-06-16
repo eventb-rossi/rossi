@@ -787,17 +787,16 @@ impl LanguageServer for RossiLanguageServer {
         let uri = &params.text_document.uri;
         debug!("Folding range request for: {}", uri);
 
-        // Get document text
-        let text = match self.document_manager.get_text(uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
+        // Fold from the document's shared, recovery-tolerant parse (no
+        // per-request re-parse), so folds are derived from the same AST every
+        // other feature reads and survive a local syntax error.
+        let Some(doc) = self.document_manager.parse_result(uri) else {
+            debug!("Document not found: {}", uri);
+            return Ok(None);
         };
-
-        // Get folding ranges
-        let response = self.folding_range_provider.folding_ranges(&params, &text);
+        let response = self
+            .folding_range_provider
+            .folding_ranges_from_components(doc.components(), &doc.text);
 
         debug!(
             "Folding ranges returned: {}",

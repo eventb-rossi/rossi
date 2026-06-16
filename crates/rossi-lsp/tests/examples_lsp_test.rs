@@ -438,14 +438,6 @@ fn hover_params(uri: Url, position: Position) -> HoverParams {
     }
 }
 
-fn folding_params(uri: Url) -> FoldingRangeParams {
-    FoldingRangeParams {
-        text_document: TextDocumentIdentifier { uri },
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    }
-}
-
 fn doclink_params(uri: Url) -> DocumentLinkParams {
     DocumentLinkParams {
         text_document: TextDocumentIdentifier { uri },
@@ -879,7 +871,7 @@ fn all_models_folding_invariants() {
     for (zip_name, file) in all_model_files() {
         let name = &file.name;
         let ranges = provider
-            .folding_ranges(&folding_params(probe_uri()), &file.text)
+            .folding_ranges(&file.text)
             .unwrap_or_else(|| panic!("{zip_name}/{name}: no folding ranges"));
         let line_count = file.text.lines().count() as u32;
 
@@ -1128,7 +1120,7 @@ fn all_models_merged_invariants() {
 
         // Folding offers a range starting at every component header.
         let folding = FoldingRangeProvider::new()
-            .folding_ranges(&folding_params(uri.clone()), text)
+            .folding_ranges(text)
             .unwrap_or_else(|| panic!("{zip_name}: no folding ranges for merged text"));
         for file in &ws.files {
             assert!(
