@@ -16,7 +16,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
-use crate::document::DocumentManager;
 use crate::lsp_types::Url;
 
 /// Canonical component / edge kinds, re-exported from the shared
@@ -296,28 +295,6 @@ impl CrossReferenceManager {
     /// cloning), unlike repeated [`Self::get_component`] calls.
     pub fn component_names_of_kind(&self, kind: ComponentKind) -> Vec<String> {
         self.graph.read().component_names_of_kind(kind)
-    }
-
-    /// Load the source text of a component by name.
-    /// Tries open documents first (via DocumentManager), falls back to disk.
-    pub fn load_component_text(
-        &self,
-        component_name: &str,
-        document_manager: Option<&DocumentManager>,
-    ) -> Option<String> {
-        let uri_str = self.find_component_uri(component_name)?;
-        if let Some(dm) = document_manager
-            && let Ok(uri) = Url::parse(&uri_str)
-            && let Some(text) = dm.get_text(&uri)
-        {
-            return Some(text);
-        }
-        if let Ok(uri) = Url::parse(&uri_str)
-            && let Ok(path) = uri.to_file_path()
-        {
-            return std::fs::read_to_string(path).ok();
-        }
-        None
     }
 
     /// Get all component URIs in the workspace

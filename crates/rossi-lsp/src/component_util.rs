@@ -3,8 +3,10 @@
 //! A `.eventb` file may contain several `CONTEXT`/`MACHINE` blocks (the
 //! output of `rossi import --merge`). Providers that used to parse a document
 //! into a single [`Component`] use these helpers instead: parse every
-//! component, pick the one under the cursor for position-based features, or
-//! pick one by name for cross-file lookups.
+//! component and pick the one under the cursor for position-based features.
+//! Cross-file lookups by name go through
+//! [`ComponentLoader`](crate::component_loader::ComponentLoader), which parses
+//! each file at most once per request.
 
 use rossi::Component;
 
@@ -17,17 +19,6 @@ pub fn parse_all(text: &str) -> Vec<Component> {
     rossi::parse_components_with_recovery(text)
         .component
         .unwrap_or_default()
-}
-
-/// Parse `text` and return the component named `name`, if any. Recovers from
-/// local errors, so the component is still found when it — or a sibling in the
-/// same file — fails a strict parse. A component whose header is too broken to
-/// read keeps its placeholder name and so is simply not matched.
-pub fn parse_named(text: &str, name: &str) -> Option<Component> {
-    rossi::parse_components_with_recovery(text)
-        .component?
-        .into_iter()
-        .find(|c| c.name() == name)
 }
 
 /// Inclusive line window of a component within `text`, for bounding line-based
@@ -101,23 +92,6 @@ mod tests {
         let components = parse_all(text);
         let names: Vec<&str> = components.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["C0", "M0"]);
-    }
-
-    #[test]
-    fn parse_named_finds_component_despite_local_error() {
-        // `parse_named` resolves a component even when the file does not parse
-        // strictly — here the named machine is healthy but its sibling context
-        // has a broken axiom.
-        let text = "CONTEXT C0\nAXIOMS\n    @a k ∈\nEND\n\nMACHINE M0\nVARIABLES\n    x\nEND\n";
-        let component = parse_named(text, "M0").expect("M0 resolves despite C0's error");
-        assert!(matches!(component, Component::Machine(_)));
-    }
-
-    #[test]
-    fn parse_named_finds_later_component() {
-        let component = parse_named(TWO_COMPONENTS, "M0").unwrap();
-        assert!(matches!(component, Component::Machine(_)));
-        assert!(parse_named(TWO_COMPONENTS, "missing").is_none());
     }
 
     #[test]
