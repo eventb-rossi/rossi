@@ -110,18 +110,41 @@ pub struct ScFile {
 }
 
 /// A single diagnostic — a type error, a missing reference, a cycle, etc.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub severity: Severity,
     /// Origin of the diagnostic: the component name, optionally scoped by
-    /// element label (`"AuctionContext"`, `"AuctionMachine.inv3"`).
+    /// element label (`"AuctionContext"`, `"AuctionMachine.inv3"`). For an
+    /// element-scoped diagnostic the leading dot-separated segment is the
+    /// component name; project-level diagnostics (e.g. a dependency cycle) use a
+    /// non-component origin such as `"project"` instead.
     pub origin: String,
     pub message: String,
     /// Stable rule identifier (e.g. [`RuleId::CrossReferenceNotFound`]) when
     /// the diagnostic corresponds to a documented rule in `crate::rules`.
     /// `None` for internal catch-all sites that have no stable contract.
     pub rule_id: Option<RuleId>,
+    /// Source span of the offending element, as a byte range into the owning
+    /// component's `.eventb` text, so a caller can resolve a precise
+    /// line/column. `None` for Rodin-XML imports (which carry no source) and for
+    /// project-level diagnostics with no single element. Ignored by equality —
+    /// it is positional metadata, not identity (the same treatment
+    /// [`rossi::Predicate`] gives its own span).
+    pub span: Option<rossi::ast::Span>,
 }
+
+/// Equality compares everything but the span — two diagnostics that differ only
+/// in source position are the same finding.
+impl PartialEq for Diagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        self.severity == other.severity
+            && self.origin == other.origin
+            && self.message == other.message
+            && self.rule_id == other.rule_id
+    }
+}
+
+impl Eq for Diagnostic {}
 
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

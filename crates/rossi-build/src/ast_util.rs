@@ -19,6 +19,20 @@ pub(crate) fn lhs_variables(action: &rossi::Action) -> Vec<&str> {
     }
 }
 
+/// Source span of the named element called `name`, when present and located.
+/// The static checker's type-inference passes work over the declared names, so
+/// they use this to recover the offending constant / variable / parameter's
+/// span and anchor a diagnostic on its declaration rather than the component.
+pub(crate) fn named_element_span(
+    elements: &[rossi::NamedElement],
+    name: &str,
+) -> Option<rossi::ast::Span> {
+    elements
+        .iter()
+        .find(|e| e.name == name)
+        .and_then(|e| e.span)
+}
+
 /// Build a left-associative maplet chain from a non-empty argument list:
 /// `[a]` → `a`; `[a, b]` → `a ↦ b`; `[a, b, c]` → `(a ↦ b) ↦ c`.
 ///

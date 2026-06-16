@@ -117,6 +117,9 @@ pub fn check_machine(
                     origin: machine.name.clone(),
                     message: format!("SEES unknown context '{sees_name}'"),
                     rule_id: Some(crate::RuleId::CrossReferenceNotFound),
+                    // SEES targets carry no per-entry span; anchor on the
+                    // machine name.
+                    span: machine.name_span,
                 });
                 accurate = false;
             }
@@ -135,6 +138,7 @@ pub fn check_machine(
             origin: machine.name.clone(),
             message: format!("REFINES unknown machine '{parent_name}'"),
             rule_id: Some(crate::RuleId::CrossReferenceNotFound),
+            span: machine.name_span,
         });
         accurate = false;
     }
@@ -164,6 +168,7 @@ pub fn check_machine(
             origin: format!("{}.{}", machine.name, name),
             message: "could not infer variable type from invariants".to_string(),
             rule_id: Some(crate::RuleId::TypeError),
+            span: crate::ast_util::named_element_span(&machine.variables, name),
         });
     }
 

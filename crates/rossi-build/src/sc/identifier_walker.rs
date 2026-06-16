@@ -40,6 +40,7 @@
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use rossi::ast::Span;
 use rossi::ast::walk::{self, Binder, IdentOccurrence, IdentRole, IdentVisitor};
 use rossi::{Action, Expression, Predicate};
 
@@ -110,6 +111,17 @@ pub fn first_forbidden_identifier_in_action_rhs(
     };
     let _ = walk::walk_action(a, &mut Vec::new(), &mut v);
     v.found
+}
+
+/// Source span of the first unshadowed `Usage` of `name` in `pred`, for
+/// anchoring a diagnostic (e.g. "unknown identifier") on the exact occurrence.
+/// Uses the same shadowing rule as [`free_identifier_in_predicate`], so it
+/// lands on the very occurrence that scan flagged. `None` if `name` does not
+/// occur free (or the occurrence carries no span, as for Rodin-XML imports).
+pub fn usage_span_in_predicate(pred: &Predicate, name: &str) -> Option<Span> {
+    let mut v = UsageSpanFinder { name, span: None };
+    let _ = walk::walk_predicate(pred, &mut Vec::new(), &mut v);
+    v.span
 }
 
 // ---------- Public API: collect-all variants -------------------------------
@@ -227,6 +239,27 @@ impl IdentVisitor for ForbiddenFinder<'_> {
     }
 }
 
+/// Captures the span of the first unshadowed `Usage` of a specific name.
+struct UsageSpanFinder<'a> {
+    name: &'a str,
+    span: Option<Span>,
+}
+
+impl IdentVisitor for UsageSpanFinder<'_> {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        if occ.role != IdentRole::Usage {
+            return ControlFlow::Continue(());
+        }
+        // Match the raw occurrence text, mirroring `FreeFinder` (which reports
+        // the unstripped name), so we anchor on the same occurrence it flagged.
+        if occ.name == self.name && !shadowed(occ.name, occ.binders) {
+            self.span = occ.span;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 struct IdentifierCollector<'a> {
     acc: &'a mut BTreeSet<String>,
 }
@@ -282,6 +315,18 @@ mod tests {
             free_identifier_in_predicate(&p, &env).as_deref(),
             Some("alice")
         );
+    }
+
+    #[test]
+    fn usage_span_locates_the_free_identifier() {
+        // The span returned must cover exactly the offending identifier so a
+        // diagnostic anchors on it rather than the whole predicate.
+        let src = "alice ∈ USERS";
+        let p = parse_predicate_str(src).unwrap();
+        let span = usage_span_in_predicate(&p, "alice").expect("alice occurs free");
+        assert_eq!(&src[span.start..span.end], "alice");
+        // A name that does not occur yields no span.
+        assert_eq!(usage_span_in_predicate(&p, "bob"), None);
     }
 
     #[test]
