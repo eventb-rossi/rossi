@@ -19,11 +19,21 @@ pub use predicate::{BuiltinPredicate, Predicate, PredicateKind};
 use crate::keywords::KeywordId;
 
 /// A bound variable with an optional type annotation (e.g., `x⦂ℤ`)
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `span` locates the binder's name token in the source. Equality compares the
+/// name and type annotation only — the span is positional metadata — so two
+/// binders of the same name and type compare equal regardless of position.
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TypedIdentifier {
     pub name: String,
     pub type_expr: Option<Box<Expression>>,
+    /// Source span of the binder's name token, if known.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub span: Option<Span>,
 }
 
 impl TypedIdentifier {
@@ -32,6 +42,7 @@ impl TypedIdentifier {
         Self {
             name,
             type_expr: None,
+            span: None,
         }
     }
 
@@ -40,9 +51,25 @@ impl TypedIdentifier {
         Self {
             name,
             type_expr: Some(Box::new(type_expr)),
+            span: None,
         }
     }
+
+    /// Set the binder's source span (builder style).
+    pub fn with_span(mut self, span: Span) -> Self {
+        self.span = Some(span);
+        self
+    }
 }
+
+/// Equality compares name and type annotation; the span is positional metadata.
+impl PartialEq for TypedIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.type_expr == other.type_expr
+    }
+}
+
+impl Eq for TypedIdentifier {}
 
 impl From<String> for TypedIdentifier {
     fn from(name: String) -> Self {

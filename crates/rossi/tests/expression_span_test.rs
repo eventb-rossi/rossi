@@ -73,6 +73,39 @@ fn function_application_identifier_is_spanned() {
 }
 
 #[test]
+fn quantifier_binder_is_spanned() {
+    let src = "∀ x · x ∈ S";
+    let pred = parse_predicate_str(src).expect("parses");
+    let PredicateKind::Quantified { identifiers, .. } = &pred.kind else {
+        panic!("expected quantified");
+    };
+    // The binder declaration `x` (after the ∀) carries its own span.
+    let binder = &identifiers[0];
+    assert_eq!(slice(src, binder.span.expect("binder span")), "x");
+    // ∀ is 3 bytes + space, so the binder starts at byte 4.
+    assert_eq!(binder.span.unwrap().start, 4);
+}
+
+#[test]
+fn lambda_pattern_binders_are_spanned() {
+    use rossi::ast::IdentPattern;
+    let src = "λ x ↦ y · x ∈ ℤ ∧ y ∈ ℤ ∣ x";
+    let expr = parse_expression_str(src).expect("parses");
+    let ExpressionKind::Lambda { pattern, .. } = &expr.kind else {
+        panic!("expected lambda");
+    };
+    let IdentPattern::Maplet(l, r) = pattern else {
+        panic!("expected maplet pattern");
+    };
+    let (IdentPattern::Identifier(lx), IdentPattern::Identifier(ry)) = (l.as_ref(), r.as_ref())
+    else {
+        panic!("expected identifier leaves");
+    };
+    assert_eq!(slice(src, lx.span.expect("x binder span")), "x");
+    assert_eq!(slice(src, ry.span.expect("y binder span")), "y");
+}
+
+#[test]
 fn quantified_body_usage_is_spanned() {
     let src = "∀ x · x ∈ S";
     let pred = parse_predicate_str(src).expect("parses");
