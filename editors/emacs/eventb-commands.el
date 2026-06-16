@@ -211,6 +211,17 @@ jumps to the offending file."
         (message "Rossi validation found issues; see %s"
                  eventb--validate-buffer-name)))))
 
+(defun eventb--validation-line-col (row)
+  "Return a (LINE . COLUMN) cons for ROW, both 1-indexed.
+Uses ROW's `region' when present (already 1-indexed, the compilation-mode
+convention); falls back to (1 . 1) for diagnostics with no source position
+\(Rodin-XML-sourced or project-level)."
+  (let ((region (alist-get 'region row)))
+    (if region
+        (cons (alist-get 'start_line region)
+              (alist-get 'start_column region))
+      (cons 1 1))))
+
 (defun eventb--render-validation (rows default-dir)
   "Render validation ROWS into the diagnostics buffer, relative to DEFAULT-DIR."
   (let ((buffer (get-buffer-create eventb--validate-buffer-name))
@@ -223,12 +234,14 @@ jumps to the offending file."
           (when (or (alist-get 'error row) (alist-get 'severity row))
             (setq count (1+ count))
             ;; "file:line:col: severity: message" is the canonical
-            ;; compilation-mode shape; rossi reports per-component, so we
-            ;; anchor every diagnostic at 1:1.
-            (insert (format "%s:1:1: %s: %s\n"
-                            (eventb--validation-path row default-dir)
-                            (eventb--severity-prefix (alist-get 'severity row))
-                            (eventb--validation-message row)))))
+            ;; compilation-mode shape, anchored on the diagnostic's region.
+            (let ((pos (eventb--validation-line-col row)))
+              (insert (format "%s:%d:%d: %s: %s\n"
+                              (eventb--validation-path row default-dir)
+                              (car pos)
+                              (cdr pos)
+                              (eventb--severity-prefix (alist-get 'severity row))
+                              (eventb--validation-message row))))))
         (insert (format "\n%d diagnostic(s).\n" count))
         (compilation-mode)
         (goto-char (point-min))))
