@@ -906,6 +906,7 @@ mod tests {
                 identifiers: vec![TypedIdentifier {
                     name: "x".into(),
                     type_expr: None,
+                    span: None,
                 }],
                 predicate: Box::new(PredicateKind::True.into()),
             }
@@ -1519,6 +1520,7 @@ mod tests {
             pattern: IdentPattern::Identifier(TypedIdentifier {
                 name: "x".into(),
                 type_expr: None,
+                span: None,
             }),
             predicate: Box::new(PredicateKind::True.into()),
             expression: Box::new(ident("x")),

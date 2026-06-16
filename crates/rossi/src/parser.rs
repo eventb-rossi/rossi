@@ -160,6 +160,7 @@ fn parse_typed_identifier(
 ) -> Result<TypedIdentifier, ParseError> {
     let mut inner = pair.into_inner();
     let name_pair = inner.next().ok_or(ParseError::MissingVariable)?;
+    let span = Some(Span::from_pest(name_pair.as_span()));
     let name = declared_name(&name_pair)?;
     // Skip op_oftype if present, then parse the type expression
     let mut type_expr = None;
@@ -172,7 +173,11 @@ fn parse_typed_identifier(
             _ => {}
         }
     }
-    Ok(TypedIdentifier { name, type_expr })
+    Ok(TypedIdentifier {
+        name,
+        type_expr,
+        span,
+    })
 }
 
 /// Collect typed identifiers from a quantifier, returning identifiers and the body predicate.
