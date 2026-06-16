@@ -33,14 +33,19 @@ impl ParsedDocument {
 /// Manages all open documents.
 ///
 /// Besides the text, the manager owns the document's recovered parse — the
-/// single source of truth every language feature reads. The document is parsed
-/// once whenever its text changes (open/change), so features never re-parse it
-/// themselves and always agree on the same (recovery-tolerant) AST.
+/// single source of truth every language feature reads. The parse is produced
+/// lazily: an edit only updates the text, and the document is (re)parsed on the
+/// next [`Self::parse_result`] when the stored snapshot lags the current
+/// version. So features never re-parse the document themselves, always agree on
+/// the same (recovery-tolerant) AST, and a burst of keystrokes parses at most
+/// once — when analysis finally reads the parse — rather than once per edit.
 pub struct DocumentManager {
     documents: DashMap<Url, Document>,
-    /// Text + recovered parse of each open document, refreshed on every edit.
-    /// Wrapped in `Arc` so readers take a cheap, self-consistent snapshot.
-    parses: DashMap<Url, Arc<ParsedDocument>>,
+    /// Each open document's recovered parse, tagged with the document version it
+    /// was produced from. `parse_result` reparses when this version lags the
+    /// document's. Wrapped in `Arc` so readers take a cheap, self-consistent
+    /// snapshot.
+    parses: DashMap<Url, (i32, Arc<ParsedDocument>)>,
 }
 
 /// Represents a single document
@@ -82,17 +87,10 @@ impl DocumentManager {
             text: rope,
             last_modified: Instant::now(),
         };
-        self.documents.insert(uri.clone(), document);
-        self.store_parse(uri, text);
-    }
-
-    /// Parse `text` with recovery and store it as `uri`'s snapshot. The text is
-    /// kept alongside the parse so readers never pair it with a different
-    /// version's AST. Shared by `open` and `change` so both parse identically.
-    fn store_parse(&self, uri: Url, text: String) {
-        let parse = rossi::parse_components_with_recovery(&text);
-        self.parses
-            .insert(uri, Arc::new(ParsedDocument { text, parse }));
+        self.documents.insert(uri, document);
+        // The parse is produced lazily on the first `parse_result` (which
+        // `didOpen` requests right away to publish diagnostics), keeping a single
+        // parse entry point.
     }
 
     /// Update document with incremental changes
@@ -126,11 +124,9 @@ impl DocumentManager {
             }
         }
 
-        // Refresh the stored parse from the new text. The `get_mut` guard above
-        // is dropped, so `get_text` can take its own read lock without deadlock.
-        if let Some(text) = self.get_text(uri) {
-            self.store_parse(uri.clone(), text);
-        }
+        // The stored parse is now stale; `parse_result` reparses lazily on the
+        // next read. Deferring the parse here is what lets a burst of keystrokes
+        // parse at most once instead of once per edit.
     }
 
     /// Close a document
@@ -145,8 +141,39 @@ impl DocumentManager {
     /// a component/error span can never go out of bounds — even if a concurrent
     /// edit has since replaced the entry. Every feature reads this rather than
     /// parsing (or re-`get_text`-ing) the document itself.
+    ///
+    /// The parse is produced lazily and memoised per document version: when the
+    /// stored snapshot already matches the document's current version this is a
+    /// cheap `Arc` clone; when an edit has left it stale (or it is absent), the
+    /// current text is parsed once here and the snapshot refreshed. So reads
+    /// always see a parse consistent with the latest text without the edit path
+    /// having to parse on every keystroke.
     pub fn parse_result(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
-        self.parses.get(uri).map(|entry| Arc::clone(entry.value()))
+        let current_version = self.documents.get(uri).map(|doc| doc.version)?;
+
+        // Fast path: the stored snapshot already matches the document version.
+        // Drop the read guard before any insert below to avoid a shard deadlock.
+        let fresh = self.parses.get(uri).and_then(|entry| {
+            let (stored_version, parsed) = entry.value();
+            (*stored_version == current_version).then(|| Arc::clone(parsed))
+        });
+        if let Some(parsed) = fresh {
+            return Some(parsed);
+        }
+
+        // Stale (an edit deferred its parse) or missing: reparse the current
+        // text under a single read and refresh the snapshot. The version is read
+        // alongside the text so the snapshot is tagged with exactly what it was
+        // produced from.
+        let (version, text) = {
+            let doc = self.documents.get(uri)?;
+            (doc.version, doc.text.to_string())
+        };
+        let parse = rossi::parse_components_with_recovery(&text);
+        let parsed = Arc::new(ParsedDocument { text, parse });
+        self.parses
+            .insert(uri.clone(), (version, Arc::clone(&parsed)));
+        Some(parsed)
     }
 
     /// Get document text as string
@@ -269,6 +296,50 @@ mod tests {
         // Close drops it.
         manager.close(&uri);
         assert!(manager.parse_result(&uri).is_none());
+    }
+
+    #[test]
+    fn parse_result_is_lazy_and_memoised_per_version() {
+        let manager = DocumentManager::new();
+        let uri = Url::parse("file:///lazy.eventb").unwrap();
+        manager.open(
+            uri.clone(),
+            "rossi".to_string(),
+            1,
+            "CONTEXT C0\nEND\n".to_string(),
+        );
+
+        // Two reads at the same version share one parse — the second is a cheap
+        // `Arc` clone, not a re-parse.
+        let first = manager.parse_result(&uri).unwrap();
+        let second = manager.parse_result(&uri).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "same version reuses one parse"
+        );
+
+        // An edit only updates the text (the parse is deferred); the next read
+        // produces a fresh snapshot for the new version and reflects the new
+        // text.
+        manager.change(
+            &uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "MACHINE M1\nEND\n".to_string(),
+            }],
+        );
+        let third = manager.parse_result(&uri).unwrap();
+        assert!(
+            !Arc::ptr_eq(&second, &third),
+            "an edit yields a fresh parse on the next read"
+        );
+        assert_eq!(third.components()[0].name(), "M1");
+
+        // The refreshed snapshot is itself memoised at the new version.
+        let fourth = manager.parse_result(&uri).unwrap();
+        assert!(Arc::ptr_eq(&third, &fourth));
     }
 
     #[test]
