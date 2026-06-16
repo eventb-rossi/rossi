@@ -2030,7 +2030,7 @@ fn parse_predicate_application(pair: pest::iterators::Pair<Rule>) -> Result<Pred
     } else {
         Ok(Predicate::new(
             PredicateKind::Application {
-                function,
+                function: Ident::new(function, Some(Span::from_pest(function_span))),
                 arguments,
             },
             pred_span,

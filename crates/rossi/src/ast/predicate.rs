@@ -3,7 +3,7 @@
 //! Predicates represent logical formulas in Event-B, including
 //! comparisons, logical connectives, and quantifiers.
 
-use super::{Expression, Span, TypedIdentifier};
+use super::{Expression, Ident, Span, TypedIdentifier};
 
 /// Comparison operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,7 +162,7 @@ pub enum PredicateKind {
 
     /// User-defined predicate function application
     Application {
-        function: String,
+        function: Ident,
         arguments: Vec<Expression>,
     },
 
