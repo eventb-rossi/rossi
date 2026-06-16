@@ -16,7 +16,8 @@ use rossi::Component;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::component_util::{component_line_window, parse_named};
+use crate::component_loader::ComponentLoader;
+use crate::component_util::component_line_window;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::position::{offset_to_position, span_to_range, utf16_len};
@@ -141,11 +142,16 @@ impl DefinitionProvider {
         let mut ctx = DefinitionContext::new();
         // Sibling components of a merged file typically see the same
         // contexts/machines — extract each visible component once per
-        // update, not once per sibling.
+        // update, not once per sibling. The loader parses each visible file at
+        // most once across the whole update and reuses open documents' parses.
         let mut cross_cache = HashMap::new();
+        let loader = ComponentLoader::optional(
+            self.cross_ref_manager.as_deref(),
+            self.document_manager.as_deref(),
+        );
         for component in &components {
             ctx.definitions.extend(
-                self.extract_definitions(component, text, &uri, &mut cross_cache)
+                self.extract_definitions(component, text, &uri, &mut cross_cache, loader.as_ref())
                     .definitions,
             );
         }
@@ -202,20 +208,17 @@ impl DefinitionProvider {
         // any way resolves and one mentioned inside an event never misfires.
         component_reference_clause(masked, position)?;
 
-        // Load the target file (prefer open documents over disk)
-        let target_text =
-            cross_ref_manager.load_component_text(word, self.document_manager.as_deref())?;
-        let target_uri = cross_ref_manager.find_component_uri(word)?;
-        let target_url = Url::parse(&target_uri).ok()?;
+        // Load the target component (open document or disk, parsed at most once).
+        let loader = ComponentLoader::new(cross_ref_manager, self.document_manager.as_deref());
+        let loaded = loader.load(word)?;
 
         // Locate the component's name via the parser (the source of truth) and
         // map its span to a range — exact for any casing or spacing, unlike a
         // textual keyword scan.
-        let component = parse_named(&target_text, word)?;
-        let name_span = component.name_span()?;
-        let range = span_to_range(&name_span, &target_text);
+        let name_span = loaded.component().name_span()?;
+        let range = span_to_range(&name_span, loaded.text());
 
-        Some(Location::new(target_url, range))
+        Some(Location::new(loaded.uri().clone(), range))
     }
 
     /// Extract all definitions visible from a component: those declared locally
@@ -226,6 +229,7 @@ impl DefinitionProvider {
         text: &str,
         uri_str: &str,
         cross_cache: &mut HashMap<String, Vec<DefinitionInfo>>,
+        loader: Option<&ComponentLoader>,
     ) -> DefinitionContext {
         let window = component_line_window(component, text);
         let mut ctx = DefinitionContext::new();
@@ -236,8 +240,8 @@ impl DefinitionProvider {
         // is where this component's visibility applies, so in a
         // multi-component document the cursor picks the resolution belonging
         // to the component it sits in.
-        if let Some(crm) = &self.cross_ref_manager {
-            let mut cross = self.resolve_cross_file_definitions(component, crm, cross_cache);
+        if let Some(loader) = loader {
+            let mut cross = self.resolve_cross_file_definitions(component, loader, cross_cache);
             for definition in &mut cross {
                 definition.component_lines = Some(window);
             }
@@ -347,22 +351,23 @@ impl DefinitionProvider {
     fn resolve_cross_file_definitions(
         &self,
         component: &Component,
-        cross_ref_manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
         cache: &mut HashMap<String, Vec<DefinitionInfo>>,
     ) -> Vec<DefinitionInfo> {
+        let manager = loader.manager();
         let component_names = match component {
             Component::Machine(machine) => {
-                let mut names = cross_ref_manager.refinement_chain(&machine.name);
-                names.extend(cross_ref_manager.ordered_visible_contexts(&machine.name));
+                let mut names = manager.refinement_chain(&machine.name);
+                names.extend(manager.ordered_visible_contexts(&machine.name));
                 names
             }
-            Component::Context(context) => cross_ref_manager.ordered_extends_chain(&context.name),
+            Component::Context(context) => manager.ordered_extends_chain(&context.name),
         };
 
         let mut results = Vec::new();
         for name in component_names {
             let definitions = cache.entry(name).or_insert_with_key(|name| {
-                self.extract_visible_definitions(name, cross_ref_manager)
+                self.extract_visible_definitions(name, loader)
                     .unwrap_or_default()
             });
             results.extend(definitions.iter().cloned());
@@ -378,13 +383,16 @@ impl DefinitionProvider {
     fn extract_visible_definitions(
         &self,
         name: &str,
-        cross_ref_manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
     ) -> Option<Vec<DefinitionInfo>> {
-        let text = cross_ref_manager.load_component_text(name, self.document_manager.as_deref())?;
-        let component = parse_named(&text, name)?;
-        let uri_str = cross_ref_manager.find_component_uri(name)?;
-        let window = component_line_window(&component, &text);
-        Some(self.extract_local_definitions(&component, &text, &uri_str, window))
+        let loaded = loader.load(name)?;
+        let window = component_line_window(loaded.component(), loaded.text());
+        Some(self.extract_local_definitions(
+            loaded.component(),
+            loaded.text(),
+            loaded.uri().as_str(),
+            window,
+        ))
     }
 }
 
