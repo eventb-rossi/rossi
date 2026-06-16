@@ -23,6 +23,7 @@ pub mod document;
 pub mod document_links;
 pub mod folding;
 pub mod formatting;
+pub mod formula_walk;
 pub mod hover;
 pub mod identifier_utils;
 pub mod position;
