@@ -14,7 +14,7 @@ use crate::completion::CompletionProvider;
 use crate::config::{ConfigManager, RossiConfig};
 use crate::cross_references::CrossReferenceManager;
 use crate::definition::DefinitionProvider;
-use crate::document::DocumentManager;
+use crate::document::{DocumentManager, ParsedDocument};
 use crate::document_links::DocumentLinkProvider;
 use crate::folding::FoldingRangeProvider;
 use crate::formatting::FormattingProvider;
@@ -46,34 +46,41 @@ impl Analyzer {
     /// source of truth once and fans it out to every eager index (none of which
     /// re-parses).
     async fn analyze(&self, uri: Url) {
-        if let Some(doc) = self.document_manager.parse_result(&uri) {
+        // Read the single source of truth (and the version it is for) once, then
+        // fan the same snapshot out to every eager index and the diagnostics.
+        let doc = self.document_manager.parse_result(&uri);
+        let version = self.document_manager.version(&uri);
+        if let Some(doc) = &doc {
+            let key = uri.to_string();
             let components = doc.components();
             self.cross_reference_manager
-                .index_components(uri.to_string(), components);
+                .index_components(key.clone(), components);
             self.definition_provider
-                .index_components(uri.to_string(), components, &doc.text);
+                .index_components(key.clone(), components, &doc.text);
             self.workspace_symbol_provider
-                .index_components(uri.to_string(), components, &doc.text);
+                .index_components(key, components, &doc.text);
         }
-        self.publish_diagnostics(uri).await;
+        self.publish_diagnostics(uri, doc.as_deref(), version).await;
     }
 
-    /// Publish `uri`'s diagnostics from its stored parse, or clear them when
-    /// diagnostics are disabled. The publish is tagged with the document's
-    /// current version (read alongside the parse) so the version always
-    /// identifies the text the diagnostics were computed from. Error spans are
-    /// mapped against that parse's own text, so a concurrent edit cannot make a
-    /// span index past the text it is rendered into.
-    async fn publish_diagnostics(&self, uri: Url) {
-        let version = self.document_manager.version(&uri);
+    /// Publish `uri`'s diagnostics from the already-read parse `doc`, or clear
+    /// them when diagnostics are disabled. The publish is tagged with the
+    /// document's current `version` so the version always identifies the text the
+    /// diagnostics were computed from. Error spans are mapped against that
+    /// parse's own text, so a concurrent edit cannot make a span index past the
+    /// text it is rendered into.
+    async fn publish_diagnostics(
+        &self,
+        uri: Url,
+        doc: Option<&ParsedDocument>,
+        version: Option<i32>,
+    ) {
         if !self.config_manager.get().diagnostics.enabled {
             self.client.publish_diagnostics(uri, vec![], version).await;
             return;
         }
 
-        let diagnostics = self
-            .document_manager
-            .parse_result(&uri)
+        let diagnostics = doc
             .map(|doc| {
                 doc.parse
                     .errors
