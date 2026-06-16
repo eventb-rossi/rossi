@@ -4,9 +4,9 @@
 //! progressively larger source ranges that enclose it
 //! (token → subexpression → predicate → clause → component).
 //!
-//! The typed [`crate::ast`] only records spans on a few nodes (components,
-//! events, labeled predicates/actions) — `Expression`/`Predicate` carry none —
-//! so it cannot expand *within* a formula. The Pest parse tree, by contrast,
+//! The typed [`crate::ast`] now records a span on every node, but its
+//! identifier-leaf and operator spans don't form the full token→rule hierarchy
+//! that smart selection expands through. The Pest parse tree, by contrast,
 //! attaches a span to every grammar rule, and the rule nesting already encodes
 //! exactly the hierarchy we want. We walk that tree here and keep pest fully
 //! encapsulated inside this crate, exposing only [`Span`] values.

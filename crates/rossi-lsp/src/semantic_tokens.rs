@@ -365,20 +365,16 @@ impl<'a> SemanticTokensBuilder<'a> {
         }
 
         for occ in formula_walk::collect_all_occurrences(component) {
+            // Match a before-after read `x'` against its unprimed declaration.
+            let base = formula_walk::canonical(&occ.name);
             // A component recovered from a broken region can carry formula spans
-            // relative to that region, not the served document. Emit a body
-            // token only when the span actually slices to this occurrence's name
-            // in `self.text`; otherwise skip (no worse than the pre-AST state).
-            let span = occ.span;
-            if span.end > self.text.len()
-                || !self.text.is_char_boundary(span.start)
-                || !self.text.is_char_boundary(span.end)
-                || self.text[span.start..span.end] != occ.name
-            {
+            // relative to that region, not the served document. Emit a body token
+            // only when the span actually slices to this name (the same guard
+            // find-references and rename use); otherwise skip (no worse than the
+            // pre-AST state).
+            if !formula_walk::span_matches(self.text, occ.span, base) {
                 continue;
             }
-            // Match a before-after read `x'` against its unprimed declaration.
-            let base = occ.name.strip_suffix('\'').unwrap_or(&occ.name);
             let token_type = if occ.bound || occ.role == IdentRole::Binder {
                 TokenType::Parameter
             } else if occ.role == IdentRole::PredicateCall {

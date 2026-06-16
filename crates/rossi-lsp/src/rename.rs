@@ -217,14 +217,7 @@ impl RenameProvider {
                     })
                     .collect();
 
-                // Sort edits in reverse order
-                edits.sort_by(|a, b| {
-                    b.range
-                        .start
-                        .line
-                        .cmp(&a.range.start.line)
-                        .then(b.range.start.character.cmp(&a.range.start.character))
-                });
+                sort_edits_reverse(&mut edits);
 
                 changes.insert(url, edits);
             }
@@ -325,6 +318,17 @@ fn ast_rename_edits(
         return None;
     }
 
+    // Every span must slice to the identifier (or its `x'` form) in the served
+    // text. If any does not — e.g. a span left relative by a deeper recovery
+    // bug — abandon the AST rename rather than corrupt unrelated source or panic
+    // on a non-char-boundary slice; the caller falls back to the text scan.
+    if !spans
+        .iter()
+        .all(|s| formula_walk::span_matches(text, *s, identifier))
+    {
+        return None;
+    }
+
     let mut edits: Vec<TextEdit> = spans
         .into_iter()
         .map(|span| TextEdit {
@@ -339,22 +343,26 @@ fn ast_rename_edits(
     Some(edits)
 }
 
-/// The byte spans to rewrite when renaming the identifier at `offset`.
+/// The byte spans to rewrite when renaming the identifier at `offset`. One walk
+/// of the component serves both the cursor lookup and the occurrence set.
 fn rename_spans(component: &Component, identifier: &str, offset: usize) -> Vec<Span> {
     let hits = formula_walk::collect_in_component(component, identifier);
-    let cursor = hits.iter().find(|h| h.span.contains(offset));
+    // Copy the cursor occurrence out (role/span/scope are all `Copy`) so the
+    // `hits` vec can be consumed by the global branch without re-walking.
+    let cursor = hits
+        .iter()
+        .find(|h| h.span.contains(offset))
+        .map(|h| (h.role, h.span, h.scope));
 
     // Determine the binder this rename is scoped to, if any.
     let binder: Option<Span> = match cursor {
-        // Cursor on a binder declaration: scope to the binder introduced here.
-        Some(h) if h.role == IdentRole::Binder => Some(h.span),
+        // Cursor on a binder declaration: scope to the binder introduced here
+        // (its own span, even when an outer binder of the same name shadows it).
+        Some((IdentRole::Binder, span, _)) => Some(span),
         // Cursor on a use bound by a binder of the same name: scope to it.
-        Some(h) => match h.scope {
-            Scope::Bound(b) => b,
-            Scope::Free => None,
-        },
-        // Cursor on a declaration site (not a formula occurrence): global.
-        None => None,
+        Some((_, _, Scope::Bound(b))) => b,
+        // Free use, or a declaration site with no formula occurrence: global.
+        _ => None,
     };
 
     if let Some(b) = binder {
@@ -375,12 +383,12 @@ fn rename_spans(component: &Component, identifier: &str, offset: usize) -> Vec<S
     }
 
     // Bound by a binder with no recorded span: only the cursor token is safe.
-    if matches!(cursor.map(|h| h.scope), Some(Scope::Bound(None))) {
-        return cursor.map(|h| vec![h.span]).unwrap_or_default();
+    if matches!(cursor, Some((_, _, Scope::Bound(None)))) {
+        return cursor.map(|(_, span, _)| vec![span]).unwrap_or_default();
     }
 
-    // Global symbol: its declaration plus every free use.
-    let mut spans = formula_walk::free_occurrence_spans(component, identifier);
+    // Global symbol: its declaration plus every free use (reusing the one walk).
+    let mut spans = formula_walk::free_spans(hits);
     if let Some(decl) = formula_walk::declaration_span(component, identifier) {
         spans.push(decl);
     }
@@ -906,6 +914,22 @@ END
         let byte = source.find("λ x").unwrap() + "λ ".len();
         let out = rename_at(source, byte, "z");
         assert!(out.contains("λ z ↦ y · z ∈ ℕ ∧ y ∈ ℕ ∣ z"), "{out}");
+    }
+
+    #[test]
+    fn rename_in_later_component_after_broken_one_is_safe() {
+        // A broken first component forces multi-component recovery. Renaming in
+        // the healthy later component must not panic (a stale slice-relative
+        // span would slice into the multibyte ∈) and must rewrite the right
+        // text — inner formula spans are absolute after recovery.
+        let source = "CONTEXT C0\nAXIOMS\n@a xxxxx ∈\nEND\n\nMACHINE M0\nVARIABLES\ncount\nINVARIANTS\n@i1 count > 0\nEND\n";
+        let byte = source.rfind("count").unwrap(); // the use in @i1
+        let out = rename_at(source, byte, "total");
+        assert!(out.contains("@i1 total > 0"), "{out}");
+        assert!(
+            out.contains("VARIABLES\ntotal"),
+            "declaration renamed: {out}"
+        );
     }
 
     #[test]
