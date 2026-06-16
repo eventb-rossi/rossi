@@ -1305,3 +1305,151 @@ fn recovery_spans_the_component_block() {
     // The span stops at the final END, not the trailing newline.
     assert_eq!(span.end, source.trim_end().len());
 }
+
+// The two tests below pin the EXACT clause regions (keyword + byte-precise source
+// slice) and recovered payloads for a fully-populated broken context and machine.
+// They characterise current recovery behaviour so a clause-scan refactor can be
+// proven byte-for-byte behaviour-preserving: the same regions and payloads must
+// survive a change to how recovery scans clauses.
+
+#[test]
+fn recovery_context_clause_regions_and_payloads_characterized() {
+    use rossi::keywords::KeywordId;
+
+    // The broken @axm2 forces the whole context into recovery; every context
+    // clause kind (EXTENDS/SETS/CONSTANTS/AXIOMS/THEOREMS) is present so the
+    // recorded clause regions cover the full set.
+    let source = "\
+CONTEXT characterized
+EXTENDS base
+SETS
+    S
+CONSTANTS
+    k
+AXIOMS
+    @axm1 k ∈ S
+    @axm2 invalid @#$ syntax
+THEOREMS
+    @thm1 k = k
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let ctx = expect_context(&result);
+
+    // Clause regions: exact keyword order and byte-exact source slices.
+    let regions: Vec<(KeywordId, &str)> = ctx
+        .clauses
+        .iter()
+        .map(|c| (c.keyword, &source[c.span.start..c.span.end]))
+        .collect();
+    assert_eq!(
+        regions,
+        vec![
+            (KeywordId::Extends, "EXTENDS base"),
+            (KeywordId::Sets, "SETS\n    S"),
+            (KeywordId::Constants, "CONSTANTS\n    k"),
+            (
+                KeywordId::Axioms,
+                "AXIOMS\n    @axm1 k ∈ S\n    @axm2 invalid @#$ syntax",
+            ),
+            (KeywordId::Theorems, "THEOREMS\n    @thm1 k = k"),
+        ],
+    );
+
+    // Recovered payloads: names from declaration clauses, predicates from AXIOMS
+    // and THEOREMS (the latter flagged, lowered into the same axioms vec).
+    assert_eq!(ctx.extends, vec!["base".to_string()]);
+    assert_eq!(ctx.sets.len(), 1);
+    assert_eq!(ctx.sets[0].name(), "S");
+    assert_eq!(ctx.constants.len(), 1);
+    assert_eq!(ctx.constants[0].name, "k");
+    let axioms: Vec<(Option<&str>, bool)> = ctx
+        .axioms
+        .iter()
+        .map(|a| (a.label.as_deref(), a.is_theorem))
+        .collect();
+    // @axm1 parses, @axm2 fails (dropped), @thm1 recovered as a flagged theorem.
+    assert_eq!(axioms, vec![(Some("axm1"), false), (Some("thm1"), true)]);
+}
+
+#[test]
+fn recovery_machine_clause_regions_and_payloads_characterized() {
+    use rossi::keywords::KeywordId;
+
+    // The broken @inv2 forces the whole machine into recovery; every
+    // machine-level clause kind is present, plus an events section, so the
+    // recorded clause regions cover the full set (REFINES through EVENTS).
+    let source = "\
+MACHINE characterized
+REFINES m0
+SEES c0
+VARIABLES
+    v
+INVARIANTS
+    @inv1 v ∈ ℕ
+    @inv2 invalid @#$ syntax
+THEOREMS
+    @thm1 v = v
+VARIANT
+    v
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 v := 0
+    END
+    EVENT step
+    WHEN
+        @grd1 v > 0
+    THEN
+        @act2 v := v
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let m = expect_machine(&result);
+
+    // Clause regions through VARIANT are byte-exact. EVENTS is recorded by a
+    // separate path (recover_events, untouched by the clause-scan refactor), so
+    // it is only checked for its keyword and that it opens on the keyword.
+    let regions: Vec<(KeywordId, &str)> = m
+        .clauses
+        .iter()
+        .map(|c| (c.keyword, &source[c.span.start..c.span.end]))
+        .collect();
+    assert_eq!(regions.len(), 7, "got {regions:?}");
+    assert_eq!(
+        &regions[..6],
+        &[
+            (KeywordId::Refines, "REFINES m0"),
+            (KeywordId::Sees, "SEES c0"),
+            (KeywordId::Variables, "VARIABLES\n    v"),
+            (
+                KeywordId::Invariants,
+                "INVARIANTS\n    @inv1 v ∈ ℕ\n    @inv2 invalid @#$ syntax",
+            ),
+            (KeywordId::Theorems, "THEOREMS\n    @thm1 v = v"),
+            (KeywordId::Variant, "VARIANT\n    v"),
+        ],
+    );
+    assert_eq!(regions[6].0, KeywordId::Events);
+    assert!(regions[6].1.starts_with("EVENTS"), "got {:?}", regions[6].1);
+
+    // Recovered payloads.
+    assert_eq!(m.refines.as_deref(), Some("m0"));
+    assert_eq!(m.sees, vec!["c0".to_string()]);
+    assert_eq!(m.variables.len(), 1);
+    assert_eq!(m.variables[0].name, "v");
+    let invariants: Vec<(Option<&str>, bool)> = m
+        .invariants
+        .iter()
+        .map(|i| (i.label.as_deref(), i.is_theorem))
+        .collect();
+    // @inv1 parses, @inv2 fails (dropped), @thm1 recovered as a flagged theorem.
+    assert_eq!(
+        invariants,
+        vec![(Some("inv1"), false), (Some("thm1"), true)],
+    );
+    assert!(m.variant.is_some(), "variant expression recovered");
+}
