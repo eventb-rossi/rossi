@@ -125,7 +125,11 @@ impl DefinitionProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Update the definition cache for a document.
+    /// Update the definition cache for a document, parsing `text` first.
+    ///
+    /// For callers that hold only the source text (the unit tests). The edit
+    /// path calls [`Self::index_components`] with the document manager's stored
+    /// parse, so the file is not parsed again to refresh this cache.
     ///
     /// Parses with error recovery so a local syntax error does not drop every
     /// definition in the file: the healthy components keep their real spans and
@@ -133,6 +137,12 @@ impl DefinitionProvider {
     /// navigable once recovery records their spans.
     pub fn update_definitions(&self, uri: String, text: &str) {
         let components = crate::component_util::parse_all(text);
+        self.index_components(uri, &components, text);
+    }
+
+    /// Refresh the definition cache from a document's already-parsed components.
+    /// `text` must be the source those component spans index into.
+    pub fn index_components(&self, uri: String, components: &[Component], text: &str) {
         if components.is_empty() {
             // Nothing recovered — drop any stale definitions for this document.
             self.definition_cache.remove(&uri);
@@ -149,7 +159,7 @@ impl DefinitionProvider {
             self.cross_ref_manager.as_deref(),
             self.document_manager.as_deref(),
         );
-        for component in &components {
+        for component in components {
             ctx.definitions.extend(
                 self.extract_definitions(component, text, &uri, &mut cross_cache, loader.as_ref())
                     .definitions,
