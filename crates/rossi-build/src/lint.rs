@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
-use rossi::{ActionKind, Component, Context, Machine};
+use rossi::{ActionKind, Component, Context, LabeledAction, LabeledPredicate, Machine};
 
 use crate::ast_util::lhs_variables;
 use crate::project::Project;
@@ -228,6 +228,16 @@ fn shadowed_name_diag(
     })
 }
 
+/// Byte span of a set's *name*. The declaration span starts at the name but
+/// runs through any trailing comment to the next declaration, which would
+/// over-underline a name-level diagnostic — clip it to the name's length.
+fn set_name_span(set: &rossi::SetDeclaration) -> Option<Span> {
+    set.span().map(|s| Span {
+        start: s.start,
+        end: s.start + set.name().len(),
+    })
+}
+
 fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for set in &c.sets {
@@ -235,7 +245,7 @@ fn lint_shadowed_names_context(c: &Context) -> Vec<Diagnostic> {
             &c.name,
             "carrier set",
             set.name(),
-            set.span(),
+            set_name_span(set),
         ));
         // Enumerated elements have no per-element span; anchor on the set.
         for e in set.elements() {
@@ -273,6 +283,21 @@ fn lint_shadowed_names_machine(m: &Machine) -> Vec<Diagnostic> {
 // and labels are separate namespaces, so a variable `x` and an invariant
 // labelled `x` do not collide. Cross-component shadowing is out of scope —
 // that is EB023 / the type checker's scope rules.
+
+/// `(label, span)` for each labelled predicate (invariant / guard / witness /
+/// axiom); unlabelled clauses are skipped. Feeds [`duplicate_diags`].
+fn pred_labels(preds: &[LabeledPredicate]) -> impl Iterator<Item = (&str, Option<Span>)> {
+    preds
+        .iter()
+        .filter_map(|p| p.label.as_deref().map(|l| (l, p.span)))
+}
+
+/// `(label, span)` for each labelled action; unlabelled actions are skipped.
+fn action_labels(actions: &[LabeledAction]) -> impl Iterator<Item = (&str, Option<Span>)> {
+    actions
+        .iter()
+        .filter_map(|a| a.label.as_deref().map(|l| (l, a.span)))
+}
 
 /// One `Error` diagnostic per name that occurs more than once in `names`
 /// (blank and whitespace-only names are skipped). Output is sorted by name for
@@ -333,9 +358,7 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
 
     // EB022 — invariant labels.
     diags.extend(duplicate_diags(
-        m.invariants
-            .iter()
-            .filter_map(|i| i.label.as_deref().map(|l| (l, i.span))),
+        pred_labels(&m.invariants),
         RuleId::DuplicateLabel,
         "invariant label",
         &scope,
@@ -363,20 +386,10 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
             &e.name,
             e.parameters.iter().map(|p| (p.name.as_str(), p.span)),
             // Event-B shares one label namespace across guards and actions.
-            e.guards
-                .iter()
-                .filter_map(|g| g.label.as_deref().map(|l| (l, g.span)))
-                .chain(
-                    e.actions
-                        .iter()
-                        .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
-                ),
+            pred_labels(&e.guards).chain(action_labels(&e.actions)),
             // rossi splits witnesses into `with` (abstract vars) + `witnesses`
             // (abstract params); Event-B treats them as one witness namespace.
-            e.with
-                .iter()
-                .chain(&e.witnesses)
-                .filter_map(|w| w.label.as_deref().map(|l| (l, w.span))),
+            pred_labels(&e.with).chain(pred_labels(&e.witnesses)),
         ));
     }
 
@@ -386,13 +399,8 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
             &m.name,
             "INITIALISATION",
             std::iter::empty(),
-            init.actions
-                .iter()
-                .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
-            init.with
-                .iter()
-                .chain(&init.witnesses)
-                .filter_map(|w| w.label.as_deref().map(|l| (l, w.span))),
+            action_labels(&init.actions),
+            pred_labels(&init.with).chain(pred_labels(&init.witnesses)),
         ));
     }
 
@@ -444,7 +452,7 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
     // have no per-element span, so they anchor on the set declaration.
     let mut ids: Vec<(&str, Option<Span>)> = Vec::new();
     for set in &c.sets {
-        ids.push((set.name(), set.span()));
+        ids.push((set.name(), set_name_span(set)));
         ids.extend(set.elements().iter().map(|e| (e.as_str(), set.span())));
     }
     ids.extend(c.constants.iter().map(|k| (k.name.as_str(), k.span)));
@@ -458,9 +466,7 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
 
     // EB022 — axiom labels.
     diags.extend(duplicate_diags(
-        c.axioms
-            .iter()
-            .filter_map(|a| a.label.as_deref().map(|l| (l, a.span))),
+        pred_labels(&c.axioms),
         RuleId::DuplicateLabel,
         "axiom label",
         &scope,
