@@ -4,10 +4,15 @@
 //! and machines) ready to be statically checked. It can be loaded from:
 //!
 //! - a Rodin `.zip` archive ([`Project::from_zip_file`] / [`Project::from_zip_bytes`]),
-//! - a directory containing `.buc` / `.bum` files ([`Project::from_directory`]),
+//! - a directory of `.buc` / `.bum` (Rodin XML) or `.eventb` / `.txt` (textual)
+//!   files ([`Project::from_directory`]),
 //! - or assembled in memory from parsed components ([`Project::new`]).
+//!
+//! Components parsed from `.eventb` text retain their [`source`](ProjectComponent::source)
+//! and AST spans, so a caller can resolve a diagnostic's byte span to a
+//! line/column. XML imports carry neither.
 
-use rossi::{Component, parse_xml};
+use rossi::{Component, parse_components, parse_xml};
 
 use crate::error::{ProjectError, Result};
 use crate::rodin_ids::RodinIds;
@@ -36,6 +41,11 @@ pub struct ProjectComponent {
     /// XML. Used to emit byte-exact `source=` URIs. Empty when the
     /// component was not loaded from XML.
     pub rodin_ids: RodinIds,
+    /// The original `.eventb` text this component was parsed from, when it came
+    /// from a textual source. `None` for Rodin-XML imports. Together with the
+    /// AST spans (also textual-only) this lets a caller turn a diagnostic's
+    /// byte span into a line/column.
+    pub source: Option<String>,
 }
 
 impl ProjectComponent {
@@ -62,7 +72,31 @@ impl ProjectComponent {
             filename,
             component,
             rodin_ids,
+            // XML carries no `.eventb` text and the parse sets no spans.
+            source: None,
         })
+    }
+
+    /// Parse `.eventb` / `.txt` text and bind it to a filename, retaining the
+    /// source so a caller can resolve the AST spans to line/columns.
+    ///
+    /// A textual file may hold more than one component, so this returns a
+    /// `Vec`; each component shares the whole file as its `source` (spans are
+    /// byte offsets into that text). The component keeps the name it declares
+    /// (`context C1` → `C1`); unlike [`from_xml`](Self::from_xml) the filename
+    /// stem is not imposed.
+    pub fn from_eventb(filename: impl Into<String>, text: &str) -> Result<Vec<Self>> {
+        let filename = basename(&filename.into()).to_string();
+        let components = parse_components(text)?;
+        Ok(components
+            .into_iter()
+            .map(|component| Self {
+                filename: filename.clone(),
+                component,
+                rodin_ids: RodinIds::default(),
+                source: Some(text.to_string()),
+            })
+            .collect())
     }
 
     /// Short name (extension stripped). For `"AuctionContext.buc"` this is
@@ -115,7 +149,7 @@ impl Project {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             let filename = entry.name().to_string();
-            if !is_input_file(&filename) {
+            if !is_xml_input(&filename) {
                 continue;
             }
             let mut xml = String::new();
@@ -128,7 +162,17 @@ impl Project {
         })
     }
 
-    /// Load a project from a directory of `.buc` / `.bum` files.
+    /// Load a project from a directory of component files — `.buc` / `.bum`
+    /// (Rodin XML) or `.eventb` (textual).
+    ///
+    /// A directory is loaded as one kind or the other: if any Rodin XML file is
+    /// present the directory is treated as a Rodin project and loose `.eventb`
+    /// text is ignored (a real export may sit beside scratch files); otherwise
+    /// the `.eventb` files are loaded. Preferring XML keeps `rossi build` on a
+    /// Rodin directory byte-identical. Textual components retain their source
+    /// and spans (see [`ProjectComponent::source`]); XML ones do not. Only
+    /// component files are read — unrelated files (dotfiles, binaries, notes)
+    /// are never opened.
     pub fn from_directory<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         if !path.is_dir() {
@@ -140,21 +184,33 @@ impl Project {
             .unwrap_or("project")
             .to_string();
 
-        let mut components = Vec::new();
-        for entry in walkdir::WalkDir::new(path)
+        let files: Vec<_> = walkdir::WalkDir::new(path)
             .max_depth(1)
             .into_iter()
             .flatten()
-        {
-            if !entry.file_type().is_file() {
+            .filter(|entry| entry.file_type().is_file())
+            .collect();
+        let has_xml = files
+            .iter()
+            .any(|entry| entry.file_name().to_str().is_some_and(is_xml_input));
+
+        let mut components = Vec::new();
+        for entry in &files {
+            let Some(filename) = entry.file_name().to_str() else {
                 continue;
-            }
-            let filename = match entry.file_name().to_str() {
-                Some(n) if is_input_file(n) => n.to_string(),
-                _ => continue,
             };
-            let xml = std::fs::read_to_string(entry.path())?;
-            components.push(ProjectComponent::from_xml(filename, &xml)?);
+            // Read only the files that are actually components of this project's
+            // kind; opening unrelated files would both waste work and let a
+            // binary / non-UTF-8 entry abort the whole load.
+            if has_xml {
+                if is_xml_input(filename) {
+                    let xml = std::fs::read_to_string(entry.path())?;
+                    components.push(ProjectComponent::from_xml(filename, &xml)?);
+                }
+            } else if is_eventb_input(filename) {
+                let text = std::fs::read_to_string(entry.path())?;
+                components.extend(ProjectComponent::from_eventb(filename, &text)?);
+            }
         }
 
         Ok(Self { name, components })
@@ -191,8 +247,16 @@ impl Project {
     }
 }
 
-fn is_input_file(name: &str) -> bool {
+/// A Rodin XML component file (`.buc` context / `.bum` machine).
+fn is_xml_input(name: &str) -> bool {
     name.ends_with(".buc") || name.ends_with(".bum")
+}
+
+/// A textual Event-B component file. Only `.eventb` is auto-loaded from a
+/// directory — `.txt` is too generic to scan for (a `README.txt` is not a
+/// component), though a `.txt` passed explicitly is still validated as text.
+fn is_eventb_input(name: &str) -> bool {
+    name.ends_with(".eventb")
 }
 
 /// Extract Rodin's project name from a `.bcc` / `.bcm` XML payload.
@@ -239,4 +303,45 @@ fn basename(path: &str) -> &str {
     // Handles '/' — zip archives normalize to forward slashes regardless of
     // the host OS.
     path.rsplit_once('/').map(|(_, b)| b).unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_eventb_retains_source_name_and_spans() {
+        let text = "CONTEXT C1\nSETS\n    S\nCONSTANTS\n    c\nAXIOMS\n    @axm1 c ∈ ℕ\nEND\n";
+        let comps = ProjectComponent::from_eventb("C1.eventb", text).unwrap();
+        assert_eq!(comps.len(), 1);
+        let pc = &comps[0];
+        // The whole file text is retained for span resolution.
+        assert_eq!(pc.source.as_deref(), Some(text));
+        // The declared name wins; the filename stem is not imposed.
+        assert_eq!(pc.component.name(), "C1");
+        // The carrier set carries a source span (textual parse).
+        match &pc.component {
+            Component::Context(c) => assert!(c.sets[0].span().is_some()),
+            other => panic!("expected a context, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventb_project_semantic_diagnostic_is_spanned() {
+        // Semantic checks run over an `.eventb`-sourced project, and the
+        // resulting diagnostic anchors on the offending element. `k` has no
+        // typing axiom, so the static check cannot infer its type.
+        let text = "CONTEXT C1\nCONSTANTS\n    k\nAXIOMS\n    @axm1 ⊤\nEND\n";
+        let comps = ProjectComponent::from_eventb("C1.eventb", text).unwrap();
+        let project = Project::new("p", comps);
+
+        let result = crate::build(&project);
+        let diag = result
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("could not infer type"))
+            .expect("untyped constant should be flagged");
+        let span = diag.span.expect("semantic diagnostic should carry a span");
+        assert_eq!(&text[span.start..span.end], "k");
+    }
 }

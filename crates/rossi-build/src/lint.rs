@@ -769,6 +769,7 @@ mod tests {
             filename: filename.into(),
             component,
             rodin_ids: RodinIds::default(),
+            source: None,
         }
     }
 
