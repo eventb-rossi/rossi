@@ -17,6 +17,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { regionToZeroIndexed, ValidationRegion } from './validationRegion';
 
 interface RossiRunResult {
     stdout: string;
@@ -42,6 +43,7 @@ interface ValidationResult {
     severity?: string;
     rule_id?: string;
     origin?: string;
+    region?: ValidationRegion;
 }
 
 interface ValidationTarget {
@@ -334,8 +336,12 @@ export class RossiCommandController {
             const target = validationDiagnosticPath(row, cwd);
             const uri = Uri.file(target);
             const message = validationMessage(row);
+            const r = regionToZeroIndexed(row.region);
             const diagnostic = new Diagnostic(
-                new Range(new Position(0, 0), new Position(0, 1)),
+                new Range(
+                    new Position(r.startLine, r.startChar),
+                    new Position(r.endLine, r.endChar)
+                ),
                 message,
                 diagnosticSeverity(row.severity)
             );

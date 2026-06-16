@@ -386,6 +386,8 @@
     "watch": "npm run bundle -- --watch",
     "lint": "eslint src --ext ts",
     "test:matcher": "tsc -p ./ && node out/symbolMatcher.test.js",
+    "test:region": "tsc -p ./ && node out/validationRegion.test.js",
+    "test": "tsc -p ./ && node out/symbolMatcher.test.js && node out/validationRegion.test.js",
     "package": "vsce package",
     "check:vsix": "node scripts/check-vsix.js"
   },
