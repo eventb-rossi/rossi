@@ -3,8 +3,10 @@
 //! A burst of `textDocument/didChange` notifications must coalesce into a single
 //! `textDocument/publishDiagnostics` for the final version, rather than one
 //! publish per keystroke. Driving the real `LspService` exercises the debounced
-//! `tokio::spawn` + abort-previous path end to end (a unit test calling the
-//! handler would bypass the runtime that runs the deferred analysis).
+//! `tokio::spawn` path end to end (a unit test calling the handler would bypass
+//! the runtime that runs the deferred analysis). Each edit's task self-skips at
+//! wake-up unless its version is still the document's latest, so only the final
+//! edit of a burst analyzes.
 
 use futures::StreamExt;
 use rossi_lsp::server::RossiLanguageServer;
@@ -70,7 +72,8 @@ async fn rapid_edits_publish_diagnostics_once() {
     assert_eq!(opened["version"], json!(1), "open publishes for version 1");
 
     // Fire several edits back to back, faster than the debounce window. Each
-    // aborts the previous pending analysis.
+    // bumps the document version, so the earlier edits' tasks will find
+    // themselves superseded at wake-up.
     for version in 2..=5 {
         let change = notification(
             "textDocument/didChange",
@@ -84,8 +87,9 @@ async fn rapid_edits_publish_diagnostics_once() {
         service.ready().await.unwrap().call(change).await.unwrap();
     }
 
-    // Let the single surviving task fire, then drain. Exactly one publish — for
-    // the final version — should have arrived; the earlier four were cancelled.
+    // Let the tasks fire, then drain. Exactly one publish — for the final
+    // version — should have arrived; the earlier four found a newer version at
+    // wake-up and bowed out.
     tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS + 150)).await;
 
     let mut publishes = Vec::new();
