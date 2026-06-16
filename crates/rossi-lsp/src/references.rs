@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::cross_references::{ComponentKind, CrossReferenceManager, ReferenceKind};
-use crate::document::DocumentManager;
+use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{SymbolKind, SymbolRef, enumerate_symbols};
 use crate::text_utils;
@@ -92,10 +92,24 @@ impl ReferenceProvider {
         let position = params.text_document_position.position;
         let uri = &params.text_document_position.text_document.uri;
 
+        // Prefer the document's own parsed snapshot when it is open: masking,
+        // offsets, and the AST then all index one consistent string. The
+        // handler's `text` is a separate copy a concurrent edit can desync from
+        // the stored parse; reusing the snapshot also avoids re-parsing the
+        // cursor document. Fall back to the handler text when the document is
+        // not open (or there is no document manager, as in the unit tests).
+        let cursor = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let text = cursor
+            .as_deref()
+            .map_or(text, |parsed| parsed.text.as_str());
+
         // Mask comments once for the whole request: every line/identifier scan
         // on the cursor document reads this instead of re-masking. The mask
         // preserves byte/line/char layout, so positions and offsets computed on
-        // it stay valid against the raw `text`.
+        // it stay valid against `text`.
         let masked = rossi::comments::mask_comments_chars(text);
 
         // Get the identifier at the cursor position
@@ -106,8 +120,14 @@ impl ReferenceProvider {
             identifier, position
         );
 
-        let locations =
-            self.find_references_for_identifier(text, &masked, uri, position, &identifier);
+        let locations = self.find_references_for_identifier(
+            text,
+            &masked,
+            uri,
+            position,
+            &identifier,
+            cursor.as_deref(),
+        );
         debug!("Found {} references to '{}'", locations.len(), identifier);
         non_empty(locations)
     }
@@ -157,6 +177,7 @@ impl ReferenceProvider {
         uri: &Url,
         position: Position,
         identifier: &str,
+        cursor: Option<&ParsedDocument>,
     ) -> Vec<Location> {
         let Some(manager) = &self.cross_ref_manager else {
             return self.find_references_in_text(text, uri, identifier);
@@ -173,7 +194,7 @@ impl ReferenceProvider {
         }
 
         if let Some(symbol) =
-            self.resolve_symbol_identity(text, masked, position, identifier, &loader)
+            self.resolve_symbol_identity(text, masked, position, identifier, &loader, cursor)
         {
             return self.find_references_for_symbol(&symbol, &loader);
         }
@@ -256,13 +277,24 @@ impl ReferenceProvider {
         position: Position,
         identifier: &str,
         loader: &ComponentLoader,
+        cursor: Option<&ParsedDocument>,
     ) -> Option<SymbolIdentity> {
-        // Recover from local errors (via the shared helper) so a symbol
-        // elsewhere in a broken document is still resolvable; an empty result
-        // resolves to no component below.
-        let components = parse_all(text);
         let offset = position_to_offset(text, position).unwrap_or(text.len());
-        let component = component_at_offset(&components, offset)?;
+
+        // Reuse the open document's stored parse when we have it; otherwise
+        // recover from local errors (via the shared helper) so a symbol
+        // elsewhere in a broken document is still resolvable. An empty result
+        // resolves to no component below. `text` and `cursor` are the same
+        // snapshot, so the offset and the component spans agree.
+        let owned;
+        let components: &[Component] = match cursor {
+            Some(parsed) => parsed.components(),
+            None => {
+                owned = parse_all(text);
+                &owned
+            }
+        };
+        let component = component_at_offset(components, offset)?;
         self.resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
     }
 
