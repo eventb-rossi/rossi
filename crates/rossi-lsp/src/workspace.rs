@@ -45,17 +45,25 @@ impl WorkspaceSymbolProvider {
         }
     }
 
-    /// Update symbol index for a specific document
+    /// Update symbol index for a specific document, parsing `text` first.
     ///
-    /// This should be called whenever a document is opened or changed to keep
-    /// the workspace symbol index up-to-date.
+    /// For callers that hold only the source text (the unit tests). The edit
+    /// path calls [`Self::index_components`] with the document manager's stored
+    /// parse, so the file is not parsed again to refresh this index.
+    ///
+    /// Parses with error recovery (via the shared helper) so a local syntax
+    /// error does not drop every symbol in the file — the healthy components
+    /// keep their spans and stay indexed.
     pub fn update_symbols(&self, uri: String, text: &str) {
+        let components = crate::component_util::parse_all(text);
+        self.index_components(uri, &components, text);
+    }
+
+    /// Refresh the symbol index from a document's already-parsed components.
+    /// `text` must be the source those component spans index into.
+    pub fn index_components(&self, uri: String, components: &[Component], text: &str) {
         debug!("Updating workspace symbols for: {}", uri);
 
-        // Parse with error recovery (via the shared helper) so a local syntax
-        // error does not drop every symbol in the file — the healthy components
-        // keep their spans and stay indexed.
-        let components = crate::component_util::parse_all(text);
         if components.is_empty() {
             // Nothing recovered — remove any stale symbols for this document.
             self.symbol_index.remove(&uri);
