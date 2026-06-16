@@ -341,8 +341,11 @@ impl LanguageServer for RossiLanguageServer {
                 .index_components(uri.to_string(), doc.components(), &doc.text);
 
             // Update workspace symbols
-            self.workspace_symbol_provider
-                .update_symbols(uri.to_string(), &doc.text);
+            self.workspace_symbol_provider.index_components(
+                uri.to_string(),
+                doc.components(),
+                &doc.text,
+            );
         }
 
         // Publish diagnostics from the parse stored by `open` above.
@@ -372,8 +375,11 @@ impl LanguageServer for RossiLanguageServer {
                 .index_components(uri.to_string(), doc.components(), &doc.text);
 
             // Update workspace symbols
-            self.workspace_symbol_provider
-                .update_symbols(uri.to_string(), &doc.text);
+            self.workspace_symbol_provider.index_components(
+                uri.to_string(),
+                doc.components(),
+                &doc.text,
+            );
 
             self.analyze_and_publish_diagnostics(uri, Some(version))
                 .await;
