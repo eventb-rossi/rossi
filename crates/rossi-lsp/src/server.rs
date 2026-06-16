@@ -1,11 +1,9 @@
 //! LSP Server implementation
 
 use crate::lsp_types::*;
-use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
@@ -27,6 +25,68 @@ use crate::selection_range::SelectionRangeProvider;
 use crate::semantic_tokens::SemanticTokensProvider;
 use crate::signature_help::SignatureHelpProvider;
 use crate::workspace::WorkspaceSymbolProvider;
+
+/// The shared handles the post-edit analysis needs, bundled so the inline
+/// (`didOpen`/`didSave`/zero-debounce) and the spawned (debounced) paths run the
+/// same code. `Clone` is a handful of `Arc`/`Client` clones, so the debounced
+/// task moves one of these into its future instead of a fistful of fields.
+#[derive(Clone)]
+struct Analyzer {
+    document_manager: Arc<DocumentManager>,
+    cross_reference_manager: Arc<CrossReferenceManager>,
+    definition_provider: Arc<DefinitionProvider>,
+    workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
+    config_manager: Arc<ConfigManager>,
+    client: Client,
+}
+
+impl Analyzer {
+    /// Refresh the cross-reference, definition, and workspace-symbol indexes
+    /// from `uri`'s stored parse, then publish its diagnostics. Reads the single
+    /// source of truth once and fans it out to every eager index (none of which
+    /// re-parses).
+    async fn analyze(&self, uri: Url) {
+        if let Some(doc) = self.document_manager.parse_result(&uri) {
+            let components = doc.components();
+            self.cross_reference_manager
+                .index_components(uri.to_string(), components);
+            self.definition_provider
+                .index_components(uri.to_string(), components, &doc.text);
+            self.workspace_symbol_provider
+                .index_components(uri.to_string(), components, &doc.text);
+        }
+        self.publish_diagnostics(uri).await;
+    }
+
+    /// Publish `uri`'s diagnostics from its stored parse, or clear them when
+    /// diagnostics are disabled. The publish is tagged with the document's
+    /// current version (read alongside the parse) so the version always
+    /// identifies the text the diagnostics were computed from. Error spans are
+    /// mapped against that parse's own text, so a concurrent edit cannot make a
+    /// span index past the text it is rendered into.
+    async fn publish_diagnostics(&self, uri: Url) {
+        let version = self.document_manager.version(&uri);
+        if !self.config_manager.get().diagnostics.enabled {
+            self.client.publish_diagnostics(uri, vec![], version).await;
+            return;
+        }
+
+        let diagnostics = self
+            .document_manager
+            .parse_result(&uri)
+            .map(|doc| {
+                doc.parse
+                    .errors
+                    .iter()
+                    .map(|e| parse_error_to_diagnostic(e, &doc.text))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.client
+            .publish_diagnostics(uri, diagnostics, version)
+            .await;
+    }
+}
 
 /// The Rossi Language Server
 pub struct RossiLanguageServer {
@@ -64,10 +124,9 @@ pub struct RossiLanguageServer {
     selection_range_provider: Arc<SelectionRangeProvider>,
     /// Signature help provider
     signature_help_provider: Arc<SignatureHelpProvider>,
-    /// Pending debounced analyze tasks, keyed by document URI. Each `didChange`
-    /// aborts the prior task and schedules a new one, so only the latest burst's
-    /// reparse + index refresh + diagnostics runs.
-    pending_analysis: DashMap<Url, JoinHandle<()>>,
+    /// Shared handles for the post-edit analysis, reused by the inline and
+    /// debounced paths.
+    analyzer: Analyzer,
 }
 
 impl RossiLanguageServer {
@@ -108,25 +167,39 @@ impl RossiLanguageServer {
         let mut document_links_provider = DocumentLinkProvider::new();
         document_links_provider.set_cross_reference_manager(Arc::clone(&cross_reference_manager));
 
+        // Shared handles the analysis fans out to; Arc'd up front so the analyzer
+        // and the request-handler fields point at the same providers.
+        let config_manager = Arc::new(ConfigManager::new());
+        let definition_provider = Arc::new(definition_provider);
+        let workspace_symbol_provider = Arc::new(WorkspaceSymbolProvider::new());
+        let analyzer = Analyzer {
+            document_manager: Arc::clone(&document_manager),
+            cross_reference_manager: Arc::clone(&cross_reference_manager),
+            definition_provider: Arc::clone(&definition_provider),
+            workspace_symbol_provider: Arc::clone(&workspace_symbol_provider),
+            config_manager: Arc::clone(&config_manager),
+            client: client.clone(),
+        };
+
         Self {
             client,
-            config_manager: Arc::new(ConfigManager::new()),
+            config_manager,
             document_manager,
             cross_reference_manager,
             formatting_provider: Arc::new(FormattingProvider::new()),
             completion_provider: Arc::new(completion_provider),
             hover_provider: Arc::new(hover_provider),
-            definition_provider: Arc::new(definition_provider),
+            definition_provider,
             reference_provider: Arc::new(reference_provider),
             rename_provider: Arc::new(rename_provider),
-            workspace_symbol_provider: Arc::new(WorkspaceSymbolProvider::new()),
+            workspace_symbol_provider,
             semantic_tokens_provider: Arc::new(SemanticTokensProvider::new()),
             document_links_provider: Arc::new(document_links_provider),
             code_actions_provider: Arc::new(CodeActionProvider::new()),
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
             signature_help_provider: Arc::new(SignatureHelpProvider::new()),
-            pending_analysis: DashMap::new(),
+            analyzer,
         }
     }
 }
@@ -339,7 +412,7 @@ impl LanguageServer for RossiLanguageServer {
 
         // Opening analyzes promptly (not debounced): refresh the eager indexes
         // and publish diagnostics from the document's stored parse.
-        self.run_analysis(uri, Some(version)).await;
+        self.analyzer.analyze(uri).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -353,55 +426,36 @@ impl LanguageServer for RossiLanguageServer {
         // to the analysis below so a burst of keystrokes parses at most once.
         self.document_manager.change(&uri, version, changes);
 
-        // Coalesce rapid edits: defer the reparse + index refresh + diagnostics
-        // behind the configured debounce window, cancelling any pending run for
-        // this document so only the latest burst is analyzed. A zero window
-        // analyzes inline (the previous behaviour).
+        // Coalesce rapid edits behind the configured debounce window. A zero
+        // window analyzes inline (the previous behaviour).
         let debounce_ms = self.config_manager.get().diagnostics.debounce_ms;
         if debounce_ms == 0 {
-            self.run_analysis(uri, Some(version)).await;
+            self.analyzer.analyze(uri).await;
             return;
         }
 
-        let document_manager = Arc::clone(&self.document_manager);
-        let cross_reference_manager = Arc::clone(&self.cross_reference_manager);
-        let definition_provider = Arc::clone(&self.definition_provider);
-        let workspace_symbol_provider = Arc::clone(&self.workspace_symbol_provider);
-        let config_manager = Arc::clone(&self.config_manager);
-        let client = self.client.clone();
-        let task_uri = uri.clone();
-        let handle = tokio::spawn(async move {
+        // Schedule the analysis after the window. Rather than tracking and
+        // aborting prior tasks, each task checks at wake-up whether its edit is
+        // still the document's latest version; a superseded (or closed) document
+        // makes the task bow out, so only the final edit of a burst analyzes —
+        // and it publishes for exactly the version it parsed.
+        let analyzer = self.analyzer.clone();
+        tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(debounce_ms as u64)).await;
-            Self::analyze(
-                &document_manager,
-                &cross_reference_manager,
-                &definition_provider,
-                &workspace_symbol_provider,
-                &config_manager,
-                &client,
-                task_uri,
-                Some(version),
-            )
-            .await;
+            if analyzer.document_manager.version(&uri) == Some(version) {
+                analyzer.analyze(uri).await;
+            }
         });
-        // Replace (and cancel) any earlier pending run for this document.
-        if let Some(previous) = self.pending_analysis.insert(uri, handle) {
-            previous.abort();
-        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         debug!("Document closed: {}", uri);
 
-        // Remove document from open-document tracking
+        // Remove document from open-document tracking. Any debounced analysis
+        // still pending for this URI finds `version(&uri) == None` at wake-up and
+        // bows out, so it cannot publish diagnostics after this close clears them.
         self.document_manager.close(&uri);
-
-        // Cancel any pending debounced analysis so it cannot publish diagnostics
-        // for the document after this close clears them.
-        if let Some((_, handle)) = self.pending_analysis.remove(&uri) {
-            handle.abort();
-        }
 
         // Retain cross-reference data so that other open documents (machines/contexts)
         // can still resolve SEES/EXTENDS/REFINES references to this component.
@@ -414,7 +468,17 @@ impl LanguageServer for RossiLanguageServer {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        debug!("Document saved: {}", params.text_document.uri);
+        let uri = params.text_document.uri;
+        debug!("Document saved: {}", uri);
+
+        // A save is a natural "done editing" signal: flush the analysis now
+        // rather than leaving the user to wait out the remaining debounce window
+        // for fresh diagnostics and indexes. A pending debounced task for the
+        // same version then finds nothing newer and re-runs an identical (cheap,
+        // memoised-parse) analysis.
+        if self.document_manager.version(&uri).is_some() {
+            self.analyzer.analyze(uri).await;
+        }
     }
 
     async fn document_symbol(
@@ -900,82 +964,6 @@ impl RossiLanguageServer {
         self.completion_provider.update_config(completion_config);
 
         info!("Configuration applied to all providers");
-    }
-
-    /// Refresh the eager indexes and publish diagnostics for `uri`, reading the
-    /// document's (lazily produced) stored parse once. A thin `&self` wrapper
-    /// over [`Self::analyze`] for the inline callers; the debounced task calls
-    /// the associated form directly with cloned handles.
-    async fn run_analysis(&self, uri: Url, version: Option<i32>) {
-        Self::analyze(
-            &self.document_manager,
-            &self.cross_reference_manager,
-            &self.definition_provider,
-            &self.workspace_symbol_provider,
-            &self.config_manager,
-            &self.client,
-            uri,
-            version,
-        )
-        .await;
-    }
-
-    /// Refresh the cross-reference, definition, and workspace-symbol indexes
-    /// from `uri`'s stored parse, then publish its diagnostics. Takes the shared
-    /// handles by reference so it can run either inline or inside a spawned
-    /// (debounced) task that owns clones of them.
-    #[allow(clippy::too_many_arguments)]
-    async fn analyze(
-        document_manager: &DocumentManager,
-        cross_reference_manager: &CrossReferenceManager,
-        definition_provider: &DefinitionProvider,
-        workspace_symbol_provider: &WorkspaceSymbolProvider,
-        config_manager: &ConfigManager,
-        client: &Client,
-        uri: Url,
-        version: Option<i32>,
-    ) {
-        // The single source of truth: parsed once here for the burst, then fanned
-        // out to every eager index (none of which re-parses).
-        if let Some(doc) = document_manager.parse_result(&uri) {
-            cross_reference_manager.index_components(uri.to_string(), doc.components());
-            definition_provider.index_components(uri.to_string(), doc.components(), &doc.text);
-            workspace_symbol_provider.index_components(
-                uri.to_string(),
-                doc.components(),
-                &doc.text,
-            );
-        }
-        Self::publish_diagnostics(document_manager, config_manager, client, uri, version).await;
-    }
-
-    /// Publish `uri`'s diagnostics from its stored parse, or clear them when
-    /// diagnostics are disabled. Error spans are mapped against that parse's own
-    /// text, so a concurrent edit cannot make a span index past the text it is
-    /// rendered into.
-    async fn publish_diagnostics(
-        document_manager: &DocumentManager,
-        config_manager: &ConfigManager,
-        client: &Client,
-        uri: Url,
-        version: Option<i32>,
-    ) {
-        if !config_manager.get().diagnostics.enabled {
-            client.publish_diagnostics(uri, vec![], version).await;
-            return;
-        }
-
-        let diagnostics = document_manager
-            .parse_result(&uri)
-            .map(|doc| {
-                doc.parse
-                    .errors
-                    .iter()
-                    .map(|e| parse_error_to_diagnostic(e, &doc.text))
-                    .collect()
-            })
-            .unwrap_or_default();
-        client.publish_diagnostics(uri, diagnostics, version).await;
     }
 }
 
