@@ -13,7 +13,8 @@ use crate::lsp_types::{
 use parking_lot::RwLock;
 use rossi::{Component, keywords, operators};
 
-use crate::component_util::{component_at_offset, parse_named};
+use crate::component_loader::ComponentLoader;
+use crate::component_util::component_at_offset;
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_char_col};
 use std::collections::HashSet;
@@ -67,11 +68,7 @@ impl CompletionContext {
         }
     }
 
-    fn from_component_with_refs(
-        component: &Component,
-        cross_ref_manager: Option<&CrossReferenceManager>,
-        document_manager: Option<&DocumentManager>,
-    ) -> Self {
+    fn from_component_with_refs(component: &Component, loader: Option<&ComponentLoader>) -> Self {
         let mut ctx = Self::new();
 
         match component {
@@ -82,14 +79,13 @@ impl CompletionContext {
                     .extend(context.sets.iter().map(|s| s.name().to_string()));
 
                 // Resolve EXTENDS chain transitively
-                if let Some(crm) = cross_ref_manager {
+                if let Some(loader) = loader {
                     let mut visited = HashSet::new();
                     visited.insert(context.name.clone());
                     for parent_name in &context.extends {
                         resolve_context_symbols(
                             parent_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.constants,
                             &mut ctx.sets,
                             &mut visited,
@@ -102,13 +98,12 @@ impl CompletionContext {
                     .extend(machine.variables.iter().map(|v| v.name.clone()));
 
                 // Resolve SEES contexts and REFINES machines
-                if let Some(crm) = cross_ref_manager {
+                if let Some(loader) = loader {
                     let mut visited = HashSet::new();
                     for ctx_name in &machine.sees {
                         resolve_context_symbols(
                             ctx_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.constants,
                             &mut ctx.sets,
                             &mut visited,
@@ -117,8 +112,7 @@ impl CompletionContext {
                     if let Some(ref refines_name) = machine.refines {
                         resolve_machine_symbols(
                             refines_name,
-                            crm,
-                            document_manager,
+                            loader,
                             &mut ctx.variables,
                             &mut ctx.constants,
                             &mut ctx.sets,
@@ -198,17 +192,24 @@ impl CompletionProvider {
             .document_manager
             .as_ref()
             .and_then(|dm| dm.parse_result(uri));
+        // One loader per request: each visible context/machine in the SEES /
+        // EXTENDS / REFINES walk is parsed at most once, reusing open documents'
+        // stored parses.
+        let loader = ComponentLoader::optional(
+            self.cross_ref_manager.as_deref(),
+            self.document_manager.as_deref(),
+        );
+        // Select the cursor's component against the stored parse's own text, so
+        // the offset and the component spans index one snapshot — the handler
+        // `text` is a separate copy a concurrent edit can desync from the parse.
         let (completion_ctx, self_name) = parsed
             .as_deref()
-            .map(|parsed| parsed.components())
-            .and_then(|components| {
-                let offset = position_to_offset(text, position).unwrap_or(text.len());
-                component_at_offset(components, offset).map(|component| {
-                    let ctx = CompletionContext::from_component_with_refs(
-                        component,
-                        self.cross_ref_manager.as_deref(),
-                        self.document_manager.as_deref(),
-                    );
+            .and_then(|parsed| {
+                let offset =
+                    position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
+                component_at_offset(parsed.components(), offset).map(|component| {
+                    let ctx =
+                        CompletionContext::from_component_with_refs(component, loader.as_ref());
                     (ctx, Some(rossi::deps::kind_and_name(component).1))
                 })
             })
@@ -510,8 +511,7 @@ impl Default for CompletionProvider {
 /// Uses a visited set to prevent cycles; caps depth at 10.
 fn resolve_context_symbols(
     context_name: &str,
-    cross_ref_manager: &CrossReferenceManager,
-    document_manager: Option<&DocumentManager>,
+    loader: &ComponentLoader,
     constants: &mut Vec<String>,
     sets: &mut Vec<String>,
     visited: &mut HashSet<String>,
@@ -522,30 +522,18 @@ fn resolve_context_symbols(
     }
     visited.insert(context_name.to_string());
 
-    let text = match cross_ref_manager.load_component_text(context_name, document_manager) {
-        Some(t) => t,
+    let loaded = match loader.load(context_name) {
+        Some(l) => l,
         None => return,
     };
 
-    let component = match parse_named(&text, context_name) {
-        Some(c) => c,
-        None => return,
-    };
-
-    if let Component::Context(ctx) = &component {
+    if let Component::Context(ctx) = loaded.component() {
         constants.extend(ctx.constants.iter().map(|c| c.name.clone()));
         sets.extend(ctx.sets.iter().map(|s| s.name().to_string()));
 
         // Recursively resolve EXTENDS parents
         for parent_name in &ctx.extends {
-            resolve_context_symbols(
-                parent_name,
-                cross_ref_manager,
-                document_manager,
-                constants,
-                sets,
-                visited,
-            );
+            resolve_context_symbols(parent_name, loader, constants, sets, visited);
         }
     }
 }
@@ -553,8 +541,7 @@ fn resolve_context_symbols(
 /// Resolve variables from a refined machine (and its transitive REFINES/SEES dependencies).
 fn resolve_machine_symbols(
     machine_name: &str,
-    cross_ref_manager: &CrossReferenceManager,
-    document_manager: Option<&DocumentManager>,
+    loader: &ComponentLoader,
     variables: &mut Vec<String>,
     constants: &mut Vec<String>,
     sets: &mut Vec<String>,
@@ -565,42 +552,22 @@ fn resolve_machine_symbols(
     }
     visited.insert(machine_name.to_string());
 
-    let text = match cross_ref_manager.load_component_text(machine_name, document_manager) {
-        Some(t) => t,
+    let loaded = match loader.load(machine_name) {
+        Some(l) => l,
         None => return,
     };
 
-    let component = match parse_named(&text, machine_name) {
-        Some(c) => c,
-        None => return,
-    };
-
-    if let Component::Machine(m) = &component {
+    if let Component::Machine(m) = loaded.component() {
         variables.extend(m.variables.iter().map(|v| v.name.clone()));
 
         // Resolve SEES contexts from the abstract machine
         for ctx_name in &m.sees {
-            resolve_context_symbols(
-                ctx_name,
-                cross_ref_manager,
-                document_manager,
-                constants,
-                sets,
-                visited,
-            );
+            resolve_context_symbols(ctx_name, loader, constants, sets, visited);
         }
 
         // Recurse into further refinements
         if let Some(ref refines_name) = m.refines {
-            resolve_machine_symbols(
-                refines_name,
-                cross_ref_manager,
-                document_manager,
-                variables,
-                constants,
-                sets,
-                visited,
-            );
+            resolve_machine_symbols(refines_name, loader, variables, constants, sets, visited);
         }
     }
 }
@@ -912,11 +879,11 @@ mod tests {
         // same source `complete` reads from.
         let parsed = dm.parse_result(&concrete_url).unwrap();
         let components = parsed.parse.component.as_deref().unwrap();
-        let ctx = CompletionContext::from_component_with_refs(
-            &components[0],
+        let loader = ComponentLoader::optional(
             provider.cross_ref_manager.as_deref(),
             provider.document_manager.as_deref(),
         );
+        let ctx = CompletionContext::from_component_with_refs(&components[0], loader.as_ref());
 
         // Should include abstract_state from refined machine
         assert!(
