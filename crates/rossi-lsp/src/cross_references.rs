@@ -101,14 +101,28 @@ impl CrossReferenceManager {
     }
 
     /// Update or add the components defined in a document
+    /// Update or add the components defined in a document, parsing `text` first.
+    ///
+    /// For callers that hold only the source text: the workspace disk scan and
+    /// the unit tests. The edit path (`didOpen`/`didChange`) instead calls
+    /// [`Self::index_components`] with the document's already stored parse, so
+    /// the file is not parsed a second time just to refresh this index.
+    ///
+    /// Parses with error recovery (via the shared helper) so a local syntax
+    /// error does not tear the file out of the dependency graph:
+    /// SEES/REFINES/EXTENDS edges are recovered from the clause text even when a
+    /// predicate fails to parse.
     pub fn update_component(&self, uri: String, text: &str) {
+        let components = crate::component_util::parse_all(text);
+        self.index_components(uri, &components);
+    }
+
+    /// Index a document's already-parsed components into the dependency graph
+    /// and the URI ↔ name maps. The single-source-of-truth entry point: the
+    /// edit path passes the document manager's stored parse straight through.
+    pub fn index_components(&self, uri: String, components: &[rossi::Component]) {
         debug!("Updating components for URI: {}", uri);
 
-        // Parse with error recovery (via the shared helper) so a local syntax
-        // error does not tear the file out of the dependency graph:
-        // SEES/REFINES/EXTENDS edges are recovered from the clause text even
-        // when a predicate fails to parse.
-        let components = crate::component_util::parse_all(text);
         if components.is_empty() {
             debug!("No components recovered for cross-references in {uri}");
             // Drop any previously-indexed components for this URI.
@@ -120,7 +134,7 @@ impl CrossReferenceManager {
         // first occurrence of a duplicated name (the maps can hold only one).
         let mut locs: Vec<ComponentLoc> = Vec::new();
         let mut kept: Vec<&rossi::Component> = Vec::new();
-        for component in &components {
+        for component in components {
             let (kind, name) = kind_and_name(component);
             if locs.iter().any(|l| l.name == name) {
                 warn!("Duplicate component name `{name}` in {uri}; keeping the first occurrence");

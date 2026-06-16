@@ -325,25 +325,25 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!("Document opened: {}", uri);
 
-        // Store document
-        self.document_manager.open(
-            uri.clone(),
-            params.text_document.language_id,
-            version,
-            text.clone(),
-        );
+        // Store document (this parses and stores the snapshot).
+        self.document_manager
+            .open(uri.clone(), params.text_document.language_id, version, text);
 
-        // Update cross-reference manager
-        self.cross_reference_manager
-            .update_component(uri.to_string(), &text);
+        // Feed the eager index providers from the document's stored parse rather
+        // than reparsing its text.
+        if let Some(doc) = self.document_manager.parse_result(&uri) {
+            // Update cross-reference manager
+            self.cross_reference_manager
+                .index_components(uri.to_string(), doc.components());
 
-        // Update definition cache
-        self.definition_provider
-            .update_definitions(uri.to_string(), &text);
+            // Update definition cache
+            self.definition_provider
+                .update_definitions(uri.to_string(), &doc.text);
 
-        // Update workspace symbols
-        self.workspace_symbol_provider
-            .update_symbols(uri.to_string(), &text);
+            // Update workspace symbols
+            self.workspace_symbol_provider
+                .update_symbols(uri.to_string(), &doc.text);
+        }
 
         // Publish diagnostics from the parse stored by `open` above.
         self.analyze_and_publish_diagnostics(uri, Some(version))
@@ -360,12 +360,12 @@ impl LanguageServer for RossiLanguageServer {
         // Update document (this reparses and stores the new snapshot).
         self.document_manager.change(&uri, version, changes);
 
-        // Feed the eager index providers from the stored snapshot's text rather
-        // than materializing the rope a second time.
+        // Feed the eager index providers from the stored snapshot rather than
+        // reparsing its text a second time.
         if let Some(doc) = self.document_manager.parse_result(&uri) {
             // Update cross-reference manager
             self.cross_reference_manager
-                .update_component(uri.to_string(), &doc.text);
+                .index_components(uri.to_string(), doc.components());
 
             // Update definition cache
             self.definition_provider
