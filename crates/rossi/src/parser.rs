@@ -2405,8 +2405,50 @@ impl<'a> RecoveryText<'a> {
     }
 }
 
+/// One recovered clause: the payload the strict parser would have produced for
+/// it, plus its source region — both derived from a single [`clause_region`]
+/// scan, so no caller re-scans a clause to record its region.
+struct RecoveredClause<T> {
+    /// The clause's source region, ready to push into a component's `clauses`;
+    /// `None` when the clause keyword is absent.
+    region: Option<ClauseRegion>,
+    /// The recovered payload (declared names, labeled predicates, …).
+    data: T,
+}
+
+impl<T> RecoveredClause<T> {
+    /// A clause whose keyword was not found: no region, paired with whatever
+    /// (empty) payload the caller has accumulated so far.
+    fn absent(data: T) -> Self {
+        Self { region: None, data }
+    }
+}
+
+/// The raw content span and the line-tight [`ClauseRegion`] for one clause
+/// keyword, or `None` when the keyword is absent.
+///
+/// Single source of truth for a clause's bounds during recovery: every path that
+/// needs them — the data-recovery helpers ([`recover_identifiers`],
+/// [`recover_labeled_predicates`]) and the variant scan — routes through here, so
+/// [`extract_clause_content`] runs exactly once per clause. The raw span drives
+/// data extraction (its untrimmed end is where line/segment scans stop); the
+/// region carries the trimmed span folding/outline consume.
+fn clause_region(
+    text: &RecoveryText,
+    keyword: KeywordId,
+    bound: usize,
+) -> Option<(Span, ClauseRegion)> {
+    let raw = extract_clause_content(text, crate::keywords::spell(keyword), bound)?;
+    let region = ClauseRegion::new(
+        keyword,
+        trimmed_span(raw.start, &text.masked[raw.start..raw.end]),
+    );
+    Some((raw, region))
+}
+
 /// Extract identifiers (each with its source [`Span`]) from a clause during
-/// error recovery.
+/// error recovery. Also returns the clause's [`ClauseRegion`], recovered from the
+/// same single [`clause_region`] scan.
 ///
 /// Content written inline after the clause keyword (`VARIABLES x, y`) counts
 /// like any other line. Declaring clauses (keyed off `keyword`, mirroring
@@ -2421,8 +2463,15 @@ impl<'a> RecoveryText<'a> {
 /// providers a definition site even inside a component the strict parse
 /// rejected; reference clauses (EXTENDS/SEES/REFINES) carry spans too, harmless
 /// for callers that only want the names.
-fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<(String, Span)> {
-    let declares = matches!(keyword, "SETS" | "CONSTANTS" | "VARIABLES");
+fn recover_identifiers(
+    text: &RecoveryText,
+    keyword: KeywordId,
+    bound: usize,
+) -> RecoveredClause<Vec<(String, Span)>> {
+    let declares = matches!(
+        keyword,
+        KeywordId::Sets | KeywordId::Constants | KeywordId::Variables
+    );
     // Keep only names the grammar would re-accept in this position, so a
     // recovered AST stays round-trippable — whitespace-split recovery would
     // otherwise yield `a--b`/`x-y`, which the pretty-printer cannot re-emit.
@@ -2437,12 +2486,13 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
         }
     };
     let mut result = Vec::new();
-    let Some(span) = extract_clause_content(text, keyword, bound) else {
-        return result;
+    let Some((span, region)) = clause_region(text, keyword, bound) else {
+        return RecoveredClause::absent(result);
     };
+    let spelling = crate::keywords::spell(keyword);
     for line in text.masked[span.start..span.end].lines() {
         let line = line.trim();
-        let content = strip_keyword_prefix(line, keyword).unwrap_or(line);
+        let content = strip_keyword_prefix(line, spelling).unwrap_or(line);
         if content.is_empty() {
             continue;
         }
@@ -2455,10 +2505,15 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
                 .filter(|(name, _)| accepts(name)),
         );
     }
-    result
+    RecoveredClause {
+        region: Some(region),
+        data: result,
+    }
 }
 
-/// Extract labeled predicates from a clause during error recovery.
+/// Extract labeled predicates from a clause during error recovery. Also returns
+/// the clause's [`ClauseRegion`], recovered from the same single [`clause_region`]
+/// scan.
 ///
 /// The clause is segmented into labeled predicates by label-bearing lines, so
 /// a predicate that spans several physical lines (`@inv1` on one line, the
@@ -2469,15 +2524,16 @@ fn recover_identifiers(text: &RecoveryText, keyword: &str, bound: usize) -> Vec<
 /// byte-exact.
 fn recover_labeled_predicates(
     text: &RecoveryText,
-    keyword: &str,
+    keyword: KeywordId,
     label: &str,
     bound: usize,
     errors: &mut Vec<ParseError>,
-) -> Vec<LabeledPredicate> {
+) -> RecoveredClause<Vec<LabeledPredicate>> {
     let mut result = Vec::new();
-    let Some(span) = extract_clause_content(text, keyword, bound) else {
-        return result;
+    let Some((span, region)) = clause_region(text, keyword, bound) else {
+        return RecoveredClause::absent(result);
     };
+    let spelling = crate::keywords::spell(keyword);
 
     // Collect the byte offset where each labeled predicate begins. The lexer's
     // `@`-label spans ([`RecoveryText::labels`]) are the single source of truth
@@ -2521,7 +2577,7 @@ fn recover_labeled_predicates(
         let raw = &text.masked[seg_start..seg_end];
         // Only the leading segment still carries the clause keyword.
         let content = if seg_start == span.start {
-            strip_keyword_prefix(raw, keyword).unwrap_or_else(|| raw.trim())
+            strip_keyword_prefix(raw, spelling).unwrap_or_else(|| raw.trim())
         } else {
             raw.trim()
         };
@@ -2566,7 +2622,10 @@ fn recover_labeled_predicates(
             }
         }
     }
-    result
+    RecoveredClause {
+        region: Some(region),
+        data: result,
+    }
 }
 
 /// The byte offset where the labeled predicate at `label_start` begins, so its
@@ -2620,16 +2679,18 @@ fn leading_label(content: &str) -> Option<&str> {
 /// Recover a `THEOREMS` clause, forcing `is_theorem = true` on each predicate.
 /// Mirrors the strict parser, which lowers THEOREMS into the axioms/invariants vec
 /// with the flag set (a theorem is a flagged axiom/invariant in Rodin's model).
+/// Carries through the [`ClauseRegion`] from [`recover_labeled_predicates`].
 fn recover_theorem_predicates(
     text: &RecoveryText,
     bound: usize,
     errors: &mut Vec<ParseError>,
-) -> Vec<LabeledPredicate> {
-    let mut result = recover_labeled_predicates(text, "THEOREMS", "theorem", bound, errors);
-    for p in &mut result {
+) -> RecoveredClause<Vec<LabeledPredicate>> {
+    let mut recovered =
+        recover_labeled_predicates(text, KeywordId::Theorems, "theorem", bound, errors);
+    for p in &mut recovered.data {
         p.is_theorem = true;
     }
-    result
+    recovered
 }
 
 /// Parse an Event-B component with error recovery
@@ -3168,24 +3229,6 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
     }
 }
 
-/// Record a line-tight [`ClauseRegion`] for each clause keyword that is present.
-/// Shared by context and machine recovery, which differ only in their clause
-/// set; the spelling to scan for comes from the keyword table, never a literal.
-fn record_clause_regions(
-    text: &RecoveryText,
-    bound: usize,
-    keywords: &[KeywordId],
-) -> Vec<ClauseRegion> {
-    keywords
-        .iter()
-        .filter_map(|&keyword| {
-            let span = extract_clause_content(text, crate::keywords::spell(keyword), bound)?;
-            let span = trimmed_span(span.start, &text.masked[span.start..span.end]);
-            Some(ClauseRegion::new(keyword, span))
-        })
-        .collect()
-}
-
 /// Attempt to parse a context with error recovery
 fn parse_context_with_recovery(
     text: &RecoveryText,
@@ -3203,43 +3246,42 @@ fn parse_context_with_recovery(
     // Try to parse each clause independently. Contexts have no event
     // section, so the clause scan is unbounded.
     let bound = text.masked.len();
-    context.extends = recover_identifiers(text, "EXTENDS", bound)
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
-    context
-        .sets
-        .extend(
-            recover_identifiers(text, "SETS", bound)
-                .into_iter()
-                .map(|(name, span)| SetDeclaration::Deferred {
-                    name,
-                    comment: None,
-                    span: Some(span),
-                }),
-        );
-    context.constants = recover_identifiers(text, "CONSTANTS", bound)
+    let extends = recover_identifiers(text, KeywordId::Extends, bound);
+    context.extends = extends.data.into_iter().map(|(name, _)| name).collect();
+    let sets = recover_identifiers(text, KeywordId::Sets, bound);
+    context.sets.extend(
+        sets.data
+            .into_iter()
+            .map(|(name, span)| SetDeclaration::Deferred {
+                name,
+                comment: None,
+                span: Some(span),
+            }),
+    );
+    let constants = recover_identifiers(text, KeywordId::Constants, bound);
+    context.constants = constants
+        .data
         .into_iter()
         .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
-    context.axioms = recover_labeled_predicates(text, "AXIOMS", "axiom", bound, &mut errors);
-    context
-        .axioms
-        .extend(recover_theorem_predicates(text, bound, &mut errors));
+    let axioms = recover_labeled_predicates(text, KeywordId::Axioms, "axiom", bound, &mut errors);
+    context.axioms = axioms.data;
+    let theorems = recover_theorem_predicates(text, bound, &mut errors);
+    context.axioms.extend(theorems.data);
 
     // Record each clause's source region (folding/outline consume these even in
-    // a component the strict parse rejected).
-    context.clauses = record_clause_regions(
-        text,
-        bound,
-        &[
-            KeywordId::Extends,
-            KeywordId::Sets,
-            KeywordId::Constants,
-            KeywordId::Axioms,
-            KeywordId::Theorems,
-        ],
-    );
+    // a component the strict parse rejected), recovered from the same scans
+    // above, in declaration order.
+    context.clauses = [
+        extends.region,
+        sets.region,
+        constants.region,
+        axioms.region,
+        theorems.region,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     // Span the component from its header through its last non-blank content, so
     // block-level span consumers (folding, component-at-offset) anchor it even
@@ -3273,55 +3315,53 @@ fn parse_machine_with_recovery(
     // event-level REFINES (or a guard that parses like an invariant) must
     // not be recovered as machine-level data.
     let bound = first_event_region_start(text);
-    machine.refines = recover_identifiers(text, "REFINES", bound)
-        .into_iter()
-        .next()
-        .map(|(name, _)| name);
-    machine.sees = recover_identifiers(text, "SEES", bound)
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
-    machine.variables = recover_identifiers(text, "VARIABLES", bound)
+    let refines = recover_identifiers(text, KeywordId::Refines, bound);
+    machine.refines = refines.data.into_iter().next().map(|(name, _)| name);
+    let sees = recover_identifiers(text, KeywordId::Sees, bound);
+    machine.sees = sees.data.into_iter().map(|(name, _)| name).collect();
+    let variables = recover_identifiers(text, KeywordId::Variables, bound);
+    machine.variables = variables
+        .data
         .into_iter()
         .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
-    machine.invariants =
-        recover_labeled_predicates(text, "INVARIANTS", "invariant", bound, &mut errors);
-    machine
-        .invariants
-        .extend(recover_theorem_predicates(text, bound, &mut errors));
+    let invariants =
+        recover_labeled_predicates(text, KeywordId::Invariants, "invariant", bound, &mut errors);
+    machine.invariants = invariants.data;
+    let theorems = recover_theorem_predicates(text, bound, &mut errors);
+    machine.invariants.extend(theorems.data);
 
-    // Record each machine-level clause's source region (bounded by the event
-    // region, like the declaration scans above).
-    machine.clauses = record_clause_regions(
-        text,
-        bound,
-        &[
-            KeywordId::Refines,
-            KeywordId::Sees,
-            KeywordId::Variables,
-            KeywordId::Invariants,
-            KeywordId::Theorems,
-            KeywordId::Variant,
-        ],
-    );
+    // The variant has no data-recovery helper; record its region from the same
+    // single-scan source of truth as the clauses above (a `ClauseRegion` is
+    // `Copy`, so this stays usable after it is collected into `clauses`).
+    let variant = clause_region(text, KeywordId::Variant, bound).map(|(_, region)| region);
 
     // Best-effort recovery of the variant expression (for the outline): the
     // region's content past the `VARIANT` keyword, if it parses.
-    if let Some(span) = machine
-        .clauses
-        .iter()
-        .find(|c| c.keyword == KeywordId::Variant)
-        .map(|c| c.span)
-    {
+    if let Some(region) = variant {
         let kw_len = crate::keywords::spell(KeywordId::Variant).len();
-        let body = text.masked[span.start + kw_len..span.end].trim();
+        let body = text.masked[region.span.start + kw_len..region.span.end].trim();
         if !body.is_empty()
             && let Ok(expr) = parse_expression_str(body)
         {
             machine.variant = Some(expr);
         }
     }
+
+    // Record each machine-level clause's source region (bounded by the event
+    // region, like the declaration scans above), recovered from the same scans,
+    // in declaration order. The EVENTS region is appended below.
+    machine.clauses = [
+        refines.region,
+        sees.region,
+        variables.region,
+        invariants.region,
+        theorems.region,
+        variant,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     // Recover the events (span-only) and the EVENTS clause region. The region
     // runs from the event-section start through the last recovered event's END
