@@ -91,7 +91,9 @@ pub struct DiagnosticsConfig {
     #[serde(default = "default_diagnostics_enabled")]
     pub enabled: bool,
 
-    /// Debounce delay in milliseconds (currently not used)
+    /// Delay in milliseconds the server waits after the last edit before it
+    /// reparses, refreshes the indexes, and republishes diagnostics. Coalesces
+    /// rapid keystrokes into a single analysis. `0` analyzes on every edit.
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u32,
 }

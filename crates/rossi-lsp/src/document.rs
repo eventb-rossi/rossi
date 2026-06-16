@@ -87,6 +87,11 @@ impl DocumentManager {
             text: rope,
             last_modified: Instant::now(),
         };
+        // Drop any parse left over from a previous open of this URI (a re-open
+        // without an intervening close, possibly with a colliding version):
+        // otherwise the version-keyed fast path in `parse_result` could return
+        // the stale parse for the freshly-opened text.
+        self.parses.remove(&uri);
         self.documents.insert(uri, document);
         // The parse is produced lazily on the first `parse_result` (which
         // `didOpen` requests right away to publish diagnostics), keeping a single
@@ -174,6 +179,13 @@ impl DocumentManager {
         self.parses
             .insert(uri.clone(), (version, Arc::clone(&parsed)));
         Some(parsed)
+    }
+
+    /// The current LSP version of `uri`, if open. Lets a deferred consumer (the
+    /// debounced analysis) check whether the document it was scheduled for is
+    /// still the latest, and tag its publish with the state it actually ran on.
+    pub fn version(&self, uri: &Url) -> Option<i32> {
+        self.documents.get(uri).map(|doc| doc.version)
     }
 
     /// Get document text as string
@@ -340,6 +352,36 @@ mod tests {
         // The refreshed snapshot is itself memoised at the new version.
         let fourth = manager.parse_result(&uri).unwrap();
         assert!(Arc::ptr_eq(&third, &fourth));
+    }
+
+    #[test]
+    fn reopen_with_colliding_version_does_not_serve_stale_parse() {
+        let manager = DocumentManager::new();
+        let uri = Url::parse("file:///reopen.eventb").unwrap();
+
+        manager.open(
+            uri.clone(),
+            "rossi".to_string(),
+            1,
+            "CONTEXT A\nEND\n".to_string(),
+        );
+        assert_eq!(
+            manager.parse_result(&uri).unwrap().components()[0].name(),
+            "A"
+        );
+
+        // Re-open the same URI (no intervening close) with new text but the SAME
+        // version number. Unless `open` drops the prior parse, the version-keyed
+        // fast path would hand back the stale "A" parse for the new text.
+        manager.open(
+            uri.clone(),
+            "rossi".to_string(),
+            1,
+            "CONTEXT B\nEND\n".to_string(),
+        );
+        let parsed = manager.parse_result(&uri).unwrap();
+        assert_eq!(parsed.text, "CONTEXT B\nEND\n");
+        assert_eq!(parsed.components()[0].name(), "B");
     }
 
     #[test]
