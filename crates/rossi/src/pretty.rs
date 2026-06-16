@@ -433,27 +433,27 @@ impl PrettyPrinter {
 
     /// Convert an Expression to text
     pub fn print_expression(&self, expr: &Expression) -> String {
-        match expr {
-            Expression::Integer(n) => n.to_string(),
-            Expression::Identifier(name) => name.clone(),
+        match &expr.kind {
+            ExpressionKind::Integer(n) => n.to_string(),
+            ExpressionKind::Identifier(name) => name.clone(),
             // TRUE and FALSE are members of the BOOL carrier set (expression-level
             // constants), not predicate constants ⊤/⊥.  They are always rendered
             // as identifiers regardless of Unicode mode.
-            Expression::True => "TRUE".to_string(),
-            Expression::False => "FALSE".to_string(),
-            Expression::EmptySet => self.op(OperatorId::EmptySet).to_string(),
-            Expression::Naturals => self.op(OperatorId::Naturals).to_string(),
-            Expression::Naturals1 => self.op(OperatorId::Naturals1).to_string(),
-            Expression::Integers => self.op(OperatorId::Integers).to_string(),
-            Expression::BoolType => "BOOL".to_string(),
+            ExpressionKind::True => "TRUE".to_string(),
+            ExpressionKind::False => "FALSE".to_string(),
+            ExpressionKind::EmptySet => self.op(OperatorId::EmptySet).to_string(),
+            ExpressionKind::Naturals => self.op(OperatorId::Naturals).to_string(),
+            ExpressionKind::Naturals1 => self.op(OperatorId::Naturals1).to_string(),
+            ExpressionKind::Integers => self.op(OperatorId::Integers).to_string(),
+            ExpressionKind::BoolType => "BOOL".to_string(),
 
-            Expression::SetEnumeration(elements) => {
+            ExpressionKind::SetEnumeration(elements) => {
                 let elems: Vec<String> =
                     elements.iter().map(|e| self.print_expression(e)).collect();
                 format!("{{{}}}", elems.join(", "))
             }
 
-            Expression::SetComprehension {
+            ExpressionKind::SetComprehension {
                 identifiers,
                 predicate,
                 expression,
@@ -478,7 +478,7 @@ impl PrettyPrinter {
                 }
             }
 
-            Expression::SetBuilder {
+            ExpressionKind::SetBuilder {
                 member_expression,
                 predicate,
             } => {
@@ -491,7 +491,7 @@ impl PrettyPrinter {
                 )
             }
 
-            Expression::RelationalImage { relation, set } => {
+            ExpressionKind::RelationalImage { relation, set } => {
                 // Relational image [S] binds at the primary level, so binary
                 // and unary expressions as the relation need parentheses to
                 // avoid `a + b[S]` being parsed as `a + (b[S])`.
@@ -503,7 +503,7 @@ impl PrettyPrinter {
                 format!("{}[{}]", relation_str, self.print_expression(set))
             }
 
-            Expression::QuantifiedUnion {
+            ExpressionKind::QuantifiedUnion {
                 identifiers,
                 predicate,
                 expression,
@@ -512,7 +512,7 @@ impl PrettyPrinter {
                 self.format_quantified_expr(op, identifiers, predicate, expression)
             }
 
-            Expression::QuantifiedInter {
+            ExpressionKind::QuantifiedInter {
                 identifiers,
                 predicate,
                 expression,
@@ -521,7 +521,7 @@ impl PrettyPrinter {
                 self.format_quantified_expr(op, identifiers, predicate, expression)
             }
 
-            Expression::Lambda {
+            ExpressionKind::Lambda {
                 pattern,
                 predicate,
                 expression,
@@ -540,25 +540,25 @@ impl PrettyPrinter {
                 )
             }
 
-            Expression::Binary { op, left, right } => {
+            ExpressionKind::Binary { op, left, right } => {
                 let op_str = self.print_binary_op(*op);
                 let left_str = self.print_child_expr(left, *op, false);
                 let right_str = self.print_child_expr(right, *op, true);
                 format!("{} {} {}", left_str, op_str, right_str)
             }
 
-            Expression::Unary { op, operand } => {
+            ExpressionKind::Unary { op, operand } => {
                 let op_str = self.print_unary_op(*op);
                 if *op == UnaryOp::Inverse {
                     // Postfix: operand∼ — parenthesize complex operands
                     let needs_parens = !matches!(
-                        operand.as_ref(),
-                        Expression::Identifier(_)
-                            | Expression::Integer(_)
-                            | Expression::FunctionApplication { .. }
-                            | Expression::RelationalImage { .. }
-                            | Expression::BuiltinApplication { .. }
-                            | Expression::Unary {
+                        operand.as_ref().kind,
+                        ExpressionKind::Identifier(_)
+                            | ExpressionKind::Integer(_)
+                            | ExpressionKind::FunctionApplication { .. }
+                            | ExpressionKind::RelationalImage { .. }
+                            | ExpressionKind::BuiltinApplication { .. }
+                            | ExpressionKind::Unary {
                                 op: UnaryOp::Inverse,
                                 ..
                             }
@@ -575,7 +575,7 @@ impl PrettyPrinter {
                 }
             }
 
-            Expression::FunctionApplication {
+            ExpressionKind::FunctionApplication {
                 function,
                 arguments,
             } => {
@@ -588,7 +588,7 @@ impl PrettyPrinter {
                 format!("{}({})", func_str, args.join(", "))
             }
 
-            Expression::BuiltinApplication {
+            ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
             } => {
@@ -597,16 +597,16 @@ impl PrettyPrinter {
                 format!("{}({})", function.name(), args.join(", "))
             }
 
-            Expression::Bool(predicate) => {
+            ExpressionKind::Bool(predicate) => {
                 format!("bool({})", self.print_predicate(predicate))
             }
 
-            Expression::StringLiteral(s) => {
+            ExpressionKind::StringLiteral(s) => {
                 let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
                 format!("\"{}\"", escaped)
             }
 
-            Expression::IfThenElse {
+            ExpressionKind::IfThenElse {
                 condition,
                 then_expr,
                 else_expr,
@@ -689,14 +689,14 @@ impl PrettyPrinter {
         // Quantified/lambda expressions sit above binary operators in the grammar
         // hierarchy, so they must be parenthesized when appearing as operands.
         if matches!(
-            child,
-            Expression::Lambda { .. }
-                | Expression::QuantifiedUnion { .. }
-                | Expression::QuantifiedInter { .. }
+            child.kind,
+            ExpressionKind::Lambda { .. }
+                | ExpressionKind::QuantifiedUnion { .. }
+                | ExpressionKind::QuantifiedInter { .. }
         ) {
             return format!("({})", self.print_expression(child));
         }
-        if let Expression::Binary { op: child_op, .. } = child {
+        if let ExpressionKind::Binary { op: child_op, .. } = &child.kind {
             let child_prec = op_info::binary_precedence(*child_op);
             let parent_prec = op_info::binary_precedence(parent_op);
 
@@ -728,13 +728,13 @@ impl PrettyPrinter {
     /// a relational image (`expr[S]`). Binary, unary, and quantified forms
     /// need wrapping because `[S]` binds at the primary expression level.
     fn needs_parens_for_relational_image(expr: &Expression) -> bool {
-        match expr {
-            Expression::Unary { op, .. } if *op == UnaryOp::Inverse => false,
-            Expression::Binary { .. }
-            | Expression::Unary { .. }
-            | Expression::Lambda { .. }
-            | Expression::QuantifiedUnion { .. }
-            | Expression::QuantifiedInter { .. } => true,
+        match &expr.kind {
+            ExpressionKind::Unary { op, .. } if *op == UnaryOp::Inverse => false,
+            ExpressionKind::Binary { .. }
+            | ExpressionKind::Unary { .. }
+            | ExpressionKind::Lambda { .. }
+            | ExpressionKind::QuantifiedUnion { .. }
+            | ExpressionKind::QuantifiedInter { .. } => true,
             _ => false,
         }
     }
@@ -744,10 +744,10 @@ impl PrettyPrinter {
     /// sit above `pair-expression` in the grammar and must be parenthesized.
     fn print_expr_as_pair(&self, expr: &Expression) -> String {
         if matches!(
-            expr,
-            Expression::Lambda { .. }
-                | Expression::QuantifiedUnion { .. }
-                | Expression::QuantifiedInter { .. }
+            expr.kind,
+            ExpressionKind::Lambda { .. }
+                | ExpressionKind::QuantifiedUnion { .. }
+                | ExpressionKind::QuantifiedInter { .. }
         ) {
             format!("({})", self.print_expression(expr))
         } else {
@@ -788,30 +788,30 @@ impl PrettyPrinter {
 
     /// Convert a Predicate to text
     pub fn print_predicate(&self, pred: &Predicate) -> String {
-        match pred {
-            Predicate::True => self.sym("⊤", "TRUE").to_string(),
-            Predicate::False => self.sym("⊥", "FALSE").to_string(),
+        match &pred.kind {
+            PredicateKind::True => self.sym("⊤", "TRUE").to_string(),
+            PredicateKind::False => self.sym("⊥", "FALSE").to_string(),
 
-            Predicate::Comparison { op, left, right } => {
+            PredicateKind::Comparison { op, left, right } => {
                 let op_str = self.print_comparison_op(*op);
                 let left_str = self.print_expr_as_pair(left);
                 let right_str = self.print_expr_as_pair(right);
                 format!("{} {} {}", left_str, op_str, right_str)
             }
 
-            Predicate::Not(p) => {
+            PredicateKind::Not(p) => {
                 let not = self.op(OperatorId::Not);
                 format!("{}({})", not, self.print_predicate(p))
             }
 
-            Predicate::Logical { op, left, right } => {
+            PredicateKind::Logical { op, left, right } => {
                 let op_str = self.print_logical_op(*op);
                 let left_str = self.print_predicate_child(left, *op, false);
                 let right_str = self.print_predicate_child(right, *op, true);
                 format!("{} {} {}", left_str, op_str, right_str)
             }
 
-            Predicate::Quantified {
+            PredicateKind::Quantified {
                 quantifier,
                 identifiers,
                 predicate,
@@ -828,7 +828,7 @@ impl PrettyPrinter {
                 )
             }
 
-            Predicate::Application {
+            PredicateKind::Application {
                 function,
                 arguments,
             } => {
@@ -837,7 +837,7 @@ impl PrettyPrinter {
                 format!("{}({})", function, args.join(", "))
             }
 
-            Predicate::BuiltinApplication {
+            PredicateKind::BuiltinApplication {
                 predicate,
                 arguments,
             } => {
@@ -856,11 +856,11 @@ impl PrettyPrinter {
         parent_op: LogicalOp,
         is_right: bool,
     ) -> String {
-        let needs_parens = match child {
+        let needs_parens = match &child.kind {
             // Quantifiers are below all logical connectives in the grammar
             // hierarchy, so they always need parentheses inside a logical op.
-            Predicate::Quantified { .. } => true,
-            Predicate::Logical { op: child_op, .. } => {
+            PredicateKind::Quantified { .. } => true,
+            PredicateKind::Logical { op: child_op, .. } => {
                 let child_prec = op_info::logical_precedence(*child_op);
                 let parent_prec = op_info::logical_precedence(parent_op);
                 if child_prec < parent_prec {

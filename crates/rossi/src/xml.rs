@@ -1930,8 +1930,6 @@ mod tests {
 
     #[test]
     fn test_context_with_axioms_to_xml() {
-        use crate::ast::Predicate;
-
         let ctx = Context {
             name: "test_ctx".to_string(),
             extends: vec![],
@@ -1940,11 +1938,12 @@ mod tests {
             axioms: vec![LabeledPredicate {
                 label: Some("axm1".to_string()),
                 is_theorem: false,
-                predicate: Predicate::Comparison {
+                predicate: crate::ast::PredicateKind::Comparison {
                     op: crate::ast::predicate::ComparisonOp::Equal,
-                    left: crate::ast::Expression::Identifier("max_value".to_string()),
-                    right: crate::ast::Expression::Integer(100),
-                },
+                    left: crate::ast::ExpressionKind::Identifier("max_value".to_string()).into(),
+                    right: crate::ast::ExpressionKind::Integer(100).into(),
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2031,7 +2030,7 @@ mod tests {
                     label: Some("act1".to_string()),
                     action: Action::Assignment {
                         variables: vec!["count".to_string()],
-                        expressions: vec![crate::ast::Expression::Integer(0)],
+                        expressions: vec![crate::ast::ExpressionKind::Integer(0).into()],
                     },
                     span: None,
                     comment: None,
@@ -2059,7 +2058,7 @@ mod tests {
 
     #[test]
     fn test_machine_with_event_to_xml() {
-        use crate::ast::{Action, LabeledAction, Predicate};
+        use crate::ast::{Action, LabeledAction};
 
         let event = Event {
             name: "increment".to_string(),
@@ -2069,11 +2068,12 @@ mod tests {
             guards: vec![LabeledPredicate {
                 label: Some("grd1".to_string()),
                 is_theorem: false,
-                predicate: Predicate::Comparison {
+                predicate: crate::ast::PredicateKind::Comparison {
                     op: crate::ast::predicate::ComparisonOp::LessThan,
-                    left: crate::ast::Expression::Identifier("count".to_string()),
-                    right: crate::ast::Expression::Identifier("max_value".to_string()),
-                },
+                    left: crate::ast::ExpressionKind::Identifier("count".to_string()).into(),
+                    right: crate::ast::ExpressionKind::Identifier("max_value".to_string()).into(),
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2083,11 +2083,16 @@ mod tests {
                 label: Some("act1".to_string()),
                 action: Action::Assignment {
                     variables: vec!["count".to_string()],
-                    expressions: vec![crate::ast::Expression::Binary {
-                        op: crate::ast::expression::BinaryOp::Add,
-                        left: Box::new(crate::ast::Expression::Identifier("count".to_string())),
-                        right: Box::new(crate::ast::Expression::Integer(1)),
-                    }],
+                    expressions: vec![
+                        crate::ast::ExpressionKind::Binary {
+                            op: crate::ast::expression::BinaryOp::Add,
+                            left: Box::new(
+                                crate::ast::ExpressionKind::Identifier("count".to_string()).into(),
+                            ),
+                            right: Box::new(crate::ast::ExpressionKind::Integer(1).into()),
+                        }
+                        .into(),
+                    ],
                 },
                 span: None,
                 comment: None,
@@ -2201,8 +2206,6 @@ mod tests {
 
     #[test]
     fn test_xml_escaping_in_predicates() {
-        use crate::ast::Predicate;
-
         let ctx = Context {
             name: "test".to_string(),
             extends: vec![],
@@ -2211,11 +2214,12 @@ mod tests {
             axioms: vec![LabeledPredicate {
                 label: Some("axm1".to_string()),
                 is_theorem: false,
-                predicate: Predicate::Comparison {
+                predicate: crate::ast::PredicateKind::Comparison {
                     op: crate::ast::predicate::ComparisonOp::GreaterThan,
-                    left: crate::ast::Expression::Identifier("x".to_string()),
-                    right: crate::ast::Expression::Integer(0),
-                },
+                    left: crate::ast::ExpressionKind::Identifier("x".to_string()).into(),
+                    right: crate::ast::ExpressionKind::Integer(0).into(),
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2323,7 +2327,7 @@ mod tests {
                 label: None,
                 action: Action::Assignment {
                     variables: vec!["x".to_string()],
-                    expressions: vec![crate::ast::Expression::Integer(1)],
+                    expressions: vec![crate::ast::ExpressionKind::Integer(1).into()],
                 },
                 span: None,
                 comment: None,
@@ -2392,7 +2396,6 @@ mod tests {
 
     #[test]
     fn test_xml_with_binding_write() {
-        use crate::ast::Predicate;
         use crate::ast::predicate::ComparisonOp;
 
         let event = Event {
@@ -2404,11 +2407,12 @@ mod tests {
             with: vec![LabeledPredicate {
                 label: Some("x".to_string()),
                 is_theorem: false,
-                predicate: Predicate::Comparison {
+                predicate: crate::ast::PredicateKind::Comparison {
                     op: ComparisonOp::Equal,
-                    left: crate::ast::Expression::Identifier("x".to_string()),
-                    right: crate::ast::Expression::Identifier("y".to_string()),
-                },
+                    left: crate::ast::ExpressionKind::Identifier("x".to_string()).into(),
+                    right: crate::ast::ExpressionKind::Identifier("y".to_string()).into(),
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2450,7 +2454,6 @@ mod tests {
 
     #[test]
     fn test_xml_with_binding_roundtrip() {
-        use crate::ast::Predicate;
         use crate::ast::predicate::ComparisonOp;
 
         let event = Event {
@@ -2462,11 +2465,12 @@ mod tests {
             with: vec![LabeledPredicate {
                 label: Some("x".to_string()),
                 is_theorem: false,
-                predicate: Predicate::Comparison {
+                predicate: crate::ast::PredicateKind::Comparison {
                     op: ComparisonOp::Equal,
-                    left: crate::ast::Expression::Identifier("x".to_string()),
-                    right: crate::ast::Expression::Identifier("y".to_string()),
-                },
+                    left: crate::ast::ExpressionKind::Identifier("x".to_string()).into(),
+                    right: crate::ast::ExpressionKind::Identifier("y".to_string()).into(),
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2582,15 +2586,21 @@ mod tests {
             assert_eq!(evt.with.len(), 1);
             assert_eq!(evt.with[0].label, Some("x".to_string()));
             // Verify the predicate is "x = y + 1"
-            match &evt.with[0].predicate {
-                crate::ast::Predicate::Comparison { op, left, right } => {
+            match &evt.with[0].predicate.kind {
+                crate::ast::PredicateKind::Comparison { op, left, right } => {
                     assert_eq!(*op, crate::ast::predicate::ComparisonOp::Equal);
-                    assert_eq!(*left, crate::ast::Expression::Identifier("x".to_string()));
-                    match right {
-                        crate::ast::Expression::Binary { op, left, right } => {
+                    assert_eq!(
+                        *left,
+                        crate::ast::ExpressionKind::Identifier("x".to_string()).into()
+                    );
+                    match &right.kind {
+                        crate::ast::ExpressionKind::Binary { op, left, right } => {
                             assert_eq!(*op, crate::ast::expression::BinaryOp::Add);
-                            assert_eq!(**left, crate::ast::Expression::Identifier("y".to_string()));
-                            assert_eq!(**right, crate::ast::Expression::Integer(1));
+                            assert_eq!(
+                                **left,
+                                crate::ast::ExpressionKind::Identifier("y".to_string()).into()
+                            );
+                            assert_eq!(**right, crate::ast::ExpressionKind::Integer(1).into());
                         }
                         other => panic!("Expected Binary expression, got {:?}", other),
                     }

@@ -8,7 +8,8 @@
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use rossi::{
-    Component, Expression, LabeledPredicate, Predicate, PrettyPrinter,
+    Component, Expression, ExpressionKind, LabeledPredicate, Predicate, PredicateKind,
+    PrettyPrinter,
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
 };
@@ -445,24 +446,26 @@ fn resolve_machine_symbols_with_source(
 
 /// Check whether an expression references identifier `id`.
 fn expression_mentions_id(expr: &Expression, id: &str) -> bool {
-    match expr {
-        Expression::Identifier(name) => name == id,
-        Expression::Binary { left, right, .. } => {
+    match &expr.kind {
+        ExpressionKind::Identifier(name) => name == id,
+        ExpressionKind::Binary { left, right, .. } => {
             expression_mentions_id(left, id) || expression_mentions_id(right, id)
         }
-        Expression::Unary { operand, .. } => expression_mentions_id(operand, id),
-        Expression::FunctionApplication {
+        ExpressionKind::Unary { operand, .. } => expression_mentions_id(operand, id),
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
         } => {
             expression_mentions_id(function, id)
                 || arguments.iter().any(|a| expression_mentions_id(a, id))
         }
-        Expression::BuiltinApplication { arguments, .. } => {
+        ExpressionKind::BuiltinApplication { arguments, .. } => {
             arguments.iter().any(|a| expression_mentions_id(a, id))
         }
-        Expression::SetEnumeration(elems) => elems.iter().any(|e| expression_mentions_id(e, id)),
-        Expression::SetComprehension {
+        ExpressionKind::SetEnumeration(elems) => {
+            elems.iter().any(|e| expression_mentions_id(e, id))
+        }
+        ExpressionKind::SetComprehension {
             predicate,
             expression,
             ..
@@ -472,47 +475,47 @@ fn expression_mentions_id(expr: &Expression, id: &str) -> bool {
                     .as_ref()
                     .is_some_and(|e| expression_mentions_id(e, id))
         }
-        Expression::RelationalImage { relation, set } => {
+        ExpressionKind::RelationalImage { relation, set } => {
             expression_mentions_id(relation, id) || expression_mentions_id(set, id)
         }
-        Expression::QuantifiedUnion {
+        ExpressionKind::QuantifiedUnion {
             predicate,
             expression,
             ..
         }
-        | Expression::QuantifiedInter {
+        | ExpressionKind::QuantifiedInter {
             predicate,
             expression,
             ..
         }
-        | Expression::Lambda {
+        | ExpressionKind::Lambda {
             predicate,
             expression,
             ..
         } => predicate_mentions_id(predicate, id) || expression_mentions_id(expression, id),
-        Expression::Bool(pred) => predicate_mentions_id(pred, id),
+        ExpressionKind::Bool(pred) => predicate_mentions_id(pred, id),
         _ => false, // Integer, True, False, EmptySet, Naturals, etc.
     }
 }
 
 /// Check whether a predicate references identifier `id`.
 fn predicate_mentions_id(pred: &Predicate, id: &str) -> bool {
-    match pred {
-        Predicate::Comparison { left, right, .. } => {
+    match &pred.kind {
+        PredicateKind::Comparison { left, right, .. } => {
             expression_mentions_id(left, id) || expression_mentions_id(right, id)
         }
-        Predicate::Not(p) => predicate_mentions_id(p, id),
-        Predicate::Logical { left, right, .. } => {
+        PredicateKind::Not(p) => predicate_mentions_id(p, id),
+        PredicateKind::Logical { left, right, .. } => {
             predicate_mentions_id(left, id) || predicate_mentions_id(right, id)
         }
-        Predicate::Quantified { predicate, .. } => predicate_mentions_id(predicate, id),
-        Predicate::Application { arguments, .. } => {
+        PredicateKind::Quantified { predicate, .. } => predicate_mentions_id(predicate, id),
+        PredicateKind::Application { arguments, .. } => {
             arguments.iter().any(|a| expression_mentions_id(a, id))
         }
-        Predicate::BuiltinApplication { arguments, .. } => {
+        PredicateKind::BuiltinApplication { arguments, .. } => {
             arguments.iter().any(|a| expression_mentions_id(a, id))
         }
-        Predicate::True | Predicate::False => false,
+        PredicateKind::True | PredicateKind::False => false,
     }
 }
 
@@ -1432,31 +1435,35 @@ mod tests {
 
         // Simple identifier
         assert!(expression_mentions_id(
-            &Expression::Identifier("x".into()),
+            &ExpressionKind::Identifier("x".into()).into(),
             "x"
         ));
         assert!(!expression_mentions_id(
-            &Expression::Identifier("y".into()),
+            &ExpressionKind::Identifier("y".into()).into(),
             "x"
         ));
 
         // Integer literal
-        assert!(!expression_mentions_id(&Expression::Integer(42), "x"));
+        assert!(!expression_mentions_id(
+            &ExpressionKind::Integer(42).into(),
+            "x"
+        ));
 
         // Binary expression
         let bin = Expression::binary(
             BinaryOp::Add,
-            Expression::Identifier("x".into()),
-            Expression::Integer(1),
+            ExpressionKind::Identifier("x".into()).into(),
+            ExpressionKind::Integer(1).into(),
         );
         assert!(expression_mentions_id(&bin, "x"));
         assert!(!expression_mentions_id(&bin, "y"));
 
         // Function application
-        let app = Expression::FunctionApplication {
-            function: Box::new(Expression::Identifier("f".into())),
-            arguments: vec![Expression::Identifier("x".into())],
-        };
+        let app: Expression = ExpressionKind::FunctionApplication {
+            function: Box::new(ExpressionKind::Identifier("f".into()).into()),
+            arguments: vec![ExpressionKind::Identifier("x".into()).into()],
+        }
+        .into();
         assert!(expression_mentions_id(&app, "f"));
         assert!(expression_mentions_id(&app, "x"));
         assert!(!expression_mentions_id(&app, "z"));
@@ -1469,8 +1476,8 @@ mod tests {
         // Comparison
         let pred = Predicate::comparison(
             ComparisonOp::In,
-            Expression::Identifier("count".into()),
-            Expression::Naturals,
+            ExpressionKind::Identifier("count".into()).into(),
+            ExpressionKind::Naturals.into(),
         );
         assert!(predicate_mentions_id(&pred, "count"));
         assert!(!predicate_mentions_id(&pred, "other"));
@@ -1478,8 +1485,8 @@ mod tests {
         // Logical
         let pred2 = Predicate::comparison(
             ComparisonOp::GreaterEqual,
-            Expression::Identifier("count".into()),
-            Expression::Integer(0),
+            ExpressionKind::Identifier("count".into()).into(),
+            ExpressionKind::Integer(0).into(),
         );
         let conj = Predicate::logical(rossi::ast::predicate::LogicalOp::And, pred.clone(), pred2);
         assert!(predicate_mentions_id(&conj, "count"));
@@ -1494,8 +1501,14 @@ mod tests {
         assert!(predicate_mentions_id(&quant, "count"));
 
         // True/False literals
-        assert!(!predicate_mentions_id(&Predicate::True, "anything"));
-        assert!(!predicate_mentions_id(&Predicate::False, "anything"));
+        assert!(!predicate_mentions_id(
+            &PredicateKind::True.into(),
+            "anything"
+        ));
+        assert!(!predicate_mentions_id(
+            &PredicateKind::False.into(),
+            "anything"
+        ));
     }
 
     #[test]
@@ -1508,8 +1521,8 @@ mod tests {
                 is_theorem: false,
                 predicate: Predicate::comparison(
                     ComparisonOp::In,
-                    Expression::Identifier("max_value".into()),
-                    Expression::Naturals,
+                    ExpressionKind::Identifier("max_value".into()).into(),
+                    ExpressionKind::Naturals.into(),
                 ),
                 span: None,
                 comment: None,
@@ -1519,8 +1532,8 @@ mod tests {
                 is_theorem: false,
                 predicate: Predicate::comparison(
                     ComparisonOp::Equal,
-                    Expression::Identifier("max_value".into()),
-                    Expression::Integer(100),
+                    ExpressionKind::Identifier("max_value".into()).into(),
+                    ExpressionKind::Integer(100).into(),
                 ),
                 span: None,
                 comment: None,
@@ -1530,8 +1543,8 @@ mod tests {
                 is_theorem: false,
                 predicate: Predicate::comparison(
                     ComparisonOp::In,
-                    Expression::Identifier("other".into()),
-                    Expression::Integers,
+                    ExpressionKind::Identifier("other".into()).into(),
+                    ExpressionKind::Integers.into(),
                 ),
                 span: None,
                 comment: None,

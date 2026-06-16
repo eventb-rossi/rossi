@@ -21,7 +21,10 @@ use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use rossi::ast::expression::{BinaryOp, BuiltinFunction};
-use rossi::{Action, Expression, Predicate, parse_action_str, parse_predicate_str};
+use rossi::{
+    Action, Expression, ExpressionKind, Predicate, PredicateKind, parse_action_str,
+    parse_predicate_str,
+};
 
 use crate::error::{ProjectError, Result};
 use crate::xml_out::tag;
@@ -473,20 +476,22 @@ pub fn strip_type_ascriptions_action(a: Action) -> Action {
 /// since they carry no logical content.
 #[must_use]
 pub fn strip_type_ascriptions_pred(p: Predicate) -> Predicate {
-    use Predicate as P;
-    match p {
-        P::True | P::False => p,
+    use PredicateKind as P;
+    match p.kind {
+        kind @ (P::True | P::False) => kind.into(),
         P::Comparison { op, left, right } => P::Comparison {
             op,
             left: strip_expr(left),
             right: strip_expr(right),
-        },
-        P::Not(inner) => P::Not(Box::new(strip_type_ascriptions_pred(*inner))),
+        }
+        .into(),
+        P::Not(inner) => P::Not(Box::new(strip_type_ascriptions_pred(*inner))).into(),
         P::Logical { op, left, right } => P::Logical {
             op,
             left: Box::new(strip_type_ascriptions_pred(*left)),
             right: Box::new(strip_type_ascriptions_pred(*right)),
-        },
+        }
+        .into(),
         P::Quantified {
             quantifier,
             identifiers,
@@ -501,21 +506,24 @@ pub fn strip_type_ascriptions_pred(p: Predicate) -> Predicate {
                 })
                 .collect(),
             predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
-        },
+        }
+        .into(),
         P::Application {
             function,
             arguments,
         } => P::Application {
             function,
             arguments: arguments.into_iter().map(strip_expr).collect(),
-        },
+        }
+        .into(),
         P::BuiltinApplication {
             predicate,
             arguments,
         } => P::BuiltinApplication {
             predicate,
             arguments: arguments.into_iter().map(strip_expr).collect(),
-        },
+        }
+        .into(),
     }
 }
 
@@ -526,10 +534,10 @@ pub fn strip_type_ascriptions_pred(p: Predicate) -> Predicate {
 /// basic-form `{x|P}`.
 fn projection_matches_binders(expr: &Expression, ids: &[rossi::ast::TypedIdentifier]) -> bool {
     fn walk(expr: &Expression, names: &[String]) -> bool {
-        match (expr, names) {
-            (Expression::Identifier(n), [single]) => n == single,
+        match (&expr.kind, names) {
+            (ExpressionKind::Identifier(n), [single]) => n == single,
             (
-                Expression::Binary {
+                ExpressionKind::Binary {
                     op: rossi::ast::expression::BinaryOp::Maplet,
                     left,
                     right,
@@ -537,7 +545,8 @@ fn projection_matches_binders(expr: &Expression, ids: &[rossi::ast::TypedIdentif
                 rest,
             ) if rest.len() >= 2 => {
                 let (last, init) = rest.split_last().expect("len ≥ 2");
-                matches!(right.as_ref(), Expression::Identifier(n) if n == last) && walk(left, init)
+                matches!(&right.as_ref().kind, ExpressionKind::Identifier(n) if n == last)
+                    && walk(left, init)
             }
             _ => false,
         }
@@ -550,8 +559,8 @@ fn projection_matches_binders(expr: &Expression, ids: &[rossi::ast::TypedIdentif
 }
 
 fn strip_expr(e: Expression) -> Expression {
-    use Expression as E;
-    match e {
+    use ExpressionKind as E;
+    match e.kind {
         E::Binary {
             op: BinaryOp::OfType,
             left,
@@ -561,11 +570,13 @@ fn strip_expr(e: Expression) -> Expression {
             op,
             left: Box::new(strip_expr(*left)),
             right: Box::new(strip_expr(*right)),
-        },
+        }
+        .into(),
         E::Unary { op, operand } => E::Unary {
             op,
             operand: Box::new(strip_expr(*operand)),
-        },
+        }
+        .into(),
         E::FunctionApplication {
             function,
             arguments,
@@ -580,19 +591,21 @@ fn strip_expr(e: Expression) -> Expression {
             // `FunctionApplication`, but our parser would have produced
             // `BuiltinApplication` for the same surface text. Collapse
             // back so the two ASTs compare equal.
-            if let E::Identifier(name) = &stripped_fn
+            if let E::Identifier(name) = &stripped_fn.kind
                 && let Some(builtin) = BuiltinFunction::from_name(name)
                 && builtin.check_arity(stripped_args.len())
             {
                 return E::BuiltinApplication {
                     function: builtin,
                     arguments: stripped_args,
-                };
+                }
+                .into();
             }
             E::FunctionApplication {
                 function: Box::new(stripped_fn),
                 arguments: stripped_args,
             }
+            .into()
         }
         E::BuiltinApplication {
             function,
@@ -600,8 +613,11 @@ fn strip_expr(e: Expression) -> Expression {
         } => E::BuiltinApplication {
             function,
             arguments: arguments.into_iter().map(strip_expr).collect(),
-        },
-        E::SetEnumeration(items) => E::SetEnumeration(items.into_iter().map(strip_expr).collect()),
+        }
+        .into(),
+        E::SetEnumeration(items) => {
+            E::SetEnumeration(items.into_iter().map(strip_expr).collect()).into()
+        }
         E::SetComprehension {
             identifiers,
             predicate,
@@ -631,6 +647,7 @@ fn strip_expr(e: Expression) -> Expression {
                 predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
                 expression: collapsed,
             }
+            .into()
         }
         E::SetBuilder {
             member_expression,
@@ -638,7 +655,8 @@ fn strip_expr(e: Expression) -> Expression {
         } => E::SetBuilder {
             member_expression: Box::new(strip_expr(*member_expression)),
             predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
-        },
+        }
+        .into(),
         E::Lambda {
             pattern,
             predicate,
@@ -647,7 +665,8 @@ fn strip_expr(e: Expression) -> Expression {
             pattern,
             predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
             expression: Box::new(strip_expr(*expression)),
-        },
+        }
+        .into(),
         E::QuantifiedUnion {
             identifiers,
             predicate,
@@ -662,7 +681,8 @@ fn strip_expr(e: Expression) -> Expression {
                 .collect(),
             predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
             expression: Box::new(strip_expr(*expression)),
-        },
+        }
+        .into(),
         E::QuantifiedInter {
             identifiers,
             predicate,
@@ -677,12 +697,14 @@ fn strip_expr(e: Expression) -> Expression {
                 .collect(),
             predicate: Box::new(strip_type_ascriptions_pred(*predicate)),
             expression: Box::new(strip_expr(*expression)),
-        },
+        }
+        .into(),
         E::RelationalImage { relation, set } => E::RelationalImage {
             relation: Box::new(strip_expr(*relation)),
             set: Box::new(strip_expr(*set)),
-        },
-        E::Bool(p) => E::Bool(Box::new(strip_type_ascriptions_pred(*p))),
+        }
+        .into(),
+        E::Bool(p) => E::Bool(Box::new(strip_type_ascriptions_pred(*p))).into(),
         E::IfThenElse {
             condition,
             then_expr,
@@ -691,8 +713,9 @@ fn strip_expr(e: Expression) -> Expression {
             condition: Box::new(strip_type_ascriptions_pred(*condition)),
             then_expr: Box::new(strip_expr(*then_expr)),
             else_expr: Box::new(strip_expr(*else_expr)),
-        },
-        other => other,
+        }
+        .into(),
+        other => other.into(),
     }
 }
 

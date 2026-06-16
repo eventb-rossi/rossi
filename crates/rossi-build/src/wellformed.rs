@@ -14,7 +14,7 @@
 
 use rossi::ast::expression::BinaryOp;
 use rossi::ast::predicate::ComparisonOp;
-use rossi::{Action, Expression, Predicate};
+use rossi::{Action, Expression, ExpressionKind, Predicate, PredicateKind};
 
 use crate::infer::type_of_expression;
 use crate::type_env::TypeEnv;
@@ -25,23 +25,23 @@ use crate::types::Type;
 /// missing type" rule). Recurses through logical connectives,
 /// quantifiers, and into the embedded expressions.
 pub fn is_well_typed_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
-    match pred {
-        Predicate::True | Predicate::False => true,
-        Predicate::Not(inner) => is_well_typed_predicate(env, inner),
-        Predicate::Logical { left, right, .. } => {
+    match &pred.kind {
+        PredicateKind::True | PredicateKind::False => true,
+        PredicateKind::Not(inner) => is_well_typed_predicate(env, inner),
+        PredicateKind::Logical { left, right, .. } => {
             is_well_typed_predicate(env, left) && is_well_typed_predicate(env, right)
         }
         // Quantifier bodies may reference binders that aren't in env;
         // a strict check would need to plumb the binder types through,
         // and the corpus doesn't depend on it yet.
-        Predicate::Quantified { .. } => true,
-        Predicate::Comparison { op, left, right } => {
+        PredicateKind::Quantified { .. } => true,
+        PredicateKind::Comparison { op, left, right } => {
             is_well_typed_expression(env, left)
                 && is_well_typed_expression(env, right)
                 && check_comparison(env, *op, left, right)
         }
-        Predicate::Application { arguments, .. }
-        | Predicate::BuiltinApplication { arguments, .. } => {
+        PredicateKind::Application { arguments, .. }
+        | PredicateKind::BuiltinApplication { arguments, .. } => {
             arguments.iter().all(|a| is_well_typed_expression(env, a))
         }
     }
@@ -83,8 +83,8 @@ pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
 /// `Union`/`Intersection`/`Difference` (the symmetric set ops, where
 /// both sides should share the same power-set type) actually agrees.
 pub fn is_well_typed_expression(env: &TypeEnv, expr: &Expression) -> bool {
-    match expr {
-        Expression::Binary {
+    match &expr.kind {
+        ExpressionKind::Binary {
             op: BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference,
             left,
             right,
@@ -100,22 +100,24 @@ pub fn is_well_typed_expression(env: &TypeEnv, expr: &Expression) -> bool {
                 _ => true,
             }
         }
-        Expression::Binary { left, right, .. } => {
+        ExpressionKind::Binary { left, right, .. } => {
             is_well_typed_expression(env, left) && is_well_typed_expression(env, right)
         }
-        Expression::Unary { operand, .. } => is_well_typed_expression(env, operand),
-        Expression::FunctionApplication {
+        ExpressionKind::Unary { operand, .. } => is_well_typed_expression(env, operand),
+        ExpressionKind::FunctionApplication {
             function,
             arguments,
         } => {
             is_well_typed_expression(env, function)
                 && arguments.iter().all(|a| is_well_typed_expression(env, a))
         }
-        Expression::BuiltinApplication { arguments, .. } => {
+        ExpressionKind::BuiltinApplication { arguments, .. } => {
             arguments.iter().all(|a| is_well_typed_expression(env, a))
         }
-        Expression::SetEnumeration(items) => items.iter().all(|i| is_well_typed_expression(env, i)),
-        Expression::RelationalImage { relation, set } => {
+        ExpressionKind::SetEnumeration(items) => {
+            items.iter().all(|i| is_well_typed_expression(env, i))
+        }
+        ExpressionKind::RelationalImage { relation, set } => {
             is_well_typed_expression(env, relation) && is_well_typed_expression(env, set)
         }
         // Lambda / set-comp / quantifier-union/inter — bodies reference

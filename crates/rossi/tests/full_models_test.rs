@@ -4,7 +4,7 @@ mod common;
 
 use rossi::ast::expression::BuiltinFunction;
 use rossi::ast::predicate::BuiltinPredicate;
-use rossi::{Component, Expression, ParseError, Predicate, parse};
+use rossi::{Component, ExpressionKind, ParseError, PredicateKind, parse};
 
 #[test]
 fn test_counter_context() {
@@ -184,8 +184,8 @@ fn test_event_with_clause() {
     assert_eq!(event.with.len(), 1);
     assert_eq!(event.with[0].label, Some("abs_val".to_string()));
     assert!(matches!(
-        &event.with[0].predicate,
-        rossi::Predicate::Comparison { .. }
+        &event.with[0].predicate.kind,
+        rossi::PredicateKind::Comparison { .. }
     ));
 }
 
@@ -225,8 +225,8 @@ fn test_event_witness_clause() {
     assert_eq!(event.witnesses.len(), 1);
     assert_eq!(event.witnesses[0].label, Some("abs_param".to_string()));
     assert!(matches!(
-        &event.witnesses[0].predicate,
-        rossi::Predicate::Comparison { .. }
+        &event.witnesses[0].predicate.kind,
+        rossi::PredicateKind::Comparison { .. }
     ));
 }
 
@@ -308,8 +308,6 @@ fn test_with_where_then_together() {
 
 #[test]
 fn test_variant_clause_simple_identifier() {
-    use rossi::Expression;
-
     let source = r#"
     MACHINE test
     VARIABLES
@@ -338,14 +336,13 @@ fn test_variant_clause_simple_identifier() {
     assert!(m.variant.is_some(), "Machine should have a variant");
     assert_eq!(
         m.variant.unwrap(),
-        Expression::Identifier("n".to_string()),
+        ExpressionKind::Identifier("n".to_string()).into(),
         "Variant should be identifier 'n'"
     );
 }
 
 #[test]
 fn test_variant_clause_arithmetic_expression() {
-    use rossi::Expression;
     use rossi::ast::expression::BinaryOp;
 
     let source = r#"
@@ -368,11 +365,11 @@ fn test_variant_clause_arithmetic_expression() {
 
     let m = common::parse_machine(source);
     assert!(m.variant.is_some(), "Machine should have a variant");
-    match m.variant.unwrap() {
-        Expression::Binary { op, left, right } => {
+    match m.variant.unwrap().kind {
+        ExpressionKind::Binary { op, left, right } => {
             assert_eq!(op, BinaryOp::Add);
-            assert!(matches!(*left, Expression::Identifier(ref n) if n == "x"));
-            assert!(matches!(*right, Expression::Identifier(ref n) if n == "y"));
+            assert!(matches!(left.kind, ExpressionKind::Identifier(ref n) if n == "x"));
+            assert!(matches!(right.kind, ExpressionKind::Identifier(ref n) if n == "y"));
         }
         other => panic!("Expected Binary expression for variant, got {:?}", other),
     }
@@ -674,8 +671,6 @@ fn test_multiple_parallel_assignment() {
 
 #[test]
 fn test_extended_set_comprehension() {
-    use rossi::Expression;
-
     let source = r#"
     MACHINE test
     VARIABLES
@@ -687,9 +682,9 @@ fn test_extended_set_comprehension() {
 
     let m = common::parse_machine(source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        match right {
-            Expression::SetComprehension {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        match &right.kind {
+            ExpressionKind::SetComprehension {
                 identifiers,
                 expression,
                 ..
@@ -713,8 +708,6 @@ fn test_extended_set_comprehension() {
 
 #[test]
 fn test_relational_image() {
-    use rossi::Expression;
-
     let source = r#"
     MACHINE test
     VARIABLES
@@ -726,11 +719,11 @@ fn test_relational_image() {
 
     let m = common::parse_machine(source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { left, .. } = pred {
-        match left {
-            Expression::RelationalImage { relation, set } => {
-                assert!(matches!(relation.as_ref(), Expression::Identifier(n) if n == "r"));
-                assert!(matches!(set.as_ref(), Expression::Identifier(n) if n == "s"));
+    if let rossi::PredicateKind::Comparison { left, .. } = &pred.kind {
+        match &left.kind {
+            ExpressionKind::RelationalImage { relation, set } => {
+                assert!(matches!(&relation.kind, ExpressionKind::Identifier(n) if n == "r"));
+                assert!(matches!(&set.kind, ExpressionKind::Identifier(n) if n == "s"));
             }
             other => panic!("Expected RelationalImage, got {:?}", other),
         }
@@ -745,8 +738,6 @@ fn test_relational_image() {
 
 #[test]
 fn test_quantified_union() {
-    use rossi::Expression;
-
     let source = r#"
     MACHINE test
     VARIABLES
@@ -758,9 +749,9 @@ fn test_quantified_union() {
 
     let m = common::parse_machine(source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        match right {
-            Expression::QuantifiedUnion { identifiers, .. } => {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        match &right.kind {
+            ExpressionKind::QuantifiedUnion { identifiers, .. } => {
                 assert_eq!(identifiers, &["x"]);
             }
             other => panic!("Expected QuantifiedUnion, got {:?}", other),
@@ -772,8 +763,6 @@ fn test_quantified_union() {
 
 #[test]
 fn test_quantified_inter() {
-    use rossi::Expression;
-
     let source = r#"
     MACHINE test
     VARIABLES
@@ -785,9 +774,9 @@ fn test_quantified_inter() {
 
     let m = common::parse_machine(source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        match right {
-            Expression::QuantifiedInter { identifiers, .. } => {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        match &right.kind {
+            ExpressionKind::QuantifiedInter { identifiers, .. } => {
                 assert_eq!(identifiers, &["x"]);
             }
             other => panic!("Expected QuantifiedInter, got {:?}", other),
@@ -813,8 +802,8 @@ fn test_typed_forall_single() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        rossi::Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        rossi::PredicateKind::Quantified {
             quantifier,
             identifiers,
             ..
@@ -824,8 +813,8 @@ fn test_typed_forall_single() {
             assert_eq!(identifiers[0].name, "x");
             assert!(identifiers[0].type_expr.is_some());
             assert!(matches!(
-                identifiers[0].type_expr.as_deref(),
-                Some(Expression::Integers)
+                identifiers[0].type_expr.as_deref().map(|e| &e.kind),
+                Some(ExpressionKind::Integers)
             ));
         }
         other => panic!("Expected Quantified ForAll, got {:?}", other),
@@ -844,8 +833,8 @@ fn test_typed_forall_multiple() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        rossi::Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        rossi::PredicateKind::Quantified {
             quantifier,
             identifiers,
             ..
@@ -873,8 +862,8 @@ fn test_typed_exists() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        rossi::Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        rossi::PredicateKind::Quantified {
             quantifier,
             identifiers,
             ..
@@ -899,8 +888,8 @@ fn test_typed_forall_mixed() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        rossi::Predicate::Quantified {
+    match &ctx.axioms[0].predicate.kind {
+        rossi::PredicateKind::Quantified {
             quantifier,
             identifiers,
             ..
@@ -921,9 +910,9 @@ fn test_typed_quantified_union() {
     let source = common::invariant_machine("s", "s = ⋃x⦂ℤ · x > 0 | {x}");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        match right {
-            Expression::QuantifiedUnion { identifiers, .. } => {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        match &right.kind {
+            ExpressionKind::QuantifiedUnion { identifiers, .. } => {
                 assert_eq!(identifiers[0].name, "x");
                 assert!(identifiers[0].type_expr.is_some());
             }
@@ -939,9 +928,9 @@ fn test_typed_quantified_inter() {
     let source = common::invariant_machine("s", "s = ⋂x⦂ℤ · x > 0 | {x}");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        match right {
-            Expression::QuantifiedInter { identifiers, .. } => {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        match &right.kind {
+            ExpressionKind::QuantifiedInter { identifiers, .. } => {
                 assert_eq!(identifiers[0].name, "x");
                 assert!(identifiers[0].type_expr.is_some());
             }
@@ -963,8 +952,8 @@ fn test_typed_bound_vars_in_forall() {
     "#;
 
     let ctx = common::parse_context(source);
-    match &ctx.axioms[0].predicate {
-        rossi::Predicate::Quantified { identifiers, .. } => {
+    match &ctx.axioms[0].predicate.kind {
+        rossi::PredicateKind::Quantified { identifiers, .. } => {
             assert_eq!(identifiers.len(), 2);
             assert_eq!(identifiers[0].name, "ti");
             assert!(identifiers[0].type_expr.is_some());
@@ -986,9 +975,9 @@ fn test_total_relation() {
     let source = common::invariant_machine("r", "r \u{2208} A <<-> B");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
         assert!(
-            matches!(right, Expression::Binary { op, .. } if *op == BinaryOp::TotalRelation),
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::TotalRelation),
             "Expected TotalRelation, got {:?}",
             right
         );
@@ -1004,9 +993,9 @@ fn test_surjective_relation() {
     let source = common::invariant_machine("r", "r \u{2208} A <->> B");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
         assert!(
-            matches!(right, Expression::Binary { op, .. } if *op == BinaryOp::SurjectiveRelation),
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::SurjectiveRelation),
             "Expected SurjectiveRelation, got {:?}",
             right
         );
@@ -1022,9 +1011,9 @@ fn test_total_surjective_relation() {
     let source = common::invariant_machine("r", "r \u{2208} A <<->> B");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
         assert!(
-            matches!(right, Expression::Binary { op, .. } if *op == BinaryOp::TotalSurjectiveRelation),
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::TotalSurjectiveRelation),
             "Expected TotalSurjectiveRelation, got {:?}",
             right
         );
@@ -1042,8 +1031,8 @@ fn test_empty_set_comma_comma() {
     let source = common::invariant_machine("s", "s = ,,");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
-        assert!(matches!(right, Expression::EmptySet));
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+        assert!(matches!(right.kind, ExpressionKind::EmptySet));
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -1060,9 +1049,9 @@ fn test_oftype_ascii() {
     let source = common::invariant_machine("x", "x \u{2208} \u{2115} oftype \u{2124}");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
         assert!(
-            matches!(right, Expression::Binary { op, .. } if *op == BinaryOp::OfType),
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::OfType),
             "Expected OfType, got {:?}",
             right
         );
@@ -1078,9 +1067,9 @@ fn test_oftype_unicode() {
     let source = common::invariant_machine("x", "x \u{2208} \u{2115} \u{2982} \u{2124}");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
-    if let rossi::Predicate::Comparison { right, .. } = pred {
+    if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
         assert!(
-            matches!(right, Expression::Binary { op, .. } if *op == BinaryOp::OfType),
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::OfType),
             "Expected OfType, got {:?}",
             right
         );
@@ -1097,15 +1086,18 @@ fn test_oftype_unicode() {
 fn test_builtin_card() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 card(S) = 5\nEND\n");
     let pred = &ctx.axioms[0].predicate;
-    if let Predicate::Comparison { left, .. } = pred {
-        match left {
-            Expression::BuiltinApplication {
+    if let PredicateKind::Comparison { left, .. } = &pred.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
             } => {
                 assert_eq!(*function, BuiltinFunction::Card);
                 assert_eq!(arguments.len(), 1);
-                assert_eq!(arguments[0], Expression::Identifier("S".to_string()));
+                assert_eq!(
+                    arguments[0],
+                    ExpressionKind::Identifier("S".to_string()).into()
+                );
             }
             other => panic!("Expected BuiltinApplication(Card), got {:?}", other),
         }
@@ -1119,17 +1111,17 @@ fn test_builtin_min_max() {
     let ctx = common::parse_context(
         "CONTEXT test\nAXIOMS\n    @axm1 min(S) = 0\n    @axm2 max(S) = 100\nEND\n",
     );
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
-        match left {
-            Expression::BuiltinApplication { function, .. } => {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication { function, .. } => {
                 assert_eq!(*function, BuiltinFunction::Min);
             }
             other => panic!("Expected BuiltinApplication(Min), got {:?}", other),
         }
     }
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[1].predicate {
-        match left {
-            Expression::BuiltinApplication { function, .. } => {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[1].predicate.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication { function, .. } => {
                 assert_eq!(*function, BuiltinFunction::Max);
             }
             other => panic!("Expected BuiltinApplication(Max), got {:?}", other),
@@ -1143,9 +1135,9 @@ fn test_builtin_id_prj() {
         "CONTEXT test\nAXIOMS\n    @axm1 id(S) = S\n    @axm2 prj1(S, T) = S\n    @axm3 prj2(S, T) = T\nEND\n",
     );
     // id(S)
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
-        match left {
-            Expression::BuiltinApplication {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
             } => {
@@ -1156,9 +1148,9 @@ fn test_builtin_id_prj() {
         }
     }
     // prj1(S, T)
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[1].predicate {
-        match left {
-            Expression::BuiltinApplication {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[1].predicate.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
             } => {
@@ -1169,9 +1161,9 @@ fn test_builtin_id_prj() {
         }
     }
     // prj2(S, T)
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[2].predicate {
-        match left {
-            Expression::BuiltinApplication {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[2].predicate.kind {
+        match &left.kind {
+            ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
             } => {
@@ -1186,8 +1178,8 @@ fn test_builtin_id_prj() {
 #[test]
 fn test_bare_id_stays_identifier() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 id = S\nEND\n");
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
-        assert_eq!(*left, Expression::Identifier("id".to_string()));
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
+        assert_eq!(*left, ExpressionKind::Identifier("id".to_string()).into());
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -1200,14 +1192,17 @@ fn test_bare_id_stays_identifier() {
 #[test]
 fn test_builtin_finite() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 finite(S)\nEND\n");
-    match &ctx.axioms[0].predicate {
-        Predicate::BuiltinApplication {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::BuiltinApplication {
             predicate,
             arguments,
         } => {
             assert_eq!(*predicate, BuiltinPredicate::Finite);
             assert_eq!(arguments.len(), 1);
-            assert_eq!(arguments[0], Expression::Identifier("S".to_string()));
+            assert_eq!(
+                arguments[0],
+                ExpressionKind::Identifier("S".to_string()).into()
+            );
         }
         other => panic!("Expected BuiltinApplication(Finite), got {:?}", other),
     }
@@ -1216,8 +1211,8 @@ fn test_builtin_finite() {
 #[test]
 fn test_builtin_partition() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 partition(S, A, B)\nEND\n");
-    match &ctx.axioms[0].predicate {
-        Predicate::BuiltinApplication {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::BuiltinApplication {
             predicate,
             arguments,
         } => {
@@ -1231,8 +1226,8 @@ fn test_builtin_partition() {
 #[test]
 fn test_user_defined_predicate() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 myPred(x)\nEND\n");
-    match &ctx.axioms[0].predicate {
-        Predicate::Application {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::Application {
             function,
             arguments,
         } => {
@@ -1250,11 +1245,11 @@ fn test_user_defined_predicate() {
 #[test]
 fn test_bool_expr() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 bool(x > 0) = TRUE\nEND\n");
-    if let Predicate::Comparison { left, .. } = &ctx.axioms[0].predicate {
-        match left {
-            Expression::Bool(pred) => {
+    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
+        match &left.kind {
+            ExpressionKind::Bool(pred) => {
                 assert!(
-                    matches!(pred.as_ref(), Predicate::Comparison { .. }),
+                    matches!(&pred.kind, PredicateKind::Comparison { .. }),
                     "Expected Comparison inside Bool, got {:?}",
                     pred
                 );
@@ -1269,8 +1264,8 @@ fn test_bool_expr() {
 #[test]
 fn test_bool_vs_bool_type() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 x : BOOL\nEND\n");
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        assert_eq!(*right, Expression::BoolType);
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        assert_eq!(*right, ExpressionKind::BoolType.into());
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -1283,8 +1278,11 @@ fn test_bool_vs_bool_type() {
 #[test]
 fn test_string_literal() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 x = \"hello\"\nEND\n");
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
-        assert_eq!(*right, Expression::StringLiteral("hello".to_string()));
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
+        assert_eq!(
+            *right,
+            ExpressionKind::StringLiteral("hello".to_string()).into()
+        );
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -1294,10 +1292,10 @@ fn test_string_literal() {
 fn test_string_literal_escapes() {
     let ctx =
         common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 x = \"he said \\\"hi\\\"\"\nEND\n");
-    if let Predicate::Comparison { right, .. } = &ctx.axioms[0].predicate {
+    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
         assert_eq!(
             *right,
-            Expression::StringLiteral("he said \"hi\"".to_string())
+            ExpressionKind::StringLiteral("he said \"hi\"".to_string()).into()
         );
     } else {
         panic!("Expected Comparison predicate");
@@ -1346,11 +1344,11 @@ fn test_builtin_prj1_single_arg() {
     let component = result.unwrap();
     if let Component::Context(ctx) = component {
         let pred = &ctx.axioms[0].predicate;
-        if let Predicate::Comparison { left, .. } = pred {
-            if let Expression::BuiltinApplication {
+        if let PredicateKind::Comparison { left, .. } = &pred.kind {
+            if let ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
-            } = left
+            } = &left.kind
             {
                 assert_eq!(*function, BuiltinFunction::Prj1);
                 assert_eq!(arguments.len(), 1);
@@ -1384,11 +1382,11 @@ fn test_builtin_prj2_single_arg() {
     let component = result.unwrap();
     if let Component::Context(ctx) = component {
         let pred = &ctx.axioms[0].predicate;
-        if let Predicate::Comparison { left, .. } = pred {
-            if let Expression::BuiltinApplication {
+        if let PredicateKind::Comparison { left, .. } = &pred.kind {
+            if let ExpressionKind::BuiltinApplication {
                 function,
                 arguments,
-            } = left
+            } = &left.kind
             {
                 assert_eq!(*function, BuiltinFunction::Prj2);
                 assert_eq!(arguments.len(), 1);
@@ -1456,7 +1454,7 @@ fn test_quantifier_in_conjunction() {
     if let Component::Context(ctx) = component {
         let pred = &ctx.axioms[0].predicate;
         // Should be: (x∈S) ∧ (∃a·(a∈T ∧ a=x))
-        if let Predicate::Logical { op, .. } = pred {
+        if let PredicateKind::Logical { op, .. } = &pred.kind {
             assert_eq!(*op, rossi::ast::predicate::LogicalOp::And);
         } else {
             panic!("Expected Logical(And), got {:?}", pred);
@@ -1552,8 +1550,8 @@ fn test_builtin_partition_wrong_arity() {
 #[test]
 fn test_builtin_partition_many_args_ok() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 partition(S, A, B, C)\nEND\n");
-    match &ctx.axioms[0].predicate {
-        Predicate::BuiltinApplication {
+    match &ctx.axioms[0].predicate.kind {
+        PredicateKind::BuiltinApplication {
             predicate,
             arguments,
         } => {

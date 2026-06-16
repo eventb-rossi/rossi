@@ -15,7 +15,7 @@ mod common;
 use rossi::ast::Expression;
 use rossi::ast::expression::UnaryOp;
 use rossi::parser::{parse_action_str, parse_predicate_str};
-use rossi::{ParseError, parse};
+use rossi::{ExpressionKind, ParseError, parse};
 
 /// Run `parse_fn` on `input` and assert it fails with a `ReservedWord` error
 /// for `word`, located at the word's first occurrence in `input`.
@@ -142,7 +142,7 @@ fn generic_atoms_still_parse_bare() {
     // legal bare, exactly as in Rodin.
     for atom in ["id", "prj1", "prj2", "pred", "succ"] {
         let rhs = common::parse_axiom_rhs(&common::axiom_context("f", &format!("f = {atom}")));
-        assert_eq!(rhs, Expression::Identifier(atom.to_string()));
+        assert_eq!(rhs, ExpressionKind::Identifier(atom.to_string()).into());
     }
 }
 
@@ -176,7 +176,7 @@ fn axiom_rhs(formula: &str) -> Expression {
 #[track_caller]
 fn assert_is_unary(expr: &Expression, op: UnaryOp) {
     assert!(
-        matches!(expr, Expression::Unary { op: o, .. } if *o == op),
+        matches!(&expr.kind, ExpressionKind::Unary { op: o, .. } if *o == op),
         "expected Unary {op:?}, got {expr:?}"
     );
 }
@@ -185,10 +185,10 @@ fn assert_is_unary(expr: &Expression, op: UnaryOp) {
 fn postfix_operators_bind_outside_closed_dom() {
     // Rodin: dom(f)∼ = (dom(f))∼, not dom(f∼).
     let inverse = axiom_rhs("dom(f)∼");
-    let Expression::Unary {
+    let ExpressionKind::Unary {
         op: UnaryOp::Inverse,
         operand,
-    } = inverse
+    } = inverse.kind
     else {
         panic!("expected (dom(f))∼, got {inverse:?}");
     };
@@ -196,14 +196,14 @@ fn postfix_operators_bind_outside_closed_dom() {
 
     // Rodin: dom(f)(x) = (dom(f))(x), not dom(f(x)).
     let applied = axiom_rhs("dom(f)(g)");
-    let Expression::FunctionApplication { function, .. } = applied else {
+    let ExpressionKind::FunctionApplication { function, .. } = applied.kind else {
         panic!("expected (dom(f))(g), got {applied:?}");
     };
     assert_is_unary(&function, UnaryOp::Domain);
 
     // Rodin: ran(f)[S] = (ran(f))[S], not ran(f[S]).
     let imaged = axiom_rhs("ran(f)[S]");
-    let Expression::RelationalImage { relation, .. } = imaged else {
+    let ExpressionKind::RelationalImage { relation, .. } = imaged.kind else {
         panic!("expected (ran(f))[S], got {imaged:?}");
     };
     assert_is_unary(&relation, UnaryOp::Range);

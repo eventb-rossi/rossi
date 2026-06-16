@@ -12,9 +12,9 @@ pub mod predicate;
 pub use action::Action;
 pub use context::{Context, SetDeclaration};
 pub use event::{Event, EventStatus, InitialisationEvent};
-pub use expression::{BuiltinFunction, Expression, IdentPattern};
+pub use expression::{BuiltinFunction, Expression, ExpressionKind, IdentPattern};
 pub use machine::Machine;
-pub use predicate::{BuiltinPredicate, Predicate};
+pub use predicate::{BuiltinPredicate, Predicate, PredicateKind};
 
 use crate::keywords::KeywordId;
 

@@ -14,7 +14,7 @@
 
 use rossi::ast::expression::BinaryOp;
 use rossi::pretty::PrettyPrinter;
-use rossi::{Action, Expression, Predicate};
+use rossi::{Action, Expression, ExpressionKind, Predicate};
 
 use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
@@ -66,16 +66,16 @@ fn lower_function_override(a: &Action) -> Action {
         return a.clone();
     };
     let domain = left_assoc_maplet(arguments);
-    let maplet = Expression::Binary {
+    let maplet = Expression::from(ExpressionKind::Binary {
         op: BinaryOp::Maplet,
         left: Box::new(domain),
         right: Box::new(expression.clone()),
-    };
-    let rhs = Expression::Binary {
+    });
+    let rhs = Expression::from(ExpressionKind::Binary {
         op: BinaryOp::Overwrite,
-        left: Box::new(Expression::Identifier(function.clone())),
-        right: Box::new(Expression::SetEnumeration(vec![maplet])),
-    };
+        left: Box::new(ExpressionKind::Identifier(function.clone()).into()),
+        right: Box::new(ExpressionKind::SetEnumeration(vec![maplet]).into()),
+    });
     Action::Assignment {
         variables: vec![function.clone()],
         expressions: vec![rhs],
@@ -90,8 +90,8 @@ fn annotate_empty_sets(a: &Action, env: &TypeEnv) -> Action {
         } => {
             let mut new_exprs = Vec::with_capacity(expressions.len());
             for (var, expr) in variables.iter().zip(expressions.iter()) {
-                new_exprs.push(match (expr, env.get(var)) {
-                    (Expression::EmptySet, Some(ty)) => typed_empty_set(ty),
+                new_exprs.push(match (&expr.kind, env.get(var)) {
+                    (ExpressionKind::EmptySet, Some(ty)) => typed_empty_set(ty),
                     _ => expr.clone(),
                 });
             }
@@ -109,32 +109,35 @@ fn typed_empty_set(ty: &Type) -> Expression {
     // An assignment `n ≔ 0` to an ℤ-typed variable is never an empty set,
     // so we guard here.
     if !matches!(ty, Type::PowerSet(_)) {
-        return Expression::EmptySet;
+        return ExpressionKind::EmptySet.into();
     }
-    Expression::Binary {
+    ExpressionKind::Binary {
         op: BinaryOp::OfType,
-        left: Box::new(Expression::EmptySet),
+        left: Box::new(ExpressionKind::EmptySet.into()),
         right: Box::new(type_to_expression(ty)),
     }
+    .into()
 }
 
 /// Convert a [`Type`] into the `Expression` shape used for type ascriptions
 /// in predicate / action text, so the pretty-printer can emit it.
 pub(crate) fn type_to_expression(ty: &Type) -> Expression {
-    use Expression as E;
+    use ExpressionKind as E;
     match ty {
-        Type::Integer => E::Integers,
-        Type::Boolean => E::BoolType,
-        Type::GivenSet(name) => E::Identifier(name.clone()),
+        Type::Integer => E::Integers.into(),
+        Type::Boolean => E::BoolType.into(),
+        Type::GivenSet(name) => E::Identifier(name.clone()).into(),
         Type::PowerSet(inner) => E::Unary {
             op: rossi::ast::expression::UnaryOp::PowerSet,
             operand: Box::new(type_to_expression(inner)),
-        },
+        }
+        .into(),
         Type::Product(l, r) => E::Binary {
             op: BinaryOp::CartesianProduct,
             left: Box::new(type_to_expression(l)),
             right: Box::new(type_to_expression(r)),
-        },
+        }
+        .into(),
     }
 }
 

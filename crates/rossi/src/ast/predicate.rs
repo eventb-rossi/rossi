@@ -3,7 +3,7 @@
 //! Predicates represent logical formulas in Event-B, including
 //! comparisons, logical connectives, and quantifiers.
 
-use super::{Expression, TypedIdentifier};
+use super::{Expression, Span, TypedIdentifier};
 
 /// Comparison operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,10 +85,51 @@ impl BuiltinPredicate {
     }
 }
 
-/// An Event-B predicate (logical formula)
+/// An Event-B predicate (logical formula) together with its source location.
+///
+/// The predicate variant lives in [`PredicateKind`]; `span` records where the
+/// predicate came from in the source text, or `None` for synthesized / Rodin-XML
+/// nodes. Equality ignores `span` (see [`Expression`] for the rationale).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Predicate {
+    /// The predicate variant.
+    pub kind: PredicateKind,
+    /// Source span of this predicate, if known.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub span: Option<Span>,
+}
+
+impl Predicate {
+    /// Wrap a kind with an explicit (optional) span.
+    pub fn new(kind: PredicateKind, span: Option<Span>) -> Self {
+        Self { kind, span }
+    }
+}
+
+/// Equality compares the kind only; the span is positional metadata.
+impl PartialEq for Predicate {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Eq for Predicate {}
+
+impl From<PredicateKind> for Predicate {
+    /// Build a span-less predicate from its kind.
+    fn from(kind: PredicateKind) -> Self {
+        Self { kind, span: None }
+    }
+}
+
+/// The variants of an Event-B [`Predicate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Predicate {
+pub enum PredicateKind {
     /// Boolean true
     True,
 
@@ -135,21 +176,22 @@ pub enum Predicate {
 impl Predicate {
     /// Create a comparison predicate
     pub fn comparison(op: ComparisonOp, left: Expression, right: Expression) -> Self {
-        Predicate::Comparison { op, left, right }
+        PredicateKind::Comparison { op, left, right }.into()
     }
 
     /// Create a logical operation
     pub fn logical(op: LogicalOp, left: Predicate, right: Predicate) -> Self {
-        Predicate::Logical {
+        PredicateKind::Logical {
             op,
             left: Box::new(left),
             right: Box::new(right),
         }
+        .into()
     }
 
     /// Create a negation
     pub fn negation(predicate: Predicate) -> Self {
-        Predicate::Not(Box::new(predicate))
+        PredicateKind::Not(Box::new(predicate)).into()
     }
 
     /// Create a quantified predicate
@@ -158,10 +200,11 @@ impl Predicate {
         identifiers: Vec<TypedIdentifier>,
         predicate: Predicate,
     ) -> Self {
-        Predicate::Quantified {
+        PredicateKind::Quantified {
             quantifier,
             identifiers,
             predicate: Box::new(predicate),
         }
+        .into()
     }
 }

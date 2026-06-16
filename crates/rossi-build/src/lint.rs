@@ -713,8 +713,8 @@ fn collect_ancestors_via<'a>(
 mod tests {
     use super::*;
     use rossi::{
-        Action, Component, Context, Event, Expression, InitialisationEvent, LabeledAction,
-        LabeledPredicate, Machine, NamedElement, Predicate,
+        Action, Component, Context, Event, Expression, ExpressionKind, InitialisationEvent,
+        LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate, PredicateKind,
     };
 
     use crate::project::ProjectComponent;
@@ -755,16 +755,17 @@ mod tests {
     }
 
     fn ident(n: &str) -> Expression {
-        Expression::Identifier(n.into())
+        ExpressionKind::Identifier(n.into()).into()
     }
 
     fn eq_pred(lhs: Expression, rhs: Expression) -> Predicate {
         use rossi::ast::predicate::ComparisonOp;
-        Predicate::Comparison {
+        PredicateKind::Comparison {
             op: ComparisonOp::Equal,
             left: lhs,
             right: rhs,
         }
+        .into()
     }
 
     fn nv(n: &str) -> NamedElement {
@@ -775,11 +776,14 @@ mod tests {
     fn dead_variable_is_flagged() {
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x"), nv("y")];
-        m.invariants = vec![lp("inv1", eq_pred(ident("x"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+        )];
         m.initialisation = Some(InitialisationEvent {
             actions: vec![
-                la(Action::assignment("x", Expression::Integer(0))),
-                la(Action::assignment("y", Expression::Integer(0))),
+                la(Action::assignment("x", ExpressionKind::Integer(0).into())),
+                la(Action::assignment("y", ExpressionKind::Integer(0).into())),
             ],
             comment: None,
             extended: false,
@@ -807,7 +811,10 @@ mod tests {
     fn unmodified_variable_is_flagged() {
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
-        m.invariants = vec![lp("inv1", eq_pred(ident("x"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+        )];
         // No INITIALISATION, no events → x is referenced but never assigned.
         // Note: lint_incomplete_init will also fire here; we only assert EB012.
 
@@ -823,7 +830,10 @@ mod tests {
     fn dead_constant_is_flagged() {
         let mut c = Context::new("C".into());
         c.constants = vec![nv("k1"), nv("k2")];
-        c.axioms = vec![lp("ax1", eq_pred(ident("k1"), Expression::Integer(0)))];
+        c.axioms = vec![lp(
+            "ax1",
+            eq_pred(ident("k1"), ExpressionKind::Integer(0).into()),
+        )];
 
         let diags = run(&proj(vec![pc("C.buc", Component::Context(c))]));
         let dead: Vec<_> = diags
@@ -847,7 +857,10 @@ mod tests {
             comment: None,
             span: None,
         }];
-        c.axioms = vec![lp("ax1", eq_pred(ident("price"), Expression::Integer(0)))];
+        c.axioms = vec![lp(
+            "ax1",
+            eq_pred(ident("price"), ExpressionKind::Integer(0).into()),
+        )];
 
         let diags = run(&proj(vec![pc("C.buc", Component::Context(c))]));
         let shadowed: Vec<_> = diags
@@ -887,17 +900,21 @@ mod tests {
         m.variables = vec![nv("x")];
         m.invariants = vec![lp(
             "inv1",
-            Predicate::Quantified {
+            PredicateKind::Quantified {
                 quantifier: Quantifier::ForAll,
                 identifiers: vec![TypedIdentifier {
                     name: "x".into(),
                     type_expr: None,
                 }],
-                predicate: Box::new(Predicate::True),
-            },
+                predicate: Box::new(PredicateKind::True.into()),
+            }
+            .into(),
         )];
         m.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::assignment("x", Expression::Integer(0)))],
+            actions: vec![la(Action::assignment(
+                "x",
+                ExpressionKind::Integer(0).into(),
+            ))],
             comment: None,
             extended: false,
             with: Vec::new(),
@@ -923,7 +940,10 @@ mod tests {
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x"), nv("y")];
         m.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::assignment("x", Expression::Integer(0)))],
+            actions: vec![la(Action::assignment(
+                "x",
+                ExpressionKind::Integer(0).into(),
+            ))],
             comment: None,
             extended: false,
             with: Vec::new(),
@@ -951,7 +971,7 @@ mod tests {
         m.initialisation = Some(InitialisationEvent {
             actions: vec![la(Action::BecomesSuchThat {
                 variables: vec!["x".into()],
-                predicate: eq_pred(ident("x'"), Expression::Integer(0)),
+                predicate: eq_pred(ident("x'"), ExpressionKind::Integer(0).into()),
             })],
             comment: None,
             extended: false,
@@ -1001,7 +1021,7 @@ mod tests {
     fn labeled_action(label: &str) -> LabeledAction {
         LabeledAction {
             label: Some(label.into()),
-            action: Action::assignment("x", Expression::Integer(0)),
+            action: Action::assignment("x", ExpressionKind::Integer(0).into()),
             span: None,
             comment: None,
         }
@@ -1028,8 +1048,14 @@ mod tests {
     fn duplicate_invariant_label_is_flagged() {
         let mut m = Machine::new("M".into());
         m.invariants = vec![
-            lp("inv1", eq_pred(ident("x"), Expression::Integer(0))),
-            lp("inv1", eq_pred(ident("y"), Expression::Integer(0))),
+            lp(
+                "inv1",
+                eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+            ),
+            lp(
+                "inv1",
+                eq_pred(ident("y"), ExpressionKind::Integer(0).into()),
+            ),
         ];
         let diags = run_component(&Component::Machine(m));
         let labels = dups_of(&diags, RuleId::DuplicateLabel);
@@ -1055,7 +1081,7 @@ mod tests {
         // Event-B shares one label namespace across guards and actions, so a
         // guard `lbl` and an action `lbl` in the same event collide.
         let mut e = Event::new("evt".into());
-        e.guards = vec![lp("lbl", Predicate::True)];
+        e.guards = vec![lp("lbl", PredicateKind::True.into())];
         e.actions = vec![labeled_action("lbl")];
         let mut m = Machine::new("M".into());
         m.events = vec![e];
@@ -1106,8 +1132,14 @@ mod tests {
     fn duplicate_axiom_label_is_flagged() {
         let mut c = Context::new("C".into());
         c.axioms = vec![
-            lp("axm1", eq_pred(ident("k"), Expression::Integer(0))),
-            lp("axm1", eq_pred(ident("k"), Expression::Integer(1))),
+            lp(
+                "axm1",
+                eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
+            ),
+            lp(
+                "axm1",
+                eq_pred(ident("k"), ExpressionKind::Integer(1).into()),
+            ),
         ];
         let diags = run_component(&Component::Context(c));
         let labels = dups_of(&diags, RuleId::DuplicateLabel);
@@ -1121,8 +1153,8 @@ mod tests {
         // `with` (abstract var) and `witnesses` (abstract param) share one
         // witness-label namespace in Event-B; the same label in each collides.
         let mut e = Event::new("evt".into());
-        e.with = vec![lp("w", Predicate::True)];
-        e.witnesses = vec![lp("w", Predicate::True)];
+        e.with = vec![lp("w", PredicateKind::True.into())];
+        e.witnesses = vec![lp("w", PredicateKind::True.into())];
         let mut m = Machine::new("M".into());
         m.events = vec![e];
         let diags = run_component(&Component::Machine(m));
@@ -1165,7 +1197,10 @@ mod tests {
         // identifiers and labels are distinct namespaces.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
-        m.invariants = vec![lp("x", eq_pred(ident("x"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "x",
+            eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+        )];
         let diags = run_component(&Component::Machine(m));
         assert!(
             dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
@@ -1180,7 +1215,10 @@ mod tests {
         // must NOT collide — identifiers and labels are distinct namespaces.
         let mut c = Context::new("C".into());
         c.constants = vec![nv("S")];
-        c.axioms = vec![lp("S", eq_pred(ident("S"), Expression::Integer(0)))];
+        c.axioms = vec![lp(
+            "S",
+            eq_pred(ident("S"), ExpressionKind::Integer(0).into()),
+        )];
         let diags = run_component(&Component::Context(c));
         assert!(
             dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
@@ -1196,7 +1234,7 @@ mod tests {
         let blank = || LabeledPredicate {
             label: None,
             is_theorem: false,
-            predicate: Predicate::True,
+            predicate: PredicateKind::True.into(),
             span: None,
             comment: None,
         };
@@ -1218,7 +1256,7 @@ mod tests {
         let ws = || LabeledPredicate {
             label: Some("   ".into()),
             is_theorem: false,
-            predicate: Predicate::True,
+            predicate: PredicateKind::True.into(),
             span: None,
             comment: None,
         };
@@ -1237,10 +1275,13 @@ mod tests {
     fn clean_model_produces_no_duplicate_findings() {
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x"), nv("y")];
-        m.invariants = vec![lp("inv1", Predicate::True), lp("inv2", Predicate::True)];
+        m.invariants = vec![
+            lp("inv1", PredicateKind::True.into()),
+            lp("inv2", PredicateKind::True.into()),
+        ];
         let mut e = Event::new("evt".into());
         e.parameters = vec![nv("p"), nv("q")];
-        e.guards = vec![lp("grd1", Predicate::True)];
+        e.guards = vec![lp("grd1", PredicateKind::True.into())];
         e.actions = vec![labeled_action("act1")];
         m.events = vec![e];
         let diags = run_component(&Component::Machine(m));
@@ -1260,7 +1301,10 @@ mod tests {
         a.constants = vec![nv("k")];
         let mut b = Context::new("B".into());
         b.extends = vec!["A".into()];
-        b.axioms = vec![lp("ax1", eq_pred(ident("k"), Expression::Integer(0)))];
+        b.axioms = vec![lp(
+            "ax1",
+            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
+        )];
 
         let project = proj(vec![
             pc("A.buc", Component::Context(a)),
@@ -1282,7 +1326,10 @@ mod tests {
         c.constants = vec![nv("k")];
         let mut m = Machine::new("M".into());
         m.sees = vec!["C".into()];
-        m.invariants = vec![lp("inv1", eq_pred(ident("k"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
+        )];
 
         let project = proj(vec![
             pc("C.buc", Component::Context(c)),
@@ -1304,7 +1351,10 @@ mod tests {
         let mut m1 = Machine::new("M1".into());
         m1.variables = vec![nv("v")];
         m1.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::assignment("v", Expression::Integer(0)))],
+            actions: vec![la(Action::assignment(
+                "v",
+                ExpressionKind::Integer(0).into(),
+            ))],
             comment: None,
             extended: false,
             with: Vec::new(),
@@ -1314,7 +1364,10 @@ mod tests {
         });
         let mut m2 = Machine::new("M2".into());
         m2.refines = Some("M1".into());
-        m2.invariants = vec![lp("inv1", eq_pred(ident("v"), Expression::Integer(0)))];
+        m2.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
 
         let project = proj(vec![
             pc("M1.bum", Component::Machine(m1)),
@@ -1336,7 +1389,10 @@ mod tests {
         // covered? It should be — through M2.
         let mut m1 = Machine::new("M1".into());
         m1.variables = vec![nv("v")];
-        m1.invariants = vec![lp("inv1", eq_pred(ident("v"), Expression::Integer(0)))];
+        m1.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
         // Note: deliberately no INIT and no events that assign v.
         let mut m2 = Machine::new("M2".into());
         m2.refines = Some("M1".into());
@@ -1348,7 +1404,10 @@ mod tests {
             guards: Vec::new(),
             with: Vec::new(),
             witnesses: Vec::new(),
-            actions: vec![la(Action::assignment("v", Expression::Integer(1)))],
+            actions: vec![la(Action::assignment(
+                "v",
+                ExpressionKind::Integer(1).into(),
+            ))],
             span: None,
             name_span: None,
             comment: None,
@@ -1374,7 +1433,10 @@ mod tests {
         // `x :∈ S` — x is assigned via BecomesIn, so EB012 must not fire.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
-        m.invariants = vec![lp("inv1", eq_pred(ident("x"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+        )];
         m.events = vec![Event {
             name: "evt".into(),
             status: None,
@@ -1385,7 +1447,7 @@ mod tests {
             witnesses: Vec::new(),
             actions: vec![la(Action::BecomesIn {
                 variables: vec!["x".into()],
-                set: Expression::Naturals,
+                set: ExpressionKind::Naturals.into(),
             })],
             span: None,
             name_span: None,
@@ -1407,7 +1469,10 @@ mod tests {
         // `f(x) := 0` — f is assigned via FunctionOverride.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("f")];
-        m.invariants = vec![lp("inv1", eq_pred(ident("f"), Expression::Integer(0)))];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("f"), ExpressionKind::Integer(0).into()),
+        )];
         m.events = vec![Event {
             name: "evt".into(),
             status: None,
@@ -1418,8 +1483,8 @@ mod tests {
             witnesses: Vec::new(),
             actions: vec![la(Action::FunctionOverride {
                 function: "f".into(),
-                arguments: vec![Expression::Integer(1)],
-                expression: Expression::Integer(0),
+                arguments: vec![ExpressionKind::Integer(1).into()],
+                expression: ExpressionKind::Integer(0).into(),
             })],
             span: None,
             name_span: None,
@@ -1446,17 +1511,23 @@ mod tests {
 
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
-        let lambda = Expression::Lambda {
+        let lambda = Expression::from(ExpressionKind::Lambda {
             pattern: IdentPattern::Identifier(TypedIdentifier {
                 name: "x".into(),
                 type_expr: None,
             }),
-            predicate: Box::new(Predicate::True),
+            predicate: Box::new(PredicateKind::True.into()),
             expression: Box::new(ident("x")),
-        };
-        m.invariants = vec![lp("inv1", eq_pred(lambda, Expression::Integer(0)))];
+        });
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(lambda, ExpressionKind::Integer(0).into()),
+        )];
         m.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::assignment("x", Expression::Integer(0)))],
+            actions: vec![la(Action::assignment(
+                "x",
+                ExpressionKind::Integer(0).into(),
+            ))],
             comment: None,
             extended: false,
             with: Vec::new(),
@@ -1505,7 +1576,10 @@ mod tests {
             status: None,
             refines: None,
             parameters: vec![nv("x")],
-            guards: vec![lp("g1", eq_pred(ident("x"), Expression::Integer(0)))],
+            guards: vec![lp(
+                "g1",
+                eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+            )],
             with: Vec::new(),
             witnesses: Vec::new(),
             actions: Vec::new(),
