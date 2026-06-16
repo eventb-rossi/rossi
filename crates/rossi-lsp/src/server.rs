@@ -338,7 +338,7 @@ impl LanguageServer for RossiLanguageServer {
 
             // Update definition cache
             self.definition_provider
-                .update_definitions(uri.to_string(), &doc.text);
+                .index_components(uri.to_string(), doc.components(), &doc.text);
 
             // Update workspace symbols
             self.workspace_symbol_provider
@@ -369,7 +369,7 @@ impl LanguageServer for RossiLanguageServer {
 
             // Update definition cache
             self.definition_provider
-                .update_definitions(uri.to_string(), &doc.text);
+                .index_components(uri.to_string(), doc.components(), &doc.text);
 
             // Update workspace symbols
             self.workspace_symbol_provider
