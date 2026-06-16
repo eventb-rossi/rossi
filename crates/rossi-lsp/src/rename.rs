@@ -81,6 +81,18 @@ impl RenameProvider {
         let uri = &params.text_document_position.text_document.uri;
         let new_name = &params.new_name;
 
+        // Prefer the open document's stored parse: the served text, the cursor
+        // offset, and the AST then index one consistent snapshot, and the cursor
+        // file is not re-parsed for the rename. Fall back to the handler text
+        // when the document is not open (closed docs, unit tests).
+        let cursor = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let text = cursor
+            .as_deref()
+            .map_or(text, |parsed| parsed.text.as_str());
+
         // Get the identifier at the cursor position
         let (identifier, _) = get_identifier_and_range_at_position(text, position)?;
 
@@ -124,7 +136,19 @@ impl RenameProvider {
             // its own scope, and the after-state form `x'` is renamed at its
             // base. Fall back to a whole-word scan when the document doesn't
             // parse far enough to resolve the cursor.
-            let edits = ast_rename_edits(text, position, &identifier, new_name)
+            //
+            // Reuse the open document's components when we have them; otherwise
+            // recover them from the served text. `text` and these components are
+            // the same snapshot, so the offset and the spans agree.
+            let owned;
+            let components: &[Component] = match cursor.as_deref() {
+                Some(parsed) => parsed.components(),
+                None => {
+                    owned = parse_all(text);
+                    &owned
+                }
+            };
+            let edits = ast_rename_edits(text, components, position, &identifier, new_name)
                 .or_else(|| text_rename_edits(text, &identifier, uri, new_name))?;
 
             changes.insert(uri.clone(), edits);
@@ -303,15 +327,20 @@ fn text_rename_edits(
 /// otherwise the component-level symbol's declaration and free uses are renamed.
 /// A binder of the same name in another scope, and same-named globals, are left
 /// untouched. The after-state form `x'` is renamed at its base, preserving `'`.
+///
+/// `components` are the document's already-parsed components (the open
+/// document's stored parse, or a recovery parse of `text` when it is not open),
+/// so the rename never re-parses the cursor file. `text` must be the source
+/// those component spans index into.
 fn ast_rename_edits(
     text: &str,
+    components: &[Component],
     position: Position,
     identifier: &str,
     new_name: &str,
 ) -> Option<Vec<TextEdit>> {
     let offset = position_to_offset(text, position)?;
-    let components = parse_all(text);
-    let component = component_at_offset(&components, offset)?;
+    let component = component_at_offset(components, offset)?;
 
     let spans = rename_spans(component, identifier, offset);
     if spans.is_empty() {
@@ -941,5 +970,38 @@ END
         let out = rename_at(source, byte, "y");
         // The base of `x'` is renamed; the prime is preserved.
         assert!(out.contains("y :∣ y' = y + 1"), "{out}");
+    }
+
+    #[test]
+    fn rename_through_open_document_uses_stored_parse() {
+        // With the document open, the rename resolves against the document
+        // manager's stored parse rather than re-parsing the handler text. The
+        // handler text below is deliberately stale and too short to contain the
+        // cursor position, so the rename can only succeed — and land on `count`
+        // — if it reads the stored snapshot instead.
+        let uri = make_uri();
+        let stored = "MACHINE m\nVARIABLES\ncount\nINVARIANTS\n@i1 count > 0\nEND\n";
+
+        let documents = Arc::new(DocumentManager::new());
+        documents.open(uri.clone(), "eventb".to_string(), 1, stored.to_string());
+
+        let mut provider = RenameProvider::new();
+        provider.set_document_manager(Arc::clone(&documents));
+
+        // Cursor on the use of `count` in @i1 (offset into the stored text).
+        let pos = pos_at(stored, stored.rfind("count").unwrap());
+        let params = make_rename_params(pos.line, pos.character, uri.clone(), "total".to_string());
+
+        let edit = provider
+            .rename(&params, "MACHINE m\nVARIABLES\nother\nEND\n")
+            .expect("rename resolves from the stored parse");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        let out = apply(stored, &edits);
+
+        assert!(out.contains("@i1 total > 0"), "{out}");
+        assert!(
+            out.contains("VARIABLES\ntotal"),
+            "declaration renamed: {out}"
+        );
     }
 }
