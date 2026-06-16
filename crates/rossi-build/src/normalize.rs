@@ -14,7 +14,7 @@
 
 use rossi::ast::expression::BinaryOp;
 use rossi::pretty::PrettyPrinter;
-use rossi::{Action, Expression, ExpressionKind, Predicate};
+use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate};
 
 use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
@@ -57,11 +57,11 @@ pub fn canonical_action_with_env(a: &Action, env: &TypeEnv) -> String {
 /// equivalent compact form (`f ≔ f{x ↦ E}`) which our parser lowers to the
 /// same AST as `f ⊕ {…}`, so semantic comparison via `ScView` converges.
 fn lower_function_override(a: &Action) -> Action {
-    let Action::FunctionOverride {
+    let ActionKind::FunctionOverride {
         function,
         arguments,
         expression,
-    } = a
+    } = &a.kind
     else {
         return a.clone();
     };
@@ -73,34 +73,36 @@ fn lower_function_override(a: &Action) -> Action {
     });
     let rhs = Expression::from(ExpressionKind::Binary {
         op: BinaryOp::Overwrite,
-        left: Box::new(ExpressionKind::Identifier(function.clone()).into()),
+        left: Box::new(ExpressionKind::Identifier(function.name.clone()).into()),
         right: Box::new(ExpressionKind::SetEnumeration(vec![maplet]).into()),
     });
-    Action::Assignment {
+    ActionKind::Assignment {
         variables: vec![function.clone()],
         expressions: vec![rhs],
     }
+    .into()
 }
 
 fn annotate_empty_sets(a: &Action, env: &TypeEnv) -> Action {
-    match a {
-        Action::Assignment {
+    match &a.kind {
+        ActionKind::Assignment {
             variables,
             expressions,
         } => {
             let mut new_exprs = Vec::with_capacity(expressions.len());
             for (var, expr) in variables.iter().zip(expressions.iter()) {
-                new_exprs.push(match (&expr.kind, env.get(var)) {
+                new_exprs.push(match (&expr.kind, env.get(var.as_str())) {
                     (ExpressionKind::EmptySet, Some(ty)) => typed_empty_set(ty),
                     _ => expr.clone(),
                 });
             }
-            Action::Assignment {
+            ActionKind::Assignment {
                 variables: variables.clone(),
                 expressions: new_exprs,
             }
+            .into()
         }
-        other => other.clone(),
+        _ => a.clone(),
     }
 }
 

@@ -22,7 +22,8 @@ use std::collections::BTreeMap;
 use rossi::ast::expression::BinaryOp;
 use rossi::ast::predicate::ComparisonOp;
 use rossi::{
-    Action, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind, TypedIdentifier,
+    Action, ActionKind, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind,
+    TypedIdentifier,
 };
 
 use crate::ast_util::left_assoc_maplet;
@@ -352,41 +353,45 @@ fn enrich_expression_in_with_expected(
 }
 
 fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
-    match action {
-        Action::Skip => Action::Skip,
-        Action::Assignment {
+    match action.kind {
+        ActionKind::Skip => ActionKind::Skip.into(),
+        ActionKind::Assignment {
             variables,
             expressions,
-        } => Action::Assignment {
+        } => ActionKind::Assignment {
             variables,
             expressions: expressions
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
-        },
-        Action::BecomesIn { variables, set } => Action::BecomesIn {
+        }
+        .into(),
+        ActionKind::BecomesIn { variables, set } => ActionKind::BecomesIn {
             variables,
             set: enrich_expression_in(set, env),
-        },
-        Action::BecomesSuchThat {
+        }
+        .into(),
+        ActionKind::BecomesSuchThat {
             variables,
             predicate,
-        } => Action::BecomesSuchThat {
+        } => ActionKind::BecomesSuchThat {
             variables,
             predicate: enrich_predicate_in(predicate, env),
-        },
-        Action::FunctionOverride {
+        }
+        .into(),
+        ActionKind::FunctionOverride {
             function,
             arguments,
             expression,
-        } => Action::FunctionOverride {
+        } => ActionKind::FunctionOverride {
             function,
             arguments: arguments
                 .into_iter()
                 .map(|e| enrich_expression_in(e, env))
                 .collect(),
             expression: enrich_expression_in(expression, env),
-        },
+        }
+        .into(),
     }
 }
 

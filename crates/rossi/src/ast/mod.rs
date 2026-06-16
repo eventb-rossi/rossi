@@ -9,7 +9,7 @@ pub mod expression;
 pub mod machine;
 pub mod predicate;
 
-pub use action::Action;
+pub use action::{Action, ActionKind};
 pub use context::{Context, SetDeclaration};
 pub use event::{Event, EventStatus, InitialisationEvent};
 pub use expression::{BuiltinFunction, Expression, ExpressionKind, IdentPattern};
@@ -68,6 +68,88 @@ impl PartialEq<&str> for TypedIdentifier {
 impl PartialEq<str> for TypedIdentifier {
     fn eq(&self, other: &str) -> bool {
         self.name == other && self.type_expr.is_none()
+    }
+}
+
+/// An identifier occurrence with its source span.
+///
+/// Used for identifier leaves that are not themselves a spanned [`Expression`]
+/// — assignment / `becomes` targets and predicate-application names. Equality,
+/// ordering, and hashing are by name only; the span is positional metadata, so
+/// two occurrences of the same name compare equal regardless of where they
+/// appear (mirroring [`TypedIdentifier`]'s name-based comparisons).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Ident {
+    /// The identifier text.
+    pub name: String,
+    /// Source span of this occurrence, if known.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub span: Option<Span>,
+}
+
+impl Ident {
+    /// Create an identifier occurrence with an explicit (optional) span.
+    pub fn new(name: impl Into<String>, span: Option<Span>) -> Self {
+        Self {
+            name: name.into(),
+            span,
+        }
+    }
+
+    /// The identifier text.
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+}
+
+impl PartialEq for Ident {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Ident {}
+
+impl std::hash::Hash for Ident {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl PartialEq<str> for Ident {
+    fn eq(&self, other: &str) -> bool {
+        self.name == other
+    }
+}
+
+impl PartialEq<&str> for Ident {
+    fn eq(&self, other: &&str) -> bool {
+        self.name == *other
+    }
+}
+
+impl AsRef<str> for Ident {
+    fn as_ref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl From<String> for Ident {
+    fn from(name: String) -> Self {
+        Self { name, span: None }
+    }
+}
+
+impl From<&str> for Ident {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            span: None,
+        }
     }
 }
 

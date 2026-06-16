@@ -4,7 +4,7 @@ mod common;
 
 use rossi::ast::expression::{BinaryOp, UnaryOp};
 use rossi::ast::predicate::Quantifier;
-use rossi::{Action, EventStatus, Expression, ExpressionKind, Predicate, PredicateKind};
+use rossi::{ActionKind, EventStatus, Expression, ExpressionKind, Predicate, PredicateKind};
 
 // ============================================================================
 // HIGH priority: Action::BecomesIn
@@ -32,8 +32,8 @@ fn test_becomes_in_unicode() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match &event.actions[0].action {
-        Action::BecomesIn { variables, set } => {
+    match &event.actions[0].action.kind {
+        ActionKind::BecomesIn { variables, set } => {
             assert_eq!(variables, &["x"]);
             assert!(
                 matches!(set.kind, ExpressionKind::SetEnumeration(_)),
@@ -67,8 +67,8 @@ fn test_becomes_in_ascii() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match &event.actions[0].action {
-        Action::BecomesIn { variables, set } => {
+    match &event.actions[0].action.kind {
+        ActionKind::BecomesIn { variables, set } => {
             assert_eq!(variables, &["x"]);
             assert!(
                 matches!(set.kind, ExpressionKind::SetEnumeration(_)),
@@ -106,8 +106,8 @@ fn test_becomes_such_that() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match &event.actions[0].action {
-        Action::BecomesSuchThat {
+    match &event.actions[0].action.kind {
+        ActionKind::BecomesSuchThat {
             variables,
             predicate,
         } => {
@@ -244,8 +244,8 @@ fn test_forward_composition_parenthesized_in_action() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match &event.actions[0].action {
-        Action::Assignment {
+    match &event.actions[0].action.kind {
+        ActionKind::Assignment {
             variables,
             expressions,
         } => {
@@ -274,10 +274,10 @@ fn test_standalone_action_forward_composition_unparenthesized() {
     // attribute) has no following action to separate, so a bare semicolon
     // is forward composition.
     let action = rossi::parse_action_str("x ≔ f;g").expect("standalone action parses");
-    let Action::Assignment {
+    let ActionKind::Assignment {
         variables,
         expressions,
-    } = &action
+    } = &action.kind
     else {
         panic!("Expected Assignment, got {:?}", action);
     };
@@ -296,7 +296,7 @@ fn test_standalone_action_chained_composition_with_inverse() {
     // Left-associative chain mixing inverse and a parenthesized set
     // expression: h∼;(s ∪ t);h parses as (h∼;(s ∪ t));h.
     let action = rossi::parse_action_str("x ≔ h∼;(s ∪ t);h").expect("standalone action parses");
-    let Action::Assignment { expressions, .. } = &action else {
+    let ActionKind::Assignment { expressions, .. } = &action.kind else {
         panic!("Expected Assignment, got {:?}", action);
     };
     let ExpressionKind::Binary { op, left, right } = &expressions[0].kind else {
@@ -336,7 +336,7 @@ fn test_printed_composition_after_string_literal_reparses_in_machine() {
 #[test]
 fn test_standalone_becomes_such_that_with_composition() {
     let action = rossi::parse_action_str("x :∣ x' = f;g").expect("standalone action parses");
-    let Action::BecomesSuchThat { predicate, .. } = &action else {
+    let ActionKind::BecomesSuchThat { predicate, .. } = &action.kind else {
         panic!("Expected BecomesSuchThat, got {:?}", action);
     };
     let PredicateKind::Comparison { right, .. } = &predicate.kind else {
@@ -707,8 +707,8 @@ fn test_primed_identifier_in_becomes_such_that() {
         .find(|e| e.name == "decrease")
         .expect("Expected 'decrease' event");
     assert_eq!(decrease.actions.len(), 1);
-    match &decrease.actions[0].action {
-        Action::BecomesSuchThat {
+    match &decrease.actions[0].action.kind {
+        ActionKind::BecomesSuchThat {
             variables,
             predicate,
         } => {

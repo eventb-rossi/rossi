@@ -2,7 +2,7 @@
 
 mod common;
 
-use rossi::{Action, ExpressionKind, parse, parse_action_str, parse_expression_str};
+use rossi::{ActionKind, ExpressionKind, parse, parse_action_str, parse_expression_str};
 
 #[test]
 fn test_binary_addition_ast_structure() {
@@ -560,8 +560,8 @@ fn test_maplet_binds_looser_than_arrow_in_action() {
     "#,
     );
     let event = &m.events[0];
-    match &event.actions[0].action {
-        Action::Assignment { expressions, .. } => match &expressions[0].kind {
+    match &event.actions[0].action.kind {
+        ActionKind::Assignment { expressions, .. } => match &expressions[0].kind {
             ExpressionKind::Binary { op, right, .. } => {
                 assert_eq!(*op, BinaryOp::Maplet);
                 assert!(matches!(
@@ -1466,12 +1466,12 @@ fn test_postfix_function_update_in_action() {
     let action = parse_action_str("currentFloor ≔ currentFloor{c ↦ f}").expect("action parses");
     let equivalent = parse_action_str("currentFloor ≔ currentFloor ⊕ {c ↦ f}").expect("explicit");
     assert_eq!(action, equivalent);
-    match action {
-        Action::Assignment {
+    match action.kind {
+        ActionKind::Assignment {
             ref variables,
             ref expressions,
         } => {
-            assert_eq!(variables, &vec!["currentFloor".to_string()]);
+            assert_eq!(variables, &vec!["currentFloor"]);
             assert_eq!(expressions.len(), 1);
         }
         other => panic!("Expected Assignment, got {:?}", other),
