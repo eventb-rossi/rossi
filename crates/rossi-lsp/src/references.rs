@@ -9,7 +9,8 @@ use rossi::Component;
 use rossi::ast::Span;
 use rossi::keywords::KeywordId;
 
-use crate::component_util::{component_at_offset, parse_all, parse_named};
+use crate::component_loader::ComponentLoader;
+use crate::component_util::{component_at_offset, parse_all};
 use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
@@ -162,18 +163,23 @@ impl ReferenceProvider {
         };
         let is_component_name = manager.find_component_uri(identifier).is_some();
 
+        // One loader per request: every component the lookup touches is parsed
+        // at most once, and open documents are read from the store, not
+        // re-parsed.
+        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+
         if is_component_name && is_component_reference_position(masked, position) {
-            return self.find_references_in_workspace(identifier);
+            return find_references_in_workspace(&loader, identifier);
         }
 
         if let Some(symbol) =
-            self.resolve_symbol_identity(text, masked, position, identifier, manager)
+            self.resolve_symbol_identity(text, masked, position, identifier, &loader)
         {
-            return self.find_references_for_symbol(&symbol, manager);
+            return self.find_references_for_symbol(&symbol, &loader);
         }
 
         if is_component_name {
-            return self.find_references_in_workspace(identifier);
+            return find_references_in_workspace(&loader, identifier);
         }
 
         self.find_references_in_text(text, uri, identifier)
@@ -182,7 +188,7 @@ impl ReferenceProvider {
     fn find_references_for_symbol(
         &self,
         symbol: &SymbolIdentity,
-        manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
     ) -> Vec<Location> {
         let mut locations = Vec::new();
         let mut seen = HashSet::new();
@@ -192,9 +198,7 @@ impl ReferenceProvider {
                 return locations;
             };
 
-            let Some((component_uri, component_text, component)) =
-                self.load_component_by_name(&symbol.owner, manager)
-            else {
+            let Some(loaded) = loader.load(&symbol.owner) else {
                 return locations;
             };
 
@@ -202,9 +206,9 @@ impl ReferenceProvider {
                 &mut locations,
                 &mut seen,
                 ast_parameter_references(
-                    &component,
-                    &component_text,
-                    &component_uri,
+                    loaded.component(),
+                    loaded.text(),
+                    loaded.uri(),
                     event_name,
                     &symbol.name,
                 ),
@@ -213,27 +217,30 @@ impl ReferenceProvider {
             return locations;
         }
 
-        for component_name in self.candidate_components_for_symbol(symbol, manager) {
-            let Some((component_uri, component_text, component)) =
-                self.load_component_by_name(&component_name, manager)
-            else {
+        for component_name in self.candidate_components_for_symbol(symbol, loader.manager()) {
+            let Some(loaded) = loader.load(&component_name) else {
                 continue;
             };
 
-            if self.resolve_symbol_identity_in_component(&component, &symbol.name, manager)
+            if self.resolve_symbol_identity_in_component(loaded.component(), &symbol.name, loader)
                 == Some(symbol.clone())
             {
                 // Event names are not formula identifiers, so they stay on the
                 // text scan; variables / constants / sets resolve from the AST.
                 let refs = if symbol.kind == SymbolKind::Event {
                     self.find_symbol_references_in_text_range(
-                        &component_text,
-                        &component_uri,
+                        loaded.text(),
+                        loaded.uri(),
                         &symbol.name,
                         None,
                     )
                 } else {
-                    ast_symbol_references(&component, &component_text, &component_uri, &symbol.name)
+                    ast_symbol_references(
+                        loaded.component(),
+                        loaded.text(),
+                        loaded.uri(),
+                        &symbol.name,
+                    )
                 };
                 push_unique_locations(&mut locations, &mut seen, refs);
             }
@@ -248,7 +255,7 @@ impl ReferenceProvider {
         masked: &str,
         position: Position,
         identifier: &str,
-        manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
     ) -> Option<SymbolIdentity> {
         // Recover from local errors (via the shared helper) so a symbol
         // elsewhere in a broken document is still resolvable; an empty result
@@ -256,7 +263,7 @@ impl ReferenceProvider {
         let components = parse_all(text);
         let offset = position_to_offset(text, position).unwrap_or(text.len());
         let component = component_at_offset(&components, offset)?;
-        self.resolve_symbol_identity_at_position(component, masked, position, identifier, manager)
+        self.resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
     }
 
     fn resolve_symbol_identity_at_position(
@@ -265,7 +272,7 @@ impl ReferenceProvider {
         masked: &str,
         position: Position,
         identifier: &str,
-        manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
     ) -> Option<SymbolIdentity> {
         if let Component::Machine(machine) = component
             && let Some(parameter) =
@@ -274,34 +281,33 @@ impl ReferenceProvider {
             return Some(parameter);
         }
 
-        self.resolve_symbol_identity_in_component(component, identifier, manager)
+        self.resolve_symbol_identity_in_component(component, identifier, loader)
     }
 
     fn resolve_symbol_identity_in_component(
         &self,
         component: &Component,
         identifier: &str,
-        manager: &CrossReferenceManager,
+        loader: &ComponentLoader,
     ) -> Option<SymbolIdentity> {
         if let Some(local) = local_symbol_identity(component, identifier) {
             return Some(local);
         }
 
+        let manager = loader.manager();
         match component {
             Component::Machine(machine) => {
                 for machine_name in manager.refinement_chain(&machine.name) {
-                    if let Some((_, _, component)) =
-                        self.load_component_by_name(&machine_name, manager)
-                        && let Some(symbol) = local_symbol_identity(&component, identifier)
+                    if let Some(loaded) = loader.load(&machine_name)
+                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
                     {
                         return Some(symbol);
                     }
                 }
 
                 for context_name in manager.ordered_visible_contexts(&machine.name) {
-                    if let Some((_, _, component)) =
-                        self.load_component_by_name(&context_name, manager)
-                        && let Some(symbol) = local_symbol_identity(&component, identifier)
+                    if let Some(loaded) = loader.load(&context_name)
+                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
                     {
                         return Some(symbol);
                     }
@@ -309,9 +315,8 @@ impl ReferenceProvider {
             }
             Component::Context(context) => {
                 for context_name in manager.ordered_extends_chain(&context.name) {
-                    if let Some((_, _, component)) =
-                        self.load_component_by_name(&context_name, manager)
-                        && let Some(symbol) = local_symbol_identity(&component, identifier)
+                    if let Some(loaded) = loader.load(&context_name)
+                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
                     {
                         return Some(symbol);
                     }
@@ -375,53 +380,40 @@ impl ReferenceProvider {
         candidates.dedup();
         candidates
     }
+}
 
-    /// Find all references across the workspace
-    fn find_references_in_workspace(&self, identifier: &str) -> Vec<Location> {
-        let mut locations = Vec::new();
-        let mut seen = HashSet::new();
+/// Find all references across the workspace.
+///
+/// A free function (it needs only the loader): every workspace component is
+/// loaded through the shared cache, so a name appearing in many files is parsed
+/// at most once.
+fn find_references_in_workspace(loader: &ComponentLoader, identifier: &str) -> Vec<Location> {
+    let mut locations = Vec::new();
+    let mut seen = HashSet::new();
 
-        let manager = match &self.cross_ref_manager {
-            Some(m) => m,
-            None => return locations,
-        };
+    let mut component_names = loader.manager().all_component_names();
+    component_names.sort();
 
-        let mut component_names = manager.all_component_names();
-        component_names.sort();
-
-        for component_name in component_names {
-            if let Some((uri, text, _)) = self.load_component_by_name(&component_name, manager) {
-                // Component references use the component word boundary so a
-                // name like `ENV_C` does not match inside a sibling component
-                // `ENV_C-1` (consistent with rename's cross-file path).
-                push_unique_locations(
-                    &mut locations,
-                    &mut seen,
-                    identifier_utils::find_whole_word_locations(
-                        &text,
-                        identifier,
-                        &uri,
-                        None,
-                        identifier_utils::WordBoundary::ComponentName,
-                    ),
-                );
-            }
+    for component_name in component_names {
+        if let Some(loaded) = loader.load(&component_name) {
+            // Component references use the component word boundary so a name
+            // like `ENV_C` does not match inside a sibling component `ENV_C-1`
+            // (consistent with rename's cross-file path).
+            push_unique_locations(
+                &mut locations,
+                &mut seen,
+                identifier_utils::find_whole_word_locations(
+                    loaded.text(),
+                    identifier,
+                    loaded.uri(),
+                    None,
+                    identifier_utils::WordBoundary::ComponentName,
+                ),
+            );
         }
-
-        locations
     }
 
-    fn load_component_by_name(
-        &self,
-        component_name: &str,
-        manager: &CrossReferenceManager,
-    ) -> Option<(Url, String, Component)> {
-        let uri_str = manager.find_component_uri(component_name)?;
-        let uri = Url::parse(&uri_str).ok()?;
-        let text = manager.load_component_text(component_name, self.document_manager.as_deref())?;
-        let component = parse_named(&text, component_name)?;
-        Some((uri, text, component))
-    }
+    locations
 }
 
 /// Resolve `identifier` to a symbol declared directly in `component`.
