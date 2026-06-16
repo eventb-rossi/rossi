@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rossi::{Action, Component, Context, Machine};
+use rossi::{ActionKind, Component, Context, Machine};
 
 use crate::ast_util::lhs_variables;
 use crate::project::Project;
@@ -467,8 +467,8 @@ fn referenced_in_machine(m: &Machine) -> BTreeSet<String> {
         for la in &e.actions {
             collect_referenced_in_action_rhs_with_locals(&la.action, &params, &mut acc);
             // `f(x) := e` writes to f but also reads its old value.
-            if let Action::FunctionOverride { function, .. } = &la.action {
-                acc.insert(function.clone());
+            if let ActionKind::FunctionOverride { function, .. } = &la.action.kind {
+                acc.insert(function.name.clone());
             }
         }
     }
@@ -713,8 +713,9 @@ fn collect_ancestors_via<'a>(
 mod tests {
     use super::*;
     use rossi::{
-        Action, Component, Context, Event, Expression, ExpressionKind, InitialisationEvent,
-        LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate, PredicateKind,
+        Action, ActionKind, Component, Context, Event, Expression, ExpressionKind,
+        InitialisationEvent, LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate,
+        PredicateKind,
     };
 
     use crate::project::ProjectComponent;
@@ -969,10 +970,11 @@ mod tests {
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
         m.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::BecomesSuchThat {
+            actions: vec![la(ActionKind::BecomesSuchThat {
                 variables: vec!["x".into()],
                 predicate: eq_pred(ident("x'"), ExpressionKind::Integer(0).into()),
-            })],
+            }
+            .into())],
             comment: None,
             extended: false,
             with: Vec::new(),
@@ -1445,10 +1447,11 @@ mod tests {
             guards: Vec::new(),
             with: Vec::new(),
             witnesses: Vec::new(),
-            actions: vec![la(Action::BecomesIn {
+            actions: vec![la(ActionKind::BecomesIn {
                 variables: vec!["x".into()],
                 set: ExpressionKind::Naturals.into(),
-            })],
+            }
+            .into())],
             span: None,
             name_span: None,
             comment: None,
@@ -1481,11 +1484,12 @@ mod tests {
             guards: Vec::new(),
             with: Vec::new(),
             witnesses: Vec::new(),
-            actions: vec![la(Action::FunctionOverride {
+            actions: vec![la(ActionKind::FunctionOverride {
                 function: "f".into(),
                 arguments: vec![ExpressionKind::Integer(1).into()],
                 expression: ExpressionKind::Integer(0).into(),
-            })],
+            }
+            .into())],
             span: None,
             name_span: None,
             comment: None,

@@ -22,7 +22,7 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use rossi::ast::expression::{BinaryOp, BuiltinFunction};
 use rossi::{
-    Action, Expression, ExpressionKind, Predicate, PredicateKind, parse_action_str,
+    Action, ActionKind, Expression, ExpressionKind, Predicate, PredicateKind, parse_action_str,
     parse_predicate_str,
 };
 
@@ -439,35 +439,39 @@ fn normalize_source(s: Option<String>) -> Option<String> {
 /// Used so `register ≔ ∅ ⦂ ℙ(USERS)` compares equal to `register ≔ ∅`.
 #[must_use]
 pub fn strip_type_ascriptions_action(a: Action) -> Action {
-    match a {
-        Action::Skip => Action::Skip,
-        Action::Assignment {
+    match a.kind {
+        ActionKind::Skip => ActionKind::Skip.into(),
+        ActionKind::Assignment {
             variables,
             expressions,
-        } => Action::Assignment {
+        } => ActionKind::Assignment {
             variables,
             expressions: expressions.into_iter().map(strip_expr).collect(),
-        },
-        Action::BecomesIn { variables, set } => Action::BecomesIn {
+        }
+        .into(),
+        ActionKind::BecomesIn { variables, set } => ActionKind::BecomesIn {
             variables,
             set: strip_expr(set),
-        },
-        Action::BecomesSuchThat {
+        }
+        .into(),
+        ActionKind::BecomesSuchThat {
             variables,
             predicate,
-        } => Action::BecomesSuchThat {
+        } => ActionKind::BecomesSuchThat {
             variables,
             predicate: strip_type_ascriptions_pred(predicate),
-        },
-        Action::FunctionOverride {
+        }
+        .into(),
+        ActionKind::FunctionOverride {
             function,
             arguments,
             expression,
-        } => Action::FunctionOverride {
+        } => ActionKind::FunctionOverride {
             function,
             arguments: arguments.into_iter().map(strip_expr).collect(),
             expression: strip_expr(expression),
-        },
+        }
+        .into(),
     }
 }
 

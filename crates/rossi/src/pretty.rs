@@ -949,29 +949,29 @@ impl PrettyPrinter {
     /// Convert an Action to text
     pub fn print_action(&self, action: &Action) -> String {
         let assign = self.op(OperatorId::Assignment);
-        match action {
-            Action::Skip => "skip".to_string(),
-            Action::Assignment {
+        match &action.kind {
+            ActionKind::Skip => "skip".to_string(),
+            ActionKind::Assignment {
                 variables,
                 expressions,
             } => {
-                let vars = variables.join(", ");
+                let vars = join_idents(variables);
                 let exprs: Vec<String> = expressions
                     .iter()
                     .map(|e| self.print_action_expr(e))
                     .collect();
                 format!("{} {} {}", vars, assign, exprs.join(", "))
             }
-            Action::BecomesIn { variables, set } => {
-                let vars = variables.join(", ");
+            ActionKind::BecomesIn { variables, set } => {
+                let vars = join_idents(variables);
                 let op = self.op(OperatorId::BecomesIn);
                 format!("{} {} {}", vars, op, self.print_action_expr(set))
             }
-            Action::BecomesSuchThat {
+            ActionKind::BecomesSuchThat {
                 variables,
                 predicate,
             } => {
-                let vars = variables.join(", ");
+                let vars = join_idents(variables);
                 let op = self.op(OperatorId::BecomesSuchThat);
                 format!(
                     "{} {} {}",
@@ -980,7 +980,7 @@ impl PrettyPrinter {
                     Self::guard_action_part(self.print_predicate(predicate))
                 )
             }
-            Action::FunctionOverride {
+            ActionKind::FunctionOverride {
                 function,
                 arguments,
                 expression,
@@ -991,7 +991,7 @@ impl PrettyPrinter {
                     .collect();
                 format!(
                     "{}({}) {} {}",
-                    function,
+                    function.as_str(),
                     args.join(", "),
                     assign,
                     self.print_action_expr(expression)
@@ -999,6 +999,14 @@ impl PrettyPrinter {
             }
         }
     }
+}
+
+/// Render a comma-separated list of identifier names (assignment / becomes LHS).
+fn join_idents(vars: &[Ident]) -> String {
+    vars.iter()
+        .map(Ident::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Convenience function to convert a Component to text with default settings

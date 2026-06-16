@@ -638,8 +638,8 @@ fn test_multiple_parallel_assignment() {
         .as_ref()
         .expect("Should have initialisation");
     assert_eq!(init.actions.len(), 1);
-    match &init.actions[0].action {
-        rossi::Action::Assignment {
+    match &init.actions[0].action.kind {
+        rossi::ActionKind::Assignment {
             variables,
             expressions,
         } => {
@@ -653,8 +653,8 @@ fn test_multiple_parallel_assignment() {
     assert_eq!(m.events.len(), 1);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match &event.actions[0].action {
-        rossi::Action::Assignment {
+    match &event.actions[0].action.kind {
+        rossi::ActionKind::Assignment {
             variables,
             expressions,
         } => {
@@ -2059,7 +2059,7 @@ fn test_skip_action_in_event() {
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
     assert_eq!(event.actions[0].label, Some("act1".to_string()));
-    assert_eq!(event.actions[0].action, rossi::Action::Skip);
+    assert_eq!(event.actions[0].action, rossi::ActionKind::Skip.into());
 }
 
 #[test]

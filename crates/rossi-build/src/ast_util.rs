@@ -7,15 +7,15 @@ use rossi::{Expression, ExpressionKind};
 /// cascade-drop logic and the lint module's unmodified-variable / INIT
 /// completeness checks.
 pub(crate) fn lhs_variables(action: &rossi::Action) -> Vec<&str> {
-    use rossi::Action;
-    match action {
-        Action::Skip => Vec::new(),
-        Action::Assignment { variables, .. }
-        | Action::BecomesIn { variables, .. }
-        | Action::BecomesSuchThat { variables, .. } => {
-            variables.iter().map(String::as_str).collect()
+    use rossi::{ActionKind, Ident};
+    match &action.kind {
+        ActionKind::Skip => Vec::new(),
+        ActionKind::Assignment { variables, .. }
+        | ActionKind::BecomesIn { variables, .. }
+        | ActionKind::BecomesSuchThat { variables, .. } => {
+            variables.iter().map(Ident::as_str).collect()
         }
-        Action::FunctionOverride { function, .. } => vec![function.as_str()],
+        ActionKind::FunctionOverride { function, .. } => vec![function.as_str()],
     }
 }
 

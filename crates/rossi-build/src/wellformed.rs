@@ -14,7 +14,7 @@
 
 use rossi::ast::expression::BinaryOp;
 use rossi::ast::predicate::ComparisonOp;
-use rossi::{Action, Expression, ExpressionKind, Predicate, PredicateKind};
+use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate, PredicateKind};
 
 use crate::infer::type_of_expression;
 use crate::type_env::TypeEnv;
@@ -50,9 +50,9 @@ pub fn is_well_typed_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
 /// `true` if every assignment's LHS variable type matches its RHS, and
 /// every set-op operand pair agrees, etc.
 pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
-    match action {
-        Action::Skip => true,
-        Action::Assignment { expressions, .. } => {
+    match &action.kind {
+        ActionKind::Skip => true,
+        ActionKind::Assignment { expressions, .. } => {
             // Only verify each RHS expression is itself well-typed.
             // We deliberately skip the LHS-vs-RHS type-equality check:
             // `type_of_expression` is the relaxed inference, which falls
@@ -64,11 +64,11 @@ pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
             // already caught by `is_well_typed_expression`.
             expressions.iter().all(|e| is_well_typed_expression(env, e))
         }
-        Action::BecomesIn { set, .. } => is_well_typed_expression(env, set),
+        ActionKind::BecomesIn { set, .. } => is_well_typed_expression(env, set),
         // Becomes-such-that uses primed forms (`x'`) the identifier
         // walker doesn't yet recognise; skip rather than flag false.
-        Action::BecomesSuchThat { .. } => true,
-        Action::FunctionOverride {
+        ActionKind::BecomesSuchThat { .. } => true,
+        ActionKind::FunctionOverride {
             arguments,
             expression,
             ..

@@ -453,10 +453,11 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
         (arb_identifier(), arb_action_expression()).prop_map(|(var, expr)| {
             let vars = vec![var.clone()];
             (
-                Action::Assignment {
-                    variables: vec![var],
+                ActionKind::Assignment {
+                    variables: vec![var.into()],
                     expressions: vec![expr],
-                },
+                }
+                .into(),
                 vars,
             )
         }),
@@ -471,10 +472,11 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
             .prop_map(|(variables, expressions)| {
                 let vars = variables.clone();
                 (
-                    Action::Assignment {
-                        variables,
+                    ActionKind::Assignment {
+                        variables: variables.into_iter().map(Into::into).collect(),
                         expressions,
-                    },
+                    }
+                    .into(),
                     vars,
                 )
             }),
@@ -482,10 +484,11 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
         (arb_identifier(), arb_action_expression()).prop_map(|(var, set)| {
             let vars = vec![var.clone()];
             (
-                Action::BecomesIn {
-                    variables: vec![var],
+                ActionKind::BecomesIn {
+                    variables: vec![var.into()],
                     set,
-                },
+                }
+                .into(),
                 vars,
             )
         }),
@@ -496,16 +499,24 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
         )
             .prop_map(|(variables, set)| {
                 let vars = variables.clone();
-                (Action::BecomesIn { variables, set }, vars)
+                (
+                    ActionKind::BecomesIn {
+                        variables: variables.into_iter().map(Into::into).collect(),
+                        set,
+                    }
+                    .into(),
+                    vars,
+                )
             }),
         // Single-variable BecomesSuchThat: v :| P
         (arb_identifier(), arb_action_predicate()).prop_map(|(var, pred)| {
             let vars = vec![var.clone()];
             (
-                Action::BecomesSuchThat {
-                    variables: vec![var],
+                ActionKind::BecomesSuchThat {
+                    variables: vec![var.into()],
                     predicate: pred,
-                },
+                }
+                .into(),
                 vars,
             )
         }),
@@ -517,10 +528,11 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
             .prop_map(|(variables, predicate)| {
                 let vars = variables.clone();
                 (
-                    Action::BecomesSuchThat {
-                        variables,
+                    ActionKind::BecomesSuchThat {
+                        variables: variables.into_iter().map(Into::into).collect(),
                         predicate,
-                    },
+                    }
+                    .into(),
                     vars,
                 )
             }),
@@ -533,11 +545,12 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
             .prop_map(|(function, arguments, expression)| {
                 let vars = vec![function.clone()];
                 (
-                    Action::FunctionOverride {
-                        function,
+                    ActionKind::FunctionOverride {
+                        function: function.into(),
                         arguments,
                         expression,
-                    },
+                    }
+                    .into(),
                     vars,
                 )
             }),

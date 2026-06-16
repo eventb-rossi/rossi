@@ -2015,7 +2015,7 @@ mod tests {
 
     #[test]
     fn test_machine_with_initialisation_to_xml() {
-        use crate::ast::{Action, LabeledAction};
+        use crate::ast::LabeledAction;
 
         let machine = Machine {
             name: "counter".to_string(),
@@ -2028,10 +2028,11 @@ mod tests {
             initialisation: Some(InitialisationEvent {
                 actions: vec![LabeledAction {
                     label: Some("act1".to_string()),
-                    action: Action::Assignment {
-                        variables: vec!["count".to_string()],
+                    action: crate::ast::ActionKind::Assignment {
+                        variables: vec!["count".into()],
                         expressions: vec![crate::ast::ExpressionKind::Integer(0).into()],
-                    },
+                    }
+                    .into(),
                     span: None,
                     comment: None,
                 }],
@@ -2058,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_machine_with_event_to_xml() {
-        use crate::ast::{Action, LabeledAction};
+        use crate::ast::LabeledAction;
 
         let event = Event {
             name: "increment".to_string(),
@@ -2081,8 +2082,8 @@ mod tests {
             witnesses: vec![],
             actions: vec![LabeledAction {
                 label: Some("act1".to_string()),
-                action: Action::Assignment {
-                    variables: vec!["count".to_string()],
+                action: crate::ast::ActionKind::Assignment {
+                    variables: vec!["count".into()],
                     expressions: vec![
                         crate::ast::ExpressionKind::Binary {
                             op: crate::ast::expression::BinaryOp::Add,
@@ -2093,7 +2094,8 @@ mod tests {
                         }
                         .into(),
                     ],
-                },
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],
@@ -2313,7 +2315,7 @@ mod tests {
 
     #[test]
     fn test_event_convergence_status() {
-        use crate::ast::{Action, LabeledAction};
+        use crate::ast::LabeledAction;
 
         let ordinary_event = Event {
             name: "evt1".to_string(),
@@ -2325,10 +2327,11 @@ mod tests {
             witnesses: vec![],
             actions: vec![LabeledAction {
                 label: None,
-                action: Action::Assignment {
-                    variables: vec!["x".to_string()],
+                action: crate::ast::ActionKind::Assignment {
+                    variables: vec!["x".into()],
                     expressions: vec![crate::ast::ExpressionKind::Integer(1).into()],
-                },
+                }
+                .into(),
                 span: None,
                 comment: None,
             }],

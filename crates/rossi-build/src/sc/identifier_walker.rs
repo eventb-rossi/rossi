@@ -33,7 +33,8 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use rossi::{
-    Action, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind, TypedIdentifier,
+    Action, ActionKind, Expression, ExpressionKind, IdentPattern, Predicate, PredicateKind,
+    TypedIdentifier,
 };
 
 use crate::type_env::TypeEnv;
@@ -230,17 +231,17 @@ fn walk_action_rhs<V: Visitor>(
     locals: &mut Vec<String>,
     v: &mut V,
 ) -> ControlFlow<()> {
-    match action {
-        Action::Skip => ControlFlow::Continue(()),
-        Action::Assignment { expressions, .. } => {
+    match &action.kind {
+        ActionKind::Skip => ControlFlow::Continue(()),
+        ActionKind::Assignment { expressions, .. } => {
             for e in expressions {
                 walk_expr(e, locals, v)?;
             }
             ControlFlow::Continue(())
         }
-        Action::BecomesIn { set, .. } => walk_expr(set, locals, v),
-        Action::BecomesSuchThat { predicate, .. } => walk_pred(predicate, locals, v),
-        Action::FunctionOverride {
+        ActionKind::BecomesIn { set, .. } => walk_expr(set, locals, v),
+        ActionKind::BecomesSuchThat { predicate, .. } => walk_pred(predicate, locals, v),
+        ActionKind::FunctionOverride {
             arguments,
             expression,
             ..

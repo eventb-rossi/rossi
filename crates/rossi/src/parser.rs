@@ -1072,10 +1072,11 @@ fn parse_action_list(pair: pest::iterators::Pair<Rule>) -> Result<Vec<LabeledAct
 
 /// Parse a single action (supports multiple variables: x, y := e1, e2)
 fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError> {
+    let action_span = Some(Span::from_pest(pair.as_span()));
     // Peek at the first inner token: if it is kw_skip this is a skip action.
     let mut inner = pair.into_inner().peekable();
     if inner.peek().map(|p| p.as_rule()) == Some(Rule::kw_skip) {
-        return Ok(Action::Skip);
+        return Ok(Action::new(ActionKind::Skip, action_span));
     }
     let inner = inner;
 
@@ -1091,7 +1092,8 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
                 // Assignment targets are uses of *declared* variables, so no
                 // reserved word can name one: `pred ≔ 0` is as invalid as
                 // `dom ≔ 0`.
-                variables.push(declared_name(&p)?);
+                let var_span = Some(Span::from_pest(p.as_span()));
+                variables.push(Ident::new(declared_name(&p)?, var_span));
             }
             Rule::comma if op.is_none() => {} // separator between LHS identifiers/arguments
             Rule::lparen if op.is_none() => {
@@ -1133,11 +1135,14 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
             .next()
             .ok_or(ParseError::MissingValue)?;
         let expression = parse_expression(rhs)?;
-        return Ok(Action::FunctionOverride {
-            function,
-            arguments,
-            expression,
-        });
+        return Ok(Action::new(
+            ActionKind::FunctionOverride {
+                function,
+                arguments,
+                expression,
+            },
+            action_span,
+        ));
     }
 
     match op_pair.as_rule() {
@@ -1149,10 +1154,13 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
             if expressions.is_empty() {
                 return Err(ParseError::MissingValue);
             }
-            Ok(Action::Assignment {
-                variables,
-                expressions,
-            })
+            Ok(Action::new(
+                ActionKind::Assignment {
+                    variables,
+                    expressions,
+                },
+                action_span,
+            ))
         }
         Rule::op_becomes_in => {
             let rhs = rhs_pairs
@@ -1160,7 +1168,10 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
                 .next()
                 .ok_or(ParseError::MissingValue)?;
             let set = parse_expression(rhs)?;
-            Ok(Action::BecomesIn { variables, set })
+            Ok(Action::new(
+                ActionKind::BecomesIn { variables, set },
+                action_span,
+            ))
         }
         Rule::op_becomes_such => {
             let rhs = rhs_pairs
@@ -1168,10 +1179,13 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
                 .next()
                 .ok_or(ParseError::MissingValue)?;
             let predicate = parse_predicate(rhs)?;
-            Ok(Action::BecomesSuchThat {
-                variables,
-                predicate,
-            })
+            Ok(Action::new(
+                ActionKind::BecomesSuchThat {
+                    variables,
+                    predicate,
+                },
+                action_span,
+            ))
         }
         _ => Err(ParseError::UnexpectedRule {
             expected: "assignment operator".to_string(),
