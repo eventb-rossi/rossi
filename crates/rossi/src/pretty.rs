@@ -834,7 +834,7 @@ impl PrettyPrinter {
             } => {
                 let args: Vec<String> =
                     arguments.iter().map(|a| self.print_expression(a)).collect();
-                format!("{}({})", function, args.join(", "))
+                format!("{}({})", function.as_str(), args.join(", "))
             }
 
             PredicateKind::BuiltinApplication {

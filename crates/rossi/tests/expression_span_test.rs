@@ -73,6 +73,22 @@ fn function_application_identifier_is_spanned() {
 }
 
 #[test]
+fn predicate_application_name_is_spanned() {
+    let src = "myPred(x)";
+    let pred = parse_predicate_str(src).expect("parses");
+    let PredicateKind::Application {
+        function,
+        arguments,
+    } = &pred.kind
+    else {
+        panic!("expected application, got {:?}", pred.kind);
+    };
+    assert_eq!(slice(src, function.span.expect("function span")), "myPred");
+    assert_eq!(function.span.unwrap().start, 0);
+    assert_eq!(slice(src, arguments[0].span.unwrap()), "x");
+}
+
+#[test]
 fn quantifier_binder_is_spanned() {
     let src = "∀ x · x ∈ S";
     let pred = parse_predicate_str(src).expect("parses");

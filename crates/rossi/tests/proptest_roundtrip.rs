@@ -394,7 +394,7 @@ fn arb_predicate() -> impl Strategy<Value = Predicate> {
                     proptest::collection::vec(arb_leaf_expression(), 1..3)
                 )
                     .prop_map(|(function, arguments)| PredicateKind::Application {
-                        function,
+                        function: function.into(),
                         arguments,
                     }
                     .into()),
