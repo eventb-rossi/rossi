@@ -91,15 +91,22 @@ impl ReferenceProvider {
         let position = params.text_document_position.position;
         let uri = &params.text_document_position.text_document.uri;
 
+        // Mask comments once for the whole request: every line/identifier scan
+        // on the cursor document reads this instead of re-masking. The mask
+        // preserves byte/line/char layout, so positions and offsets computed on
+        // it stay valid against the raw `text`.
+        let masked = rossi::comments::mask_comments_chars(text);
+
         // Get the identifier at the cursor position
-        let identifier = get_identifier_at_position(text, position)?;
+        let identifier = identifier_at_masked_position(&masked, position)?;
 
         debug!(
             "Finding references for identifier '{}' at {:?}",
             identifier, position
         );
 
-        let locations = self.find_references_for_identifier(text, uri, position, &identifier);
+        let locations =
+            self.find_references_for_identifier(text, &masked, uri, position, &identifier);
         debug!("Found {} references to '{}'", locations.len(), identifier);
         non_empty(locations)
     }
@@ -145,6 +152,7 @@ impl ReferenceProvider {
     fn find_references_for_identifier(
         &self,
         text: &str,
+        masked: &str,
         uri: &Url,
         position: Position,
         identifier: &str,
@@ -154,16 +162,13 @@ impl ReferenceProvider {
         };
         let is_component_name = manager.find_component_uri(identifier).is_some();
 
-        if is_component_name
-            && is_component_reference_position(
-                &rossi::comments::mask_comments_chars(text),
-                position,
-            )
-        {
+        if is_component_name && is_component_reference_position(masked, position) {
             return self.find_references_in_workspace(identifier);
         }
 
-        if let Some(symbol) = self.resolve_symbol_identity(text, position, identifier, manager) {
+        if let Some(symbol) =
+            self.resolve_symbol_identity(text, masked, position, identifier, manager)
+        {
             return self.find_references_for_symbol(&symbol, manager);
         }
 
@@ -240,6 +245,7 @@ impl ReferenceProvider {
     fn resolve_symbol_identity(
         &self,
         text: &str,
+        masked: &str,
         position: Position,
         identifier: &str,
         manager: &CrossReferenceManager,
@@ -250,20 +256,20 @@ impl ReferenceProvider {
         let components = parse_all(text);
         let offset = position_to_offset(text, position).unwrap_or(text.len());
         let component = component_at_offset(&components, offset)?;
-        self.resolve_symbol_identity_at_position(component, text, position, identifier, manager)
+        self.resolve_symbol_identity_at_position(component, masked, position, identifier, manager)
     }
 
     fn resolve_symbol_identity_at_position(
         &self,
         component: &Component,
-        text: &str,
+        masked: &str,
         position: Position,
         identifier: &str,
         manager: &CrossReferenceManager,
     ) -> Option<SymbolIdentity> {
         if let Component::Machine(machine) = component
             && let Some(parameter) =
-                local_parameter_symbol_identity_at_position(machine, text, position, identifier)
+                local_parameter_symbol_identity_at_position(machine, masked, position, identifier)
         {
             return Some(parameter);
         }
@@ -431,14 +437,16 @@ fn local_symbol_identity(component: &Component, identifier: &str) -> Option<Symb
 
 fn local_parameter_symbol_identity_at_position(
     machine: &rossi::Machine,
-    text: &str,
+    masked: &str,
     position: Position,
     identifier: &str,
 ) -> Option<SymbolIdentity> {
     let line_idx = position.line as usize;
 
     machine.events.iter().find_map(|event| {
-        let (start_line, end_line) = event_line_range(text, &event.name)?;
+        // `masked` is the comment-masked document, masked once by the caller;
+        // scanning it per event avoids re-masking the whole text each time.
+        let (start_line, end_line) = event_line_range_in(masked, &event.name)?;
         if line_idx < start_line || line_idx > end_line {
             return None;
         }
@@ -536,12 +544,23 @@ fn non_empty(locations: Vec<Location>) -> Option<Vec<Location>> {
     }
 }
 
+#[cfg(test)]
 fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     // Scan comment-masked lines: an `EVENT foo` or `END` inside a comment
     // must not open or close the event's line range. The terminator is matched
     // through the keyword table ([`text_utils::line_keyword_is`]), so a labelled
     // action whose label spells a keyword (`@end x := 0`) is not read as `END`.
     let masked = rossi::comments::mask_comments_chars(text);
+    event_line_range_in(&masked, event_name)
+}
+
+/// Find an event's `[start_line, end_line]` range over text that is already
+/// comment-masked, so a caller scanning many events masks the document once
+/// instead of per event. An `EVENT foo` or `END` inside a comment is blanked in
+/// `masked` and so cannot open or close the range; the terminator is matched
+/// through the keyword table ([`text_utils::line_keyword_is`]), so a labelled
+/// action whose label spells a keyword (`@end x := 0`) is not read as `END`.
+fn event_line_range_in(masked: &str, event_name: &str) -> Option<(usize, usize)> {
     let lines: Vec<&str> = masked.lines().collect();
     let start_line = lines
         .iter()
@@ -611,11 +630,18 @@ fn is_component_reference_position(masked: &str, position: Position) -> bool {
     component_reference_clause(masked, position).is_some()
 }
 
+/// Get the identifier at `position` in already comment-masked text. A cursor
+/// inside a comment is not on an identifier (the comment is blanked in `masked`).
+fn identifier_at_masked_position(masked: &str, position: Position) -> Option<String> {
+    identifier_utils::identifier_at_position(masked, position).map(|(identifier, _)| identifier)
+}
+
 /// Get the identifier at the given position in the text.
 /// Comment-masked: a cursor inside a comment is not on an identifier.
+#[cfg(test)]
 fn get_identifier_at_position(text: &str, position: Position) -> Option<String> {
     let masked = rossi::comments::mask_comments_chars(text);
-    identifier_utils::identifier_at_position(&masked, position).map(|(identifier, _)| identifier)
+    identifier_at_masked_position(&masked, position)
 }
 
 #[cfg(test)]
