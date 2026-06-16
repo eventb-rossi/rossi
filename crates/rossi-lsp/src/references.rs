@@ -6,10 +6,13 @@
 
 use crate::lsp_types::*;
 use rossi::Component;
+use rossi::ast::Span;
 use rossi::keywords::KeywordId;
 
 use crate::component_util::{component_at_offset, parse_all, parse_named};
+use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
+use crate::position::span_to_range;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
@@ -184,23 +187,21 @@ impl ReferenceProvider {
                 return locations;
             };
 
-            let Some((component_uri, component_text, _)) =
+            let Some((component_uri, component_text, component)) =
                 self.load_component_by_name(&symbol.owner, manager)
             else {
-                return locations;
-            };
-            let Some(line_range) = event_line_range(&component_text, event_name) else {
                 return locations;
             };
 
             push_unique_locations(
                 &mut locations,
                 &mut seen,
-                self.find_references_in_text_range(
+                ast_parameter_references(
+                    &component,
                     &component_text,
                     &component_uri,
+                    event_name,
                     &symbol.name,
-                    Some(line_range),
                 ),
             );
 
@@ -217,16 +218,19 @@ impl ReferenceProvider {
             if self.resolve_symbol_identity_in_component(&component, &symbol.name, manager)
                 == Some(symbol.clone())
             {
-                push_unique_locations(
-                    &mut locations,
-                    &mut seen,
+                // Event names are not formula identifiers, so they stay on the
+                // text scan; variables / constants / sets resolve from the AST.
+                let refs = if symbol.kind == SymbolKind::Event {
                     self.find_symbol_references_in_text_range(
                         &component_text,
                         &component_uri,
                         &symbol.name,
                         None,
-                    ),
-                );
+                    )
+                } else {
+                    ast_symbol_references(&component, &component_text, &component_uri, &symbol.name)
+                };
+                push_unique_locations(&mut locations, &mut seen, refs);
             }
         }
 
@@ -464,6 +468,82 @@ fn push_unique_locations(
             locations.push(location);
         }
     }
+}
+
+/// References to a global symbol (variable / constant / set) in one component:
+/// its declaration site plus every free formula occurrence (reads and write
+/// targets), resolved from the AST so binder-shadowed names of the same spelling
+/// are excluded and matches never land in comments or string literals.
+fn ast_symbol_references(
+    component: &Component,
+    text: &str,
+    uri: &Url,
+    name: &str,
+) -> Vec<Location> {
+    let mut spans: Vec<Span> = Vec::new();
+    if let Some(decl) = declaration_span(component, name) {
+        spans.push(decl);
+    }
+    spans.extend(formula_walk::free_occurrence_spans(component, name));
+    spans_to_locations(spans, text, uri)
+}
+
+/// References to an event parameter: its declaration plus every free occurrence
+/// within that event's guards, witnesses, `with` predicates, and actions.
+fn ast_parameter_references(
+    component: &Component,
+    text: &str,
+    uri: &Url,
+    event_name: &str,
+    name: &str,
+) -> Vec<Location> {
+    let Component::Machine(machine) = component else {
+        return Vec::new();
+    };
+    let Some(event) = machine.events.iter().find(|e| e.name == event_name) else {
+        return Vec::new();
+    };
+    let mut spans: Vec<Span> = Vec::new();
+    if let Some(param) = event.parameters.iter().find(|p| p.name == name)
+        && let Some(s) = param.span
+    {
+        spans.push(s);
+    }
+    spans.extend(formula_walk::parameter_occurrence_spans(event, name));
+    spans_to_locations(spans, text, uri)
+}
+
+/// Declaration span of a set / constant / variable named `name`, if this
+/// component declares it.
+fn declaration_span(component: &Component, name: &str) -> Option<Span> {
+    match component {
+        Component::Context(ctx) => ctx
+            .sets
+            .iter()
+            .find(|s| s.name() == name)
+            .and_then(|s| s.span())
+            .or_else(|| {
+                ctx.constants
+                    .iter()
+                    .find(|c| c.name == name)
+                    .and_then(|c| c.span)
+            }),
+        Component::Machine(m) => m
+            .variables
+            .iter()
+            .find(|v| v.name == name)
+            .and_then(|v| v.span),
+    }
+}
+
+fn spans_to_locations(spans: Vec<Span>, text: &str, uri: &Url) -> Vec<Location> {
+    spans
+        .into_iter()
+        .map(|span| Location {
+            uri: uri.clone(),
+            range: span_to_range(&span, text),
+        })
+        .collect()
 }
 
 fn non_empty(locations: Vec<Location>) -> Option<Vec<Location>> {
