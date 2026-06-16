@@ -172,6 +172,30 @@ pub fn parameter_occurrence_spans(event: &Event, target: &str) -> Vec<Span> {
         .collect()
 }
 
+/// Declaration span of a set / constant / variable named `name`, if this
+/// component declares it. (Event parameters are declared per event; see the
+/// rename / references parameter paths.)
+pub fn declaration_span(component: &Component, name: &str) -> Option<Span> {
+    match component {
+        Component::Context(ctx) => ctx
+            .sets
+            .iter()
+            .find(|s| s.name() == name)
+            .and_then(|s| s.span())
+            .or_else(|| {
+                ctx.constants
+                    .iter()
+                    .find(|c| c.name == name)
+                    .and_then(|c| c.span)
+            }),
+        Component::Machine(m) => m
+            .variables
+            .iter()
+            .find(|v| v.name == name)
+            .and_then(|v| v.span),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
