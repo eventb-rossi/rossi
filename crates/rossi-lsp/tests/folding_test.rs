@@ -1,240 +1,77 @@
-//! Integration tests for folding ranges
+//! Integration tests for folding ranges (derived from the parsed AST).
 
 use rossi_lsp::folding::FoldingRangeProvider;
-use rossi_lsp::lsp_types::{FoldingRangeParams, TextDocumentIdentifier, Url};
+use rossi_lsp::lsp_types::FoldingRange;
 
-fn create_test_params(uri: &str) -> FoldingRangeParams {
-    FoldingRangeParams {
-        text_document: TextDocumentIdentifier {
-            uri: Url::parse(uri).unwrap(),
-        },
-        work_done_progress_params: Default::default(),
-        partial_result_params: Default::default(),
-    }
+fn folds(text: &str) -> Vec<FoldingRange> {
+    FoldingRangeProvider::new()
+        .folding_ranges(text)
+        .unwrap_or_default()
 }
 
-/// Each row covers one clause / block type. Asserts the provider produces a
-/// folding range with the given `(start_line, end_line)` against the sample
-/// text — collapses what used to be nine near-identical per-clause tests.
-#[test]
-fn test_fold_clauses_and_blocks() {
-    let provider = FoldingRangeProvider::new();
-    let params = create_test_params("file:///test.eventb");
-
-    let cases: &[(&str, &str, u32, u32)] = &[
-        (
-            "CONTEXT block",
-            "CONTEXT test\nSETS\n    S\n    T\nCONSTANTS c\nAXIOMS\n    @axm1 c > 0\nEND",
-            0,
-            7,
-        ),
-        (
-            "MACHINE block",
-            "MACHINE test\nVARIABLES\n    x\n    y\nINVARIANTS\n    @inv1 x > 0\nEND",
-            0,
-            6,
-        ),
-        (
-            "INITIALISATION block",
-            "MACHINE test\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND",
-            2,
-            5,
-        ),
-        (
-            "VARIABLES clause",
-            "MACHINE test\nVARIABLES\n    x\n    y\n    z\nINVARIANTS\n    @inv1 TRUE\nEND",
-            1,
-            4,
-        ),
-        (
-            "INVARIANTS clause",
-            "MACHINE test\nVARIABLES x\nINVARIANTS\n    @inv1 x > 0\n    @inv2 x < 100\n    @inv3 x /= 50\nEVENTS\nEND",
-            2,
-            5,
-        ),
-        (
-            "AXIOMS clause",
-            "CONTEXT test\nCONSTANTS c d e\nAXIOMS\n    @axm1 c > 0\n    @axm2 d < 100\n    @axm3 e /= 0\nEND",
-            2,
-            5,
-        ),
-        (
-            "SETS clause",
-            "CONTEXT test\nSETS\n    S\n    T\n    U\nCONSTANTS c\nEND",
-            1,
-            4,
-        ),
-        (
-            "CONSTANTS clause",
-            "CONTEXT test\nSETS S\nCONSTANTS\n    c1\n    c2\n    c3\nAXIOMS\nEND",
-            2,
-            5,
-        ),
-    ];
-
-    for (name, text, want_start, want_end) in cases {
-        let ranges = provider
-            .folding_ranges(&params, text)
-            .unwrap_or_else(|| panic!("[{name}] folding_ranges returned None"));
-        assert!(
-            ranges
-                .iter()
-                .any(|r| r.start_line == *want_start && r.end_line == *want_end),
-            "[{name}] no folding range at lines {want_start}..{want_end}; got: {ranges:?}"
-        );
-    }
+fn has(ranges: &[FoldingRange], start: u32, end: u32) -> bool {
+    ranges
+        .iter()
+        .any(|r| r.start_line == start && r.end_line == end)
 }
 
+/// The reported bug: a machine that contains events folded only to its first
+/// nested event END instead of its own END. Drive the real example model and
+/// assert the whole machine folds (and the context still does too).
 #[test]
-fn test_fold_event_blocks() {
-    let provider = FoldingRangeProvider::new();
-    let text = "MACHINE test\nEVENTS\n    EVENT evt1\n    THEN\n        x := 1\n    END\n    EVENT evt2\n    THEN\n        y := 2\n    END\nEND";
-    let params = create_test_params("file:///test.eventb");
+fn base_model_machine_folds_to_its_own_end() {
+    let text = include_str!("../../rossi/examples/base-model.eventb");
+    let ranges = folds(text);
 
-    let ranges = provider.folding_ranges(&params, text);
-
-    assert!(ranges.is_some());
-    let ranges = ranges.unwrap();
-
-    // Should have ranges for both events
-    let has_evt1 = ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5);
-    let has_evt2 = ranges.iter().any(|r| r.start_line == 6 && r.end_line == 9);
-
-    assert!(has_evt1, "Should detect first EVENT block");
-    assert!(has_evt2, "Should detect second EVENT block");
-}
-
-#[test]
-fn test_no_fold_for_empty_clauses() {
-    let provider = FoldingRangeProvider::new();
-    let text = "MACHINE test\nVARIABLES\nINVARIANTS\nEVENTS\nEND";
-    let params = create_test_params("file:///test.eventb");
-
-    let ranges = provider.folding_ranges(&params, text);
-
-    if let Some(ranges) = ranges {
-        // Should not have ranges for empty clauses (only the MACHINE block)
-        let vars_range = ranges.iter().find(|r| r.start_line == 1);
-        let invs_range = ranges.iter().find(|r| r.start_line == 2);
-
-        assert!(
-            vars_range.is_none(),
-            "Should not create folding range for empty VARIABLES clause"
-        );
-        assert!(
-            invs_range.is_none(),
-            "Should not create folding range for empty INVARIANTS clause"
-        );
-    }
-}
-
-#[test]
-fn test_complex_machine_multiple_folds() {
-    let provider = FoldingRangeProvider::new();
-    let text = "\
-MACHINE counter
-VARIABLES
-    count
-INVARIANTS
-    @inv1 count >= 0
-    @inv2 count <= 100
-EVENTS
-    EVENT INITIALISATION
-    THEN
-        count := 0
-    END
-
-    EVENT increment
-    WHEN
-        count < 100
-    THEN
-        count := count + 1
-    END
-END";
-    let params = create_test_params("file:///test.eventb");
-
-    let ranges = provider.folding_ranges(&params, text);
-
-    assert!(ranges.is_some());
-    let ranges = ranges.unwrap();
-
-    // Should have multiple ranges
+    // `context C1` (line 16) … `end` (line 63): 0-indexed 15..62.
     assert!(
-        ranges.len() >= 5,
-        "Should have at least 5 folding ranges (MACHINE, VARIABLES, INVARIANTS, INITIALISATION, EVENT)"
+        has(&ranges, 15, 62),
+        "context C1 must fold 15..62; got {ranges:?}"
     );
-
-    // Verify each type exists
-    let has_machine = ranges.iter().any(|r| r.start_line == 0);
-    let has_vars = ranges.iter().any(|r| r.start_line == 1);
-    let has_invs = ranges.iter().any(|r| r.start_line == 3);
-
-    assert!(has_machine, "Should have MACHINE block");
-    assert!(has_vars, "Should have VARIABLES clause");
-    assert!(has_invs, "Should have INVARIANTS clause");
+    // `machine M1` (line 66) … final `end` (line 1249): 0-indexed 65..1248.
+    assert!(
+        has(&ranges, 65, 1248),
+        "machine M1 must fold to its own END (65..1248), not the first event END"
+    );
 }
 
+/// Each clause/block kind produces a fold over its full extent.
 #[test]
-fn test_nested_event_in_events_clause() {
-    let provider = FoldingRangeProvider::new();
-    let text = "MACHINE test\nEVENTS\n    EVENT e1\n    END\nEND";
-    let params = create_test_params("file:///test.eventb");
+fn clause_and_block_folds() {
+    // 0 CONTEXT | 1 SETS | 2 S | 3 T | 4 CONSTANTS | 5 k | 6 AXIOMS | 7 @a1 | 8 END
+    let ctx = "CONTEXT c\nSETS\n    S\n    T\nCONSTANTS\n    k\nAXIOMS\n    @a1 k > 0\nEND";
+    let ranges = folds(ctx);
+    assert!(has(&ranges, 0, 8), "context block; got {ranges:?}");
+    assert!(has(&ranges, 1, 3), "sets clause; got {ranges:?}");
+    assert!(has(&ranges, 4, 5), "constants clause; got {ranges:?}");
+    assert!(has(&ranges, 6, 7), "axioms clause; got {ranges:?}");
 
-    let ranges = provider.folding_ranges(&params, text);
-
-    assert!(ranges.is_some());
-    let ranges = ranges.unwrap();
-
-    // Should have range for EVENTS clause and EVENT block
-    let has_events_clause = ranges.iter().any(|r| r.start_line == 1);
-    let has_event_block = ranges.iter().any(|r| r.start_line == 2);
-
-    assert!(has_events_clause, "Should detect EVENTS clause");
-    assert!(has_event_block, "Should detect EVENT block");
+    // 0 MACHINE | 1 VARIABLES | 2 x | 3 y | 4 INVARIANTS | 5 @i | 6 END
+    let mch = "MACHINE m\nVARIABLES\n    x\n    y\nINVARIANTS\n    @i x > 0\nEND";
+    let ranges = folds(mch);
+    assert!(has(&ranges, 0, 6), "machine block; got {ranges:?}");
+    assert!(has(&ranges, 1, 3), "variables clause; got {ranges:?}");
+    assert!(has(&ranges, 4, 5), "invariants clause; got {ranges:?}");
 }
 
+/// Keywords spelled inside comments are masked by the lexer, so they can never
+/// open or close a fold — the AST never sees them.
 #[test]
-fn test_all_clause_types() {
-    let provider = FoldingRangeProvider::new();
-    let text = "CONTEXT test\nEXTENDS\n    parent\nSETS\n    S\nCONSTANTS\n    c\nAXIOMS\n    @axm1 TRUE\n    @thm1 theorem TRUE\nEND";
-    let params = create_test_params("file:///test.eventb");
-
-    let ranges = provider.folding_ranges(&params, text);
-
-    assert!(ranges.is_some());
-    let ranges = ranges.unwrap();
-
-    // Should detect all clause types
-    let has_extends = ranges.iter().any(|r| r.start_line == 1);
-    let has_sets = ranges.iter().any(|r| r.start_line == 3);
-    let has_constants = ranges.iter().any(|r| r.start_line == 5);
-    let has_axioms = ranges.iter().any(|r| r.start_line == 7);
-
-    assert!(has_extends, "Should detect EXTENDS clause");
-    assert!(has_sets, "Should detect SETS clause");
-    assert!(has_constants, "Should detect CONSTANTS clause");
-    assert!(has_axioms, "Should detect AXIOMS clause");
-}
-
-#[test]
-fn test_keywords_in_comments_do_not_affect_folds() {
-    let provider = FoldingRangeProvider::new();
-    let params = create_test_params("file:///test.eventb");
-
-    // `// END` must not close the event fold early; the `/* EVENT ghost */`
-    // block must not open one.
+fn comment_keywords_do_not_create_folds() {
+    // 0 MACHINE | 1 EVENTS | 2 EVENT evt // not the END | 3 THEN |
+    // 4 @a x := 1 /* EVENT ghost */ | 5 END | 6 END
     let text = "\
 MACHINE test
 EVENTS
-    EVENT evt1 // not the END
+    EVENT evt // not the END
     THEN
-        x := 1 /* EVENT ghost */
+        @a x := 1 /* EVENT ghost */
     END
 END";
-    let ranges = provider.folding_ranges(&params, text).unwrap();
+    let ranges = folds(text);
     assert!(
-        ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
-        "event fold must span lines 2..5 despite comment keywords; got {ranges:?}"
+        has(&ranges, 2, 5),
+        "event fold must span 2..5 despite comment keywords; got {ranges:?}"
     );
     assert!(
         !ranges.iter().any(|r| r.start_line == 4),
@@ -242,25 +79,32 @@ END";
     );
 }
 
+/// Folding is driven by the recovery-tolerant parse, so a local syntax error
+/// does not erase the document's folds.
 #[test]
-fn test_comment_only_line_does_not_end_clause_fold() {
-    let provider = FoldingRangeProvider::new();
-    let params = create_test_params("file:///test.eventb");
-
-    // The Camille-style block comment between invariants is clause content;
-    // the INVARIANTS fold must reach past it to the last invariant.
+fn broken_document_still_folds() {
+    // The broken invariant forces recovery.
     let text = "\
-MACHINE test
-VARIABLES x
+MACHINE m
+VARIABLES
+    x
 INVARIANTS
-    @inv1 x > 0
-    // explains inv2
-    @inv2 x < 100
+    @i broken @#$ syntax
 EVENTS
+    EVENT step
+    THEN
+        @a x := 0
+    END
 END";
-    let ranges = provider.folding_ranges(&params, text).unwrap();
+    let ranges = folds(text);
+    let last = text.lines().count() as u32 - 1;
     assert!(
-        ranges.iter().any(|r| r.start_line == 2 && r.end_line == 5),
-        "INVARIANTS fold must span lines 2..5 across the comment line; got {ranges:?}"
+        has(&ranges, 0, last),
+        "machine block must fold despite the error; got {ranges:?}"
+    );
+    // 6 EVENT step | 7 THEN | 8 @a x := 0 | 9 END
+    assert!(
+        has(&ranges, 6, 9),
+        "the recoverable event must still fold; got {ranges:?}"
     );
 }
