@@ -1306,56 +1306,10 @@ fn test_builtin_prj1_zero_args() {
 }
 
 #[test]
-fn test_quantifier_in_conjunction() {
-    // Rodin extension: quantified predicates as operands of ∧/∨ without parens
-    // Per kernel_lang.pdf spec this requires parens, but Rodin accepts it
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 (x∈S ∧ ∃a·(a∈T ∧ a=x))
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(
-        result.is_ok(),
-        "Quantifier in conjunction should parse: {:?}",
-        result.err()
-    );
-    let component = result.unwrap();
-    if let Component::Context(ctx) = component {
-        let pred = &ctx.axioms[0].predicate;
-        // Should be: (x∈S) ∧ (∃a·(a∈T ∧ a=x))
-        if let PredicateKind::Logical { op, .. } = &pred.kind {
-            assert_eq!(*op, rossi::ast::predicate::LogicalOp::And);
-        } else {
-            panic!("Expected Logical(And), got {:?}", pred);
-        }
-    } else {
-        panic!("Expected Context");
-    }
-}
-
-#[test]
-fn test_quantifier_in_disjunction() {
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 (x∈S ∨ ∀a·(a∈T ⇒ a=x))
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(
-        result.is_ok(),
-        "Quantifier in disjunction should parse: {:?}",
-        result.err()
-    );
-}
-
-#[test]
 fn test_nested_quantifier_in_guard() {
-    // Exact guard pattern from a real-world corpus machine
+    // A realistic nested guard: a conjunction whose second conjunct is a
+    // parenthesised quantifier (the form Event-B requires — a bare quantifier
+    // as a ∧ operand is rejected, see operator_compatibility_test.rs).
     let source = r#"
     MACHINE test
     VARIABLES errcode part
@@ -1365,7 +1319,7 @@ fn test_nested_quantifier_in_guard() {
     EVENTS
         EVENT evt
         WHEN
-            @grd1 (errcode∈dom(HM_Table(part)) ∧ ∃a·(a∈ACTIONS ∧ LEVEL↦a∈dom(HM_Table(part)(errcode))))
+            @grd1 (errcode∈dom(HM_Table(part)) ∧ (∃a·(a∈ACTIONS ∧ LEVEL↦a∈dom(HM_Table(part)(errcode)))))
         THEN
             @act1 errcode ≔ errcode
         END
@@ -1375,7 +1329,7 @@ fn test_nested_quantifier_in_guard() {
     let result = parse(source);
     assert!(
         result.is_ok(),
-        "corpus-style guard should parse: {:?}",
+        "nested-quantifier guard should parse: {:?}",
         result.err()
     );
 }

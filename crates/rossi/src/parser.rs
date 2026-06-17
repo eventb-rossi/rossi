@@ -192,6 +192,7 @@ fn parse_typed_identifier(
 /// Shared by `negation_predicate` and `quantified_predicate` handlers.
 fn collect_typed_identifiers_and_predicate(
     inner: &mut pest::iterators::Pairs<Rule>,
+    bracketed: bool,
 ) -> Result<(Vec<TypedIdentifier>, Predicate), ParseError> {
     let mut identifiers = Vec::new();
     for p in inner.by_ref() {
@@ -200,7 +201,9 @@ fn collect_typed_identifiers_and_predicate(
                 identifiers.push(parse_typed_identifier(p)?);
             }
             Rule::predicate | Rule::predicate_no_semi => {
-                let predicate = parse_predicate(p)?;
+                // A quantifier body shares the enclosing closing bracket (if
+                // any), so it inherits `bracketed`.
+                let predicate = parse_predicate_inner(p, bracketed)?;
                 return Ok((identifiers, predicate));
             }
             Rule::comma | Rule::dot => {}
@@ -1800,7 +1803,8 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                     // skip lparen
                     bool_inner.next();
                     let pred_pair = bool_inner.next().ok_or(ParseError::MissingPredicate)?;
-                    let predicate = parse_predicate(pred_pair)?;
+                    // bool(P) closes with `)`, so a trailing quantifier in P is bounded.
+                    let predicate = parse_predicate_inner(pred_pair, true)?;
                     Ok(Expression::new(
                         ExpressionKind::Bool(Box::new(predicate)),
                         node_span,
@@ -1888,8 +1892,9 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                                 ));
                             }
                             Rule::predicate => {
-                                // Basic form: {x | P}
-                                let predicate = parse_predicate(p)?;
+                                // Basic form: {x | P}. The predicate closes with
+                                // `}`, so a trailing quantifier in P is bounded.
+                                let predicate = parse_predicate_inner(p, true)?;
                                 return Ok(Expression::new(
                                     ExpressionKind::SetComprehension {
                                         identifiers,
@@ -1903,12 +1908,13 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                                 // Expression form: {E | P}
                                 // This is the third alternative in the grammar
                                 let member_expression = parse_expression(p)?;
-                                // Skip pipe, then parse predicate
+                                // Skip pipe, then parse predicate. The predicate
+                                // closes with `}`, so a trailing quantifier is bounded.
                                 let mut predicate = None;
                                 for rest in iter.by_ref() {
                                     match rest.as_rule() {
                                         Rule::predicate => {
-                                            predicate = Some(parse_predicate(rest)?);
+                                            predicate = Some(parse_predicate_inner(rest, true)?);
                                         }
                                         Rule::pipe | Rule::rbrace => {}
                                         _ => {
@@ -2096,19 +2102,79 @@ fn rule_to_logical_op(rule: Rule) -> Option<crate::ast::predicate::LogicalOp> {
     }
 }
 
-/// Parse a binary logical predicate (conjunction, disjunction, implication, equivalence)
-fn parse_binary_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, ParseError> {
+/// A bare, unparenthesised leading quantifier in `pair` (a `negation_predicate`
+/// operand), returned as its display spelling. A parenthesised `(∀x·P)` descends
+/// through `atomic_predicate`, so its leading child is not a quantifier — only a
+/// directly-quantified operand is reported.
+fn leading_quantifier(pair: &pest::iterators::Pair<Rule>) -> Option<String> {
+    let first = pair.clone().into_inner().next()?;
+    match first.as_rule() {
+        // `display_rule` never fails, so a matched quantifier always yields
+        // `Some` — the gate fails closed rather than silently accepting.
+        Rule::op_forall | Rule::op_exists => Some(display_rule(first.as_rule())),
+        _ => None,
+    }
+}
+
+/// Parse a binary logical predicate (conjunction/disjunction, implication, equivalence).
+///
+/// `bracketed` is true when this predicate is bounded on the right by a closing
+/// bracket (`)` / `}`), which lets a trailing bare quantifier stand as a `∧`/`∨`
+/// operand — the bracket plays the role of the parentheses Event-B otherwise
+/// requires. See [`parse_predicate_inner`].
+fn parse_binary_predicate(
+    pair: pest::iterators::Pair<Rule>,
+    bracketed: bool,
+) -> Result<Predicate, ParseError> {
+    use crate::ast::predicate::LogicalOp;
+    use crate::op_info;
+
     let mut inner = pair.into_inner();
 
     // Get the first operand
     let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
-    let mut left = parse_predicate(first)?;
+    let mut left = parse_predicate_inner(first, bracketed)?;
+
+    // The operator binding the accumulated left operand, kept by `Rule` so the
+    // display spelling is built only on the error path.
+    let connective_level = op_info::logical_precedence(LogicalOp::And);
+    let mut prev: Option<(LogicalOp, Rule)> = None;
 
     // Process remaining (operator, operand) pairs
     while let Some(op_pair) = inner.next() {
-        if let Some(op) = rule_to_logical_op(op_pair.as_rule()) {
+        let op_rule = op_pair.as_rule();
+        if let Some(op) = rule_to_logical_op(op_rule) {
             let right_pair = inner.next().ok_or(ParseError::EmptyPredicate)?;
-            let right = parse_predicate(right_pair)?;
+
+            // Conjunction/disjunction gate. ∧ and ∨ share one level: they may
+            // not be mixed, and a bare quantifier may not be a ∧/∨ operand
+            // unless a closing bracket bounds it — both otherwise need explicit
+            // parentheses. Implication and equivalence keep their own (looser)
+            // levels and are not gated here.
+            if op_info::logical_precedence(op) == connective_level {
+                // `∧`/`∨` mixed without parentheses (checked when the operator
+                // is reached, before its right operand — matching Rodin).
+                if let Some((prev_op, prev_rule)) = prev
+                    && !op_info::logical_ops_compatible(prev_op, op)
+                {
+                    return Err(incompatible_operators(
+                        op_pair.as_span(),
+                        display_rule(prev_rule),
+                        display_rule(op_rule),
+                    ));
+                }
+                // A bare quantifier as the right operand of `∧`/`∨`, when no
+                // closing bracket bounds it.
+                if !bracketed && let Some(quantifier) = leading_quantifier(&right_pair) {
+                    return Err(incompatible_operators(
+                        op_pair.as_span(),
+                        display_rule(op_rule),
+                        quantifier,
+                    ));
+                }
+            }
+
+            let right = parse_predicate_inner(right_pair, bracketed)?;
             let span = fold_span(left.span, right.span);
             left = Predicate::new(
                 PredicateKind::Logical {
@@ -2118,6 +2184,7 @@ fn parse_binary_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate
                 },
                 span,
             );
+            prev = Some((op, op_rule));
         }
     }
 
@@ -2158,12 +2225,29 @@ fn parse_ident_pattern_atom(pair: pest::iterators::Pair<Rule>) -> Result<IdentPa
 ///
 /// Same iterative-descent treatment as [`parse_expression`]: the predicate
 /// precedence chain (`predicate` → `quantified_predicate` →
-/// `equivalence_predicate` → `implication_predicate` → `disjunction_predicate`
-/// → `conjunction_predicate` → `negation_predicate` → `atomic_predicate`,
-/// plus `_no_semi` twins) produces a deeply nested Pair tree even for a
-/// simple comparison. We unwrap single-child wrappers in a loop and only
-/// recurse for actual operators / quantifiers / negation.
+/// `equivalence_predicate` → `implication_predicate` → `connective_predicate`
+/// → `negation_predicate` → `atomic_predicate`, plus `_no_semi` twins)
+/// produces a deeply nested Pair tree even for a simple comparison. We unwrap
+/// single-child wrappers in a loop and only recurse for actual operators /
+/// quantifiers / negation.
 fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, ParseError> {
+    // Top-level entry: a formula attribute (axiom, guard, invariant, …) is not
+    // bounded by a closing bracket, so a bare quantifier as a ∧/∨ operand is
+    // rejected.
+    parse_predicate_inner(pair, false)
+}
+
+/// Parse a predicate, tracking whether it is bounded on the right by a closing
+/// bracket. A bare quantifier may be a ∧/∨ operand only when `bracketed` — the
+/// `)`/`}` then stands in for the parentheses Event-B otherwise requires. The
+/// flag propagates into quantifier bodies and connective operands; it is set on
+/// entering `( … )`, `bool( … )`, and a `{ … ∣ P }` comprehension, and stays
+/// false at top level and in `∣`-bounded such-that positions (λ, ⋃/⋂,
+/// `{ x · P ∣ E }`).
+fn parse_predicate_inner(
+    pair: pest::iterators::Pair<Rule>,
+    bracketed: bool,
+) -> Result<Predicate, ParseError> {
     let mut pair = pair;
     let rule = loop {
         let r = pair.as_rule();
@@ -2176,16 +2260,14 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
             // level (descend); multi-child = real chain (dispatch).
             Rule::equivalence_predicate
             | Rule::implication_predicate
-            | Rule::disjunction_predicate
-            | Rule::conjunction_predicate
+            | Rule::connective_predicate
             | Rule::equivalence_predicate_no_semi
             | Rule::implication_predicate_no_semi
-            | Rule::disjunction_predicate_no_semi
-            | Rule::conjunction_predicate_no_semi => {
+            | Rule::connective_predicate_no_semi => {
                 let mut probe = pair.clone().into_inner();
                 let first = probe.next().ok_or(ParseError::EmptyPredicate)?;
                 if probe.next().is_some() {
-                    return parse_binary_predicate(pair);
+                    return parse_binary_predicate(pair, bracketed);
                 }
                 pair = first;
             }
@@ -2219,15 +2301,21 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
             let mut inner = pair.into_inner();
             let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
             if first.as_rule() == Rule::op_not {
-                let pred = parse_predicate(inner.next().ok_or(ParseError::EmptyPredicate)?)?;
+                let pred = parse_predicate_inner(
+                    inner.next().ok_or(ParseError::EmptyPredicate)?,
+                    bracketed,
+                )?;
                 Ok(Predicate::new(
                     PredicateKind::Not(Box::new(pred)),
                     node_span,
                 ))
             } else if let Some(quantifier) = rule_to_quantifier(first.as_rule()) {
-                // Quantified predicate nested inside conjunction/disjunction
-                // (Rodin extension: spec requires parens, but Rodin accepts bare quantifiers)
-                let (identifiers, predicate) = collect_typed_identifiers_and_predicate(&mut inner)?;
+                // A quantified predicate appearing as a sub-formula operand,
+                // e.g. the right side of `⇒`/`⇔` or a nested quantifier body.
+                // A bare quantifier directly under `∧`/`∨` is rejected earlier
+                // in `parse_binary_predicate` unless a closing bracket bounds it.
+                let (identifiers, predicate) =
+                    collect_typed_identifiers_and_predicate(&mut inner, bracketed)?;
                 Ok(Predicate::new(
                     PredicateKind::Quantified {
                         quantifier,
@@ -2238,7 +2326,7 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
                 ))
             } else {
                 // Loop should have unwrapped the no-op alternative; defensive.
-                parse_predicate(first)
+                parse_predicate_inner(first, bracketed)
             }
         }
         Rule::quantified_predicate | Rule::quantified_predicate_no_semi => {
@@ -2251,7 +2339,8 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
                     expected: "∀ or ∃".to_string(),
                     found: format!("{:?}", first.as_rule()),
                 })?;
-            let (identifiers, predicate) = collect_typed_identifiers_and_predicate(&mut inner)?;
+            let (identifiers, predicate) =
+                collect_typed_identifiers_and_predicate(&mut inner, bracketed)?;
             Ok(Predicate::new(
                 PredicateKind::Quantified {
                     quantifier,
@@ -2267,15 +2356,17 @@ fn parse_predicate(pair: pest::iterators::Pair<Rule>) -> Result<Predicate, Parse
             match first.as_rule() {
                 Rule::kw_true => Ok(Predicate::new(PredicateKind::True, node_span)),
                 Rule::kw_false => Ok(Predicate::new(PredicateKind::False, node_span)),
-                Rule::predicate => parse_predicate(first),
+                // Only reachable for a parenthesised predicate, so it is bracketed.
+                Rule::predicate => parse_predicate_inner(first, true),
                 Rule::predicate_application => parse_predicate_application(first),
                 Rule::comparison_predicate | Rule::comparison_predicate_no_semi => {
                     parse_comparison_predicate(first)
                 }
                 Rule::lparen => {
-                    // Parenthesized predicate: lparen ~ predicate ~ rparen
+                    // Parenthesized predicate: lparen ~ predicate ~ rparen. The
+                    // closing `)` bounds it, so a trailing quantifier is allowed.
                     let predicate_pair = inner.next().ok_or(ParseError::EmptyPredicate)?;
-                    parse_predicate(predicate_pair)
+                    parse_predicate_inner(predicate_pair, true)
                 }
                 _ => Err(ParseError::UnexpectedRule {
                     expected: "atomic predicate".to_string(),
