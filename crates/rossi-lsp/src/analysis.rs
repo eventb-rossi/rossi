@@ -5,6 +5,7 @@
 
 use crate::identifier_utils::span_to_range;
 use crate::lsp_types::{DocumentSymbol, Range, SymbolKind};
+use rossi::ast::Span;
 use rossi::{Component, Context, Event, EventStatus, Machine};
 
 /// Extract document symbols from a component
@@ -58,10 +59,7 @@ fn extract_context_symbols(ctx: &Context, source: &str) -> Vec<DocumentSymbol> {
         .span
         .as_ref()
         .map_or_else(default_range, |span| span_to_range(span, source));
-    let name_range = ctx
-        .name_span
-        .as_ref()
-        .map_or_else(default_range, |span| span_to_range(span, source));
+    let name_range = name_range_or(ctx.name_span.as_ref(), range, source);
 
     let context_symbol = DocumentSymbol {
         name: ctx.name.clone(),
@@ -143,10 +141,7 @@ fn extract_machine_symbols(machine: &Machine, source: &str) -> Vec<DocumentSymbo
             .span
             .as_ref()
             .map_or_else(default_range, |span| span_to_range(span, source));
-        let selection_range = init
-            .name_span
-            .as_ref()
-            .map_or_else(default_range, |span| span_to_range(span, source));
+        let selection_range = name_range_or(init.name_span.as_ref(), range, source);
 
         let init_symbol = DocumentSymbol {
             name: "INITIALISATION".to_string(),
@@ -176,10 +171,7 @@ fn extract_machine_symbols(machine: &Machine, source: &str) -> Vec<DocumentSymbo
         .span
         .as_ref()
         .map_or_else(default_range, |span| span_to_range(span, source));
-    let name_range = machine
-        .name_span
-        .as_ref()
-        .map_or_else(default_range, |span| span_to_range(span, source));
+    let name_range = name_range_or(machine.name_span.as_ref(), range, source);
 
     let machine_symbol = DocumentSymbol {
         name: machine.name.clone(),
@@ -206,7 +198,7 @@ fn extract_event_symbol(event: &Event, source: &str) -> DocumentSymbol {
             param.name.clone(),
             SymbolKind::TYPE_PARAMETER,
             "Parameter",
-            default_range(),
+            name_range_or(param.span.as_ref(), default_range(), source),
         ));
     }
 
@@ -270,10 +262,7 @@ fn extract_event_symbol(event: &Event, source: &str) -> DocumentSymbol {
         .span
         .as_ref()
         .map_or_else(default_range, |span| span_to_range(span, source));
-    let name_range = event
-        .name_span
-        .as_ref()
-        .map_or_else(default_range, |span| span_to_range(span, source));
+    let name_range = name_range_or(event.name_span.as_ref(), range, source);
 
     DocumentSymbol {
         name: event.name.clone(),
@@ -305,6 +294,11 @@ fn create_symbol(name: String, kind: SymbolKind, detail: &str, range: Range) -> 
         #[allow(deprecated)]
         deprecated: None,
     }
+}
+
+/// `name_span` as a range, or `fallback` when absent.
+fn name_range_or(name_span: Option<&Span>, fallback: Range, source: &str) -> Range {
+    name_span.map_or(fallback, |s| span_to_range(s, source))
 }
 
 /// Create a default range (0,0)-(0,0)
@@ -508,6 +502,31 @@ mod tests {
         assert_eq!(init.selection_range.end, Position::new(4, 24));
         // The full-event range is real, not the (0, 0) default.
         assert_ne!(init.range, default_range());
+    }
+
+    #[test]
+    fn selection_range_contained_when_name_span_absent() {
+        // An event whose name_span is None (e.g. the header was unreadable) must
+        // still produce a DocumentSymbol where selectionRange ⊆ range.  The old
+        // code fell back to (0,0)-(0,0) which lies outside any event not at the
+        // very top of the file.
+        let source = "MACHINE m\nVARIABLES\n    v\nEVENTS\n    EVENT step\n    END\nEND";
+        let mut event = rossi::Event::new("step".to_string());
+        // Place the span at the EVENT keyword on line 4 (byte 40 is an
+        // approximation; what matters is that the range starts past line 0).
+        event.span = Some(rossi::ast::Span { start: 40, end: 55 });
+        event.name_span = None;
+
+        let sym = extract_event_symbol(&event, source);
+
+        // selectionRange.start must be ≥ range.start (line then column).
+        let r = sym.range;
+        let s = sym.selection_range;
+        assert!(
+            (s.start.line, s.start.character) >= (r.start.line, r.start.character)
+                && (s.end.line, s.end.character) <= (r.end.line, r.end.character),
+            "selection_range {s:?} must be contained in range {r:?}"
+        );
     }
 
     #[test]
