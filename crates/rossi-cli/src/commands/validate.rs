@@ -433,6 +433,9 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
         // formula attribute (predicate/expression/assignment) is rejected by
         // the grammar — that's a formula syntax error, not XML corruption.
         ParseError::MalformedAttribute { .. } => RuleId::FormulaParseError,
+        // Incompatible-operator rejection is a formula syntax error: the Rodin
+        // formula parser folds it into the same diagnostic class.
+        ParseError::IncompatibleOperators { .. } => RuleId::FormulaParseError,
         _ => RuleId::XmlParseError,
     }
 }

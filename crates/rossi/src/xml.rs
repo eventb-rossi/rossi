@@ -209,10 +209,14 @@ fn wrap_attr_error(
     value: &str,
     err: ParseError,
 ) -> ParseError {
-    // A nesting rejection is a property of the formula, not of the XML
-    // envelope — keep the variant intact so consumers classify it as a
-    // formula error (EB005) rather than a malformed-XML one (EB001).
-    if matches!(err, ParseError::NestingTooDeep { .. }) {
+    // A nesting rejection or an operator-incompatibility rejection is a
+    // property of the formula, not of the XML envelope — keep the variant
+    // intact so consumers classify it as a formula error (EB005) and surface
+    // its precise message instead of a malformed-attribute wrapper.
+    if matches!(
+        err,
+        ParseError::NestingTooDeep { .. } | ParseError::IncompatibleOperators { .. }
+    ) {
         return err;
     }
     let label_part = match label {
