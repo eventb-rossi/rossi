@@ -653,13 +653,11 @@ impl<'a> SemanticTokensBuilder<'a> {
         self.advance_past_keyword(KeywordId::Event, &mut cur, bound);
         self.advance_past_keyword(KeywordId::Initialisation, &mut cur, bound);
 
-        // THEN/BEGIN clause (actions). Labels are emitted lexically; the action
-        // span advances the cursor so the END search lands on this event's END.
-        if !init.actions.is_empty() {
-            self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
-            for action in &init.actions {
-                cur = self.visit_action(action, cur);
-            }
+        // THEN/BEGIN clause: unconditional (advance_past_keyword is a no-op when
+        // absent); labels are emitted lexically, advancing cur to the event's END.
+        self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
+        for action in &init.actions {
+            cur = self.visit_action(action, cur);
         }
 
         self.advance_past_keyword(KeywordId::End, &mut cur, bound);
@@ -701,10 +699,8 @@ impl<'a> SemanticTokensBuilder<'a> {
             self.advance_past_keyword(KeywordId::Refines, &mut cur, bound);
         }
 
-        // ANY clause (parameters)
-        if !event.parameters.is_empty()
-            && let Some(off) = self.mark_keyword(KeywordId::Any, cur, bound)
-        {
+        // ANY clause: unconditional (mark_keyword returns None when absent).
+        if let Some(off) = self.mark_keyword(KeywordId::Any, cur, bound) {
             cur = off;
             for param in &event.parameters {
                 cur = self.mark_name(
@@ -718,36 +714,26 @@ impl<'a> SemanticTokensBuilder<'a> {
             }
         }
 
-        // WHERE/WHEN clause (guards)
-        if !event.guards.is_empty() {
-            self.advance_past_keyword(KeywordId::Where, &mut cur, bound);
-            for guard in &event.guards {
-                cur = self.visit_labeled_predicate(guard, cur);
-            }
+        // Unconditional: keywords coloured even when error recovery left clause
+        // vectors empty (advance_past_keyword is a no-op when absent).
+        self.advance_past_keyword(KeywordId::Where, &mut cur, bound);
+        for guard in &event.guards {
+            cur = self.visit_labeled_predicate(guard, cur);
         }
 
-        // WITH clause (labeled predicates)
-        if !event.with.is_empty() {
-            self.advance_past_keyword(KeywordId::With, &mut cur, bound);
-            for lp in &event.with {
-                cur = self.visit_labeled_predicate(lp, cur);
-            }
+        self.advance_past_keyword(KeywordId::With, &mut cur, bound);
+        for lp in &event.with {
+            cur = self.visit_labeled_predicate(lp, cur);
         }
 
-        // WITNESS clause (labeled predicates)
-        if !event.witnesses.is_empty() {
-            self.advance_past_keyword(KeywordId::Witness, &mut cur, bound);
-            for lp in &event.witnesses {
-                cur = self.visit_labeled_predicate(lp, cur);
-            }
+        self.advance_past_keyword(KeywordId::Witness, &mut cur, bound);
+        for lp in &event.witnesses {
+            cur = self.visit_labeled_predicate(lp, cur);
         }
 
-        // THEN/BEGIN clause (actions)
-        if !event.actions.is_empty() {
-            self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
-            for action in &event.actions {
-                cur = self.visit_action(action, cur);
-            }
+        self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
+        for action in &event.actions {
+            cur = self.visit_action(action, cur);
         }
 
         // END keyword
