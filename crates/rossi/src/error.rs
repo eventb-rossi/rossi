@@ -50,6 +50,23 @@ pub enum ParseError {
         span: Option<Span>,
     },
 
+    /// Two adjacent operators were used without the parentheses the Event-B
+    /// language requires — e.g. `A ∪ B ∩ C` or `P ∧ Q ∨ R`. Both spellings are
+    /// valid operators; only their bare juxtaposition is rejected (the Rodin
+    /// formula parser raises `IncompatibleOperators` here). `left` is the
+    /// operator binding the accumulated left operand, `right` the next operator
+    /// (or, for a bare quantifier conjunct, the quantifier). `line` and `column`
+    /// are 1-indexed; `span` is the byte range of the operator at which the
+    /// incompatibility is detected (additive, oracle-safe).
+    #[error("Operator: {left} is not compatible with: {right}, parentheses are required")]
+    IncompatibleOperators {
+        left: String,
+        right: String,
+        line: usize,
+        column: usize,
+        span: Option<Span>,
+    },
+
     #[error("Empty expression")]
     EmptyExpression,
 
@@ -167,11 +184,7 @@ impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
         // their pest name. Renaming leaves the position fields untouched, so it
         // happens last (it consumes the pest error).
         let message = (*error)
-            .renamed_rules(|rule| {
-                crate::parser::friendly_rule_name(*rule)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{rule:?}"))
-            })
+            .renamed_rules(|rule| crate::parser::display_rule(*rule))
             .to_string();
         ParseError::PestError {
             message,
@@ -191,6 +204,7 @@ impl ParseError {
             ParseError::PestError { line, column, .. }
             | ParseError::NestingTooDeep { line, column, .. }
             | ParseError::ReservedWord { line, column, .. }
+            | ParseError::IncompatibleOperators { line, column, .. }
             | ParseError::ClauseError { line, column, .. }
             | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
             ParseError::FileContext { source, .. } => source.position(),
@@ -211,6 +225,7 @@ impl ParseError {
         match self {
             ParseError::PestError { span, .. }
             | ParseError::ReservedWord { span, .. }
+            | ParseError::IncompatibleOperators { span, .. }
             | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),
@@ -324,5 +339,22 @@ mod tests {
         };
         assert_eq!(err.position(), Some((4, 7)));
         assert_eq!(err.span(), Some(Span { start: 10, end: 13 }));
+    }
+
+    #[test]
+    fn incompatible_operators_message_names_both_operators() {
+        let err = ParseError::IncompatibleOperators {
+            left: "∪".to_string(),
+            right: "∩".to_string(),
+            line: 1,
+            column: 7,
+            span: Some(Span { start: 6, end: 7 }),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Operator: ∪ is not compatible with: ∩, parentheses are required"
+        );
+        assert_eq!(err.position(), Some((1, 7)));
+        assert_eq!(err.span(), Some(Span { start: 6, end: 7 }));
     }
 }

@@ -64,6 +64,15 @@ pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
     })
 }
 
+/// Owned display spelling for a [`Rule`], for diagnostic messages: the
+/// [`friendly_rule_name`] glyph when there is one, else the debug name. Never
+/// fails, so callers that name an operator in an error can rely on it.
+pub(crate) fn display_rule(rule: Rule) -> String {
+    friendly_rule_name(rule)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{rule:?}"))
+}
+
 /// Bridge a grammar [`Rule`] to its canonical [`OperatorId`], reusing the maps
 /// already maintained for parsing (`rule_to_*`) and pretty-printing (`*_id`).
 /// Returns `None` for rules that do not denote an operator. This is the link
@@ -1311,19 +1320,45 @@ fn rule_to_unary_op(rule: Rule) -> Option<crate::ast::expression::UnaryOp> {
 
 /// Parse a binary expression (additive, multiplicative, or relational)
 fn parse_binary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ParseError> {
+    use crate::ast::expression::BinaryOp;
+    use crate::op_info;
+
     let mut inner = pair.into_inner();
 
     // Get the first operand
     let first = inner.next().ok_or(ParseError::EmptyExpression)?;
     let mut left = parse_expression(first)?;
 
+    // The operator binding the accumulated left operand (its root operator),
+    // kept by `Rule` so the display spelling is built only on the error path.
+    let set_level = op_info::binary_precedence(BinaryOp::Union);
+    let mut prev: Option<(BinaryOp, Rule)> = None;
+
     // Process remaining (operator, operand) pairs
     while let Some(op_pair) = inner.next() {
-        let op =
-            rule_to_binary_op(op_pair.as_rule()).ok_or_else(|| ParseError::UnexpectedRule {
-                expected: "binary operator".to_string(),
-                found: format!("{:?}", op_pair.as_rule()),
-            })?;
+        let op_rule = op_pair.as_rule();
+        let op = rule_to_binary_op(op_rule).ok_or_else(|| ParseError::UnexpectedRule {
+            expected: "binary operator".to_string(),
+            found: format!("{op_rule:?}"),
+        })?;
+
+        // Reject set-level operators juxtaposed without the parentheses the
+        // Event-B language requires (e.g. `A ∪ B ∩ C`). Only the set-operator
+        // level has an incompatibility matrix: the other binary levels are
+        // either freely mixing (arithmetic) or non-associative by grammar
+        // (relation arrows, range, exponent), so they never reach this gate
+        // carrying two operators.
+        if op_info::binary_precedence(op) == set_level
+            && let Some((prev_op, prev_rule)) = prev
+            && !op_info::set_ops_acceptable(prev_op, op)
+        {
+            return Err(incompatible_operators(
+                op_pair.as_span(),
+                display_rule(prev_rule),
+                display_rule(op_rule),
+            ));
+        }
+
         let right_pair = inner.next().ok_or(ParseError::EmptyExpression)?;
         let right = parse_expression(right_pair)?;
         // The folded node spans from the start of its left operand to the end
@@ -1337,6 +1372,7 @@ fn parse_binary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Pa
             },
             span,
         );
+        prev = Some((op, op_rule));
     }
 
     Ok(left)
@@ -1364,6 +1400,20 @@ fn identifier_expression(name: &str, span: Option<Span>) -> Expression {
     match crate::ast::expression::AtomicBuiltinKind::from_name(name) {
         Some(kind) => Expression::new(ExpressionKind::AtomicBuiltin(kind), span),
         None => Expression::new(ExpressionKind::Identifier(name.to_string()), span),
+    }
+}
+
+/// Build an [`ParseError::IncompatibleOperators`] anchored at the operator
+/// `span` (the operator at which the incompatibility is detected). Called only
+/// on the rejection path, so the `line_col` scan stays off the accepting path.
+fn incompatible_operators(span: pest::Span<'_>, left: String, right: String) -> ParseError {
+    let (line, column) = span.start_pos().line_col();
+    ParseError::IncompatibleOperators {
+        left,
+        right,
+        line,
+        column,
+        span: Some(Span::from_pest(span)),
     }
 }
 
