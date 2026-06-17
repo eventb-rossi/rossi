@@ -158,3 +158,88 @@ fn hover_still_works_after_a_local_error() {
         content.value
     );
 }
+
+/// Machine with an event whose guard is broken (missing `∖`), forcing
+/// recovery. Lines (0-indexed):
+///
+/// ```text
+///  0 MACHINE m
+///  1 VARIABLES
+///  2     v
+///  3 EVENTS
+///  4     EVENT step
+///  5     ANY
+///  6         container
+///  7     WHERE
+///  8         @grd1 container ∈ Union  Union
+///  9     THEN
+/// 10         v := 0
+/// 11     END
+/// 12 END
+/// ```
+const BROKEN_GUARD_SOURCE: &str = "\
+MACHINE m
+VARIABLES
+    v
+EVENTS
+    EVENT step
+    ANY
+        container
+    WHERE
+        @grd1 container ∈ Union  Union
+    THEN
+        v := 0
+    END
+END
+";
+
+fn broken_guard_uri() -> Url {
+    Url::parse("file:///broken.eventb").unwrap()
+}
+
+fn setup_broken_guard() -> DefinitionProvider {
+    let crm = Arc::new(CrossReferenceManager::new());
+    let dm = Arc::new(DocumentManager::new());
+    crm.update_component(broken_guard_uri().to_string(), BROKEN_GUARD_SOURCE);
+    dm.open(
+        broken_guard_uri(),
+        "eventb".to_string(),
+        1,
+        BROKEN_GUARD_SOURCE.to_string(),
+    );
+    let mut def = DefinitionProvider::new();
+    def.set_cross_reference_manager(Arc::clone(&crm));
+    def.set_document_manager(Arc::clone(&dm));
+    def.update_definitions(broken_guard_uri().to_string(), BROKEN_GUARD_SOURCE);
+    def
+}
+
+#[test]
+fn goto_resolves_event_parameter_when_guard_is_broken() {
+    // The broken guard forces the machine into error recovery, which used to
+    // leave event.parameters empty — goto-definition on `container` (line 6,
+    // col 8) returned nothing.  recover_events now extracts ANY-clause
+    // parameters so the definition site is always available.
+    let def = setup_broken_guard();
+    let goto_def_params = GotoDefinitionParams {
+        text_document_position_params: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: broken_guard_uri(),
+            },
+            position: Position::new(6, 8),
+        },
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    };
+    let location = match def
+        .goto_definition(&goto_def_params, BROKEN_GUARD_SOURCE)
+        .expect("definition should resolve")
+    {
+        GotoDefinitionResponse::Scalar(l) => l,
+        other => panic!("expected scalar, got {other:?}"),
+    };
+    assert_eq!(location.uri, broken_guard_uri());
+    // `container` on line 6 starts at column 8 (`    ANY\n        container`).
+    assert_eq!(location.range.start.line, 6);
+    assert_eq!(location.range.start.character, 8);
+}
