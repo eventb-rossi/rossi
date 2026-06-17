@@ -31,7 +31,6 @@ use rossi::ast::expression::{AtomicBuiltinKind, BinaryOp, BuiltinFunction, Ident
 use rossi::ast::predicate::{BuiltinPredicate, ComparisonOp, LogicalOp};
 use rossi::{Expression, ExpressionKind, Predicate, PredicateKind};
 
-use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
@@ -449,18 +448,17 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             function,
             arguments,
         } => {
-            // `f(x)` (or curried `f(a, b)` ≡ `f(a ↦ b)`): when
-            // `f : ℙ(α × β)`, the application has type `β`. Best-effort
-            // unify the argument against the domain (an argument still
-            // resolving in the fixpoint is skipped) so a polymorphic
-            // function's domain variable gets pinned; return the codomain.
+            // `f(x)`: when `f : ℙ(α × β)`, the application has type `β`. A pair
+            // argument is the single maplet `f(a ↦ b)`. Best-effort unify the
+            // argument against the domain (an argument still resolving in the
+            // fixpoint is skipped) so a polymorphic function's domain variable
+            // gets pinned; return the codomain.
             let f = synth(env, function, u)?;
             let (dom, codomain) = u.as_relation(&f)?;
-            if !arguments.is_empty() {
-                let arg_expr = left_assoc_maplet(arguments);
-                if let Some(arg_t) = synth(env, &arg_expr, u) {
-                    u.unify(&dom, &arg_t).ok();
-                }
+            if let Some(arg) = arguments.first()
+                && let Some(arg_t) = synth(env, arg, u)
+            {
+                u.unify(&dom, &arg_t).ok();
             }
             Some(codomain)
         }
@@ -1002,8 +1000,8 @@ pub fn infer_constant_from_predicate(
                     arguments,
                 } = &left.kind
                     && matches!(&function.kind, ExpressionKind::Identifier(n) if n == constant_name)
-                    && !arguments.is_empty()
-                    && let Some(arg_t) = type_of_expression(env, &left_assoc_maplet(arguments))
+                    && let Some(arg) = arguments.first()
+                    && let Some(arg_t) = type_of_expression(env, arg)
                     && let Some(Type::PowerSet(elem)) = type_of_expression(env, right)
                 {
                     return Some(Type::pow(Type::prod(arg_t, *elem)));
@@ -1163,12 +1161,11 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
                 return;
             }
             if let Some((dom, _)) = type_of_expression(env, function).and_then(Type::into_relation)
+                && let Some(arg) = arguments.first()
+                && let Some(t) = infer_from_maplet_pattern(arg, &dom, target)
             {
-                let arg_expr = left_assoc_maplet(arguments);
-                if let Some(t) = infer_from_maplet_pattern(&arg_expr, &dom, target) {
-                    *found = Some(t);
-                    return;
-                }
+                *found = Some(t);
+                return;
             }
             for a in arguments {
                 walk_expr_for_arg(env, a, target, found);

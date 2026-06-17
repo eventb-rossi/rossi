@@ -305,27 +305,26 @@ fn arb_expression() -> impl Strategy<Value = Expression> {
     arb_expression_with(arb_binary_op().boxed(), 4, 64)
 }
 
-/// Generate a BuiltinApplication with correct arity.
+/// Generate a BuiltinApplication. Every closed builtin takes exactly one
+/// argument (`card(S)`, `min(S)`, …).
 fn arb_builtin_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Value = Expression> {
-    arb_builtin_function().prop_flat_map(move |func| {
-        let arity = func.arity();
-        proptest::collection::vec(inner.clone(), arity..=arity).prop_map(move |arguments| {
-            ExpressionKind::BuiltinApplication {
-                function: func,
-                arguments,
-            }
-            .into()
-        })
+    (arb_builtin_function(), inner).prop_map(|(function, arg)| {
+        ExpressionKind::BuiltinApplication {
+            function,
+            arguments: vec![arg],
+        }
+        .into()
     })
 }
 
 /// Generate a FunctionApplication with a safe identifier as function.
 /// All names in `arb_identifier()` already avoid builtins and keywords.
+/// Application is single-argument (Rodin's FUNIMAGE); a pair would be a maplet.
 fn arb_function_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Value = Expression> {
-    (arb_identifier(), proptest::collection::vec(inner, 1..4)).prop_map(|(name, arguments)| {
+    (arb_identifier(), inner).prop_map(|(name, argument)| {
         ExpressionKind::FunctionApplication {
             function: Box::new(ExpressionKind::Identifier(name).into()),
-            arguments,
+            arguments: vec![argument],
         }
         .into()
     })

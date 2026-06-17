@@ -288,11 +288,13 @@ mod tests {
     }
 
     #[test]
-    fn function_override_multi_arg_left_assoc() {
+    fn function_override_maplet_arg() {
         use rossi::parse_action_str;
         let env = TypeEnv::new();
-        // Multi-arg: `(a ↦ b) ↦ y` — left-associative, emits flat.
-        let a = parse_action_str("g(a, b) ≔ y").unwrap();
+        // Override on a pair domain uses a maplet argument `g(a ↦ b) ≔ y`
+        // (function application is single-argument); it lowers to the override
+        // `g ≔ g <+ {(a ↦ b) ↦ y}`, the maplet printed flat (left-associative).
+        let a = parse_action_str("g(a ↦ b) ≔ y").unwrap();
         assert_eq!(
             canonical_action_with_env(&a, &env),
             "g ≔ g\u{E103}{a ↦ b ↦ y}"

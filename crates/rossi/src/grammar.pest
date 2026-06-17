@@ -265,8 +265,13 @@ lambda_expr = {
 //   `dom(f)∼ = (dom(f))∼`, `dom(f)[S] = (dom(f))[S]`.
 closed_unary_expr = { (op_domain | op_range) ~ lparen ~ expression ~ rparen }
 
+// Function application is single-argument (Rodin's FUNIMAGE is binary): `f(x)`,
+// with a pair written as a maplet `f(x ↦ y)` — never a comma list `f(a, b)`.
+// The `lbrace … rbrace` form is the function-update set `f{x ↦ y, …}` (a set
+// of maplets, so it keeps its commas); `lbracket … rbracket` is relational
+// image `r[S]`; `op_inverse` is postfix `∼`.
 function_application = {
-    (closed_unary_expr | primary_expr) ~ (lparen ~ expression ~ (comma ~ expression)* ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
+    (closed_unary_expr | primary_expr) ~ (lparen ~ expression ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
 }
 
 // Unary Expressions
@@ -497,7 +502,7 @@ action_expression = {
 
 action = {
     kw_skip                                                                      // Skip (no-op)
-  | identifier ~ lparen ~ action_expression ~ (comma ~ action_expression)* ~ rparen ~ op_becomes_equal ~ action_expression  // Function override: f(x) ≔ E
+  | identifier ~ lparen ~ action_expression ~ rparen ~ op_becomes_equal ~ action_expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
   | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ action_expression ~ (comma ~ action_expression)*  // Deterministic (parallel) assignment
   | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ action_expression     // Non-deterministic assignment (becomes member of)
   | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate_no_semi   // Non-deterministic assignment (becomes such that)
@@ -511,7 +516,7 @@ action = {
 // THEN block are juxtaposed.
 standalone_action = {
     kw_skip                                                                      // Skip (no-op)
-  | identifier ~ lparen ~ expression ~ (comma ~ expression)* ~ rparen ~ op_becomes_equal ~ expression  // Function override: f(x) ≔ E
+  | identifier ~ lparen ~ expression ~ rparen ~ op_becomes_equal ~ expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
   | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ expression ~ (comma ~ expression)*  // Deterministic (parallel) assignment
   | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ expression            // Non-deterministic assignment (becomes member of)
   | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate           // Non-deterministic assignment (becomes such that)
