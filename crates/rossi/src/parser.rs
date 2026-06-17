@@ -1363,6 +1363,19 @@ fn fold_span(left: Option<Span>, right: Option<Span>) -> Option<Span> {
     }
 }
 
+/// Build an expression for a bare `identifier` token. A reserved relational
+/// atom (`id`, `prj1`, `prj2`, `pred`, `succ` — exact case) becomes the typed
+/// [`ExpressionKind::AtomicBuiltin`]; every other word is an ordinary
+/// identifier. Applying an atom (`prj1(x)`) is then handled by the surrounding
+/// `function_application`, which wraps it in a `FunctionApplication` — matching
+/// Rodin's atomic-expression + `FUNIMAGE` structure.
+fn identifier_expression(name: &str, span: Option<Span>) -> Expression {
+    match crate::ast::expression::AtomicBuiltinKind::from_name(name) {
+        Some(kind) => Expression::new(ExpressionKind::AtomicBuiltin(kind), span),
+        None => Expression::new(ExpressionKind::Identifier(name.to_string()), span),
+    }
+}
+
 /// Parse an expression
 ///
 /// The grammar's expression precedence chain (`expression` →
@@ -1648,11 +1661,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                         if !builtin.check_arity(arguments.len()) {
                             return Err(ParseError::ArityMismatch {
                                 name: builtin.name().to_string(),
-                                expected: if builtin.min_arity() == builtin.max_arity() {
-                                    builtin.min_arity().to_string()
-                                } else {
-                                    format!("{} to {}", builtin.min_arity(), builtin.max_arity())
-                                },
+                                expected: builtin.arity().to_string(),
                                 actual: arguments.len(),
                             });
                         }
@@ -1776,10 +1785,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                         .map_err(|_| ParseError::InvalidInteger(first.as_str().to_string()))?;
                     Ok(Expression::new(ExpressionKind::Integer(value), node_span))
                 }
-                Rule::identifier => Ok(Expression::new(
-                    ExpressionKind::Identifier(first.as_str().to_string()),
-                    node_span,
-                )),
+                Rule::identifier => Ok(identifier_expression(first.as_str(), node_span)),
                 Rule::expression => parse_expression(first),
                 Rule::lparen => {
                     // Parenthesized expression: lparen ~ expression ~ rparen
@@ -1918,10 +1924,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
             // raw identifier pair (formula identifiers arrive wrapped in
             // function_application, which carries the position-aware check).
             reject_reserved_operator_word(&pair)?;
-            Ok(Expression::new(
-                ExpressionKind::Identifier(pair.as_str().to_string()),
-                node_span,
-            ))
+            Ok(identifier_expression(pair.as_str(), node_span))
         }
         Rule::integer => {
             let value = pair
@@ -2845,6 +2848,7 @@ fn shift_expr_spans(expr: &mut Expression, delta: usize) {
     match &mut expr.kind {
         ExpressionKind::Integer(_)
         | ExpressionKind::Identifier(_)
+        | ExpressionKind::AtomicBuiltin(_)
         | ExpressionKind::True
         | ExpressionKind::False
         | ExpressionKind::EmptySet

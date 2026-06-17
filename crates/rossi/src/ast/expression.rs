@@ -99,16 +99,18 @@ pub enum UnaryOp {
     Inverse,
 }
 
-/// Built-in expression functions recognized by the parser
+/// Closed built-in expression functions: words that are only ever meaningful
+/// applied to a parenthesized argument (`card(S)`, `min(S)`, …). Each takes
+/// exactly one argument. The generic relational atoms (`id`/`prj1`/`prj2`/
+/// `pred`/`succ`) are *not* here — they are atomic expressions, modelled by
+/// [`AtomicBuiltinKind`], and "application" of them (`prj1(x)`) is an ordinary
+/// [`ExpressionKind::FunctionApplication`], matching Rodin's `FUNIMAGE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BuiltinFunction {
     Card,
     Min,
     Max,
-    Id,
-    Prj1,
-    Prj2,
     /// Generalized union `union(S)` (prefix `⋃` over a set of sets).
     Union,
     /// Generalized intersection `inter(S)` (prefix `⋂` over a set of sets).
@@ -122,49 +124,20 @@ impl BuiltinFunction {
             BuiltinFunction::Card => "card",
             BuiltinFunction::Min => "min",
             BuiltinFunction::Max => "max",
-            BuiltinFunction::Id => "id",
-            BuiltinFunction::Prj1 => "prj1",
-            BuiltinFunction::Prj2 => "prj2",
             BuiltinFunction::Union => "union",
             BuiltinFunction::Inter => "inter",
         }
     }
 
-    /// Get the expected number of arguments for this built-in function
+    /// The number of arguments a closed built-in takes — always exactly one
+    /// (`card(S)`, `min(S)`, …); there is no variadic or nullary form.
     pub fn arity(&self) -> usize {
-        self.max_arity()
+        1
     }
 
-    /// Get the minimum number of arguments
-    pub fn min_arity(&self) -> usize {
-        match self {
-            BuiltinFunction::Card
-            | BuiltinFunction::Min
-            | BuiltinFunction::Max
-            | BuiltinFunction::Id
-            | BuiltinFunction::Prj1
-            | BuiltinFunction::Prj2
-            | BuiltinFunction::Union
-            | BuiltinFunction::Inter => 1,
-        }
-    }
-
-    /// Get the maximum number of arguments
-    pub fn max_arity(&self) -> usize {
-        match self {
-            BuiltinFunction::Card
-            | BuiltinFunction::Min
-            | BuiltinFunction::Max
-            | BuiltinFunction::Id
-            | BuiltinFunction::Union
-            | BuiltinFunction::Inter => 1,
-            BuiltinFunction::Prj1 | BuiltinFunction::Prj2 => 2,
-        }
-    }
-
-    /// Check if the given number of arguments is valid
+    /// Check if the given number of arguments is valid.
     pub fn check_arity(&self, n: usize) -> bool {
-        n >= self.min_arity() && n <= self.max_arity()
+        n == self.arity()
     }
 
     /// Look up a built-in function by name
@@ -173,13 +146,62 @@ impl BuiltinFunction {
             "card" => Some(BuiltinFunction::Card),
             "min" => Some(BuiltinFunction::Min),
             "max" => Some(BuiltinFunction::Max),
-            "id" => Some(BuiltinFunction::Id),
-            "prj1" => Some(BuiltinFunction::Prj1),
-            "prj2" => Some(BuiltinFunction::Prj2),
             "union" => Some(BuiltinFunction::Union),
             "inter" => Some(BuiltinFunction::Inter),
             _ => None,
         }
+    }
+}
+
+/// The generic relational atoms of the Event-B mathematical language: bare
+/// words that denote a built-in relation whose type the static checker infers
+/// (Rodin's `KID_GEN`/`KPRJ1_GEN`/`KPRJ2_GEN` atomic expressions, plus the
+/// monomorphic integer relations `KPRED`/`KSUCC`). They are *atoms* — a bare
+/// `prj1` is a value, and `prj1(x)` is function application of that value
+/// (`FUNIMAGE`), never a closed builtin call. These are reserved atom words
+/// (see [`crate::builtins::RESERVED_ATOM_WORDS`]): legal bare, un-namable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum AtomicBuiltinKind {
+    /// Generic identity relation `id` (`ℙ(α × α)`).
+    Id,
+    /// First projection `prj1` (`ℙ((α × β) × α)`).
+    Prj1,
+    /// Second projection `prj2` (`ℙ((α × β) × β)`).
+    Prj2,
+    /// Predecessor relation `pred` (`ℙ(ℤ × ℤ)`).
+    Pred,
+    /// Successor relation `succ` (`ℙ(ℤ × ℤ)`).
+    Succ,
+}
+
+impl AtomicBuiltinKind {
+    /// Every relational atom, the canonical variant list. `name` is the single
+    /// source of spellings; `from_name` and callers that need to enumerate the
+    /// atoms derive from this array rather than re-listing the variants.
+    pub const ALL: [AtomicBuiltinKind; 5] = [
+        AtomicBuiltinKind::Id,
+        AtomicBuiltinKind::Prj1,
+        AtomicBuiltinKind::Prj2,
+        AtomicBuiltinKind::Pred,
+        AtomicBuiltinKind::Succ,
+    ];
+
+    /// Get the canonical name of this relational atom.
+    pub fn name(&self) -> &'static str {
+        match self {
+            AtomicBuiltinKind::Id => "id",
+            AtomicBuiltinKind::Prj1 => "prj1",
+            AtomicBuiltinKind::Prj2 => "prj2",
+            AtomicBuiltinKind::Pred => "pred",
+            AtomicBuiltinKind::Succ => "succ",
+        }
+    }
+
+    /// Look up a relational atom by name (derived from [`Self::name`], so the
+    /// spellings can never drift between the two directions).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
     }
 }
 
@@ -332,6 +354,11 @@ pub enum ExpressionKind {
         function: BuiltinFunction,
         arguments: Vec<Expression>,
     },
+
+    /// A generic relational atom written bare: `id`, `prj1`, `prj2`, `pred`,
+    /// `succ`. An atomic value (Rodin's generic atomic expressions); applying
+    /// one (`prj1(x)`) is an ordinary [`ExpressionKind::FunctionApplication`].
+    AtomicBuiltin(AtomicBuiltinKind),
 
     /// Boolean conversion: bool(P) — converts a predicate to a boolean expression
     Bool(Box<Predicate>),

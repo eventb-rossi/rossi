@@ -143,7 +143,10 @@ pub fn walk_expression<V: IdentVisitor>(
 ) -> ControlFlow<()> {
     match &e.kind {
         ExpressionKind::Identifier(n) => emit(v, n, e.span, IdentRole::Usage, binders),
-        ExpressionKind::Integer(_)
+        // A relational atom is a builtin value, not an identifier usage — it
+        // names no user declaration, so it is never reported as a free name.
+        ExpressionKind::AtomicBuiltin(_)
+        | ExpressionKind::Integer(_)
         | ExpressionKind::True
         | ExpressionKind::False
         | ExpressionKind::EmptySet

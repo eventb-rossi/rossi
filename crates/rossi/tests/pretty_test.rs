@@ -593,19 +593,13 @@ fn test_pretty_print_function_application_binary_function_keeps_parens() {
     // (mapping ◁ prj1)(x): the function side is a Binary, so
     // dropping the parens would re-bind as `mapping ◁ prj1(x)`,
     // a different AST. Regression seen on a real-world corpus model.
-    use rossi::ast::expression::{BinaryOp, BuiltinFunction};
+    use rossi::ast::expression::{AtomicBuiltinKind, BinaryOp};
     let expr: Expression = ExpressionKind::FunctionApplication {
         function: Box::new(
             ExpressionKind::Binary {
                 op: BinaryOp::DomainRestriction,
                 left: Box::new(ExpressionKind::Identifier("mapping".into()).into()),
-                right: Box::new(
-                    ExpressionKind::BuiltinApplication {
-                        function: BuiltinFunction::Prj1,
-                        arguments: Vec::new(),
-                    }
-                    .into(),
-                ),
+                right: Box::new(ExpressionKind::AtomicBuiltin(AtomicBuiltinKind::Prj1).into()),
             }
             .into(),
         ),
@@ -613,7 +607,21 @@ fn test_pretty_print_function_application_binary_function_keeps_parens() {
     }
     .into();
     let output = PrettyPrinter::new().print_expression(&expr);
-    assert_eq!(output, "(mapping \u{25C1} prj1())(x)");
+    assert_eq!(output, "(mapping \u{25C1} prj1)(x)");
+}
+
+#[test]
+fn test_pretty_print_inverse_of_atomic_builtin_no_parens() {
+    // A bare relational atom is a primary expression, so postfix inverse needs
+    // no parens: `prj1∼`, not `(prj1)∼` (it would round-trip either way, but
+    // the canonical form must match the minimal one).
+    use rossi::ast::expression::{AtomicBuiltinKind, UnaryOp};
+    let expr: Expression = ExpressionKind::Unary {
+        op: UnaryOp::Inverse,
+        operand: Box::new(ExpressionKind::AtomicBuiltin(AtomicBuiltinKind::Prj1).into()),
+    }
+    .into();
+    assert_eq!(PrettyPrinter::new().print_expression(&expr), "prj1\u{223C}");
 }
 
 #[test]
