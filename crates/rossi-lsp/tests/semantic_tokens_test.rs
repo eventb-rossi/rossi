@@ -483,6 +483,39 @@ fn test_label_token_excludes_trailing_colon() {
 }
 
 #[test]
+fn event_clause_keywords_coloured_when_guard_parse_fails() {
+    // A broken guard (`∖` missing → `Union CurrUnion`) causes error recovery to
+    // leave event.guards empty.  WHERE and THEN must still receive keyword
+    // tokens so the event body doesn't appear completely unhighlighted.
+    let text = "MACHINE m\nVARIABLES\n    v\nEVENTS\n    EVENT step\n    WHERE\n        @grd1 v ∈ ℕ  ℕ\n    THEN\n        v := 0\n    END\nEND\n";
+    assert!(rossi::parse(text).is_err(), "fixture must be broken");
+
+    let tokens = decode_tokens(text);
+    let keyword = token_type_index("keyword");
+    let lines: Vec<&str> = text.lines().collect();
+
+    let kw_at = |line: u32, text_slice: &str| {
+        let col = lines[line as usize].find(text_slice).unwrap() as u32;
+        tokens
+            .iter()
+            .any(|&(l, c, _, t)| l == line && c == col && t == keyword)
+    };
+
+    assert!(
+        kw_at(5, "WHERE"),
+        "WHERE must get a keyword token despite failed guard"
+    );
+    assert!(
+        kw_at(7, "THEN"),
+        "THEN must get a keyword token despite failed guard"
+    );
+    assert!(
+        kw_at(9, "END"),
+        "END must get a keyword token despite failed guard"
+    );
+}
+
+#[test]
 fn formula_body_identifiers_are_classified() {
     // Per-identifier spans let semantic tokens colour identifiers inside formula
     // bodies, not just declarations: a variable used in an invariant is a
