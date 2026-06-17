@@ -8,11 +8,17 @@
 
 use rossi::{parse_expression_str, parse_predicate_str};
 
-/// Assert an expression is rejected and the message names both operators.
+/// Assert a parse `result` is the incompatible-operators rejection naming both
+/// operators. Generic over the Ok type so the expression and predicate entry
+/// points share one body.
 #[track_caller]
-fn expr_incompatible(src: &str, left: &str, right: &str) {
-    let err = parse_expression_str(src)
-        .expect_err(&format!("expected `{src}` to be rejected as incompatible"));
+fn assert_incompatible<T: std::fmt::Debug, E: std::fmt::Display>(
+    result: Result<T, E>,
+    src: &str,
+    left: &str,
+    right: &str,
+) {
+    let err = result.expect_err(&format!("expected `{src}` to be rejected as incompatible"));
     let msg = err.to_string();
     assert!(
         msg.contains(&format!(
@@ -20,6 +26,16 @@ fn expr_incompatible(src: &str, left: &str, right: &str) {
         )),
         "`{src}` rejected, but message did not name {left}/{right}: {msg}"
     );
+}
+
+#[track_caller]
+fn expr_incompatible(src: &str, left: &str, right: &str) {
+    assert_incompatible(parse_expression_str(src), src, left, right);
+}
+
+#[track_caller]
+fn pred_incompatible(src: &str, left: &str, right: &str) {
+    assert_incompatible(parse_predicate_str(src), src, left, right);
 }
 
 #[track_caller]
@@ -111,4 +127,101 @@ fn other_binary_levels_are_unaffected() {
     expr_ok("a + b − c");
     expr_ok("a ↦ b ↦ c");
     pred_ok("x ∈ a ‥ b");
+}
+
+// ---------------------------------------------------------------------------
+// ∧ / ∨ may not be mixed without parentheses
+// ---------------------------------------------------------------------------
+
+#[test]
+fn and_then_or_is_rejected() {
+    pred_incompatible("x > 0 ∧ y > 0 ∨ z > 0", "∧", "∨");
+}
+
+#[test]
+fn or_then_and_is_rejected() {
+    pred_incompatible("x > 0 ∨ y > 0 ∧ z > 0", "∨", "∧");
+}
+
+#[test]
+fn mixing_fires_before_a_trailing_quantifier_operand() {
+    // Reached at the operator, before its right operand is parsed.
+    pred_incompatible("x > 0 ∧ y > 0 ∨ ∃ w · w > 0", "∧", "∨");
+}
+
+#[test]
+fn same_connective_chains_parse() {
+    pred_ok("x > 0 ∧ y > 0 ∧ z > 0");
+    pred_ok("x > 0 ∨ y > 0 ∨ z > 0");
+}
+
+#[test]
+fn parenthesised_connectives_parse() {
+    pred_ok("(x > 0 ∧ y > 0) ∨ z > 0");
+    pred_ok("x > 0 ∧ (y > 0 ∨ z > 0)");
+}
+
+#[test]
+fn connectives_below_implication_keep_their_precedence() {
+    // ∧/∨ bind tighter than ⇒, so these need no parentheses.
+    pred_ok("x > 0 ⇒ y > 0 ∨ z > 0");
+    pred_ok("x > 0 ∧ y > 0 ⇒ z > 0");
+}
+
+// ---------------------------------------------------------------------------
+// A bare quantifier may not be a ∧ / ∨ operand
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bare_exists_as_conjunct_is_rejected() {
+    pred_incompatible("x > 0 ∧ ∃ w · w > 0", "∧", "∃");
+}
+
+#[test]
+fn bare_forall_as_disjunct_is_rejected() {
+    pred_incompatible("x > 0 ∨ ∀ w · w > 0", "∨", "∀");
+}
+
+#[test]
+fn parenthesised_quantifier_operand_parses() {
+    pred_ok("x > 0 ∧ (∃ w · w > 0)");
+    pred_ok("x > 0 ∨ (∀ w · w > 0)");
+}
+
+#[test]
+fn negated_quantifier_operand_parses() {
+    // `¬` wraps the quantifier, so the operand's leading token is `¬`, not `∃`.
+    pred_ok("x > 0 ∧ ¬(∃ w · w > 0)");
+}
+
+#[test]
+fn leading_quantifier_absorbs_the_connective_body() {
+    // `∀w·w>0 ∧ x>0` is `∀w·(w>0 ∧ x>0)`: the quantifier body extends maximally,
+    // so the conjunction is inside it, not the other way around.
+    pred_ok("∀ w · w > 0 ∧ x > 0");
+    pred_ok("∃ w · w > 0 ∨ x > 0");
+}
+
+// A trailing bare quantifier under ∧/∨ is permitted when a closing bracket
+// bounds it (the bracket stands in for the required parentheses). The rule
+// propagates into quantifier bodies but resets at ∣-bounded such-that clauses.
+
+#[test]
+fn quantifier_conjunct_bounded_by_a_bracket_parses() {
+    pred_ok("(x > 0 ∧ ∃ w · w > 0)"); // parentheses
+    pred_ok("(x > 0 ∨ ∃ w · w > 0)"); // disjunction, parenthesised
+    pred_ok("x > 1 ⇒ (x > 0 ∧ ∃ w · w > 0)"); // parenthesised right operand
+    pred_ok("z ∈ {x ∣ x > 0 ∧ ∃ w · w > 0}"); // simple comprehension
+    pred_ok("z ∈ {x ∣ x > 0 ∧ ∃ w · w > 0 ∧ x > 1}"); // quantifier mid-chain (absorbs)
+    pred_ok("(∀ x · x > 0 ∧ ∃ w · w > 0)"); // propagates into the ∀ body
+}
+
+#[test]
+fn quantifier_conjunct_not_bounded_by_a_bracket_is_rejected() {
+    // Top level, a ∀ body, and ∣-bounded such-that clauses are not bracketed.
+    pred_incompatible("x > 0 ∧ ∃ w · w > 0", "∧", "∃");
+    pred_incompatible("∀ x · x > 0 ∧ ∃ w · w > 0", "∧", "∃");
+    expr_incompatible("{x · x > 0 ∧ ∃ w · w > 0 ∣ x}", "∧", "∃"); // explicit comprehension
+    expr_incompatible("(λ x · x > 0 ∧ ∃ w · w > 0 ∣ x)", "∧", "∃"); // lambda such-that
+    expr_incompatible("⋃ z · z > 0 ∧ ∃ w · w > 0 ∣ {z}", "∧", "∃"); // ⋃ such-that
 }

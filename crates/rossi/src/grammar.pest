@@ -375,16 +375,16 @@ negation_predicate = {
   | atomic_predicate
 }
 
-conjunction_predicate = {
-    negation_predicate ~ (op_and ~ negation_predicate)*
-}
-
-disjunction_predicate = {
-    conjunction_predicate ~ (op_or ~ conjunction_predicate)*
+// Conjunction and disjunction share one precedence level: ∧ and ∨ are not a
+// precedence ladder, they are incompatible and must be parenthesised when
+// mixed (rejected at AST build). Folding them flat keeps the operator sequence
+// visible to that check, the same way set operators are folded flat.
+connective_predicate = {
+    negation_predicate ~ ((op_and | op_or) ~ negation_predicate)*
 }
 
 implication_predicate = {
-    disjunction_predicate ~ (op_implies ~ disjunction_predicate)*
+    connective_predicate ~ (op_implies ~ connective_predicate)*
 }
 
 equivalence_predicate = {
@@ -423,16 +423,12 @@ negation_predicate_no_semi = {
   | atomic_predicate_no_semi
 }
 
-conjunction_predicate_no_semi = {
-    negation_predicate_no_semi ~ (op_and ~ negation_predicate_no_semi)*
-}
-
-disjunction_predicate_no_semi = {
-    conjunction_predicate_no_semi ~ (op_or ~ conjunction_predicate_no_semi)*
+connective_predicate_no_semi = {
+    negation_predicate_no_semi ~ ((op_and | op_or) ~ negation_predicate_no_semi)*
 }
 
 implication_predicate_no_semi = {
-    disjunction_predicate_no_semi ~ (op_implies ~ disjunction_predicate_no_semi)*
+    connective_predicate_no_semi ~ (op_implies ~ connective_predicate_no_semi)*
 }
 
 equivalence_predicate_no_semi = {
