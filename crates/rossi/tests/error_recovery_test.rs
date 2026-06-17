@@ -1453,3 +1453,37 @@ END
     );
     assert!(m.variant.is_some(), "variant expression recovered");
 }
+
+#[test]
+fn recovery_extracts_any_clause_parameters() {
+    // A broken guard forces the whole machine into error recovery.  The
+    // recovered event must still expose its ANY-clause parameters with byte-
+    // exact spans so goto-definition and semantic tokens keep working.
+    let source = "\
+MACHINE m
+VARIABLES
+    v
+EVENTS
+    EVENT step
+    ANY
+        container
+    WHERE
+        @grd1 container ∈ ℕ  ℕ
+    THEN
+        v := 0
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "broken guard must trigger recovery");
+    let m = expect_machine(&result);
+
+    assert_eq!(m.events.len(), 1);
+    let params = &m.events[0].parameters;
+    assert_eq!(params.len(), 1, "one ANY-clause parameter, got {params:?}");
+    assert_eq!(params[0].name, "container");
+
+    // The span must point at the identifier text in the source.
+    let span = params[0].span.expect("parameter carries a span");
+    assert_eq!(&source[span.start..span.end], "container");
+}

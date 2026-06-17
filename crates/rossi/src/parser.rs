@@ -2463,6 +2463,15 @@ fn clause_region(
 /// providers a definition site even inside a component the strict parse
 /// rejected; reference clauses (EXTENDS/SEES/REFINES) carry spans too, harmless
 /// for callers that only want the names.
+/// Whether `name` is acceptable as a declared Event-B identifier.
+/// Mirrors the strict parser: mathematical-identifier syntax, not a builtin
+/// reserved word, and not a structural keyword (e.g. `WHERE`, `THEN`).
+fn accepts_declared_name(name: &str) -> bool {
+    crate::names::is_valid_math_identifier(name)
+        && !crate::builtins::is_reserved_word(name)
+        && !crate::keywords::is_keyword(name)
+}
+
 fn recover_identifiers(
     text: &RecoveryText,
     keyword: KeywordId,
@@ -2480,7 +2489,7 @@ fn recover_identifiers(
     // reference clauses (EXTENDS/SEES/REFINES) take component names.
     let accepts = |name: &str| {
         if declares {
-            crate::names::is_valid_math_identifier(name) && !crate::builtins::is_reserved_word(name)
+            accepts_declared_name(name)
         } else {
             crate::names::is_valid_component_name(name)
         }
@@ -3582,6 +3591,36 @@ fn recover_events(
             let mut event = Event::new(name);
             event.span = Some(span);
             event.name_span = name_span;
+
+            // Recover ANY-clause parameters so goto-definition and semantic
+            // tokens keep working for event parameters even when a guard or
+            // action failed to parse.  The search is bounded to [kw_end,
+            // body_end] so it never reaches a sibling event's ANY clause.
+            let any_kw = crate::keywords::spell(KeywordId::Any);
+            if let Some(any_pos) = find_keyword_word(text, any_kw, kw_end, body_end) {
+                let content_start = any_pos + any_kw.len();
+                let mut content_end = body_end;
+                for &id in &[
+                    KeywordId::Where,
+                    KeywordId::With,
+                    KeywordId::Witness,
+                    KeywordId::Then,
+                    KeywordId::End,
+                ] {
+                    for &bkw in crate::keywords::keyword(id).spellings {
+                        if let Some(p) = find_keyword_word(text, bkw, content_start, content_end) {
+                            content_end = p;
+                        }
+                    }
+                }
+                event.parameters =
+                    extract_identifiers(&text.masked[content_start..content_end], content_start)
+                        .into_iter()
+                        .filter(|(name, _)| accepts_declared_name(name))
+                        .map(|(name, span)| NamedElement::with_span(name, span))
+                        .collect();
+            }
+
             events.push(event);
         }
     }
