@@ -140,6 +140,59 @@ pub fn set_ops_compatible(child: BinaryOp, parent: BinaryOp) -> bool {
     )
 }
 
+/// Whether two adjacent set-level operators may stand without parentheses
+/// in Event-B source — the *acceptance* relation enforced at parse time.
+///
+/// In a flat sequence `… child … parent …` (left-associative fold), `child`
+/// is the root operator of the already-folded left operand and `parent` is
+/// the next operator. The relation is asymmetric and does **not** reduce to a
+/// precedence ladder: e.g. `∩ ▷` is accepted but `▷ ∩` is not, and `▷` is not
+/// even self-associative (`a ▷ b ▷ c` requires parentheses).
+///
+/// This is the complete kernel_lang §3.3.7 set-operator compatibility table,
+/// derived from the Rodin formula parser's accept/reject decision for every
+/// ordered operator pair. It is distinct from [`set_ops_compatible`], which
+/// answers the pretty-printer's narrower "must I add a paren?" question and is
+/// deliberately conservative (it may omit accepted pairs — over-parenthesising
+/// is harmless for printing but would *over-reject* as an acceptance gate).
+/// Invariant: every [`set_ops_compatible`] pair is also accepted here
+/// (checked in tests).
+#[must_use]
+pub fn set_ops_acceptable(child: BinaryOp, parent: BinaryOp) -> bool {
+    use BinaryOp::*;
+    matches!(
+        (child, parent),
+        // Self-associative set operators.
+        (Union, Union)
+            | (Intersection, Intersection)
+            | (CartesianProduct, CartesianProduct)
+            | (Overwrite, Overwrite)
+            | (Semicolon, Semicolon)
+            | (Composition, Composition)
+            // ∩ as left operand.
+            | (Intersection, Difference)
+            | (Intersection, RangeRestriction)
+            | (Intersection, RangeSubtraction)
+            // ; (forward composition) as left operand.
+            | (Semicolon, RangeRestriction)
+            | (Semicolon, RangeSubtraction)
+            // ◁ (domain restriction) as left operand.
+            | (DomainRestriction, Intersection)
+            | (DomainRestriction, Difference)
+            | (DomainRestriction, Semicolon)
+            | (DomainRestriction, RangeRestriction)
+            | (DomainRestriction, RangeSubtraction)
+            | (DomainRestriction, DirectProduct)
+            // ⩤ (domain subtraction) as left operand.
+            | (DomainSubtraction, Intersection)
+            | (DomainSubtraction, Difference)
+            | (DomainSubtraction, Semicolon)
+            | (DomainSubtraction, RangeRestriction)
+            | (DomainSubtraction, RangeSubtraction)
+            | (DomainSubtraction, DirectProduct)
+    )
+}
+
 /// Check whether two same-precedence operators are compatible (can mix
 /// without parentheses). For arithmetic and other non-set levels, uses
 /// simple same-operator grouping.
@@ -186,5 +239,95 @@ pub fn logical_compat_class(op: LogicalOp) -> u8 {
         LogicalOp::And => 1,
         LogicalOp::Or => 2,
         LogicalOp::Implies | LogicalOp::Equivalent => 0, // non-associative singletons
+    }
+}
+
+/// Whether two adjacent same-precedence logical operators may stand without
+/// parentheses — the *acceptance* relation enforced at parse time, mirroring
+/// the parenthesisation decision in [`logical_compat_class`].
+///
+/// Two operators mix bare only when both belong to the same non-singleton
+/// compatibility class: `∧ ∧` and `∨ ∨` are accepted; `∧ ∨` / `∨ ∧` are not.
+/// Class-0 operators (`⇒`, `⇔`) never mix bare, not even with themselves.
+#[must_use]
+pub fn logical_ops_compatible(child: LogicalOp, parent: LogicalOp) -> bool {
+    let c = logical_compat_class(child);
+    let p = logical_compat_class(parent);
+    c != 0 && p != 0 && c == p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use BinaryOp::*;
+
+    /// The 13 binary set-level operators (precedence level of `Union`).
+    const SET_OPS: [BinaryOp; 13] = [
+        Union,
+        Intersection,
+        Difference,
+        CartesianProduct,
+        Overwrite,
+        Semicolon,
+        Composition,
+        DomainRestriction,
+        DomainSubtraction,
+        RangeRestriction,
+        RangeSubtraction,
+        DirectProduct,
+        ParallelProduct,
+    ];
+
+    #[test]
+    fn set_ops_acceptable_is_a_superset_of_printer_compatibility() {
+        // The printer table may be conservative, but it must never claim a
+        // pair compatible that the acceptance gate would reject — otherwise
+        // `rossi fmt` could print a formula the parser then refuses.
+        for &c in &SET_OPS {
+            for &p in &SET_OPS {
+                if set_ops_compatible(c, p) {
+                    assert!(
+                        set_ops_acceptable(c, p),
+                        "{c:?} as child of {p:?}: printer-compatible but not acceptable"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_ops_acceptable_matches_rodin_matrix() {
+        // Exactly 23 ordered pairs are accepted bare (Rodin formula parser).
+        let count = SET_OPS
+            .iter()
+            .flat_map(|&c| SET_OPS.iter().map(move |&p| (c, p)))
+            .filter(|&(c, p)| set_ops_acceptable(c, p))
+            .count();
+        assert_eq!(count, 23, "accepted set-operator pair count");
+
+        // Spot checks against the oracle, including the asymmetric and
+        // non-self-associative cases that distinguish this from a precedence
+        // ladder.
+        assert!(set_ops_acceptable(Intersection, Difference)); // ∩ ∖
+        assert!(set_ops_acceptable(Intersection, RangeRestriction)); // ∩ ▷
+        assert!(set_ops_acceptable(DomainRestriction, DirectProduct)); // ◁ ⊗
+        assert!(!set_ops_acceptable(Union, Intersection)); // ∪ ∩
+        assert!(!set_ops_acceptable(Difference, Intersection)); // ∖ ∩
+        assert!(!set_ops_acceptable(RangeRestriction, RangeRestriction)); // ▷ ▷
+        assert!(!set_ops_acceptable(Semicolon, DomainRestriction)); // ; ◁
+        assert!(!set_ops_acceptable(ParallelProduct, ParallelProduct)); // ∥ ∥
+    }
+
+    #[test]
+    fn logical_ops_compatible_only_pairs_same_associative_operator() {
+        use LogicalOp::*;
+        assert!(logical_ops_compatible(And, And));
+        assert!(logical_ops_compatible(Or, Or));
+        assert!(!logical_ops_compatible(And, Or));
+        assert!(!logical_ops_compatible(Or, And));
+        // ⇒ / ⇔ are singletons: never bare, not even with themselves.
+        assert!(!logical_ops_compatible(Implies, Implies));
+        assert!(!logical_ops_compatible(Equivalent, Equivalent));
+        assert!(!logical_ops_compatible(Implies, Equivalent));
     }
 }
