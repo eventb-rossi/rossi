@@ -150,7 +150,7 @@ op_domain_restrict = { "◁" | "<|" }
 op_domain_subtract = { "⩤" | "<<|" }
 op_range_restrict = { "▷" | "|>" }
 op_range_subtract = { "⩥" | "|>>" }
-op_overwrite = { "\u{E103}" | "⊕" | "<+" }
+op_overwrite = { "\u{E103}" | "<+" }
 op_direct_product = { "⊗" | "><" }
 op_parallel_product = { "∥" | "||" }
 
@@ -249,8 +249,8 @@ lambda_expr = {
 // Function/Relation Application, Relational Image, and Function Update
 // f(x)        function application
 // r[S]        relational image
-// f{x ↦ y}   Rodin's compact serialization of f ⊕ {x ↦ y} (functional override).
-//              Lowered by the parser to the same AST as the explicit ⊕ form
+// f{x ↦ y}   Rodin's compact serialization of f <+ {x ↦ y} (functional override).
+//              Lowered by the parser to the same AST as the explicit <+ form
 //              so consumers don't need to handle a separate variant.
 // r∼         postfix inverse
 // `dom`/`ran` are closed unary applications: the operand is exactly the

@@ -1438,18 +1438,17 @@ fn test_true_eq_comparison() {
     }
 }
 
-// ===== Postfix function update: f{x ↦ y} == f ⊕ {x ↦ y} =====
+// ===== Postfix function update: f{x ↦ y} == f <+ {x ↦ y} =====
 //
 // Rodin's parser accepts this compact form (well-formed under its
 // FormulaFactory.OVR tag); our grammar lowers it to the same AST as the
-// explicit ⊕ form so consumers don't need to handle a new variant. The
-// canonical static-checker emission uses the explicit operator
-// (U+E103), but the parser is permissive about its input.
+// explicit <+ form so consumers don't need to handle a new variant. The
+// canonical static-checker emission uses U+E103.
 
 #[test]
 fn test_postfix_function_update_lowers_to_overwrite() {
     let postfix = parse_expression_str("f{x ↦ y}").expect("postfix update parses");
-    let explicit = parse_expression_str("f ⊕ {x ↦ y}").expect("explicit overwrite parses");
+    let explicit = parse_expression_str("f <+ {x ↦ y}").expect("explicit overwrite parses");
     assert_eq!(postfix, explicit);
 }
 
@@ -1457,14 +1456,14 @@ fn test_postfix_function_update_lowers_to_overwrite() {
 fn test_postfix_function_update_multi_element() {
     let postfix = parse_expression_str("f{x ↦ y, a ↦ b}").expect("multi-element postfix parses");
     let explicit =
-        parse_expression_str("f ⊕ {x ↦ y, a ↦ b}").expect("multi-element explicit parses");
+        parse_expression_str("f <+ {x ↦ y, a ↦ b}").expect("multi-element explicit parses");
     assert_eq!(postfix, explicit);
 }
 
 #[test]
 fn test_postfix_function_update_in_action() {
     let action = parse_action_str("currentFloor ≔ currentFloor{c ↦ f}").expect("action parses");
-    let equivalent = parse_action_str("currentFloor ≔ currentFloor ⊕ {c ↦ f}").expect("explicit");
+    let equivalent = parse_action_str("currentFloor ≔ currentFloor <+ {c ↦ f}").expect("explicit");
     assert_eq!(action, equivalent);
     match action.kind {
         ActionKind::Assignment {
