@@ -1269,22 +1269,12 @@ fn test_bool_vs_bool_type() {
 // ============================================================================
 
 #[test]
-fn test_builtin_card_wrong_arity() {
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 card(S, T) = 5
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(result.is_err(), "Expected arity error for card(S, T)");
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("card") && err.contains("expected 1") && err.contains("got 2"),
-        "Expected arity mismatch error, got: {}",
-        err
-    );
+fn test_builtin_card_comma_form_rejected() {
+    // A closed builtin takes exactly one argument; `card(S, T)` is rejected
+    // (the comma is unexpected after the single argument), matching Rodin where
+    // function application is single-argument.
+    let source = "CONTEXT test\nAXIOMS\n    @axm1 card(S, T) = 5\nEND\n";
+    assert!(parse(source).is_err(), "Expected error for card(S, T)");
 }
 
 #[test]

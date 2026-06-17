@@ -1124,32 +1124,23 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
     let op_pair = op.ok_or(ParseError::MissingOperator)?;
 
     if is_func_override {
-        // f(x, ...) ≔ E  →  f ≔ f\u{E103}{(x ↦ ...) ↦ E}
+        // f(x) ≔ E  →  f ≔ f\u{E103}{x ↦ E}. Function override takes a single
+        // argument (Rodin's FUNIMAGE is binary); a pair is the maplet `f(x ↦ y)`.
         use crate::ast::expression::BinaryOp;
         let function = variables
             .into_iter()
             .next()
             .ok_or(ParseError::MissingValue)?;
-        let mut arguments: Vec<Expression> = Vec::new();
-        for arg in func_arg_pairs {
-            arguments.push(parse_expression(arg)?);
-        }
+        let arg_pair = func_arg_pairs
+            .into_iter()
+            .next()
+            .ok_or(ParseError::MissingValue)?;
+        let domain = parse_expression(arg_pair)?;
         let rhs_pair = rhs_pairs
             .into_iter()
             .next()
             .ok_or(ParseError::MissingValue)?;
         let expression = parse_expression(rhs_pair)?;
-        // Build left-associative maplet chain over arguments, then append expression.
-        let mut args_iter = arguments.into_iter();
-        let mut domain = args_iter.next().ok_or(ParseError::MissingValue)?;
-        for next in args_iter {
-            domain = ExpressionKind::Binary {
-                op: BinaryOp::Maplet,
-                left: Box::new(domain),
-                right: Box::new(next),
-            }
-            .into();
-        }
         let maplet: Expression = ExpressionKind::Binary {
             op: BinaryOp::Maplet,
             left: Box::new(domain),
@@ -1632,43 +1623,31 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
             while i < remaining.len() {
                 if remaining[i].as_rule() == Rule::lparen {
                     i += 1; // Skip lparen
-                    let mut arguments = Vec::new();
-
-                    // Collect arguments until we hit rparen
-                    while i < remaining.len() && remaining[i].as_rule() != Rule::rparen {
-                        match remaining[i].as_rule() {
-                            Rule::expression => {
-                                arguments.push(parse_expression(remaining[i].clone())?);
-                            }
-                            Rule::comma => {}
-                            _ => {
-                                return Err(ParseError::UnexpectedRule {
-                                    expected: "expression or comma".to_string(),
-                                    found: format!("{:?}", remaining[i].as_rule()),
-                                });
-                            }
-                        }
-                        i += 1;
-                    }
+                    // Function application takes exactly one argument — Rodin's
+                    // FUNIMAGE is binary (function, argument). The grammar admits
+                    // a single expression between the parens; a pair is written
+                    // with a maplet (`f(x ↦ y)`), never a comma list.
+                    let argument =
+                        if i < remaining.len() && remaining[i].as_rule() == Rule::expression {
+                            let a = parse_expression(remaining[i].clone())?;
+                            i += 1;
+                            a
+                        } else {
+                            return Err(ParseError::EmptyExpression);
+                        };
 
                     i += 1; // Skip rparen
 
-                    // Check if base is a known built-in function
+                    // A closed builtin (card/min/max/union/inter) applied to its
+                    // single argument; every other head is plain application.
                     if let ExpressionKind::Identifier(ref name) = result.kind
                         && let Some(builtin) =
                             crate::ast::expression::BuiltinFunction::from_name(name)
                     {
-                        if !builtin.check_arity(arguments.len()) {
-                            return Err(ParseError::ArityMismatch {
-                                name: builtin.name().to_string(),
-                                expected: builtin.arity().to_string(),
-                                actual: arguments.len(),
-                            });
-                        }
                         result = Expression::new(
                             ExpressionKind::BuiltinApplication {
                                 function: builtin,
-                                arguments,
+                                arguments: vec![argument],
                             },
                             node_span,
                         );
@@ -1677,7 +1656,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                     result = Expression::new(
                         ExpressionKind::FunctionApplication {
                             function: Box::new(result),
-                            arguments,
+                            arguments: vec![argument],
                         },
                         node_span,
                     );

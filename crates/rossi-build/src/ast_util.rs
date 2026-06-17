@@ -32,11 +32,11 @@ pub(crate) fn named_element_span(
         .and_then(|e| e.span)
 }
 
-/// Build a left-associative maplet chain from a non-empty argument list:
+/// Build a left-associative maplet chain from a non-empty list:
 /// `[a]` → `a`; `[a, b]` → `a ↦ b`; `[a, b, c]` → `(a ↦ b) ↦ c`.
 ///
-/// Used to align curried/multi-arg call sites against a function's
-/// product-shaped domain type.
+/// Used to fold a set-comprehension short form's binders into the implicit
+/// projection expression (`{x, y ∣ P}` → `{x, y · P ∣ x ↦ y}`).
 pub(crate) fn left_assoc_maplet(args: &[Expression]) -> Expression {
     let mut iter = args.iter().cloned();
     let mut acc = iter.next().expect("left_assoc_maplet requires ≥1 argument");

@@ -148,6 +148,34 @@ fn generic_atoms_still_parse_bare() {
 }
 
 #[test]
+fn comma_form_application_is_rejected() {
+    // Rodin's function application (FUNIMAGE) is single-argument; a pair is a
+    // maplet. The comma form `f(a, b)` is a parse error for every head —
+    // user functions, closed builtins, and the relational atoms alike.
+    for src in [
+        "f(a, b) = c",
+        "card(S, T) = 5",
+        "prj1(S, T) = S",
+        "prj2(a, b) = b",
+        "id(x, y) = x",
+    ] {
+        assert!(
+            parse_predicate_str(src).is_err(),
+            "comma-form application must be rejected: {src}"
+        );
+    }
+    // The single-argument and maplet forms are accepted.
+    for src in [
+        "f(a ↦ b) = c",
+        "prj1(S ↦ T) = S",
+        "id(x) = x",
+        "card(S) = 5",
+    ] {
+        parse_predicate_str(src).unwrap_or_else(|e| panic!("must parse {src}: {e:?}"));
+    }
+}
+
+#[test]
 fn reservation_is_exact_case() {
     // Rodin reserves exact spellings only: `Dom`, `DOM`, `Card` are
     // ordinary identifiers there.

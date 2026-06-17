@@ -129,17 +129,6 @@ impl BuiltinFunction {
         }
     }
 
-    /// The number of arguments a closed built-in takes — always exactly one
-    /// (`card(S)`, `min(S)`, …); there is no variadic or nullary form.
-    pub fn arity(&self) -> usize {
-        1
-    }
-
-    /// Check if the given number of arguments is valid.
-    pub fn check_arity(&self, n: usize) -> bool {
-        n == self.arity()
-    }
-
     /// Look up a built-in function by name
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
