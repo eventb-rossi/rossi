@@ -175,11 +175,14 @@ pub fn collect_referenced_in_action_rhs_with_locals(
 }
 
 /// Event-B built-in function names that are always "in scope" even though
-/// they aren't declared in any context or machine.
+/// they aren't declared in any context or machine. The relational atoms
+/// (`id`/`prj1`/`prj2`/`pred`/`succ`) are no longer here: they parse as
+/// [`rossi::ExpressionKind::AtomicBuiltin`], which the walker never reports as
+/// an identifier usage.
 pub fn is_builtin_ident(name: &str) -> bool {
     matches!(
         name,
-        "dom" | "ran" | "id" | "prj1" | "prj2" | "card" | "min" | "max" | "closure" | "closure1"
+        "dom" | "ran" | "card" | "min" | "max" | "closure" | "closure1"
     )
 }
 
@@ -376,10 +379,12 @@ mod tests {
 
     #[test]
     fn builtin_recognition() {
-        for name in ["dom", "ran", "card", "min", "max", "id", "prj1", "prj2"] {
+        for name in ["dom", "ran", "card", "min", "max"] {
             assert!(is_builtin_ident(name), "{name} should be builtin");
         }
-        for name in ["foo", "", "users", "unknown"] {
+        // Relational atoms are AtomicBuiltin nodes, never identifiers — so
+        // is_builtin_ident (an identifier-name check) deliberately excludes them.
+        for name in ["id", "prj1", "prj2", "pred", "succ", "foo", "", "users"] {
             assert!(!is_builtin_ident(name), "{name} should not be builtin");
         }
     }

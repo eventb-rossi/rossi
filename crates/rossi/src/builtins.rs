@@ -83,34 +83,19 @@ pub const RESERVED_OPERATOR_WORDS: &[&str] = &[
 
 /// The remaining kernel_lang §2.2 reserved words (exact case): generic atoms
 /// and literals that are legal *in formulas* (`id`, `prj1`, `prj2`, `pred`,
-/// `succ` parse as bare atoms; `TRUE`/`FALSE`/`BOOL`/`bool` lex as keyword
-/// tokens there) but can never *name* a user identifier. Together with
-/// [`RESERVED_OPERATOR_WORDS`] this forms the full §2.2 list.
+/// `succ` parse as bare atoms — the [`crate::ast::AtomicBuiltinKind`] relational
+/// atoms; `TRUE`/`FALSE`/`BOOL`/`bool` lex as keyword tokens there) but can
+/// never *name* a user identifier. Together with [`RESERVED_OPERATOR_WORDS`]
+/// this forms the full §2.2 list.
 pub const RESERVED_ATOM_WORDS: &[&str] = &[
     "BOOL", "FALSE", "TRUE", "bool", "id", "pred", "prj1", "prj2", "succ",
 ];
-
-/// The reserved *relational* atoms (`id`, `prj1`, `prj2`, `pred`, `succ`):
-/// the subset of [`RESERVED_ATOM_WORDS`] that denote a built-in total
-/// relation rather than a boolean value or type literal. The semantic layer
-/// keys on exactly these — `rossi_build`'s type inference types them ahead of
-/// the environment, and the well-definedness computer skips their `f∈dom(f)`
-/// domain condition — so this is the one membership set both passes share
-/// (kept here, the vocabulary authority, so the relational subset can't drift
-/// from [`RESERVED_ATOM_WORDS`]; a test pins the inclusion).
-pub const RESERVED_RELATIONAL_ATOM_WORDS: &[&str] = &["id", "pred", "prj1", "prj2", "succ"];
 
 /// Whether `word` is in the full kernel_lang §2.2 reserved list (exact case).
 /// Checked wherever a user identifier is being *named*: declarations,
 /// assignment targets, predicate-application heads, recovery, XML import.
 pub fn is_reserved_word(word: &str) -> bool {
     is_reserved_operator_word(word) || RESERVED_ATOM_WORDS.contains(&word)
-}
-
-/// Whether `word` is one of the reserved relational atoms
-/// ([`RESERVED_RELATIONAL_ATOM_WORDS`]) — exact case.
-pub fn is_reserved_relational_atom(word: &str) -> bool {
-    RESERVED_RELATIONAL_ATOM_WORDS.contains(&word)
 }
 
 /// Whether `word` may not appear as a plain (unapplied) identifier inside a
@@ -158,7 +143,7 @@ pub fn is_reserved_name(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BuiltinFunction, BuiltinPredicate};
+    use crate::ast::{AtomicBuiltinKind, BuiltinFunction, BuiltinPredicate};
 
     #[test]
     fn is_builtin_is_case_insensitive() {
@@ -168,35 +153,20 @@ mod tests {
         assert!(!is_builtin("not_a_builtin"));
     }
 
-    /// Every `BuiltinFunction` variant, with `true` for the closed
-    /// (paren-mandating) forms and `false` for the generic atoms. The match
-    /// in [`is_closed_builtin`] is exhaustive, so adding a variant without
-    /// classifying it here is a compile error — the forcing function that
-    /// keeps the reserved lists from silently lagging the parser vocabulary.
+    /// Every `BuiltinFunction` variant. These are all *closed* (paren-mandating)
+    /// forms — listing one here pins it against the reserved-operator-word list
+    /// so the facade can't silently lag the parser vocabulary. The generic
+    /// relational atoms live in [`AtomicBuiltinKind`] / [`ALL_ATOMIC_BUILTINS`].
     const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
         BuiltinFunction::Card,
         BuiltinFunction::Min,
         BuiltinFunction::Max,
-        BuiltinFunction::Id,
-        BuiltinFunction::Prj1,
-        BuiltinFunction::Prj2,
         BuiltinFunction::Union,
         BuiltinFunction::Inter,
     ];
 
     const ALL_BUILTIN_PREDICATES: &[BuiltinPredicate] =
         &[BuiltinPredicate::Finite, BuiltinPredicate::Partition];
-
-    fn is_closed_builtin(f: BuiltinFunction) -> bool {
-        match f {
-            BuiltinFunction::Card
-            | BuiltinFunction::Min
-            | BuiltinFunction::Max
-            | BuiltinFunction::Union
-            | BuiltinFunction::Inter => true,
-            BuiltinFunction::Id | BuiltinFunction::Prj1 | BuiltinFunction::Prj2 => false,
-        }
-    }
 
     #[test]
     fn builtins_cover_parsed_vocabulary() {
@@ -305,29 +275,17 @@ mod tests {
                 "reserved word {w:?} missing from BUILTIN_WORDS"
             );
         }
-        // The relational atoms are a subset of the reserved atoms — the
-        // semantic layer derives from this list, so it must not drift.
-        for w in RESERVED_RELATIONAL_ATOM_WORDS {
-            assert!(
-                RESERVED_ATOM_WORDS.contains(w),
-                "relational atom {w:?} missing from RESERVED_ATOM_WORDS"
-            );
-        }
     }
 
     #[test]
     fn reserved_operator_words_cover_closed_builtins() {
-        // Every *closed* builtin the parser resolves (applied form only) must
-        // be a reserved operator word, so adding a builtin can't reintroduce
-        // the issue-#30 inconsistency (applied form resolves, bare form
-        // silently parses as an identifier); the generic atoms must stay
-        // legal bare yet un-namable. Classification comes from the
-        // exhaustive `is_closed_builtin`.
+        // Every closed builtin (applied form only) must be a reserved operator
+        // word, so adding one can't reintroduce the issue-#30 inconsistency
+        // (applied form resolves, bare form silently parses as an identifier).
         for &f in ALL_BUILTIN_FUNCTIONS {
-            assert_eq!(
+            assert!(
                 is_reserved_operator_word(f.name()),
-                is_closed_builtin(f),
-                "BuiltinFunction {f:?} misclassified in RESERVED_OPERATOR_WORDS"
+                "BuiltinFunction {f:?} missing from RESERVED_OPERATOR_WORDS"
             );
             assert!(
                 is_reserved_word(f.name()),
@@ -339,6 +297,27 @@ mod tests {
                 is_reserved_operator_word(p.name()),
                 "BuiltinPredicate {p:?} missing from RESERVED_OPERATOR_WORDS"
             );
+        }
+    }
+
+    #[test]
+    fn atomic_builtins_are_reserved_atoms() {
+        // `AtomicBuiltinKind` is the SSOT for the relational atoms. Pin every
+        // variant against the reserved-word vocabulary so they can't drift:
+        // each is a legal *bare* expression (NOT a reserved operator word) yet
+        // can never *name* a user identifier (it is a reserved atom word).
+        for a in AtomicBuiltinKind::ALL {
+            assert_eq!(AtomicBuiltinKind::from_name(a.name()), Some(a));
+            assert!(
+                !is_reserved_operator_word(a.name()),
+                "relational atom {a:?} must be legal bare"
+            );
+            assert!(
+                RESERVED_ATOM_WORDS.contains(&a.name()),
+                "relational atom {a:?} must be un-namable"
+            );
+            assert!(is_reserved_word(a.name()));
+            assert!(is_builtin(a.name()));
         }
     }
 }

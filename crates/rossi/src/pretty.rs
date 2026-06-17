@@ -554,6 +554,7 @@ impl PrettyPrinter {
                     let needs_parens = !matches!(
                         operand.as_ref().kind,
                         ExpressionKind::Identifier(_)
+                            | ExpressionKind::AtomicBuiltin(_)
                             | ExpressionKind::Integer(_)
                             | ExpressionKind::FunctionApplication { .. }
                             | ExpressionKind::RelationalImage { .. }
@@ -596,6 +597,9 @@ impl PrettyPrinter {
                     arguments.iter().map(|a| self.print_expression(a)).collect();
                 format!("{}({})", function.name(), args.join(", "))
             }
+
+            // Generic relational atom (`id`, `prj1`, …): a bare word.
+            ExpressionKind::AtomicBuiltin(kind) => kind.name().to_string(),
 
             ExpressionKind::Bool(predicate) => {
                 format!("bool({})", self.print_predicate(predicate))

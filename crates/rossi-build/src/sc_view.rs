@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
-use rossi::ast::expression::{BinaryOp, BuiltinFunction};
+use rossi::ast::expression::BinaryOp;
 use rossi::{
     Action, ActionKind, Expression, ExpressionKind, Predicate, PredicateKind, parse_action_str,
     parse_predicate_str,
@@ -575,29 +575,15 @@ fn strip_expr(e: Expression) -> Expression {
             function,
             arguments,
         } => {
-            let stripped_fn = strip_expr(*function);
-            let stripped_args: Vec<Expression> = arguments.into_iter().map(strip_expr).collect();
-            // Rodin's static checker emits V1-style `prj1(s)` / `prj2(s)`
-            // (and other type-extent builtins) in `.bcc`/`.bcm` as the V2
-            // generic-atomic form `(prj1 ⦂ T)(s)`: a type-ascribed atom
-            // applied as a function. After OfType stripping the atom is
-            // a bare `Identifier("prj1")` and the surrounding shape is
-            // `FunctionApplication`, but our parser would have produced
-            // `BuiltinApplication` for the same surface text. Collapse
-            // back so the two ASTs compare equal.
-            if let E::Identifier(name) = &stripped_fn.kind
-                && let Some(builtin) = BuiltinFunction::from_name(name)
-                && builtin.check_arity(stripped_args.len())
-            {
-                return E::BuiltinApplication {
-                    function: builtin,
-                    arguments: stripped_args,
-                }
-                .into();
-            }
+            // Rodin's static checker emits `prj1(s)` etc. as the generic-atomic
+            // form `(prj1 ⦂ T)(s)`: a type-ascribed atom applied as a function.
+            // After `OfType` stripping the atom is a bare `AtomicBuiltin(Prj1)`
+            // and the shape is `FunctionApplication` — exactly what our parser
+            // produces for the same surface text, so no special collapse is
+            // needed.
             E::FunctionApplication {
-                function: Box::new(stripped_fn),
-                arguments: stripped_args,
+                function: Box::new(strip_expr(*function)),
+                arguments: arguments.into_iter().map(strip_expr).collect(),
             }
             .into()
         }

@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 
 use rossi::ast::TypedIdentifier;
-use rossi::ast::expression::{BinaryOp, BuiltinFunction, IdentPattern, UnaryOp};
+use rossi::ast::expression::{AtomicBuiltinKind, BinaryOp, BuiltinFunction, IdentPattern, UnaryOp};
 use rossi::ast::predicate::{BuiltinPredicate, ComparisonOp, LogicalOp};
 use rossi::{Expression, ExpressionKind, Predicate, PredicateKind};
 
@@ -208,38 +208,32 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
     ground(&u, &t)
 }
 
-/// The reserved relational atoms when written *bare*. `succ`/`pred` are the
-/// monomorphic integer relations (Rodin's KSUCC/KPRED, `ℙ(ℤ×ℤ)`);
-/// `id`/`prj1`/`prj2` are the generic atoms (KID_GEN/KPRJ1_GEN/KPRJ2_GEN) and
-/// carry fresh type variables the surrounding context must solve — if nothing
-/// solves them the expression keeps a free variable and `ground` drops it,
-/// exactly as Rodin drops an unsolved `TypeVariable`. (Applied forms — `id(x)`
-/// etc. — are the `BuiltinApplication` arm.) These are reserved words, so the
-/// `Identifier` arm consults this before an env lookup.
-fn reserved_atom(name: &str, u: &mut Unifier) -> Option<ITy> {
-    // Membership comes from the one list in `rossi::builtins`, shared with the
-    // WD computer (reserved-beats-env: these always denote the built-in,
-    // regardless of any illegal declaration).
-    if !rossi::builtins::is_reserved_relational_atom(name) {
-        return None;
-    }
-    match name {
-        "succ" | "pred" => Some(ITy::relation(ITy::Integer, ITy::Integer)),
-        "id" => {
+/// The type of a generic relational atom (`id`, `prj1`, `prj2`, `pred`,
+/// `succ`). `succ`/`pred` are the monomorphic integer relations (Rodin's
+/// KSUCC/KPRED, `ℙ(ℤ×ℤ)`); `id`/`prj1`/`prj2` are the generic atoms
+/// (KID_GEN/KPRJ1_GEN/KPRJ2_GEN) and carry fresh type variables the surrounding
+/// context must solve — if nothing solves them the expression keeps a free
+/// variable and `ground` drops it, exactly as Rodin drops an unsolved
+/// `TypeVariable`. Applying an atom (`prj1(x)`) is the `FunctionApplication`
+/// arm: it synths this relation type and returns its codomain.
+fn atomic_builtin_type(kind: AtomicBuiltinKind, u: &mut Unifier) -> ITy {
+    use AtomicBuiltinKind as A;
+    match kind {
+        A::Succ | A::Pred => ITy::relation(ITy::Integer, ITy::Integer),
+        A::Id => {
             let a = u.fresh();
-            Some(ITy::relation(a.clone(), a))
+            ITy::relation(a.clone(), a)
         }
-        "prj1" => {
+        A::Prj1 => {
             let a = u.fresh();
             let b = u.fresh();
-            Some(ITy::relation(ITy::prod(a.clone(), b), a))
+            ITy::relation(ITy::prod(a.clone(), b), a)
         }
-        "prj2" => {
+        A::Prj2 => {
             let a = u.fresh();
             let b = u.fresh();
-            Some(ITy::relation(ITy::prod(a, b.clone()), b))
+            ITy::relation(ITy::prod(a, b.clone()), b)
         }
-        _ => None,
     }
 }
 
@@ -298,11 +292,10 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             Some(ITy::pow(ITy::Integer))
         }
         ExpressionKind::BoolType => Some(ITy::pow(ITy::Boolean)),
-        // A reserved relational atom (`succ`/`pred`/`id`/`prj1`/`prj2`) wins
-        // over an env lookup; everything else is an env-typed identifier.
-        ExpressionKind::Identifier(name) => {
-            reserved_atom(name, u).or_else(|| env.get(name).map(ITy::from))
-        }
+        // Relational atoms (`id`/`prj1`/`prj2`/`pred`/`succ`) are their own AST
+        // node now; an `Identifier` is always an env-typed user name.
+        ExpressionKind::Identifier(name) => env.get(name).map(ITy::from),
+        ExpressionKind::AtomicBuiltin(kind) => Some(atomic_builtin_type(*kind, u)),
         // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
         // keeps a free variable and drops; in context (`∅ ∪ r`, `∅ ⦂ T`)
         // the variable is solved.
@@ -478,41 +471,6 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // Cardinality / min / max of any set return integers.
             BuiltinFunction::Card | BuiltinFunction::Min | BuiltinFunction::Max => {
                 Some(ITy::Integer)
-            }
-            // `id` is the generic identity relation (ℙ(α × α)); `id(x)` is
-            // function application of identity, so `id(x) : typeof(x)`
-            // (e.g. id(S) : ℙ(S), id(n) : ℤ). This matches Rodin's modern
-            // KID_GEN semantics, not the legacy "identity-on-set" reading.
-            BuiltinFunction::Id => synth(env, arguments.first()?, u),
-            // prj1(x)/prj2(x) are function application of the generic
-            // projections (Rodin's KPRJ1_GEN/KPRJ2_GEN): for x : α × β,
-            // prj1(x) : α and prj2(x) : β. A bare-variable argument is
-            // split into a fresh product so the projection still resolves.
-            BuiltinFunction::Prj1 => {
-                let arg = synth(env, arguments.first()?, u)?;
-                match u.resolve(&arg) {
-                    ITy::Product(l, _) => Some(*l),
-                    ITy::Var(_) => {
-                        let l = u.fresh();
-                        let r = u.fresh();
-                        u.unify(&arg, &ITy::prod(l.clone(), r)).ok()?;
-                        Some(l)
-                    }
-                    _ => None,
-                }
-            }
-            BuiltinFunction::Prj2 => {
-                let arg = synth(env, arguments.first()?, u)?;
-                match u.resolve(&arg) {
-                    ITy::Product(_, r) => Some(*r),
-                    ITy::Var(_) => {
-                        let l = u.fresh();
-                        let r = u.fresh();
-                        u.unify(&arg, &ITy::prod(l, r.clone())).ok()?;
-                        Some(r)
-                    }
-                    _ => None,
-                }
             }
             // Generalized union/intersection collapses one power-set level:
             // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).

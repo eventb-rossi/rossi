@@ -2,7 +2,7 @@
 
 mod common;
 
-use rossi::ast::expression::BuiltinFunction;
+use rossi::ast::expression::{AtomicBuiltinKind, BuiltinFunction};
 use rossi::ast::predicate::BuiltinPredicate;
 use rossi::{Component, ExpressionKind, ParseError, PredicateKind, parse};
 
@@ -1129,57 +1129,50 @@ fn test_builtin_min_max() {
     }
 }
 
-#[test]
-fn test_builtin_id_prj() {
-    let ctx = common::parse_context(
-        "CONTEXT test\nAXIOMS\n    @axm1 id(S) = S\n    @axm2 prj1(S, T) = S\n    @axm3 prj2(S, T) = T\nEND\n",
-    );
-    // id(S)
-    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
-        match &left.kind {
-            ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } => {
-                assert_eq!(*function, BuiltinFunction::Id);
-                assert_eq!(arguments.len(), 1);
-            }
-            other => panic!("Expected BuiltinApplication(Id), got {:?}", other),
-        }
+/// The left-hand expression of a comparison predicate (panics otherwise).
+fn comparison_lhs(kind: &PredicateKind) -> &ExpressionKind {
+    match kind {
+        PredicateKind::Comparison { left, .. } => &left.kind,
+        other => panic!("Expected Comparison, got {other:?}"),
     }
-    // prj1(S, T)
-    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[1].predicate.kind {
-        match &left.kind {
-            ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } => {
-                assert_eq!(*function, BuiltinFunction::Prj1);
-                assert_eq!(arguments.len(), 2);
-            }
-            other => panic!("Expected BuiltinApplication(Prj1), got {:?}", other),
+}
+
+/// Assert that `left` is the single-argument application of a relational atom —
+/// the V2 form `prj1(x)` = `FUNIMAGE(prj1, x)`.
+fn assert_applied_atom(left: &ExpressionKind, kind: AtomicBuiltinKind) {
+    match left {
+        ExpressionKind::FunctionApplication {
+            function,
+            arguments,
+        } => {
+            assert_eq!(function.kind, ExpressionKind::AtomicBuiltin(kind));
+            assert_eq!(arguments.len(), 1);
         }
-    }
-    // prj2(S, T)
-    if let PredicateKind::Comparison { left, .. } = &ctx.axioms[2].predicate.kind {
-        match &left.kind {
-            ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } => {
-                assert_eq!(*function, BuiltinFunction::Prj2);
-                assert_eq!(arguments.len(), 2);
-            }
-            other => panic!("Expected BuiltinApplication(Prj2), got {:?}", other),
-        }
+        other => panic!("Expected FunctionApplication(AtomicBuiltin({kind:?})), got {other:?}"),
     }
 }
 
 #[test]
-fn test_bare_id_stays_identifier() {
+fn test_builtin_id_prj() {
+    // V2: `id(x)`/`prj1(x)` are function application of the generic atom; a
+    // projection of a pair uses a maplet argument (`prj1(S ↦ T)`).
+    let ctx = common::parse_context(
+        "CONTEXT test\nAXIOMS\n    @axm1 id(S) = S\n    @axm2 prj1(S ↦ T) = S\n    @axm3 prj2(S ↦ T) = T\nEND\n",
+    );
+    let atom = |i: usize, k| assert_applied_atom(comparison_lhs(&ctx.axioms[i].predicate.kind), k);
+    atom(0, AtomicBuiltinKind::Id);
+    atom(1, AtomicBuiltinKind::Prj1);
+    atom(2, AtomicBuiltinKind::Prj2);
+}
+
+#[test]
+fn test_bare_id_is_atomic_builtin() {
     let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 id = S\nEND\n");
     if let PredicateKind::Comparison { left, .. } = &ctx.axioms[0].predicate.kind {
-        assert_eq!(*left, ExpressionKind::Identifier("id".to_string()).into());
+        assert_eq!(
+            *left,
+            ExpressionKind::AtomicBuiltin(AtomicBuiltinKind::Id).into()
+        );
     } else {
         panic!("Expected Comparison predicate");
     }
@@ -1296,110 +1289,30 @@ fn test_builtin_card_wrong_arity() {
 
 #[test]
 fn test_builtin_prj1_single_arg() {
-    // V2 generic form: prj1(S) with 1 argument is valid
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 prj1(S) = T
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(
-        result.is_ok(),
-        "prj1 with 1 arg should be valid (V2 generic form): {:?}",
-        result.err()
+    // V2: prj1(S) is function application of the generic projection atom.
+    let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 prj1(S) = T\nEND\n");
+    assert_applied_atom(
+        comparison_lhs(&ctx.axioms[0].predicate.kind),
+        AtomicBuiltinKind::Prj1,
     );
-    let component = result.unwrap();
-    if let Component::Context(ctx) = component {
-        let pred = &ctx.axioms[0].predicate;
-        if let PredicateKind::Comparison { left, .. } = &pred.kind {
-            if let ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } = &left.kind
-            {
-                assert_eq!(*function, BuiltinFunction::Prj1);
-                assert_eq!(arguments.len(), 1);
-            } else {
-                panic!("Expected BuiltinApplication, got {:?}", left);
-            }
-        } else {
-            panic!("Expected Comparison predicate, got {:?}", pred);
-        }
-    } else {
-        panic!("Expected Context");
-    }
 }
 
 #[test]
 fn test_builtin_prj2_single_arg() {
-    // V2 generic form: prj2(cv) with 1 argument is valid
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 prj2(cv) = FALSE
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(
-        result.is_ok(),
-        "prj2 with 1 arg should be valid (V2 generic form): {:?}",
-        result.err()
+    // V2: prj2(cv) is function application of the generic projection atom.
+    let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 prj2(cv) = FALSE\nEND\n");
+    assert_applied_atom(
+        comparison_lhs(&ctx.axioms[0].predicate.kind),
+        AtomicBuiltinKind::Prj2,
     );
-    let component = result.unwrap();
-    if let Component::Context(ctx) = component {
-        let pred = &ctx.axioms[0].predicate;
-        if let PredicateKind::Comparison { left, .. } = &pred.kind {
-            if let ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } = &left.kind
-            {
-                assert_eq!(*function, BuiltinFunction::Prj2);
-                assert_eq!(arguments.len(), 1);
-            } else {
-                panic!("Expected BuiltinApplication, got {:?}", left);
-            }
-        } else {
-            panic!("Expected Comparison predicate, got {:?}", pred);
-        }
-    } else {
-        panic!("Expected Context");
-    }
 }
 
 #[test]
 fn test_builtin_prj1_zero_args() {
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 prj1() = T
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(result.is_err(), "Expected error for prj1()");
-}
-
-#[test]
-fn test_builtin_prj1_three_args() {
-    let source = r#"
-    CONTEXT test
-    AXIOMS
-        @axm1 prj1(A, B, C) = T
-    END
-    "#;
-
-    let result = parse(source);
-    assert!(result.is_err(), "Expected arity error for prj1(A, B, C)");
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("prj1") && err.contains("got 3"),
-        "Expected arity mismatch error, got: {}",
-        err
-    );
+    // `prj1()` has empty application parens — a syntax error (the bare atom is
+    // `prj1`; application needs an argument).
+    let source = "CONTEXT test\nAXIOMS\n    @axm1 prj1() = T\nEND\n";
+    assert!(parse(source).is_err(), "Expected error for prj1()");
 }
 
 #[test]

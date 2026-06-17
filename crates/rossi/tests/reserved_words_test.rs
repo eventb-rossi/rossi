@@ -13,7 +13,7 @@
 mod common;
 
 use rossi::ast::Expression;
-use rossi::ast::expression::UnaryOp;
+use rossi::ast::expression::{AtomicBuiltinKind, UnaryOp};
 use rossi::parser::{parse_action_str, parse_predicate_str};
 use rossi::{ExpressionKind, ParseError, parse};
 
@@ -139,10 +139,11 @@ fn applied_builtin_forms_still_parse() {
 #[test]
 fn generic_atoms_still_parse_bare() {
     // id, prj1, prj2, pred, succ are generic atomic expressions in V2 —
-    // legal bare, exactly as in Rodin.
+    // legal bare, exactly as in Rodin, and carry a typed AtomicBuiltin handle.
     for atom in ["id", "prj1", "prj2", "pred", "succ"] {
         let rhs = common::parse_axiom_rhs(&common::axiom_context("f", &format!("f = {atom}")));
-        assert_eq!(rhs, ExpressionKind::Identifier(atom.to_string()).into());
+        let kind = AtomicBuiltinKind::from_name(atom).expect("relational atom");
+        assert_eq!(rhs, ExpressionKind::AtomicBuiltin(kind).into());
     }
 }
 

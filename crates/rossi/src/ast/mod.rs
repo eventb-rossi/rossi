@@ -13,7 +13,9 @@ pub mod walk;
 pub use action::{Action, ActionKind};
 pub use context::{Context, SetDeclaration};
 pub use event::{Event, EventStatus, InitialisationEvent};
-pub use expression::{BuiltinFunction, Expression, ExpressionKind, IdentPattern};
+pub use expression::{
+    AtomicBuiltinKind, BuiltinFunction, Expression, ExpressionKind, IdentPattern,
+};
 pub use machine::Machine;
 pub use predicate::{BuiltinPredicate, Predicate, PredicateKind};
 pub use walk::{Binder, IdentOccurrence, IdentRole, IdentVisitor};

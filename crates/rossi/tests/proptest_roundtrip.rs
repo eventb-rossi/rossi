@@ -158,12 +158,13 @@ fn arb_builtin_function() -> impl Strategy<Value = BuiltinFunction> {
         Just(BuiltinFunction::Card),
         Just(BuiltinFunction::Min),
         Just(BuiltinFunction::Max),
-        Just(BuiltinFunction::Id),
         Just(BuiltinFunction::Union),
         Just(BuiltinFunction::Inter),
-        Just(BuiltinFunction::Prj1),
-        Just(BuiltinFunction::Prj2),
     ]
+}
+
+fn arb_atomic_builtin() -> impl Strategy<Value = AtomicBuiltinKind> {
+    proptest::sample::select(AtomicBuiltinKind::ALL.to_vec())
 }
 
 // =============================================================================
@@ -178,6 +179,7 @@ fn arb_leaf_expression() -> impl Strategy<Value = Expression> {
     prop_oneof![
         (0i64..1000).prop_map(|n| ExpressionKind::Integer(n).into()),
         arb_identifier().prop_map(|s| ExpressionKind::Identifier(s).into()),
+        arb_atomic_builtin().prop_map(|k| ExpressionKind::AtomicBuiltin(k).into()),
         Just(ExpressionKind::EmptySet.into()),
         Just(ExpressionKind::Naturals.into()),
         Just(ExpressionKind::Naturals1.into()),
