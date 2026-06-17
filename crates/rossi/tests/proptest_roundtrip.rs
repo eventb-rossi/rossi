@@ -189,8 +189,6 @@ fn arb_leaf_expression() -> impl Strategy<Value = Expression> {
             Just(Predicate::from(PredicateKind::False))
         ]
         .prop_map(|p| ExpressionKind::Bool(Box::new(p)).into()),
-        // StringLiteral — safe characters only
-        "[a-zA-Z0-9_]{0,10}".prop_map(|s| ExpressionKind::StringLiteral(s).into()),
     ]
 }
 

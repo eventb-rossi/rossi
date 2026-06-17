@@ -150,8 +150,7 @@ pub fn walk_expression<V: IdentVisitor>(
         | ExpressionKind::Naturals
         | ExpressionKind::Naturals1
         | ExpressionKind::Integers
-        | ExpressionKind::BoolType
-        | ExpressionKind::StringLiteral(_) => ControlFlow::Continue(()),
+        | ExpressionKind::BoolType => ControlFlow::Continue(()),
         ExpressionKind::Binary { left, right, .. } => {
             walk_expression(left, binders, v)?;
             walk_expression(right, binders, v)
@@ -183,15 +182,6 @@ pub fn walk_expression<V: IdentVisitor>(
         ExpressionKind::RelationalImage { relation, set } => {
             walk_expression(relation, binders, v)?;
             walk_expression(set, binders, v)
-        }
-        ExpressionKind::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            walk_predicate(condition, binders, v)?;
-            walk_expression(then_expr, binders, v)?;
-            walk_expression(else_expr, binders, v)
         }
         ExpressionKind::SetComprehension {
             identifiers,

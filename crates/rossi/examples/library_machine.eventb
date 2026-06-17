@@ -17,17 +17,31 @@ EVENTS
         loans := ∅
     END
 
-    EVENT borrow_book
+    EVENT borrow_book_existing
     ANY
         member
         book
     WHERE
         @grd1 member ∈ MEMBERS
         @grd2 book ∈ available_books
-        @grd3 member ∈ dom(loans) ⇒ card(loans(member)) < max_loans
+        @grd3 member ∈ dom(loans)
+        @grd4 card(loans(member)) < max_loans
     THEN
         available_books := available_books ∖ {book}
-        loans := loans ⊕ {member ↦ (IF member ∈ dom(loans) THEN loans(member) ∪ {book} ELSE {book} END)}
+        loans(member) := loans(member) ∪ {book}
+    END
+
+    EVENT borrow_book_new
+    ANY
+        member
+        book
+    WHERE
+        @grd1 member ∈ MEMBERS
+        @grd2 book ∈ available_books
+        @grd3 member ∉ dom(loans)
+    THEN
+        available_books := available_books ∖ {book}
+        loans(member) := {book}
     END
 
     EVENT return_book

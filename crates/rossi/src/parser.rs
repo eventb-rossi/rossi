@@ -1748,76 +1748,12 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                     ))
                 }
                 Rule::kw_bool => Ok(Expression::new(ExpressionKind::BoolType, node_span)),
-                Rule::string_literal => {
-                    // Extract string_inner content and process escapes.
-                    // The grammar only allows \" and \\ as escape sequences;
-                    // other backslash sequences are rejected at the grammar
-                    // level. The fallback arms below are defensive, preserving
-                    // the backslash verbatim if the grammar is ever extended.
-                    let mut s = String::new();
-                    for p in first.into_inner() {
-                        match p.as_rule() {
-                            Rule::string_inner => {
-                                let raw = p.as_str();
-                                let mut chars = raw.chars();
-                                while let Some(c) = chars.next() {
-                                    if c == '\\' {
-                                        match chars.next() {
-                                            Some('"') => s.push('"'),
-                                            Some('\\') => s.push('\\'),
-                                            // Defensive: grammar currently rejects
-                                            // unknown escapes, but preserve them
-                                            // verbatim if the grammar is extended.
-                                            Some(other) => {
-                                                s.push('\\');
-                                                s.push(other);
-                                            }
-                                            None => s.push('\\'),
-                                        }
-                                    } else {
-                                        s.push(c);
-                                    }
-                                }
-                            }
-                            _ => {
-                                return Err(ParseError::UnexpectedRule {
-                                    expected: "string_inner".to_string(),
-                                    found: format!("{:?}", p.as_rule()),
-                                });
-                            }
-                        }
-                    }
-                    Ok(Expression::new(ExpressionKind::StringLiteral(s), node_span))
-                }
                 Rule::integer => {
                     let value = first
                         .as_str()
                         .parse::<i64>()
                         .map_err(|_| ParseError::InvalidInteger(first.as_str().to_string()))?;
                     Ok(Expression::new(ExpressionKind::Integer(value), node_span))
-                }
-                Rule::if_then_else_expr => {
-                    let mut ite_inner = first.into_inner();
-                    // Skip kw_if
-                    ite_inner.next();
-                    let cond_pair = ite_inner.next().ok_or(ParseError::MissingPredicate)?;
-                    let condition = parse_predicate(cond_pair)?;
-                    // Skip kw_then
-                    ite_inner.next();
-                    let then_pair = ite_inner.next().ok_or(ParseError::EmptyExpression)?;
-                    let then_expr = parse_expression(then_pair)?;
-                    // Skip kw_else
-                    ite_inner.next();
-                    let else_pair = ite_inner.next().ok_or(ParseError::EmptyExpression)?;
-                    let else_expr = parse_expression(else_pair)?;
-                    Ok(Expression::new(
-                        ExpressionKind::IfThenElse {
-                            condition: Box::new(condition),
-                            then_expr: Box::new(then_expr),
-                            else_expr: Box::new(else_expr),
-                        },
-                        node_span,
-                    ))
                 }
                 Rule::identifier => Ok(Expression::new(
                     ExpressionKind::Identifier(first.as_str().to_string()),
@@ -2894,8 +2830,7 @@ fn shift_expr_spans(expr: &mut Expression, delta: usize) {
         | ExpressionKind::Naturals
         | ExpressionKind::Naturals1
         | ExpressionKind::Integers
-        | ExpressionKind::BoolType
-        | ExpressionKind::StringLiteral(_) => {}
+        | ExpressionKind::BoolType => {}
         ExpressionKind::SetEnumeration(items) => {
             for e in items {
                 shift_expr_spans(e, delta);
@@ -2970,15 +2905,6 @@ fn shift_expr_spans(expr: &mut Expression, delta: usize) {
             }
         }
         ExpressionKind::Bool(p) => shift_pred_spans(p, delta),
-        ExpressionKind::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            shift_pred_spans(condition, delta);
-            shift_expr_spans(then_expr, delta);
-            shift_expr_spans(else_expr, delta);
-        }
     }
 }
 

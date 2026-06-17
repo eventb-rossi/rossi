@@ -1272,37 +1272,6 @@ fn test_bool_vs_bool_type() {
 }
 
 // ============================================================================
-// String literal tests
-// ============================================================================
-
-#[test]
-fn test_string_literal() {
-    let ctx = common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 x = \"hello\"\nEND\n");
-    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
-        assert_eq!(
-            *right,
-            ExpressionKind::StringLiteral("hello".to_string()).into()
-        );
-    } else {
-        panic!("Expected Comparison predicate");
-    }
-}
-
-#[test]
-fn test_string_literal_escapes() {
-    let ctx =
-        common::parse_context("CONTEXT test\nAXIOMS\n    @axm1 x = \"he said \\\"hi\\\"\"\nEND\n");
-    if let PredicateKind::Comparison { right, .. } = &ctx.axioms[0].predicate.kind {
-        assert_eq!(
-            *right,
-            ExpressionKind::StringLiteral("he said \"hi\"".to_string()).into()
-        );
-    } else {
-        panic!("Expected Comparison predicate");
-    }
-}
-
-// ============================================================================
 // Arity validation tests
 // ============================================================================
 

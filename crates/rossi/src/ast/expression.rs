@@ -335,16 +335,6 @@ pub enum ExpressionKind {
 
     /// Boolean conversion: bool(P) — converts a predicate to a boolean expression
     Bool(Box<Predicate>),
-
-    /// String literal (ProB extension): "hello"
-    StringLiteral(String),
-
-    /// Conditional expression (ProB extension): IF P THEN E1 ELSE E2 END
-    IfThenElse {
-        condition: Box<Predicate>,
-        then_expr: Box<Expression>,
-        else_expr: Box<Expression>,
-    },
 }
 
 impl Expression {

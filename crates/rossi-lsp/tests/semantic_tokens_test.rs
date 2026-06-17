@@ -363,28 +363,6 @@ fn test_quote_in_label_does_not_hide_real_comment() {
 }
 
 #[test]
-fn test_multiline_string_content_is_not_a_comment() {
-    // The grammar's `string_inner` spans lines; `//` on a continuation line
-    // is string content. A phantom comment here used to swallow real code.
-    let text = "CONTEXT c\nCONSTANTS\n    s\nAXIOMS\n    @axm1 s = \"a\n// not: a comment\"\nEND\n";
-    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
-
-    let tokens = decode_tokens(text);
-
-    let comment = token_type_index("comment");
-    assert!(
-        !tokens.iter().any(|t| t.3 == comment),
-        "string content must not be tokenized as comment, got {tokens:?}"
-    );
-    let keyword = token_type_index("keyword");
-    let last_line = text.lines().count() as u32 - 1;
-    assert!(
-        tokens.iter().any(|t| t.3 == keyword && t.0 == last_line),
-        "the END keyword after the string must keep its token, got {tokens:?}"
-    );
-}
-
-#[test]
 fn test_broken_document_keeps_comment_and_keyword_tokens() {
     // Mid-edit documents go through error recovery; highlighting (including
     // the issue-#24 comment tokens) must not vanish on every keystroke.

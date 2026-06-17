@@ -78,13 +78,9 @@ impl LexicalSpans {
 
 /// Lexically scan `source` for comments and labels.
 ///
-/// Comment markers inside string literals and labels are ignored, matching
-/// the grammar: `string_inner` spans lines and honors the `\"`/`\\` escapes,
-/// and the compound-atomic `label` rule consumes any non-whitespace after
-/// `@` (Rodin-imported labels like `@SAF5"` or `@inv//1` are plain label
-/// text). A quote with no closing quote anywhere after it is treated as a
-/// stray character, not a string start, so a half-typed string in a broken
-/// document (the recovery parser's main diet) cannot hide later comments.
+/// Comment markers inside labels are ignored, matching the grammar: the
+/// compound-atomic `label` rule consumes any non-whitespace after `@`
+/// (Rodin-imported labels like `@SAF5"` or `@inv//1` are plain label text).
 pub fn lexical_spans(source: &str) -> LexicalSpans {
     let bytes = source.as_bytes();
     let mut comments = Vec::new();
@@ -95,31 +91,13 @@ pub fn lexical_spans(source: &str) -> LexicalSpans {
         match bytes[i] {
             b'@' => {
                 // Label: everything up to the next whitespace is label text
-                // (the grammar's `label_text`), never a comment or string.
+                // (the grammar's `label_text`), never a comment.
                 let start = i;
                 i += 1;
                 while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
                     i += 1;
                 }
                 labels.push(Span { start, end: i });
-            }
-            b'"' => {
-                // String literal: consume up to the matching closing quote.
-                // Only `\"` and `\\` are escapes (grammar's `string_inner`).
-                // If no closing quote exists, the quote is a stray character
-                // and scanning resumes right after it.
-                let mut j = i + 1;
-                let close = loop {
-                    match bytes.get(j) {
-                        None => break None,
-                        Some(b'"') => break Some(j),
-                        Some(b'\\') if matches!(bytes.get(j + 1), Some(b'"') | Some(b'\\')) => {
-                            j += 2;
-                        }
-                        Some(_) => j += 1,
-                    }
-                };
-                i = close.map_or(i + 1, |close| close + 1);
             }
             b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
                 let start = i;
@@ -290,51 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn comment_markers_inside_string_are_not_comments() {
-        let src = "s = \"http://example.org\" // real: comment\n";
-        let spans = comment_spans(src);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(&src[spans[0].start..spans[0].end], "// real: comment");
-    }
-
-    #[test]
-    fn escaped_quote_keeps_string_mode() {
-        let src = "s = \"a\\\" // not a comment\" + t\n";
-        assert!(comment_spans(src).is_empty());
-        assert_eq!(mask_comments(src), src);
-    }
-
-    #[test]
-    fn backslash_before_newline_does_not_extend_string() {
-        // `\` followed by a newline is not an escape; with no closing quote
-        // anywhere the quote is a stray, so the comment is still recognized.
-        let src = "s = \"oops\\\n// note: colon\n";
-        let spans = comment_spans(src);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(&src[spans[0].start..spans[0].end], "// note: colon");
-    }
-
-    #[test]
-    fn unterminated_string_is_a_stray_quote() {
-        // A half-typed string must not hide a comment on a later line.
-        let src = "s = \"oops\n// next: line\n";
-        let spans = comment_spans(src);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(&src[spans[0].start..spans[0].end], "// next: line");
-    }
-
-    #[test]
-    fn multiline_string_hides_comment_markers() {
-        // The grammar's `string_inner` spans lines; `//` and `/*` on a
-        // continuation line are string content, not comments (a phantom
-        // `/*` span here used to swallow everything to end of input).
-        let src = "s = \"line1\n// not: a comment\n/* neither */\" // real: one\n";
-        let spans = comment_spans(src);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(&src[spans[0].start..spans[0].end], "// real: one");
-    }
-
-    #[test]
     fn label_spans_cover_at_tokens() {
         let src = "@inv//1 x > 0 // note: real\n";
         let spans = lexical_spans(src);
@@ -353,8 +286,8 @@ mod tests {
     #[test]
     fn comment_markers_inside_label_are_label_text() {
         // The compound-atomic `label` rule consumes any non-whitespace, so
-        // `@inv//1` is a complete label and `@SAF5"` (a Rodin-imported label)
-        // does not open a string that would hide the real comment.
+        // `@inv//1` is a complete label and `@SAF5"` (a Rodin-imported label
+        // with a stray quote) does not hide the real comment.
         let src = "@inv//1 x > 0\n@SAF5\" y > 0 // note: real\n";
         let spans = comment_spans(src);
         assert_eq!(spans.len(), 1);

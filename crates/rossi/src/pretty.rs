@@ -600,24 +600,6 @@ impl PrettyPrinter {
             ExpressionKind::Bool(predicate) => {
                 format!("bool({})", self.print_predicate(predicate))
             }
-
-            ExpressionKind::StringLiteral(s) => {
-                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                format!("\"{}\"", escaped)
-            }
-
-            ExpressionKind::IfThenElse {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                format!(
-                    "IF {} THEN {} ELSE {} END",
-                    self.print_predicate(condition),
-                    self.print_expression(then_expr),
-                    self.print_expression(else_expr)
-                )
-            }
         }
     }
 
@@ -897,28 +879,12 @@ impl PrettyPrinter {
         self.op(operators::logical_op_id(op))
     }
 
-    /// True if `s` contains a `;` outside all (), [], {} delimiters and
-    /// string literals — i.e. a top-level forward composition (the printer
-    /// emits `;` for nothing else).
+    /// True if `s` contains a `;` outside all (), [], {} delimiters —
+    /// i.e. a top-level forward composition (the printer emits `;` for nothing else).
     fn has_bare_semicolon(s: &str) -> bool {
         let mut depth = 0usize;
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
+        for c in s.chars() {
             match c {
-                // Skip string-literal content: a stray delimiter or `;`
-                // inside it must not affect the scan. The printer escapes
-                // only `\` and `"` (see Expression::StringLiteral).
-                '"' => {
-                    while let Some(c) = chars.next() {
-                        match c {
-                            '\\' => {
-                                chars.next();
-                            }
-                            '"' => break,
-                            _ => {}
-                        }
-                    }
-                }
                 '(' | '[' | '{' => depth += 1,
                 ')' | ']' | '}' => depth = depth.saturating_sub(1),
                 ';' if depth == 0 => return true,

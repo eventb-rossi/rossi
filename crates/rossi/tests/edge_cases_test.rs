@@ -318,22 +318,6 @@ fn test_standalone_action_chained_composition_with_inverse() {
 }
 
 #[test]
-fn test_printed_composition_after_string_literal_reparses_in_machine() {
-    // The printer guards a bare `;` in an action by parenthesizing; the scan
-    // must not be thrown off by delimiter characters inside string literals
-    // (here an unbalanced `(`), or the printed machine text fails to parse.
-    let action = rossi::parse_action_str(r#"x ≔ "(" ; g"#).expect("standalone action parses");
-    let printed = rossi::PrettyPrinter::new().print_action(&action);
-    let source = format!(
-        "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        {printed}\n    END\nEND\n"
-    );
-    let m = common::parse_machine(&source);
-    let init = m.initialisation.as_ref().unwrap();
-    assert_eq!(init.actions.len(), 1);
-    assert_eq!(init.actions[0].action, action);
-}
-
-#[test]
 fn test_standalone_becomes_such_that_with_composition() {
     let action = rossi::parse_action_str("x :∣ x' = f;g").expect("standalone action parses");
     let ActionKind::BecomesSuchThat { predicate, .. } = &action.kind else {

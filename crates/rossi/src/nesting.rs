@@ -27,7 +27,7 @@
 //!   image, set enumeration/comprehension, function application, `bool(…)`),
 //! - prefix/binder tokens that nest without brackets: `¬`/`not`, `∀`/`!`,
 //!   `∃`/`#`, `λ`/`%`, `⋃`/`UNION`, `⋂`/`INTER`, `ℙ`/`POW`/`ℙ1`/`POW1`,
-//!   `dom`, `ran`, `if` (if-then-else), and unary minus `-`/`−`.
+//!   `dom`, `ran`, and unary minus `-`/`−`.
 //!
 //! Infix operator chains (`∧`, `+`, `↦`, …) are parsed iteratively by both
 //! pest (`(op ~ rhs)*` repetitions) and the AST builder, so they are
@@ -89,10 +89,9 @@ fn is_unicode_operand_end(c: char) -> bool {
 /// `op_not`, `op_domain`, `op_range`, `op_powerset`, `op_powerset1`).
 fn is_prefix_word(word: &str) -> bool {
     matches!(word, "not" | "dom" | "ran" | "POW" | "POW1")
-        // Case-insensitive keywords: `kw_UNION`, `kw_INTER`, `kw_if`.
+        // Case-insensitive keywords: `kw_UNION`, `kw_INTER`.
         || word.eq_ignore_ascii_case("union")
         || word.eq_ignore_ascii_case("inter")
-        || word.eq_ignore_ascii_case("if")
 }
 
 /// Scan `input` and reject it if its worst-case parser recursion depth
@@ -101,9 +100,8 @@ fn is_prefix_word(word: &str) -> bool {
 /// follows ([`parser_stack_red_zone`]).
 ///
 /// Single forward pass, no recursion; the only allocation is the
-/// bracket-snapshot stack. Comments, string literals, and `@label` text are
-/// skipped exactly as the grammar lexes them, so brackets inside them don't
-/// count.
+/// bracket-snapshot stack. Comments and `@label` text are skipped exactly as
+/// the grammar lexes them, so brackets inside them don't count.
 pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
     let bytes = input.as_bytes();
     let len = bytes.len();
@@ -165,29 +163,6 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
                     // Division or an ASCII op like `/:` — not a driver.
                     after_operand = false;
                     i += 1;
-                }
-            }
-            b'"' => {
-                // String literal with `\"` and `\\` escapes; if unterminated,
-                // treat the quote as an ordinary char and keep counting.
-                let mut j = i + 1;
-                let close = loop {
-                    match bytes.get(j) {
-                        None => break None,
-                        Some(b'\\') => j += 2,
-                        Some(b'"') => break Some(j),
-                        Some(_) => j += 1,
-                    }
-                };
-                match close {
-                    Some(end) => {
-                        i = end + 1;
-                        after_operand = true;
-                    }
-                    None => {
-                        after_operand = false;
-                        i += 1;
-                    }
                 }
             }
             b'@' => {
@@ -374,32 +349,24 @@ mod tests {
     }
 
     #[test]
-    fn parens_in_comments_strings_labels_ignored() {
+    fn parens_in_comments_and_labels_ignored() {
         let deep = "(".repeat(MAX_NESTING_DEPTH * 2);
         assert!(check_nesting(&format!("/* {deep} */ x = 1")).is_ok());
         assert!(check_nesting(&format!("// {deep}\nx = 1")).is_ok());
-        assert!(check_nesting(&format!("\"{deep}\" = s")).is_ok());
         assert!(check_nesting(&format!("@lbl{deep} x = 1")).is_ok());
     }
 
     #[test]
-    fn unterminated_comment_or_string_still_counts() {
+    fn unterminated_block_comment_still_counts() {
         let deep = "(".repeat(MAX_NESTING_DEPTH + 1);
         assert!(depth_err(&format!("/* {deep}")));
-        assert!(depth_err(&format!("\"{deep}")));
     }
 
     #[test]
-    fn unterminated_lexemes_before_multibyte_chars_are_boundary_safe() {
-        // The unterminated-comment/string fallbacks resume scanning one byte
+    fn unterminated_block_comment_before_multibyte_char_is_boundary_safe() {
+        // The unterminated block-comment fallback resumes scanning one byte
         // after the introducer; the next char may be multi-byte.
-        assert!(check_nesting("\"¬").is_ok());
         assert!(check_nesting("/*¬").is_ok());
-        assert!(check_nesting("\"é\\").is_ok());
-        assert!(depth_err(&format!(
-            "\"∀{}",
-            "(".repeat(MAX_NESTING_DEPTH + 1)
-        )));
     }
 
     #[test]

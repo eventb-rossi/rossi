@@ -36,10 +36,6 @@ ident_binder_type = {
 // Numbers
 integer = @{ "-"? ~ ASCII_DIGIT+ }
 
-// String Literals (ProB extension)
-string_inner = @{ (!("\"" | "\\") ~ ANY | "\\" ~ ("\"" | "\\"))* }
-string_literal = { "\"" ~ string_inner ~ "\"" }
-
 // ==========================
 // Keywords
 // ==========================
@@ -99,10 +95,6 @@ kw_nat1 = @{ ("ℕ1" | ^"nat1") ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_nat = @{ ("ℕ" | ^"nat") ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_int = @{ ("ℤ" | ^"int") ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_bool = @{ ^"bool" ~ !(ASCII_ALPHANUMERIC | "_") }
-
-// Conditional expression keywords (ProB extension)
-kw_if = @{ ^"if" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_else = @{ ^"else" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // Quantified set operation keywords
 kw_UNION = @{ "⋃" | (^"UNION" ~ !(ASCII_ALPHANUMERIC | "_")) }
@@ -209,13 +201,6 @@ pipe = { "|" | "∣" }
 // Bool expression: bool(P) — converts a predicate to boolean
 bool_expr = { kw_bool ~ lparen ~ predicate ~ rparen }
 
-// Conditional expression (ProB extension): IF P THEN E1 ELSE E2 END
-// Uses regular predicate/expression inside since the keywords provide
-// unambiguous delimiters (same reasoning as parenthesized expressions).
-if_then_else_expr = {
-    kw_if ~ predicate ~ kw_then ~ expression ~ kw_else ~ expression ~ kw_end
-}
-
 // Primary Expressions
 primary_expr = {
     kw_true
@@ -226,9 +211,7 @@ primary_expr = {
   | kw_int
   | bool_expr
   | kw_bool
-  | string_literal
   | integer
-  | if_then_else_expr
   | identifier
   | lparen ~ expression ~ rparen
   | set_enumeration

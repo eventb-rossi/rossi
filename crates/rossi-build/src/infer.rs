@@ -21,7 +21,7 @@
 //! Expression typing in [`type_of_expression`] additionally covers
 //! relation operators (`◁`, `▷`, `⩤`, `⩥`, `⊕`, `⊗`, `∥`, `;`, `∘`),
 //! relational image `r[A]`, `bool(P)`, type ascription `e ⦂ T`,
-//! `if … then … else …`, lambda, set comprehension, set builder, and
+//! lambda, set comprehension, set builder, and
 //! quantified union / intersection.
 
 use std::collections::BTreeMap;
@@ -273,7 +273,7 @@ fn constrain_with_set(u: &mut Unifier, side: &ITy, set: Option<ITy>) {
 
 /// Combine two operands that must share a type: unify them when both type,
 /// tolerate one still-unresolved side (returning the other), and drop only
-/// when neither types. Used by `∪`/`∩`/`∖`/`⊕` and `if … then … else`.
+/// when neither types. Used by `∪`/`∩`/`∖`/`⊕`.
 fn unify_or_either(u: &mut Unifier, a: Option<ITy>, b: Option<ITy>) -> Option<ITy> {
     match (a, b) {
         (Some(a), Some(b)) => {
@@ -536,16 +536,6 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
         ExpressionKind::Bool(_) => Some(ITy::Boolean),
-        // `if P then E1 else E2` — both branches share the same type.
-        ExpressionKind::IfThenElse {
-            condition: _,
-            then_expr,
-            else_expr,
-        } => {
-            let t = synth(env, then_expr, u);
-            let e = synth(env, else_expr, u);
-            unify_or_either(u, t, e)
-        }
         // λ pattern · P ∣ E. Bind the pattern names from explicit type
         // ascriptions or from `P`, then return ℙ(dom × typeof(E)).
         ExpressionKind::Lambda {
@@ -622,7 +612,6 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             }
             synth(&local, expression, u)
         }
-        _ => None,
     }
 }
 
@@ -905,11 +894,11 @@ fn collect_from_maplet(
 
 /// Collect bare identifiers referenced in `expr`, in left-to-right
 /// order, deduped. Used by the SetBuilder arm to figure out which names
-/// are binders. Recurses through binary/unary/application/`bool(P)`/
-/// `if … then … else …`/etc. but stops at lambda / set-comprehension /
-/// set-builder / quantified-union / quantified-inter — those nodes'
-/// internal binders shouldn't leak. Names bound by a quantifier inside
-/// `bool(P)` or an `if-then-else` condition are also filtered out.
+/// are binders. Recurses through binary/unary/application/`bool(P)`/etc.
+/// but stops at lambda /
+/// set-comprehension / set-builder / quantified-union / quantified-inter —
+/// those nodes' internal binders shouldn't leak. Names bound by a quantifier
+/// inside `bool(P)` are also filtered out.
 ///
 /// This stops-at-binders, expression-only contract is the opposite of
 /// `wd::normal`'s `expression_free_names`, which descends *into* binders
@@ -960,15 +949,6 @@ fn collect_free_idents_expr<'a>(
             collect_free_idents_expr(set, shadow, out);
         }
         ExpressionKind::Bool(p) => collect_free_idents_pred(p, shadow, out),
-        ExpressionKind::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_free_idents_pred(condition, shadow, out);
-            collect_free_idents_expr(then_expr, shadow, out);
-            collect_free_idents_expr(else_expr, shadow, out);
-        }
         _ => {}
     }
 }
@@ -1271,21 +1251,6 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
             walk_expr_for_arg(env, set, target, found);
         }
         ExpressionKind::Bool(p) => walk_pred_for_arg(env, p, target, found),
-        ExpressionKind::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            walk_pred_for_arg(env, condition, target, found);
-            if found.is_some() {
-                return;
-            }
-            walk_expr_for_arg(env, then_expr, target, found);
-            if found.is_some() {
-                return;
-            }
-            walk_expr_for_arg(env, else_expr, target, found);
-        }
         _ => {}
     }
 }
@@ -2198,17 +2163,6 @@ mod tests {
         collect_free_identifiers(&e, &mut out);
         assert!(out.contains(&"y"), "missing y in {out:?}");
         assert!(!out.contains(&"x"), "x must not leak: {out:?}");
-    }
-
-    #[test]
-    fn collect_free_idents_through_if_then_else() {
-        // `if c = c then a else b end` — all three identifiers free.
-        let e = parse_expr("if c = c then a else b end");
-        let mut out = Vec::new();
-        collect_free_identifiers(&e, &mut out);
-        for n in ["c", "a", "b"] {
-            assert!(out.contains(&n), "missing {n} in {out:?}");
-        }
     }
 
     #[test]

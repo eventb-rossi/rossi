@@ -1088,7 +1088,6 @@ fn test_roundtrip_feature(source: &str) {
 // ============================================================================
 
 #[test_case("CONTEXT test\nAXIOMS\n    @axm1 bool(x > 0) = TRUE\nEND\n" ; "bool_expr")]
-#[test_case("CONTEXT test\nAXIOMS\n    @axm1 x = \"hello\"\nEND\n" ; "string_literal")]
 fn test_roundtrip_builtin(source: &str) {
     common::assert_roundtrip(source);
 }
@@ -1124,9 +1123,8 @@ END
 #[test_case("MACHINE test\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x \u{2208} \u{2115} \u{2982} \u{2124}\nEND\n" ; "oftype")]
 // Typed identifiers in quantifiers
 #[test_case("CONTEXT test\nAXIOMS\n    \u{2200}x\u{2982}\u{2124}\u{00B7}x > 0\nEND\n" ; "typed_forall")]
-// Bool and string (not in proptest)
+// Bool (not in proptest)
 #[test_case("CONTEXT test\nAXIOMS\n    @axm1 bool(x > 0) = TRUE\nEND\n" ; "bool_expr")]
-#[test_case("CONTEXT test\nAXIOMS\n    @axm1 x = \"hello\"\nEND\n" ; "string_literal")]
 fn test_roundtrip_ascii(source: &str) {
     common::assert_roundtrip_ascii(source);
 }

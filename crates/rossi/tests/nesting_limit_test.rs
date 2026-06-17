@@ -171,14 +171,6 @@ fn at_limit_every_driver_construct_parses() {
     let union: String = (0..k).map(|i| format!("⋃ z{i} · 1=1 ∣ ")).collect();
     parse(&format!("context C axioms @a s = {union}{{1}} end")).expect("at-limit ⋃ chain");
 
-    // Nested if-then-else (kw-delimited: only `if` counts).
-    let ite = format!(
-        "context C axioms @a x = {}0{} end",
-        "if 1=1 then ".repeat(n),
-        " else 1 end".repeat(n)
-    );
-    parse(&ite).expect("at-limit if-then-else");
-
     // Unary keyword chains (dom/ran/ℙ) and unary minus. dom/ran require the
     // parenthesized form, so each level costs 2 (prefix word + bracket); the
     // chain only sits exactly at the limit while the limit is even.

@@ -709,16 +709,6 @@ fn strip_expr(e: Expression) -> Expression {
         }
         .into(),
         E::Bool(p) => E::Bool(Box::new(strip_type_ascriptions_pred(*p))).into(),
-        E::IfThenElse {
-            condition,
-            then_expr,
-            else_expr,
-        } => E::IfThenElse {
-            condition: Box::new(strip_type_ascriptions_pred(*condition)),
-            then_expr: Box::new(strip_expr(*then_expr)),
-            else_expr: Box::new(strip_expr(*else_expr)),
-        }
-        .into(),
         other => other.into(),
     }
 }

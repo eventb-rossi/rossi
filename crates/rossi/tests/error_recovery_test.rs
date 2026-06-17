@@ -1000,26 +1000,6 @@ fn test_recovery_comment_markers_in_label_no_spurious_error() {
 }
 
 #[test]
-fn test_recovery_multiline_string_does_not_swallow_later_clauses() {
-    // A `/*` inside a multi-line string used to open a phantom comment that
-    // masked everything to end of input; axioms after it must survive.
-    let source = "CONTEXT phantom\nCONSTANTS\n    c1\n    +\nAXIOMS\n    @axm1 s = \"a\n/* b\"\n    @axm2 c1 = 1\nEND\n";
-
-    let result = parse_with_recovery(source);
-
-    let ctx = expect_context(&result);
-    let labels: Vec<&str> = ctx
-        .axioms
-        .iter()
-        .filter_map(|a| a.label.as_deref())
-        .collect();
-    assert!(
-        labels.contains(&"axm2"),
-        "the axiom after the multi-line string must be recovered, got {labels:?}"
-    );
-}
-
-#[test]
 fn test_recovery_set_error_does_not_leak_into_axioms_issue_32() {
     // Issue #32, example 2: a malformed SETS line (`BOOK: READER`) must be
     // reported once, at the SETS line, and must NOT produce spurious errors on
