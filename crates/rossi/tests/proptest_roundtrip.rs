@@ -534,24 +534,6 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
                     vars,
                 )
             }),
-        // FunctionOverride: f(x) := E
-        (
-            arb_identifier(),
-            proptest::collection::vec(arb_action_expression(), 1..3),
-            arb_action_expression(),
-        )
-            .prop_map(|(function, arguments, expression)| {
-                let vars = vec![function.clone()];
-                (
-                    ActionKind::FunctionOverride {
-                        function: function.into(),
-                        arguments,
-                        expression,
-                    }
-                    .into(),
-                    vars,
-                )
-            }),
     ]
 }
 

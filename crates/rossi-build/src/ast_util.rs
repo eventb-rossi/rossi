@@ -15,7 +15,6 @@ pub(crate) fn lhs_variables(action: &rossi::Action) -> Vec<&str> {
         | ActionKind::BecomesSuchThat { variables, .. } => {
             variables.iter().map(Ident::as_str).collect()
         }
-        ActionKind::FunctionOverride { function, .. } => vec![function.as_str()],
     }
 }
 
@@ -37,8 +36,7 @@ pub(crate) fn named_element_span(
 /// `[a]` → `a`; `[a, b]` → `a ↦ b`; `[a, b, c]` → `(a ↦ b) ↦ c`.
 ///
 /// Used to align curried/multi-arg call sites against a function's
-/// product-shaped domain type, and to normalise `FunctionOverride`
-/// argument tuples.
+/// product-shaped domain type.
 pub(crate) fn left_assoc_maplet(args: &[Expression]) -> Expression {
     let mut iter = args.iter().cloned();
     let mut acc = iter.next().expect("left_assoc_maplet requires ≥1 argument");

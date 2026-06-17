@@ -142,10 +142,8 @@ pub fn collect_referenced_in_expression(expr: &Expression, acc: &mut BTreeSet<St
 }
 
 /// Insert every free identifier on an action's read side into `acc`.
-/// `function: f` in `Action::FunctionOverride` is **not** added here —
-/// callers that consider override targets as reads must insert `f`
-/// themselves (the walker treats action RHS as a pure read of expressions
-/// and predicates).
+/// For `f ≔ f\u{E103}{(x ↦ E)}` (function override lowered by the parser),
+/// the `f` on the Overwrite RHS is emitted as a Usage and collected here.
 pub fn collect_referenced_in_action_rhs(a: &Action, acc: &mut BTreeSet<String>) {
     collect_referenced_in_action_rhs_with_locals(a, &[], acc);
 }

@@ -68,14 +68,6 @@ pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
         // Becomes-such-that uses primed forms (`x'`) the identifier
         // walker doesn't yet recognise; skip rather than flag false.
         ActionKind::BecomesSuchThat { .. } => true,
-        ActionKind::FunctionOverride {
-            arguments,
-            expression,
-            ..
-        } => {
-            arguments.iter().all(|a| is_well_typed_expression(env, a))
-                && is_well_typed_expression(env, expression)
-        }
     }
 }
 

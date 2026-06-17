@@ -462,16 +462,6 @@ pub fn strip_type_ascriptions_action(a: Action) -> Action {
             predicate: strip_type_ascriptions_pred(predicate),
         }
         .into(),
-        ActionKind::FunctionOverride {
-            function,
-            arguments,
-            expression,
-        } => ActionKind::FunctionOverride {
-            function,
-            arguments: arguments.into_iter().map(strip_expr).collect(),
-            expression: strip_expr(expression),
-        }
-        .into(),
     }
 }
 

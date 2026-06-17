@@ -266,23 +266,6 @@ pub fn walk_action<V: IdentVisitor>(
             write_targets(variables, binders, v)?;
             walk_predicate(predicate, binders, v)
         }
-        ActionKind::FunctionOverride {
-            function,
-            arguments,
-            expression,
-        } => {
-            emit(
-                v,
-                &function.name,
-                function.span,
-                IdentRole::WriteTarget,
-                binders,
-            )?;
-            for a in arguments {
-                walk_expression(a, binders, v)?;
-            }
-            walk_expression(expression, binders, v)
-        }
     }
 }
 

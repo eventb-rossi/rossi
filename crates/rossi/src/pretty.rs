@@ -946,23 +946,6 @@ impl PrettyPrinter {
                     Self::guard_action_part(self.print_predicate(predicate))
                 )
             }
-            ActionKind::FunctionOverride {
-                function,
-                arguments,
-                expression,
-            } => {
-                let args: Vec<String> = arguments
-                    .iter()
-                    .map(|e| self.print_action_expr(e))
-                    .collect();
-                format!(
-                    "{}({}) {} {}",
-                    function.as_str(),
-                    args.join(", "),
-                    assign,
-                    self.print_action_expr(expression)
-                )
-            }
         }
     }
 }

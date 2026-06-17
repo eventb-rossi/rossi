@@ -41,20 +41,15 @@ fn parallel_assignment_targets_each_spanned() {
 
 #[test]
 fn function_override_target_is_spanned() {
+    // `f(x) := y` is lowered by the parser to `f ≔ f\u{E103}{x ↦ y}`.
     let src = "f(x) := y";
     let action = parse_action_str(src).expect("parses");
-    let ActionKind::FunctionOverride {
-        function,
-        arguments,
-        expression,
-    } = &action.kind
-    else {
-        panic!("expected function override");
+    let ActionKind::Assignment { variables, .. } = &action.kind else {
+        panic!("expected assignment, got {:?}", action.kind);
     };
-    assert_eq!(slice(src, function.span.expect("function span")), "f");
-    assert_eq!(function.span.unwrap().start, 0);
-    assert_eq!(slice(src, arguments[0].span.unwrap()), "x");
-    assert_eq!(slice(src, expression.span.unwrap()), "y");
+    let target = &variables[0];
+    assert_eq!(slice(src, target.span.expect("target span")), "f");
+    assert_eq!(target.span.unwrap().start, 0);
 }
 
 #[test]

@@ -1126,25 +1126,48 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
     let op_pair = op.ok_or(ParseError::MissingOperator)?;
 
     if is_func_override {
-        // Function override: f(x, ...) ≔ E
+        // f(x, ...) ≔ E  →  f ≔ f\u{E103}{(x ↦ ...) ↦ E}
+        use crate::ast::expression::BinaryOp;
         let function = variables
             .into_iter()
             .next()
             .ok_or(ParseError::MissingValue)?;
-        let mut arguments = Vec::new();
+        let mut arguments: Vec<Expression> = Vec::new();
         for arg in func_arg_pairs {
             arguments.push(parse_expression(arg)?);
         }
-        let rhs = rhs_pairs
+        let rhs_pair = rhs_pairs
             .into_iter()
             .next()
             .ok_or(ParseError::MissingValue)?;
-        let expression = parse_expression(rhs)?;
+        let expression = parse_expression(rhs_pair)?;
+        // Build left-associative maplet chain over arguments, then append expression.
+        let mut args_iter = arguments.into_iter();
+        let mut domain = args_iter.next().ok_or(ParseError::MissingValue)?;
+        for next in args_iter {
+            domain = ExpressionKind::Binary {
+                op: BinaryOp::Maplet,
+                left: Box::new(domain),
+                right: Box::new(next),
+            }
+            .into();
+        }
+        let maplet: Expression = ExpressionKind::Binary {
+            op: BinaryOp::Maplet,
+            left: Box::new(domain),
+            right: Box::new(expression),
+        }
+        .into();
+        let overwrite_rhs: Expression = ExpressionKind::Binary {
+            op: BinaryOp::Overwrite,
+            left: Box::new(ExpressionKind::Identifier(function.name.clone()).into()),
+            right: Box::new(ExpressionKind::SetEnumeration(vec![maplet]).into()),
+        }
+        .into();
         return Ok(Action::new(
-            ActionKind::FunctionOverride {
-                function,
-                arguments,
-                expression,
+            ActionKind::Assignment {
+                variables: vec![function],
+                expressions: vec![overwrite_rhs],
             },
             action_span,
         ));
@@ -2979,17 +3002,6 @@ fn shift_action_spans(action: &mut Action, delta: usize) {
                 shift_opt_span(&mut v.span, delta);
             }
             shift_pred_spans(predicate, delta);
-        }
-        ActionKind::FunctionOverride {
-            function,
-            arguments,
-            expression,
-        } => {
-            shift_opt_span(&mut function.span, delta);
-            for a in arguments {
-                shift_expr_spans(a, delta);
-            }
-            shift_expr_spans(expression, delta);
         }
     }
 }

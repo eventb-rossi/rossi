@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
-use rossi::{ActionKind, Component, Context, LabeledAction, LabeledPredicate, Machine};
+use rossi::{Component, Context, LabeledAction, LabeledPredicate, Machine};
 
 use crate::ast_util::lhs_variables;
 use crate::project::Project;
@@ -515,10 +515,6 @@ fn referenced_in_machine(m: &Machine) -> BTreeSet<String> {
         }
         for la in &e.actions {
             collect_referenced_in_action_rhs_with_locals(&la.action, &params, &mut acc);
-            // `f(x) := e` writes to f but also reads its old value.
-            if let ActionKind::FunctionOverride { function, .. } = &la.action.kind {
-                acc.insert(function.name.clone());
-            }
         }
     }
     acc
@@ -761,6 +757,7 @@ fn collect_ancestors_via<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rossi::ast::expression::BinaryOp;
     use rossi::{
         Action, ActionKind, Component, Context, Event, Expression, ExpressionKind,
         InitialisationEvent, LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate,
@@ -1571,13 +1568,29 @@ mod tests {
 
     #[test]
     fn function_override_lhs_marks_variable_as_assigned() {
-        // `f(x) := 0` — f is assigned via FunctionOverride.
+        // `f(1) := 0` lowered to `f ≔ f\u{E103}{1 ↦ 0}` — f is assigned.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("f")];
         m.invariants = vec![lp(
             "inv1",
             eq_pred(ident("f"), ExpressionKind::Integer(0).into()),
         )];
+        let overwrite_rhs: Expression = ExpressionKind::Binary {
+            op: BinaryOp::Overwrite,
+            left: Box::new(ExpressionKind::Identifier("f".into()).into()),
+            right: Box::new(
+                ExpressionKind::SetEnumeration(vec![
+                    ExpressionKind::Binary {
+                        op: BinaryOp::Maplet,
+                        left: Box::new(ExpressionKind::Integer(1).into()),
+                        right: Box::new(ExpressionKind::Integer(0).into()),
+                    }
+                    .into(),
+                ])
+                .into(),
+            ),
+        }
+        .into();
         m.events = vec![Event {
             name: "evt".into(),
             status: None,
@@ -1586,10 +1599,9 @@ mod tests {
             guards: Vec::new(),
             with: Vec::new(),
             witnesses: Vec::new(),
-            actions: vec![la(ActionKind::FunctionOverride {
-                function: "f".into(),
-                arguments: vec![ExpressionKind::Integer(1).into()],
-                expression: ExpressionKind::Integer(0).into(),
+            actions: vec![la(ActionKind::Assignment {
+                variables: vec!["f".into()],
+                expressions: vec![overwrite_rhs],
             }
             .into())],
             span: None,
@@ -1603,7 +1615,7 @@ mod tests {
             !diags
                 .iter()
                 .any(|d| d.rule_id == Some(RuleId::UnmodifiedVariable)),
-            "f is assigned via FunctionOverride: {diags:#?}"
+            "f is assigned via overwrite assignment: {diags:#?}"
         );
     }
 

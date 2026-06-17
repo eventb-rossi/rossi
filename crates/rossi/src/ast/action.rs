@@ -69,13 +69,6 @@ pub enum ActionKind {
         variables: Vec<Ident>,
         predicate: Predicate,
     },
-
-    /// Function override assignment: f(x) ≔ E  (equivalent to f ≔ f ◁ {x ↦ E})
-    FunctionOverride {
-        function: Ident,
-        arguments: Vec<Expression>,
-        expression: Expression,
-    },
 }
 
 impl Action {
