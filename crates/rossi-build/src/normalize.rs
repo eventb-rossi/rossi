@@ -16,7 +16,6 @@ use rossi::ast::expression::BinaryOp;
 use rossi::pretty::PrettyPrinter;
 use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate};
 
-use crate::ast_util::left_assoc_maplet;
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
@@ -46,41 +45,8 @@ pub fn canonical_action(a: &Action) -> String {
 /// are affected; `:∈` (becomes-in) and `:|` (becomes-such-that) keep
 /// their raw form because the RHS is a set / predicate, not a value.
 pub fn canonical_action_with_env(a: &Action, env: &TypeEnv) -> String {
-    let lowered = lower_function_override(a);
-    let annotated = annotate_empty_sets(&lowered, env);
+    let annotated = annotate_empty_sets(a, env);
     canonical_action(&annotated)
-}
-
-/// Rewrite `f(x₁, …, xₙ) ≔ E` into the spec-prescribed form
-/// `f ≔ f ⊕ {(x₁ ↦ … ↦ xₙ) ↦ E}` so our output uses the language
-/// reference's canonical formulation. Rodin's static checker emits an
-/// equivalent compact form (`f ≔ f{x ↦ E}`) which our parser lowers to the
-/// same AST as `f ⊕ {…}`, so semantic comparison via `ScView` converges.
-fn lower_function_override(a: &Action) -> Action {
-    let ActionKind::FunctionOverride {
-        function,
-        arguments,
-        expression,
-    } = &a.kind
-    else {
-        return a.clone();
-    };
-    let domain = left_assoc_maplet(arguments);
-    let maplet = Expression::from(ExpressionKind::Binary {
-        op: BinaryOp::Maplet,
-        left: Box::new(domain),
-        right: Box::new(expression.clone()),
-    });
-    let rhs = Expression::from(ExpressionKind::Binary {
-        op: BinaryOp::Overwrite,
-        left: Box::new(ExpressionKind::Identifier(function.name.clone()).into()),
-        right: Box::new(ExpressionKind::SetEnumeration(vec![maplet]).into()),
-    });
-    ActionKind::Assignment {
-        variables: vec![function.clone()],
-        expressions: vec![rhs],
-    }
-    .into()
 }
 
 fn annotate_empty_sets(a: &Action, env: &TypeEnv) -> Action {
@@ -160,11 +126,10 @@ fn tighten(input: &str, mode: TightenMode) -> String {
 
     // Always-tight operators. Rodin's bcc/bcm canonical form drops spaces
     // around: comparison, logical, multiply (∗), centre-dot (·), additive
-    // `+`, the symmetric set ops `∪`, `∩`, `×`, and the function-override
-    // serialization marker U+E103 (compact `f{x ↦ E}` lowering of `f ⊕ {…}`,
-    // 1311 corpus occurrences all tight). It keeps spaces around `−`, `↦`,
-    // `‥`, the user-facing `⊕` (U+2295), and the asymmetric set ops `∖`,
-    // `⩤`, `⩥`, `◁`, `▷`.
+    // `+`, the symmetric set ops `∪`, `∩`, `×`, and U+E103 (Rodin's
+    // private-use overwrite glyph, distinct from ⊕ U+2295; 1311 corpus
+    // occurrences all tight). It keeps spaces around `−`, `↦`, `‥`,
+    // `⊕` (U+2295), and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷`.
     const ALWAYS_TIGHT: &[&str] = &[
         "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·",
         "∗", "+", "∪", "∩", "×", "\u{E103}",
@@ -310,14 +275,12 @@ mod tests {
     }
 
     #[test]
-    fn function_override_lowers_to_overwrite_rhs() {
+    fn function_override_canonical_form() {
         use rossi::parse_action_str;
         let env = TypeEnv::new();
+        // The parser lowers `f(x) ≔ E` to `f ≔ f\u{E103}{x ↦ E}` directly.
+        // canonical_action_with_env tightens the pretty-printed Assignment.
         let a = parse_action_str("currentFloor(c) ≔ f").unwrap();
-        // We emit the spec form `f ⊕ {x ↦ y}` using U+E103, the Rodin
-        // Private-Use code point that the pretty-printer canonicalizes to.
-        // Rodin emits the same byte sequence; ScView lowers both to the same
-        // AST, so semantic comparison passes.
         assert_eq!(
             canonical_action_with_env(&a, &env),
             "currentFloor ≔ currentFloor\u{E103}{c ↦ f}"
@@ -325,12 +288,11 @@ mod tests {
     }
 
     #[test]
-    fn function_override_multi_arg_uses_left_assoc_maplet() {
+    fn function_override_multi_arg_left_assoc() {
         use rossi::parse_action_str;
         let env = TypeEnv::new();
+        // Multi-arg: `(a ↦ b) ↦ y` — left-associative, emits flat.
         let a = parse_action_str("g(a, b) ≔ y").unwrap();
-        // Maplet is left-associative; `(a ↦ b) ↦ y` is the natural grouping
-        // and emits flat (matching Rodin: `BoardGame{x ↦ y ↦ PlayerTurn}`).
         assert_eq!(
             canonical_action_with_env(&a, &env),
             "g ≔ g\u{E103}{a ↦ b ↦ y}"

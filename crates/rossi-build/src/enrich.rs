@@ -379,19 +379,6 @@ fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
             predicate: enrich_predicate_in(predicate, env),
         }
         .into(),
-        ActionKind::FunctionOverride {
-            function,
-            arguments,
-            expression,
-        } => ActionKind::FunctionOverride {
-            function,
-            arguments: arguments
-                .into_iter()
-                .map(|e| enrich_expression_in(e, env))
-                .collect(),
-            expression: enrich_expression_in(expression, env),
-        }
-        .into(),
     }
 }
 
