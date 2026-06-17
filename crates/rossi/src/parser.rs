@@ -31,9 +31,8 @@ pub struct RossiParser;
 ///
 /// * The Rodin private-use relations (`op_total_relation` &c.) and the
 ///   relational override store a private-use codepoint as their canonical
-///   glyph, which renders as nothing in an error; we show a typable form
-///   instead (`⊕` is U+2295, the displayable equivalent of the override's
-///   U+E103). `op_range_op` likewise reads better as `..` than the `‥` leader.
+///   glyph, which renders as nothing in an error; we show the ASCII form
+///   (`<+`) instead. `op_range_op` likewise reads better as `..` than the `‥` leader.
 /// * Bracketing and separator tokens (`comma`, `lparen`, …) are not modelled
 ///   as operators, so they have no [`OperatorId`] to derive from.
 ///
@@ -45,9 +44,8 @@ pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
         // Displayable spelling for operators whose canonical glyph (matching
         // the kernel-language spec code points) is an unrenderable Rodin
         // private-use code point — U+E100..=U+E103 — or the U+2025 `‥` leader.
-        // Error messages show the spec's ASCII form (or ⊕ U+2295 for the
-        // override's U+E103) instead.
-        Rule::op_overwrite => "⊕",
+        // Error messages show the ASCII form for the override's U+E103.
+        Rule::op_overwrite => "<+",
         Rule::op_total_relation => "<<->",
         Rule::op_surjective_relation => "<->>",
         Rule::op_total_surjective_relation => "<<->>",
@@ -1693,10 +1691,10 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                         i += 1;
                     }
                 } else if remaining[i].as_rule() == Rule::lbrace {
-                    // Function update: f{x ↦ y, ...} == f ⊕ {x ↦ y, ...}.
+                    // Function update: f{x ↦ y, ...} == f <+ {x ↦ y, ...}.
                     // Rodin's static checker can emit this compact form for
                     // f(x) := y actions; we lower it to the same AST as the
-                    // explicit ⊕ operator so semantic comparison converges.
+                    // explicit <+ operator so semantic comparison converges.
                     i += 1; // skip lbrace
                     let mut elements = Vec::new();
                     while i < remaining.len() && remaining[i].as_rule() != Rule::rbrace {
@@ -3786,7 +3784,7 @@ mod tests {
         (Rule::op_domain_subtract, "⩤"),
         (Rule::op_range_restrict, "▷"),
         (Rule::op_range_subtract, "⩥"),
-        (Rule::op_overwrite, "⊕"),
+        (Rule::op_overwrite, "<+"),
         (Rule::op_direct_product, "⊗"),
         (Rule::op_parallel_product, "∥"),
         (Rule::op_total_surjective_relation, "<<->>"),

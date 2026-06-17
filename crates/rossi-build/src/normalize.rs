@@ -127,9 +127,9 @@ fn tighten(input: &str, mode: TightenMode) -> String {
     // Always-tight operators. Rodin's bcc/bcm canonical form drops spaces
     // around: comparison, logical, multiply (∗), centre-dot (·), additive
     // `+`, the symmetric set ops `∪`, `∩`, `×`, and U+E103 (Rodin's
-    // private-use overwrite glyph, distinct from ⊕ U+2295; 1311 corpus
-    // occurrences all tight). It keeps spaces around `−`, `↦`, `‥`,
-    // `⊕` (U+2295), and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷`.
+    // private-use overwrite glyph; 1311 corpus occurrences all tight).
+    // It keeps spaces around `−`, `↦`, `‥`, and the asymmetric set ops
+    // `∖`, `⩤`, `⩥`, `◁`, `▷`.
     const ALWAYS_TIGHT: &[&str] = &[
         "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·",
         "∗", "+", "∪", "∩", "×", "\u{E103}",

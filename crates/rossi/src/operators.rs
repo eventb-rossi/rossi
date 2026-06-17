@@ -1241,11 +1241,10 @@ mod tests {
             }
         }
 
-        // Reverse: every grammar `op_` literal is a canonical spelling, except the
-        // input-only aliases the parser accepts but the tools never emit (`,,`
-        // empty set, `⊕` U+2295 for the override whose canonical glyph is U+E103)
-        // and `_`, which appears only in the `!(… | "_")` word-boundary guards.
-        let allow = [",,", "⊕", "_"];
+        // Reverse: every grammar `op_` literal is a canonical spelling, except
+        // the `,,` empty-set alias and `_`, which appears only in the
+        // `!(… | "_")` word-boundary guards.
+        let allow = [",,", "_"];
         let canonical: HashSet<&str> = OPERATOR_SPELLINGS
             .iter()
             .flat_map(|op| [op.unicode, op.ascii])

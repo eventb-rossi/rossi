@@ -19,7 +19,7 @@
 //!   (quantifier-bound variables don't shadow the constant)
 //!
 //! Expression typing in [`type_of_expression`] additionally covers
-//! relation operators (`◁`, `▷`, `⩤`, `⩥`, `⊕`, `⊗`, `∥`, `;`, `∘`),
+//! relation operators (`◁`, `▷`, `⩤`, `⩥`, `<+`, `⊗`, `∥`, `;`, `∘`),
 //! relational image `r[A]`, `bool(P)`, type ascription `e ⦂ T`,
 //! lambda, set comprehension, set builder, and
 //! quantified union / intersection.
@@ -273,7 +273,7 @@ fn constrain_with_set(u: &mut Unifier, side: &ITy, set: Option<ITy>) {
 
 /// Combine two operands that must share a type: unify them when both type,
 /// tolerate one still-unresolved side (returning the other), and drop only
-/// when neither types. Used by `∪`/`∩`/`∖`/`⊕`.
+/// when neither types. Used by `∪`/`∩`/`∖`/`<+`.
 fn unify_or_either(u: &mut Unifier, a: Option<ITy>, b: Option<ITy>) -> Option<ITy> {
     match (a, b) {
         (Some(a), Some(b)) => {
