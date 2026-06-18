@@ -241,7 +241,7 @@ impl CompletionProvider {
 
         // Add snippet completions
         if config.enable_snippets {
-            items.extend(self.get_snippet_completions());
+            items.extend(self.get_snippet_completions(&line_text, position));
         }
 
         // Add built-in type completions
@@ -421,17 +421,45 @@ impl CompletionProvider {
     /// Serving them here means the LSP (the path Sublime Text uses, since it has
     /// no native snippet files) offers exactly the snippets every other editor
     /// ships, so the two can never drift.
-    fn get_snippet_completions(&self) -> Vec<CompletionItem> {
+    ///
+    /// When the cursor follows a `\name` input leader (e.g. the user typed
+    /// `\exists` and pressed Tab), the editor's own word boundary excludes the
+    /// leading backslash, so a plain insert leaves it stranded in front of the
+    /// expanded body (`\∃ …`, which then fails to parse — issue #78). In that
+    /// case each item gets an explicit edit that replaces the whole `\name`
+    /// span, plus a backslashed `filter_text` so the client still matches it.
+    fn get_snippet_completions(&self, line: &str, position: Position) -> Vec<CompletionItem> {
+        let leader = leader_token_range(line, position);
         rossi::snippets::SNIPPETS
             .iter()
-            .map(|snippet| CompletionItem {
-                label: snippet.prefix.to_string(),
-                kind: Some(CompletionItemKind::SNIPPET),
-                detail: Some(snippet.name.to_string()),
-                documentation: Some(Documentation::String(snippet.description.to_string())),
-                insert_text: Some(snippet.body.join("\n")),
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                ..Default::default()
+            .map(|snippet| {
+                let body = snippet.body.join("\n");
+                // With a `\name` leader, replace the whole `\name` span via an
+                // explicit edit (so the backslash is consumed, not stranded) and
+                // filter on the backslashed prefix; otherwise insert at the
+                // cursor and let the editor match on the label as usual.
+                let (insert_text, text_edit, filter_text) = match leader {
+                    Some(range) => (
+                        None,
+                        Some(CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: body,
+                        })),
+                        Some(format!("\\{}", snippet.prefix)),
+                    ),
+                    None => (Some(body), None, None),
+                };
+                CompletionItem {
+                    label: snippet.prefix.to_string(),
+                    kind: Some(CompletionItemKind::SNIPPET),
+                    detail: Some(snippet.name.to_string()),
+                    documentation: Some(Documentation::String(snippet.description.to_string())),
+                    insert_text,
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    text_edit,
+                    filter_text,
+                    ..Default::default()
+                }
             })
             .collect()
     }
@@ -621,6 +649,27 @@ fn hyphenated_word_range(masked: &str, position: Position) -> Range {
     line_run_to_range(line, position.line, start, cursor)
 }
 
+/// The range of a `\name` input-leader token ending at the cursor, if one is
+/// present. Scans left over `[A-Za-z0-9_]` name characters; if a single `\`
+/// sits immediately before that run (or right before the cursor, for a bare
+/// `\`), returns the range from the backslash through the cursor — used as a
+/// snippet completion's edit range so expanding `\exists` replaces the whole
+/// `\exists`, not just the word after the backslash (issue #78). Returns `None`
+/// when there is no leading backslash, leaving plain word typing to the
+/// editor's default replace behaviour. Columns are UTF-16 in and out (LSP),
+/// converted via `utf16_to_char_col` / `line_run_to_range`, as in
+/// [`hyphenated_word_range`].
+fn leader_token_range(line: &str, position: Position) -> Option<Range> {
+    let chars: Vec<char> = line.chars().collect();
+    let cursor = utf16_to_char_col(line, position.character as usize);
+    let mut start = cursor;
+    while start > 0 && (chars[start - 1].is_ascii_alphanumeric() || chars[start - 1] == '_') {
+        start -= 1;
+    }
+    (start > 0 && chars[start - 1] == '\\')
+        .then(|| line_run_to_range(line, position.line, start - 1, cursor))
+}
+
 // Context detection functions
 
 fn is_top_level_context(line_text: &str) -> bool {
@@ -794,22 +843,82 @@ mod tests {
     #[test]
     fn test_snippet_completions() {
         let provider = CompletionProvider::new();
-        let items = provider.get_snippet_completions();
+        // No `\` leader, so items carry a plain insert_text and no text_edit.
+        let items = provider.get_snippet_completions("", Position::new(0, 0));
 
         // Every snippet comes from the canonical table — one item per entry.
         assert_eq!(items.len(), rossi::snippets::SNIPPETS.len());
         assert!(items.iter().any(|item| item.label == "evt"));
         assert!(items.iter().any(|item| item.label == "forall"));
         assert!(items.iter().any(|item| item.label == "exists"));
-        // Every item is a snippet carrying its body.
+        // Every item is a snippet carrying its body, with no edit range when
+        // there is no leader to consume.
         assert!(items.iter().all(|item| {
             item.kind == Some(CompletionItemKind::SNIPPET)
                 && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
                 && item.insert_text.is_some()
+                && item.text_edit.is_none()
         }));
         // The old ad-hoc labels are gone now that the table is the source.
         assert!(!items.iter().any(|item| item.label == "event"));
         assert!(!items.iter().any(|item| item.label == "labeled_predicate"));
+    }
+
+    #[test]
+    fn leader_token_range_spans_backslash_and_word() {
+        // `\exists`, cursor at the end (UTF-16 col 7) → the whole `\exists`.
+        let range = leader_token_range("\\exists", Position::new(0, 7))
+            .expect("a `\\name` leader must be detected");
+        assert_eq!(range.start, Position::new(0, 0));
+        assert_eq!(range.end, Position::new(0, 7));
+
+        // A bare `\` (col 1) still counts — replacing it consumes the leader.
+        let bare = leader_token_range("\\", Position::new(0, 1))
+            .expect("a bare backslash is a leader too");
+        assert_eq!(bare.start, Position::new(0, 0));
+        assert_eq!(bare.end, Position::new(0, 1));
+
+        // A plain word (no backslash) is not a leader — let the editor decide.
+        assert!(leader_token_range("exists", Position::new(0, 6)).is_none());
+    }
+
+    #[test]
+    fn snippet_completion_consumes_leader_backslash() {
+        let provider = CompletionProvider::new();
+        // The user typed `\exists` and triggered completion.
+        let items = provider.get_snippet_completions("\\exists", Position::new(0, 7));
+        // With a leader every item (single- and multi-line bodies alike) carries
+        // the edit, with no leftover insert_text a client might prefer over it.
+        assert!(
+            items
+                .iter()
+                .all(|i| i.text_edit.is_some() && i.insert_text.is_none())
+        );
+        let item = items
+            .iter()
+            .find(|i| i.label == "exists")
+            .expect("the exists snippet must be offered");
+
+        // The edit must replace the whole `\exists`, backslash included, so the
+        // expanded body stands alone rather than `\∃ …` (issue #78).
+        let body = rossi::snippets::SNIPPETS
+            .iter()
+            .find(|s| s.prefix == "exists")
+            .unwrap()
+            .body
+            .join("\n");
+        match item.text_edit.as_ref().expect("leader needs a text_edit") {
+            CompletionTextEdit::Edit(edit) => {
+                assert_eq!(edit.range.start, Position::new(0, 0));
+                assert_eq!(edit.range.end, Position::new(0, 7));
+                assert_eq!(edit.new_text, body);
+            }
+            other => panic!("expected a plain TextEdit, got {other:?}"),
+        }
+        // Filter on the backslashed form so the client still surfaces the item,
+        // and keep snippet semantics for the inserted tabstops.
+        assert_eq!(item.filter_text.as_deref(), Some("\\exists"));
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
     }
 
     #[test]
