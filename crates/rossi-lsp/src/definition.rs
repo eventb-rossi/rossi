@@ -1,8 +1,11 @@
 //! Go-to-definition provider for Event-B.
 //!
-//! Resolves the identifier under the cursor to the symbol it names — scope-aware,
+//! Resolves the identifier under the cursor to what it names — scope-aware,
 //! through the shared resolver in [`crate::symbols`] that find-references also
-//! uses — and jumps to that symbol's declaration site:
+//! uses — and jumps to its declaration site:
+//! - a formula binder the cursor sits on or is bound by (a quantifier `∀`/`∃`,
+//!   `λ`, set comprehension, quantified `⋃`/`⋂`) resolves to *its own* binder,
+//!   never a same-named global it shadows;
 //! - an event `ANY` parameter resolves to *its own* event's declaration, never a
 //!   same-named parameter of a sibling event;
 //! - a variable / constant / set / event resolves to the component that declares
@@ -25,7 +28,7 @@ use crate::document::DocumentManager;
 use crate::identifier_utils::identifier_at_position;
 use crate::position::span_to_range;
 use crate::references::component_reference_clause;
-use crate::symbols::{declaration_location, resolve_symbol_identity};
+use crate::symbols::{Resolution, declaration_location, resolve_cursor};
 
 /// Provides go-to-definition functionality.
 pub struct DefinitionProvider {
@@ -90,11 +93,17 @@ impl DefinitionProvider {
             return Some(GotoDefinitionResponse::Scalar(location));
         }
 
-        // Stage 2: resolve the identifier to the symbol it names (scope-aware)
-        // and jump to that symbol's declaration site.
-        let symbol =
-            resolve_symbol_identity(text, &masked, position, &word, &loader, cursor.as_deref())?;
-        let location = declaration_location(&symbol, &loader)?;
+        // Stage 2: resolve the identifier to what it names (scope-aware) and jump
+        // to its declaration site — a formula binder to its own binder (always in
+        // this document), a symbol to its declaring component.
+        let location =
+            match resolve_cursor(text, &masked, position, &word, &loader, cursor.as_deref())? {
+                Resolution::Bound(bound) => Location {
+                    uri: uri.clone(),
+                    range: span_to_range(&bound.declaration?, text),
+                },
+                Resolution::Symbol(symbol) => declaration_location(&symbol, &loader)?,
+            };
         Some(GotoDefinitionResponse::Scalar(location))
     }
 }
@@ -212,6 +221,61 @@ mod tests {
 
         // `count` used in @inv1 (line 4) → its declaration (line 2).
         assert_goto(&provider, uri, source, 4, 12, uri, range(2, 4, 9));
+    }
+
+    // Issue #100 — a formula binder shadowing a same-named machine variable.
+    //   2      x              <- the variable declaration (cols 4..5)
+    //   4  @inv1 x ∈ ℕ        <- a free use of the variable (col 10)
+    //   5  @inv2 ∀ x · x > 0  <- `∀ x` binder (col 12), bound use (col 16)
+    const SHADOWING_BINDER: &str =
+        "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 ∀ x · x > 0\nEND";
+
+    #[test]
+    fn bound_variable_use_resolves_to_its_binder_not_the_global() {
+        // The reported bug: the `x` in `@inv2 ∀ x · x > 0` is bound by the
+        // quantifier, so go-to-definition lands on the `∀ x` binder (line 5),
+        // never the variable declaration on line 2.
+        let uri = "file:///m.eventb";
+        let provider = setup(&[(uri, SHADOWING_BINDER)]);
+
+        assert_goto(
+            &provider,
+            uri,
+            SHADOWING_BINDER,
+            5,
+            16,
+            uri,
+            range(5, 12, 13),
+        );
+    }
+
+    #[test]
+    fn binder_declaration_resolves_to_itself_not_the_global() {
+        // A cursor on the binder `x` itself resolves to the binder, not the
+        // same-named global variable it shadows.
+        let uri = "file:///m.eventb";
+        let provider = setup(&[(uri, SHADOWING_BINDER)]);
+
+        assert_goto(
+            &provider,
+            uri,
+            SHADOWING_BINDER,
+            5,
+            12,
+            uri,
+            range(5, 12, 13),
+        );
+    }
+
+    #[test]
+    fn free_use_beside_a_shadowing_binder_still_resolves_to_the_variable() {
+        // The free `x` in @inv1 is *not* bound by the @inv2 quantifier, so it
+        // still resolves to the variable declaration — the binder-awareness is
+        // one-directional and does not capture free uses.
+        let uri = "file:///m.eventb";
+        let provider = setup(&[(uri, SHADOWING_BINDER)]);
+
+        assert_goto(&provider, uri, SHADOWING_BINDER, 4, 10, uri, range(2, 4, 5));
     }
 
     // A machine with two events that both declare a parameter named `subject`.

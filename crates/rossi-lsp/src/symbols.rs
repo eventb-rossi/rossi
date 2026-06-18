@@ -3,12 +3,15 @@
 //! `SymbolKind` classifies the five kinds of named symbols, and
 //! `enumerate_symbols` walks a parsed `Component` to list them. On top of that
 //! taxonomy, `SymbolIdentity` names a *resolved* symbol (its declaring
-//! component, and the event for a parameter) and the `resolve_symbol_identity*`
-//! functions turn a cursor position into one, scope-aware: an event `ANY`
-//! parameter is resolved to its own event, and a global symbol is resolved to
-//! the component that declares it by walking the refinement / sees / extends
-//! chains. Go-to-definition and find-references both build on this single
-//! resolver so the two features cannot drift on what a name means.
+//! component, and the event for a parameter). `resolve_cursor` turns a cursor
+//! position into a `Resolution`, scope-aware and most-local first: a formula
+//! binder the cursor sits on or is bound by (a quantifier / lambda /
+//! comprehension binder) resolves to its own local scope; an event `ANY`
+//! parameter to its own event; and a global symbol to the component that
+//! declares it by walking the refinement / sees / extends chains.
+//! Go-to-definition, find-references, and rename build on this one resolver (and
+//! the shared binder walk it delegates to) so the features cannot drift on what
+//! a name means.
 
 use rossi::Component;
 use rossi::ast::Span;
@@ -154,21 +157,44 @@ impl From<SymbolRef> for SymbolIdentity {
     }
 }
 
-/// Resolve the identifier at `position` to the symbol it names, scope-aware.
+/// What the identifier at a cursor position resolves to.
 ///
-/// `text` is the document the offsets index into and `masked` its
-/// comment-masked form; `cursor` is the document's stored parse when it is open
-/// (its components and `text` are one snapshot). When there is no stored parse
-/// (no document manager, or a not-yet-opened file), the text is parsed with
-/// error recovery so a symbol elsewhere in a broken document is still resolvable.
-pub(crate) fn resolve_symbol_identity(
+/// Either a named component-level symbol (a variable / constant / set / event,
+/// or an event `ANY` parameter) — the identity find-references groups its hits
+/// by and go-to-definition maps to a declaration site — or a formula binder
+/// local to one component, carrying its declaration and in-scope occurrences
+/// inline (its `is_event_parameter` flag is always `false` here, since event
+/// parameters resolve to a `Symbol`). Definition, references, and hover all
+/// resolve through this one enum so they cannot disagree on what a name means.
+pub(crate) enum Resolution {
+    /// A component-level / inherited symbol, or an event parameter.
+    Symbol(SymbolIdentity),
+    /// A formula binder (a quantifier / lambda / comprehension binder) local to
+    /// the cursor's own component — formula binders never cross a component
+    /// boundary, so every span is in the cursor document.
+    Bound(formula_walk::BoundResolution),
+}
+
+/// Resolve the identifier at `position` to what it names, scope-aware and
+/// most-local first.
+///
+/// A formula binder the cursor sits on or is bound by is the most local scope and
+/// resolves to a [`Resolution::Bound`]; an event `ANY` parameter and a
+/// component-level / inherited symbol resolve to a [`Resolution::Symbol`].
+///
+/// `text` is the document the offsets index into and `masked` its comment-masked
+/// form; `cursor` is the document's stored parse when it is open (its components
+/// and `text` are one snapshot). When there is no stored parse (no document
+/// manager, or a not-yet-opened file), the text is parsed with error recovery so
+/// a symbol elsewhere in a broken document is still resolvable.
+pub(crate) fn resolve_cursor(
     text: &str,
     masked: &str,
     position: Position,
     identifier: &str,
     loader: &ComponentLoader,
     cursor: Option<&ParsedDocument>,
-) -> Option<SymbolIdentity> {
+) -> Option<Resolution> {
     let offset = position_to_offset(text, position).unwrap_or(text.len());
 
     let owned;
@@ -180,7 +206,20 @@ pub(crate) fn resolve_symbol_identity(
         }
     };
     let component = component_at_offset(components, offset)?;
+
+    // A formula binder the cursor sits on or is bound by is the most local scope.
+    // Event `ANY` parameters are seeded as binders too, but they keep their own
+    // component/event symbol identity below (richer for hover, cross-checked for
+    // references), so they are excluded here and fall through to the parameter
+    // path.
+    if let Some(bound) = formula_walk::resolve_bound_at_offset(component, identifier, offset)
+        && !bound.is_event_parameter
+    {
+        return Some(Resolution::Bound(bound));
+    }
+
     resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
+        .map(Resolution::Symbol)
 }
 
 /// Resolve `identifier` within the component the cursor sits in. An event `ANY`
