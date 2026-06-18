@@ -123,14 +123,15 @@ enum TightenMode {
 /// Operators whose Rodin bcc/bcm canonical form drops surrounding spaces:
 /// comparison, logical, multiply (∗), centre-dot (·), additive `+`, the
 /// symmetric set ops `∪`, `∩`, `×`, and the private-use overwrite glyph
-/// (U+E103). Spaces are kept around `−`, `↦`, `‥`, and the asymmetric set ops
-/// `∖`, `⩤`, `⩥`, `◁`, `▷`.
+/// (`operators::RELATIONAL_OVERRIDE`, U+E103). Spaces are kept around `−`, `↦`,
+/// `‥`, and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷`.
 ///
 /// Every entry must be a known operator spelling — enforced by
 /// `tests::always_tight_entries_are_known_operators`.
+#[rustfmt::skip]
 const ALWAYS_TIGHT: &[&str] = &[
     "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·", "∗",
-    "+", "∪", "∩", "×", "\u{E103}",
+    "+", "∪", "∩", "×", rossi::operators::RELATIONAL_OVERRIDE,
 ];
 
 fn tighten(input: &str, mode: TightenMode) -> String {
