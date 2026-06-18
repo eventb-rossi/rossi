@@ -20,6 +20,7 @@ use crate::component_loader::ComponentLoader;
 use crate::component_util::component_at_offset;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
+use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
 use crate::text_utils;
 
@@ -195,14 +196,18 @@ impl HoverProvider {
         // multi-character) operator like `:=`.
         let (word, range) = word_at_position(text, position)?;
 
-        // Try different hover providers in order. An event ANY-clause parameter
-        // is scoped to its event and shadows a same-named global, so it is
-        // resolved positionally (via the resolver find-references shares) and
-        // tried before the component-wide identifier hover.
+        // Try different hover providers in order, most-local scope first. A
+        // formula binder the cursor sits on or is bound by (a quantifier / lambda
+        // / comprehension binder) shadows everything wider, so it is tried before
+        // the event parameter and the component-wide identifier. An event
+        // ANY-clause parameter is scoped to its event and shadows a same-named
+        // global, resolved positionally next. Both share the resolver
+        // find-references uses, so hover cannot drift from navigation.
         let parse_text = parsed.as_deref().map(|parsed| parsed.text.as_str());
         let mut hover = self
             .hover_keyword(&word)
             .or_else(|| self.hover_operator(&word))
+            .or_else(|| hover_bound(&word, cursor_component, parse_text, position))
             .or_else(|| hover_parameter(&word, cursor_component, parse_text, position))
             .or_else(|| self.hover_identifier(&word, &hover_ctx))
             .or_else(|| self.hover_builtin(&word))?;
@@ -530,6 +535,31 @@ fn append_constraint_section(description: &mut String, header: &str, constraints
     for constraint in constraints {
         description.push_str(&format!("- `{constraint}`\n"));
     }
+}
+
+/// Hover for a formula binder under the cursor — a quantifier (`∀`/`∃`), `λ`,
+/// set comprehension, or quantified `⋃`/`⋂` bound variable, whether the cursor
+/// is on the binder declaration or a use it binds. `component` and `text` are the
+/// cursor's component and the stored parse's own text (the snapshot its spans
+/// index into), already resolved by `hover`. Returns `None` when the document is
+/// not open or the cursor is not on (or bound by) a formula binder; an event
+/// `ANY` parameter is left to the richer [`hover_parameter`] card.
+fn hover_bound(
+    word: &str,
+    component: Option<&Component>,
+    text: Option<&str>,
+    position: Position,
+) -> Option<Hover> {
+    let offset = position_to_offset(text?, position)?;
+    let bound = formula_walk::resolve_bound_at_offset(component?, word, offset)?;
+    if bound.is_event_parameter {
+        return None;
+    }
+    Some(create_hover(
+        &format!("Bound variable: {word}"),
+        "**Bound variable**\n\nLocal variable bound by a quantifier (`∀`/`∃`), `λ`, \
+         set comprehension, or quantified `⋃`/`⋂` — in scope only within its binder.",
+    ))
 }
 
 /// Hover for an event `ANY`-clause parameter under the cursor. `component` and
@@ -1270,6 +1300,40 @@ mod tests {
             HoverContents::Markup(content) => content.value,
             other => panic!("expected markup content, got {other:?}"),
         }
+    }
+
+    // Issue #100 — a quantifier binder shadowing a same-named machine variable.
+    //   4  @inv1 x ∈ ℕ        <- a free use of the variable (col 10)
+    //   5  @inv2 ∀ x · x > 0  <- `∀ x` binder (col 12), bound use (col 16)
+    const SHADOWING_BINDER: &str =
+        "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 ∀ x · x > 0\nEND";
+
+    #[test]
+    fn hover_on_a_bound_variable_names_it_local_not_the_global() {
+        // The reported bug: hovering the bound `x` in `∀ x · x > 0` describes a
+        // bound variable, not the machine variable `x` it shadows.
+        let value = markup(hover_with_doc(SHADOWING_BINDER, 5, 16).expect("hover on bound x"));
+        assert!(value.contains("**Bound variable**"), "got: {value}");
+        assert!(
+            !value.contains("**Variable**"),
+            "must not show the global variable card: {value}"
+        );
+    }
+
+    #[test]
+    fn hover_on_the_binder_declaration_names_it_local() {
+        // A cursor on the binder `x` itself is also a bound variable.
+        let value = markup(hover_with_doc(SHADOWING_BINDER, 5, 12).expect("hover on binder x"));
+        assert!(value.contains("**Bound variable**"), "got: {value}");
+    }
+
+    #[test]
+    fn hover_on_a_free_use_beside_a_binder_still_shows_the_variable() {
+        // The free `x` in @inv1 is not bound by the @inv2 quantifier, so hover
+        // still shows the machine variable card.
+        let value = markup(hover_with_doc(SHADOWING_BINDER, 4, 10).expect("hover on free x"));
+        assert!(value.contains("**Variable**"), "got: {value}");
+        assert!(!value.contains("Bound variable"), "got: {value}");
     }
 
     #[test]
