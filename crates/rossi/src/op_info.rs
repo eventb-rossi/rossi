@@ -217,14 +217,17 @@ pub fn binary_ops_compatible(child: BinaryOp, parent: BinaryOp) -> bool {
 
 /// Precedence of a logical operator (higher = binds tighter).
 ///
-/// And/Or share the same precedence level; Camille compatibility classes
-/// (see [`logical_compat_class`]) decide whether parentheses are needed.
+/// Two tiers: `⇒`/`⇔` form the looser tier and `∧`/`∨` the tighter one (so
+/// `P ⇒ Q ∧ R` needs no parentheses). Operators within a tier share one level;
+/// Camille compatibility classes (see [`logical_compat_class`]) then decide
+/// whether parentheses are needed. `⇒` and `⇔` deliberately share a level even
+/// though they bind nothing in common — both are class-0 singletons, so any
+/// nesting of one inside the other is always parenthesised.
 #[must_use]
 pub fn logical_precedence(op: LogicalOp) -> u8 {
     match op {
-        LogicalOp::Equivalent => 1,
-        LogicalOp::Implies => 2,
-        LogicalOp::Or | LogicalOp::And => 3,
+        LogicalOp::Implies | LogicalOp::Equivalent => 1,
+        LogicalOp::Or | LogicalOp::And => 2,
     }
 }
 

@@ -2225,8 +2225,8 @@ fn parse_ident_pattern_atom(pair: pest::iterators::Pair<Rule>) -> Result<IdentPa
 ///
 /// Same iterative-descent treatment as [`parse_expression`]: the predicate
 /// precedence chain (`predicate` → `quantified_predicate` →
-/// `equivalence_predicate` → `implication_predicate` → `connective_predicate`
-/// → `negation_predicate` → `atomic_predicate`, plus `_no_semi` twins)
+/// `implies_equiv_predicate` → `connective_predicate` → `negation_predicate`
+/// → `atomic_predicate`, plus `_no_semi` twins)
 /// produces a deeply nested Pair tree even for a simple comparison. We unwrap
 /// single-child wrappers in a loop and only recurse for actual operators /
 /// quantifiers / negation.
@@ -2258,11 +2258,9 @@ fn parse_predicate_inner(
             }
             // Binary precedence wrappers. Single child = no operator at this
             // level (descend); multi-child = real chain (dispatch).
-            Rule::equivalence_predicate
-            | Rule::implication_predicate
+            Rule::implies_equiv_predicate
             | Rule::connective_predicate
-            | Rule::equivalence_predicate_no_semi
-            | Rule::implication_predicate_no_semi
+            | Rule::implies_equiv_predicate_no_semi
             | Rule::connective_predicate_no_semi => {
                 let mut probe = pair.clone().into_inner();
                 let first = probe.next().ok_or(ParseError::EmptyPredicate)?;
