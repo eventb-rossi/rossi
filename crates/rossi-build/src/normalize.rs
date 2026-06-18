@@ -19,21 +19,29 @@ use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate};
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
+// The canonical form must match Rodin's internal bcc/bcm spelling, which uses
+// the private-use glyphs for the relation/override operators (and tightens only
+// override — relations stay spaced). These never reach an editor buffer, so the
+// printer keeps them rather than falling back to ASCII.
+fn canonical_printer() -> PrettyPrinter {
+    PrettyPrinter::new().with_private_use_glyphs(true)
+}
+
 /// Canonicalise a predicate to Rodin's tight form.
 pub fn canonical_predicate(p: &Predicate) -> String {
-    let raw = PrettyPrinter::new().print_predicate(p);
+    let raw = canonical_printer().print_predicate(p);
     tighten(&raw, TightenMode::Predicate)
 }
 
 /// Canonicalise an expression to Rodin's tight form.
 pub fn canonical_expression(e: &Expression) -> String {
-    let raw = PrettyPrinter::new().print_expression(e);
+    let raw = canonical_printer().print_expression(e);
     tighten(&raw, TightenMode::Expression)
 }
 
 /// Canonicalise an action (assignment).
 pub fn canonical_action(a: &Action) -> String {
-    let raw = PrettyPrinter::new().print_action(a);
+    let raw = canonical_printer().print_action(a);
     tighten(&raw, TightenMode::Action)
 }
 
@@ -124,7 +132,8 @@ enum TightenMode {
 /// comparison, logical, multiply (∗), centre-dot (·), additive `+`, the
 /// symmetric set ops `∪`, `∩`, `×`, and the private-use overwrite glyph
 /// (`operators::RELATIONAL_OVERRIDE`, U+E103). Spaces are kept around `−`, `↦`,
-/// `‥`, and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷`.
+/// `‥`, and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷` — and, deliberately,
+/// the relation glyphs `↔`/U+E100..E102, which Rodin leaves spaced.
 ///
 /// Every entry must be a known operator spelling — enforced by
 /// `tests::always_tight_entries_are_known_operators`.
@@ -317,5 +326,16 @@ mod tests {
             canonical_action_with_env(&a, &env),
             "g ≔ g\u{E103}{a ↦ b ↦ y}"
         );
+    }
+
+    /// The relation operators are absent from `ALWAYS_TIGHT`, so Rodin (and the
+    /// canonical form) keeps them spaced and spelled with the private-use glyph
+    /// — not tightened, and not the ASCII `<<->` whose `<`/`>` would be caught
+    /// by the comparison-operator spacing rules.
+    #[test]
+    fn relation_operators_stay_spaced_with_their_glyph() {
+        use rossi::parse_predicate_str;
+        let p = parse_predicate_str("r ∈ A <<-> B").unwrap();
+        assert_eq!(canonical_predicate(&p), "r∈A \u{E100} B");
     }
 }

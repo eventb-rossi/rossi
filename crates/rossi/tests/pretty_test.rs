@@ -1157,3 +1157,28 @@ fn test_set_comprehension_basic_unicode_bar() {
         output
     );
 }
+
+#[test]
+fn private_use_glyphs_flag_controls_relation_and_override_spelling() {
+    let pred = parse_predicate_str("r ∈ A <<-> B ∧ s = f <+ g").expect("parses");
+
+    // Default printer is portable: the private-use operators emit ASCII.
+    let portable = PrettyPrinter::new().print_predicate(&pred);
+    assert!(
+        portable.contains("<<->") && portable.contains("<+"),
+        "default printer should emit ASCII for private-use operators, got: {portable}"
+    );
+    assert!(
+        !portable.contains('\u{E100}') && !portable.contains('\u{E103}'),
+        "default printer must not emit a private-use glyph, got: {portable}"
+    );
+
+    // Opting in reproduces Rodin's internal spelling (the raw glyphs).
+    let glyphs = PrettyPrinter::new()
+        .with_private_use_glyphs(true)
+        .print_predicate(&pred);
+    assert!(
+        glyphs.contains('\u{E100}') && glyphs.contains('\u{E103}'),
+        "with_private_use_glyphs(true) should emit the glyphs, got: {glyphs}"
+    );
+}

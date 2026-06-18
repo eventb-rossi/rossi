@@ -606,15 +606,11 @@ fn operator_title(spelling: &operators::OperatorSpelling) -> String {
     format!("{} ({})", display_glyph(spelling), spelling.description)
 }
 
-/// Glyph to show in hover titles. Operators without a standard glyph use
-/// private-use-area code points (U+E000..=U+F8FF) that won't render in fonts, so
-/// fall back to the ASCII spelling for those.
+/// Glyph to show in hover titles — the same spelling rossi emits everywhere
+/// else (see [`operators::OperatorSpelling::emit_text`]), so operators whose only
+/// Unicode form is a private-use-area glyph fall back to ASCII rather than tofu.
 fn display_glyph(spelling: &operators::OperatorSpelling) -> &'static str {
-    if operators::is_private_use_glyph(spelling.unicode) {
-        spelling.ascii
-    } else {
-        spelling.unicode
-    }
+    spelling.emit_text(true)
 }
 
 fn lookup_operator_doc(word: &str) -> Option<(String, &'static str)> {
@@ -855,15 +851,15 @@ const OPERATOR_DOCS: &[OperatorDocEntry] = &[
     ),
     (
         OperatorId::TotalRelation,
-        "Relates every element of the source set.\n\n```eventb\nA \u{E100} B\nA <<-> B  // ASCII alternative\n```",
+        "Relates every element of the source set.\n\n```eventb\nA <<-> B\n```",
     ),
     (
         OperatorId::SurjectiveRelation,
-        "Covers every element of the target set.\n\n```eventb\nA \u{E101} B\nA <->> B  // ASCII alternative\n```",
+        "Covers every element of the target set.\n\n```eventb\nA <->> B\n```",
     ),
     (
         OperatorId::TotalSurjectiveRelation,
-        "Both total on the source set and surjective onto the target set.\n\n```eventb\nA \u{E102} B\nA <<->> B  // ASCII alternative\n```",
+        "Both total on the source set and surjective onto the target set.\n\n```eventb\nA <<->> B\n```",
     ),
     (
         OperatorId::TotalFunction,
@@ -935,7 +931,7 @@ const OPERATOR_DOCS: &[OperatorDocEntry] = &[
     ),
     (
         OperatorId::Overwrite,
-        "r \u{E103} s overrides r with s where they overlap.\n\n```eventb\nr \u{E103} s\nr <+ s  // ASCII alternative\n```",
+        "r <+ s overrides r with s where they overlap.\n\n```eventb\nr <+ s\n```",
     ),
     (
         OperatorId::DirectProduct,
@@ -1528,11 +1524,11 @@ mod tests {
         }
     }
 
-    /// The hand-written hover bodies for the private-use operators embed the
-    /// glyph literally; pin each to its canonical spelling so the body can't
-    /// drift from `operators` (where the code point is defined).
+    /// The hand-written hover bodies for the private-use operators must show the
+    /// ASCII spelling and never the private-use glyph — it renders as tofu without
+    /// Rodin's font, the same reason `emit_text` keeps it out of the title.
     #[test]
-    fn test_private_use_hover_bodies_use_canonical_glyphs() {
+    fn test_private_use_hover_bodies_avoid_the_glyph() {
         let provider = HoverProvider::new();
         for id in [
             OperatorId::TotalRelation,
@@ -1552,12 +1548,12 @@ mod tests {
                 panic!("expected markup hover for {id:?}");
             };
             assert!(
-                content.value.contains(spelling.unicode),
-                "{id:?} hover body must show the canonical private-use glyph"
+                !operators::is_private_use_glyph(&content.value),
+                "{id:?} hover (title or body) must not show the private-use glyph"
             );
             assert!(
                 content.value.contains(spelling.ascii),
-                "{id:?} hover body must show the ASCII alternative {:?}",
+                "{id:?} hover body must show the ASCII spelling {:?}",
                 spelling.ascii
             );
         }

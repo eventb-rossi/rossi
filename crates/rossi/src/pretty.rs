@@ -68,6 +68,13 @@ pub struct PrettyPrinter {
     pub use_unicode: bool,
     /// Indentation string (default: 4 spaces)
     pub indent: String,
+    /// Emit the raw Rodin private-use-area glyphs (U+E100..E103) for the
+    /// relation/override operators instead of their ASCII spelling. Off by
+    /// default: those glyphs render as tofu without Rodin's font, so output
+    /// meant for an editor stays portable. Rodin-canonical formatting (the
+    /// static checker's `canonical` form) turns this on to match Rodin's
+    /// internal bcc/bcm spelling exactly; see `OperatorSpelling::emit_text`.
+    pub private_use_glyphs: bool,
 }
 
 impl Default for PrettyPrinter {
@@ -75,6 +82,7 @@ impl Default for PrettyPrinter {
         Self {
             use_unicode: true,
             indent: "    ".to_string(),
+            private_use_glyphs: false,
         }
     }
 }
@@ -89,6 +97,7 @@ impl PrettyPrinter {
     pub fn ascii() -> Self {
         Self {
             use_unicode: false,
+            private_use_glyphs: false,
             indent: "    ".to_string(),
         }
     }
@@ -96,6 +105,13 @@ impl PrettyPrinter {
     /// Set the indentation string
     pub fn with_indent(mut self, indent: String) -> Self {
         self.indent = indent;
+        self
+    }
+
+    /// Emit the raw Rodin private-use glyphs for the relation/override
+    /// operators (see [`PrettyPrinter::private_use_glyphs`]).
+    pub fn with_private_use_glyphs(mut self, yes: bool) -> Self {
+        self.private_use_glyphs = yes;
         self
     }
 
@@ -749,10 +765,17 @@ impl PrettyPrinter {
         if self.use_unicode { unicode } else { ascii }
     }
 
-    /// Pick an operator spelling from the shared Event-B table.
+    /// Pick an operator spelling from the shared Event-B table. Unless
+    /// `private_use_glyphs` is set, this routes through `emit_text` so the
+    /// private-use relation/override operators print as ASCII (their glyph
+    /// won't render without Rodin's font).
     #[inline]
     fn op(&self, id: OperatorId) -> &'static str {
-        operators::spell(id, self.use_unicode)
+        if self.private_use_glyphs {
+            operators::spell(id, self.use_unicode)
+        } else {
+            operators::spelling(id).emit_text(self.use_unicode)
+        }
     }
 
     #[inline]
