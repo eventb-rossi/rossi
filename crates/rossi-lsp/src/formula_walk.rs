@@ -188,6 +188,127 @@ pub fn parameter_occurrence_spans(event: &Event, target: &str) -> Vec<Span> {
     free_spans(collect_in_event_body(event, target))
 }
 
+/// The binder-local resolution of a cursor sitting on a formula identifier.
+///
+/// Produced when the cursor is on a binder declaration or a use bound by one — a
+/// quantifier (`∀`/`∃`), `λ`, set comprehension, quantified `⋃`/`⋂`, or a seeded
+/// event parameter. This is the single source of truth for "what scope does this
+/// cursor bind to": rename rewrites [`spans`](Self::spans), go-to-definition
+/// jumps to [`declaration`](Self::declaration), and find-references reports
+/// [`spans`](Self::spans) as the in-scope locations.
+#[derive(Debug, Clone)]
+pub struct BoundResolution {
+    /// The binder's declaration span — the go-to-definition target and the
+    /// declaration entry of the reference set. `None` only for a binder the
+    /// walker records without a span.
+    pub declaration: Option<Span>,
+    /// The binder declaration plus every use it binds, within this one component.
+    pub spans: Vec<Span>,
+    /// True when the binding binder is an event `ANY` parameter (seeded at event
+    /// scope) rather than a formula binder. Lets the definition / references /
+    /// hover providers keep an event parameter on its own symbol path, while
+    /// rename treats every binder uniformly.
+    pub is_event_parameter: bool,
+}
+
+/// Resolve the occurrence of `identifier` at byte `offset` against the binders in
+/// `component`.
+///
+/// Returns the binder-local scope when the cursor sits on a binder declaration or
+/// a use bound by one; `None` when the occurrence is free (the name resolves to a
+/// component-level / inherited symbol) or there is no occurrence at `offset`. One
+/// walk of the component serves both the cursor lookup and the occurrence set.
+pub fn resolve_bound_at_offset(
+    component: &Component,
+    identifier: &str,
+    offset: usize,
+) -> Option<BoundResolution> {
+    resolve_bound_from_hits(
+        &collect_in_component(component, identifier),
+        component,
+        offset,
+    )
+}
+
+/// Classify the cursor at `offset` against `hits` (a [`collect_in_component`] run
+/// for one identifier).
+///
+/// Split out of [`resolve_bound_at_offset`] so a caller that already holds the
+/// walk's hits — rename, which also needs the free-use set on the fall-through —
+/// reuses them instead of walking the component a second time.
+pub(crate) fn resolve_bound_from_hits(
+    hits: &[Hit],
+    component: &Component,
+    offset: usize,
+) -> Option<BoundResolution> {
+    // Copy the cursor occurrence out (role / span / scope are all `Copy`).
+    let (role, cursor_span, scope) = hits
+        .iter()
+        .find(|h| h.span.contains(offset))
+        .map(|h| (h.role, h.span, h.scope))?;
+
+    // The binder this cursor is scoped to.
+    let binder_span = match (role, scope) {
+        // Cursor on a binder declaration: the binder introduced here (its own
+        // span, even when an outer binder of the same name shadows it).
+        (IdentRole::Binder, _) => cursor_span,
+        // Cursor on a use bound by a binder of the same name: scope to it.
+        (_, Scope::Bound(Some(span))) => span,
+        // Bound by a binder with no recorded span (the parser normally records
+        // one): only the cursor token is safe to report.
+        (_, Scope::Bound(None)) => {
+            return Some(BoundResolution {
+                declaration: None,
+                spans: vec![cursor_span],
+                is_event_parameter: false,
+            });
+        }
+        // Free use, or a declaration site with no formula occurrence: not
+        // binder-local — the name resolves to a component-level symbol.
+        (_, Scope::Free) => return None,
+    };
+
+    let mut spans: Vec<Span> = hits
+        .iter()
+        .filter(|h| {
+            // The binder's own declaration, plus every *use* it binds. An inner
+            // binder of the same name re-declares (shadows) it: the inner
+            // declaration is emitted in this binder's scope
+            // (`Bound(Some(binder_span))`) yet introduces a new binding, not a
+            // use of this one, so it is excluded — renaming this binder must
+            // leave the shadowing inner binder and its body untouched.
+            (h.role == IdentRole::Binder && h.span == binder_span)
+                || (h.role != IdentRole::Binder && h.scope == Scope::Bound(Some(binder_span)))
+        })
+        .map(|h| h.span)
+        .collect();
+    // Event parameters are seeded as binders but not emitted as formula
+    // occurrences, so add the binder declaration span explicitly.
+    if !spans.contains(&binder_span) {
+        spans.push(binder_span);
+    }
+
+    Some(BoundResolution {
+        declaration: Some(binder_span),
+        spans,
+        is_event_parameter: is_event_parameter_span(component, binder_span),
+    })
+}
+
+/// Whether `span` is the declaration span of an event `ANY` parameter (seeded as
+/// a binder at event scope), as opposed to a formula binder
+/// (`∀`/`∃`/`λ`/comprehension/`⋃`/`⋂`).
+fn is_event_parameter_span(component: &Component, span: Span) -> bool {
+    let Component::Machine(machine) = component else {
+        return false;
+    };
+    machine
+        .events
+        .iter()
+        .flat_map(|event| &event.parameters)
+        .any(|parameter| parameter.span == Some(span))
+}
+
 /// Any identifier occurrence in a component's formulas (used to colour every
 /// formula identifier as a semantic token).
 #[derive(Debug, Clone)]
@@ -299,5 +420,90 @@ mod tests {
         let spans = free_occurrence_spans(&component, "v");
         // The invariant use and the VARIANT expression use.
         assert_eq!(texts(src, &spans), vec!["v", "v"]);
+    }
+
+    // ---- resolve_bound_at_offset (the binder-scope SSOT) -------------------
+
+    const SHADOWED: &str = "MACHINE m\nVARIABLES\nx\nINVARIANTS\n@i1 x ∈ ℕ\n@i2 ∀ x · x > 0\nEND\n";
+
+    #[test]
+    fn cursor_on_quantifier_binder_resolves_its_own_scope() {
+        let component = parse(SHADOWED).expect("parses");
+        // Cursor on the `∀ x` binder declaration.
+        let offset = SHADOWED.find("∀ x").unwrap() + "∀ ".len();
+        let res = resolve_bound_at_offset(&component, "x", offset).expect("bound");
+
+        assert!(!res.is_event_parameter, "a formula binder, not a parameter");
+        assert_eq!(texts(SHADOWED, &[res.declaration.unwrap()]), vec!["x"]);
+        // The binder declaration and the bound use, both inside @i2.
+        assert_eq!(texts(SHADOWED, &res.spans), vec!["x", "x"]);
+        let i2 = SHADOWED.find("@i2").unwrap();
+        assert!(
+            res.spans.iter().all(|s| s.start >= i2),
+            "scope stays within the quantifier, never the @i1 global use"
+        );
+    }
+
+    #[test]
+    fn cursor_on_bound_use_resolves_to_its_binder() {
+        let component = parse(SHADOWED).expect("parses");
+        // Cursor on the bound use `x` after the `·`.
+        let offset = SHADOWED.find("· x").unwrap() + "· ".len();
+        let res = resolve_bound_at_offset(&component, "x", offset).expect("bound");
+
+        assert_eq!(res.spans.len(), 2, "binder declaration + the one bound use");
+        let i2 = SHADOWED.find("@i2").unwrap();
+        assert!(res.spans.iter().all(|s| s.start >= i2));
+    }
+
+    #[test]
+    fn cursor_on_free_global_use_is_not_bound() {
+        let component = parse(SHADOWED).expect("parses");
+        // Cursor on the free use `x` in @i1 (no enclosing binder of that name).
+        let offset = SHADOWED.find("@i1 x").unwrap() + "@i1 ".len();
+        assert!(resolve_bound_at_offset(&component, "x", offset).is_none());
+    }
+
+    #[test]
+    fn nested_same_name_binder_excludes_the_inner_declaration() {
+        // `∀ x · (∃ x · x > 0)`: the inner `∃ x` re-declares (shadows) `x`. A
+        // cursor on the OUTER binder scopes to the outer `x` alone — it has no
+        // body uses (the inner shadows them), and the inner declaration belongs
+        // to a *different* binding, so it must not be captured here.
+        let src = "MACHINE m\nINVARIANTS\n@i1 ∀ x · (∃ x · x > 0)\nEND\n";
+        let component = parse(src).expect("parses");
+
+        let outer = src.find("∀ x").unwrap() + "∀ ".len();
+        let res = resolve_bound_at_offset(&component, "x", outer).expect("bound");
+        assert_eq!(
+            res.spans.len(),
+            1,
+            "outer binder alone, not the inner `∃ x`: {:?}",
+            texts(src, &res.spans)
+        );
+        assert_eq!(res.declaration, Some(res.spans[0]));
+
+        // A cursor on the inner binder scopes to the inner `∃ x` plus its body use.
+        let inner = src.find("∃ x").unwrap() + "∃ ".len();
+        let inner_res = resolve_bound_at_offset(&component, "x", inner).expect("bound");
+        assert_eq!(
+            inner_res.spans.len(),
+            2,
+            "inner binder + its bound use: {:?}",
+            texts(src, &inner_res.spans)
+        );
+    }
+
+    #[test]
+    fn cursor_on_event_parameter_is_flagged() {
+        let src = "MACHINE m\nVARIABLES\nv\nEVENTS\nEVENT e\nANY\nq\nWHERE\n@grd1 q > 0\nTHEN\n@act1 v ≔ q\nEND\nEND\n";
+        let component = parse(src).expect("parses");
+        // Cursor on the use of the ANY parameter `q` in the guard.
+        let offset = src.find("@grd1 q").unwrap() + "@grd1 ".len();
+        let res = resolve_bound_at_offset(&component, "q", offset).expect("bound");
+        assert!(
+            res.is_event_parameter,
+            "an event ANY parameter is flagged so callers keep its symbol path"
+        );
     }
 }
