@@ -383,17 +383,18 @@ connective_predicate = {
     negation_predicate ~ ((op_and | op_or) ~ negation_predicate)*
 }
 
-implication_predicate = {
-    connective_predicate ~ (op_implies ~ connective_predicate)*
-}
-
-equivalence_predicate = {
-    implication_predicate ~ (op_equivalent ~ implication_predicate)*
+// Implication and equivalence share one precedence level: ⇒ and ⇔ are not a
+// precedence ladder either — each is non-associative and the two are mutually
+// incompatible, so chaining or mixing them needs parentheses (rejected at AST
+// build). Folding them flat keeps the operator sequence visible to that check,
+// the same way ∧/∨ above are folded flat.
+implies_equiv_predicate = {
+    connective_predicate ~ ((op_implies | op_equivalent) ~ connective_predicate)*
 }
 
 quantified_predicate = {
     (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate
-  | equivalence_predicate
+  | implies_equiv_predicate
 }
 
 predicate = {
@@ -427,17 +428,13 @@ connective_predicate_no_semi = {
     negation_predicate_no_semi ~ ((op_and | op_or) ~ negation_predicate_no_semi)*
 }
 
-implication_predicate_no_semi = {
-    connective_predicate_no_semi ~ (op_implies ~ connective_predicate_no_semi)*
-}
-
-equivalence_predicate_no_semi = {
-    implication_predicate_no_semi ~ (op_equivalent ~ implication_predicate_no_semi)*
+implies_equiv_predicate_no_semi = {
+    connective_predicate_no_semi ~ ((op_implies | op_equivalent) ~ connective_predicate_no_semi)*
 }
 
 quantified_predicate_no_semi = {
     (op_forall | op_exists) ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate_no_semi
-  | equivalence_predicate_no_semi
+  | implies_equiv_predicate_no_semi
 }
 
 predicate_no_semi = {
