@@ -888,20 +888,24 @@ END
 // ============================================================================
 
 #[test]
-fn test_roundtrip_empty_set_comma_comma() {
-    // This test verifies parsing of ,, as empty set
-    // but roundtrip will produce ∅ (canonical form), so we just check parse+reparse
+fn test_roundtrip_maplet_comma_comma() {
+    // `,,` is an accepted alternative input spelling for the maplet ↦; it
+    // round-trips to the canonical ↦, so verify that glyph appears and that
+    // the output parses back.
     let source = r#"
 MACHINE test
 VARIABLES
-    s
+    r, x, y
 INVARIANTS
-    @inv1 s = ,,
+    @inv1 r = x ,, y
 END
 "#;
     let component = parse(source).unwrap();
     let output = to_string(&component);
-    // The pretty printer outputs ∅ for empty set, so verify it parses back
+    assert!(
+        output.contains('\u{21A6}'),
+        "expected canonical maplet ↦ in output, got:\n{output}"
+    );
     let _component2 = parse(&output).unwrap();
 }
 

@@ -145,11 +145,12 @@ op_difference = { "∖" | "\\" }
 op_cartesian = { "×" | "**" }
 op_powerset = @{ "ℙ" | ("POW" ~ word_boundary) }
 op_powerset1 = @{ "ℙ1" | ("POW1" ~ word_boundary) }
-op_emptyset = { "∅" | "{}" | ",," }
+op_emptyset = { "∅" | "{}" }
 op_oftype = @{ "⦂" | ("oftype" ~ word_boundary) }
 
 // Relation Operators
-op_maplet = { "↦" | "|->" }
+// `,,` is an accepted alternative input spelling for the maplet ↦.
+op_maplet = { "↦" | "|->" | ",," }
 op_relation = { "↔" | "<->" }
 op_partial_fn = { "⇸" | "+->" }
 op_total_fn = { "→" | "-->" }
