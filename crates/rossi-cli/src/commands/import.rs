@@ -74,6 +74,8 @@ fn run_inner(cli: &ImportArgs) -> CmdResult<()> {
     let printer = PrettyPrinter {
         use_unicode: !cli.ascii,
         indent: cli.indent.clone().unwrap_or_else(|| "    ".to_string()),
+        // Emitted text stays portable: never the private-use glyphs.
+        private_use_glyphs: false,
     };
 
     if let Some(ref order) = cli.merge {

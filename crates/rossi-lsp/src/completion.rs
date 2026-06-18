@@ -307,8 +307,8 @@ impl CompletionProvider {
             .iter()
             .filter(|entry| entry.completion)
             .map(|entry| {
-                let label = entry.text(config.use_unicode);
-                let alternative = entry.text(!config.use_unicode);
+                let label = entry.emit_text(config.use_unicode);
+                let alternative = entry.emit_text(!config.use_unicode);
                 let alternative = if alternative == label {
                     ""
                 } else {
@@ -772,15 +772,15 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "⇒"));
         assert!(items.iter().any(|item| item.label == "∈"));
         assert!(items.iter().any(|item| item.label == "⊈"));
+        // The private-use operators have no portable glyph, so even in Unicode
+        // mode their completion inserts the ASCII spelling, never a tofu glyph.
+        assert!(items.iter().any(|item| item.label == "<<->"));
+        assert!(items.iter().any(|item| item.label == "<+"));
         assert!(
-            items
+            !items
                 .iter()
-                .any(|item| item.label == operators::TOTAL_RELATION)
-        );
-        assert!(
-            items
-                .iter()
-                .any(|item| item.label == operators::RELATIONAL_OVERRIDE)
+                .any(|item| operators::is_private_use_glyph(&item.label)),
+            "no operator completion should insert a private-use glyph"
         );
         assert!(items.iter().any(|item| item.label == "‥"));
         assert!(items.iter().any(|item| item.label == "−"));

@@ -97,6 +97,8 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
     let printer = PrettyPrinter {
         use_unicode: !cli.ascii,
         indent: cli.indent.clone().unwrap_or_else(|| "    ".to_string()),
+        // Emitted text stays portable: never the private-use glyphs.
+        private_use_glyphs: false,
     };
 
     // `-` reads one Event-B text stream from stdin (the lone input). It has no

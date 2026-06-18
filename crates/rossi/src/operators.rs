@@ -111,6 +111,21 @@ impl OperatorSpelling {
         }
     }
 
+    /// The spelling to write into emitted text — completion inserts, document
+    /// formatting, hover titles, the input-method table. Identical to
+    /// [`Self::text`], except an operator whose only Unicode spelling is a Rodin
+    /// private-use-area glyph always yields its ASCII form: that glyph has no
+    /// portable rendering and shows as tofu without Rodin's math font, so rossi
+    /// never emits it into a buffer. Private-use spellings are still accepted on
+    /// input (the grammar lexes them) — they are never produced.
+    pub fn emit_text(self, use_unicode: bool) -> &'static str {
+        if is_private_use_glyph(self.unicode) {
+            self.ascii
+        } else {
+            self.text(use_unicode)
+        }
+    }
+
     /// True when the ASCII spelling contains no word characters, so it is safe
     /// to substitute eagerly while typing (symbolic combos like `=>`, `|->`),
     /// as opposed to alphabetic ops (`NAT`, `or`, `dom`) which would block
@@ -865,7 +880,11 @@ pub fn convert_to_unicode(text: &str) -> String {
         }
 
         if let Some(entry) = matched {
-            result.push_str(entry.unicode);
+            // `emit_text` leaves the four private-use operators in ASCII (their
+            // glyph would not render) while consuming the full ASCII match, so a
+            // spelling like `<<->` is kept whole rather than partly rewritten
+            // into the shorter `<->` (`↔`).
+            result.push_str(entry.emit_text(true));
             byte_pos += entry.ascii.len();
         } else if let Some(ch) = rest.chars().next() {
             result.push(ch);
@@ -1325,5 +1344,52 @@ mod tests {
         assert!(!is_private_use_glyph("↦"));
         assert!(!is_private_use_glyph("⦂"));
         assert!(!is_private_use_glyph("<<->"));
+    }
+
+    /// The invariant this module enforces: `emit_text` never produces a
+    /// private-use-area code point, in either spelling mode. Operators whose only
+    /// Unicode form is a Rodin private-use glyph fall back to their ASCII
+    /// spelling; everything else emits exactly what `text` would.
+    #[test]
+    fn emit_text_never_yields_a_private_use_glyph() {
+        // The invariant: nothing emitted is ever a private-use code point.
+        for entry in OPERATOR_SPELLINGS {
+            for use_unicode in [true, false] {
+                assert!(
+                    !is_private_use_glyph(entry.emit_text(use_unicode)),
+                    "{:?} emits a private-use glyph (use_unicode={use_unicode})",
+                    entry.id
+                );
+            }
+        }
+
+        // The four private-use operators emit their ASCII spelling even in
+        // Unicode mode; operators with a portable glyph are left untouched.
+        assert_eq!(spelling(OperatorId::Overwrite).emit_text(true), "<+");
+        assert_eq!(spelling(OperatorId::TotalRelation).emit_text(true), "<<->");
+        assert_eq!(
+            spelling(OperatorId::SurjectiveRelation).emit_text(true),
+            "<->>"
+        );
+        assert_eq!(
+            spelling(OperatorId::TotalSurjectiveRelation).emit_text(true),
+            "<<->>"
+        );
+        let and = spelling(OperatorId::And);
+        assert_eq!(and.emit_text(true), and.unicode);
+        assert_eq!(and.emit_text(false), and.ascii);
+    }
+
+    /// ASCII → Unicode conversion never introduces a private-use glyph: the four
+    /// private-use operators are dropped from the conversion table, so their
+    /// ASCII spellings round-trip unchanged.
+    #[test]
+    fn convert_to_unicode_keeps_private_use_operators_ascii() {
+        assert_eq!(convert_to_unicode("f <+ g"), "f <+ g");
+        assert_eq!(convert_to_unicode("A <<-> B"), "A <<-> B");
+        assert_eq!(convert_to_unicode("A <->> B"), "A <->> B");
+        assert_eq!(convert_to_unicode("A <<->> B"), "A <<->> B");
+        // Convert-to-ASCII still cleans pasted private-use glyphs back to ASCII.
+        assert_eq!(convert_to_ascii("f \u{E103} g"), "f <+ g");
     }
 }

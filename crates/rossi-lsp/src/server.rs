@@ -911,18 +911,26 @@ pub struct OperatorRow {
 
 /// Build the operator rows served by `rossi/operatorTable` from the
 /// single-source table in `rossi::operators`. Only operators whose ASCII and
-/// Unicode spellings differ are included (identical ones need no conversion).
+/// *emitted* spellings differ are included: identical ones need no conversion,
+/// and the private-use operators emit ASCII (`emit_text`) so they collapse to
+/// `ascii == unicode` here and drop out.
 pub fn operator_rows() -> Vec<OperatorRow> {
     rossi::operators::OPERATOR_SPELLINGS
         .iter()
-        .filter(|entry| entry.ascii != entry.unicode)
-        .map(|entry| OperatorRow {
-            ascii: entry.ascii.to_string(),
-            unicode: entry.unicode.to_string(),
-            description: entry.description.to_string(),
-            aliases: entry.aliases().iter().map(|a| a.to_string()).collect(),
-            symbolic: entry.is_symbolic(),
-            eager: entry.is_eager_input(),
+        .filter_map(|entry| {
+            // `emit_text` is the spelling editors should substitute to; the
+            // private-use operators emit ASCII, so they collapse to `ascii ==
+            // unicode` here and drop out (no point converting `<+` to itself,
+            // and nothing should ever substitute to a private-use glyph).
+            let unicode = entry.emit_text(true);
+            (entry.ascii != unicode).then(|| OperatorRow {
+                ascii: entry.ascii.to_string(),
+                unicode: unicode.to_string(),
+                description: entry.description.to_string(),
+                aliases: entry.aliases().iter().map(|a| a.to_string()).collect(),
+                symbolic: entry.is_symbolic(),
+                eager: entry.is_eager_input(),
+            })
         })
         .collect()
 }
@@ -1198,10 +1206,24 @@ mod tests {
         let rows = operator_rows();
         assert!(!rows.is_empty(), "operator table must not be empty");
 
-        // Every row differs (ascii != unicode) and has non-empty spellings.
+        // Every row differs (ascii != unicode) and has non-empty spellings, and
+        // no row substitutes to a private-use glyph that would render as tofu.
         for row in &rows {
             assert_ne!(row.ascii, row.unicode);
             assert!(!row.ascii.is_empty() && !row.unicode.is_empty());
+            assert!(
+                !rossi::operators::is_private_use_glyph(&row.unicode),
+                "operator row {:?} substitutes to a private-use glyph",
+                row.ascii
+            );
+        }
+
+        // The private-use operators emit ASCII, so they have no conversion row.
+        for ascii in ["<+", "<<->", "<->>", "<<->>"] {
+            assert!(
+                !rows.iter().any(|r| r.ascii == ascii),
+                "{ascii:?} should not appear in the input-method table"
+            );
         }
 
         // Representative symbolic op carries aliases and is eager-eligible.
