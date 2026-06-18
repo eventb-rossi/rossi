@@ -225,3 +225,64 @@ fn quantifier_conjunct_not_bounded_by_a_bracket_is_rejected() {
     expr_incompatible("(λ x · x > 0 ∧ ∃ w · w > 0 ∣ x)", "∧", "∃"); // lambda such-that
     expr_incompatible("⋃ z · z > 0 ∧ ∃ w · w > 0 ∣ {z}", "∧", "∃"); // ⋃ such-that
 }
+
+// ---------------------------------------------------------------------------
+// ⇒ / ⇔ may neither be chained nor mixed without parentheses
+// ---------------------------------------------------------------------------
+//
+// Each is a non-associative singleton, and the two are mutually incompatible —
+// so every adjacent pair of them needs explicit parentheses, unlike the ∧/∨
+// level where same-operator chains are fine.
+
+#[test]
+fn implication_chain_is_rejected() {
+    pred_incompatible("x > 0 ⇒ y > 0 ⇒ z > 0", "⇒", "⇒");
+}
+
+#[test]
+fn equivalence_chain_is_rejected() {
+    pred_incompatible("x > 0 ⇔ y > 0 ⇔ z > 0", "⇔", "⇔");
+}
+
+#[test]
+fn implication_then_equivalence_is_rejected() {
+    pred_incompatible("x > 0 ⇒ y > 0 ⇔ z > 0", "⇒", "⇔");
+}
+
+#[test]
+fn equivalence_then_implication_is_rejected() {
+    pred_incompatible("x > 0 ⇔ y > 0 ⇒ z > 0", "⇔", "⇒");
+}
+
+#[test]
+fn a_surrounding_bracket_does_not_license_an_implication_chain() {
+    // Unlike a bare quantifier operand, binary-operator chaining is never
+    // licensed by a closing bracket — only explicit grouping parentheses are.
+    pred_incompatible("(x > 0 ⇒ y > 0 ⇒ z > 0)", "⇒", "⇒");
+}
+
+#[test]
+fn explicitly_grouped_implication_and_equivalence_parse() {
+    pred_ok("x > 0 ⇒ (y > 0 ⇒ z > 0)");
+    pred_ok("(x > 0 ⇒ y > 0) ⇒ z > 0");
+    pred_ok("x > 0 ⇔ (y > 0 ⇔ z > 0)");
+    pred_ok("(x > 0 ⇒ y > 0) ⇔ z > 0");
+    pred_ok("x > 0 ⇒ (y > 0 ⇔ z > 0)");
+}
+
+// A bare quantifier may not be a ⇒/⇔ operand either, with the same
+// closing-bracket exception as the ∧/∨ level.
+
+#[test]
+fn bare_quantifier_as_an_implication_operand_is_rejected() {
+    pred_incompatible("x > 0 ⇒ ∃ w · w > 0", "⇒", "∃");
+    pred_incompatible("x > 0 ⇔ ∃ w · w > 0", "⇔", "∃");
+    pred_incompatible("x > 0 ⇒ ∀ w · w > 0", "⇒", "∀");
+}
+
+#[test]
+fn quantifier_implication_operand_bounded_by_a_bracket_parses() {
+    pred_ok("x > 0 ⇒ (∃ w · w > 0)"); // quantifier parenthesised
+    pred_ok("(x > 0 ⇒ ∃ w · w > 0)"); // whole predicate bracketed
+    pred_ok("x > 0 ⇔ (∃ w · w > 0)");
+}
