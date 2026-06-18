@@ -146,6 +146,14 @@ fn is_word(spelling: &str) -> bool {
 /// test pins each one to the parser's exact-case keyword vocabulary.
 const BOOLEAN_WORDS: &[&str] = &["TRUE", "FALSE", "BOOL", "true", "false", "bool"];
 
+/// The boolean predicate literals' Unicode spellings — `⊤`/`⊥`, the canonical
+/// forms of `true`/`false` (Rodin's `btrue`/`bfalse`). The parser carries them
+/// as `kw_true`/`kw_false` string literals, not as [`OPERATOR_SPELLINGS`]
+/// entries, so they reach the generator here as symbolic constants;
+/// `boolean_symbols_render_the_literals` pins each to the pretty-printer's
+/// spelling of the matching predicate literal.
+const BOOLEAN_SYMBOLS: &[&str] = &["⊤", "⊥"];
+
 /// The format-neutral token model, built once from the canonical tables.
 pub struct Model {
     pub groups: Vec<TokenGroup>,
@@ -174,11 +182,15 @@ impl Model {
             }
         }
 
-        // The boolean atoms, both cases (`TRUE` value vs `true` predicate
-        // literal): exact-case constants the lowercase-only `BUILTIN_WORDS`
-        // cannot supply.
+        // The boolean atoms: the word spellings in both cases (`TRUE` the value
+        // vs `true` the predicate literal) that the lowercase-only
+        // `BUILTIN_WORDS` cannot supply, plus the predicate literals' Unicode
+        // symbols `⊤`/`⊥`.
         for word in BOOLEAN_WORDS {
             constant_words.push((*word).to_string());
+        }
+        for sym in BOOLEAN_SYMBOLS {
+            constant_symbols.push((*sym).to_string());
         }
 
         // Operators: atoms (∅, ℕ, NAT …) read as constants; every other
@@ -520,6 +532,20 @@ mod tests {
                 "BOOLEAN_WORDS entry {w:?} is not a reserved keyword token"
             );
         }
+    }
+
+    /// SSOT guard: the boolean symbols are exactly the Unicode spellings the
+    /// pretty-printer renders for the boolean predicate literals, so they cannot
+    /// drift from the `⊤`/`⊥` the parser accepts as `true`/`false`.
+    #[test]
+    fn boolean_symbols_render_the_literals() {
+        use rossi::ast::predicate::{Predicate, PredicateKind};
+        let pp = rossi::pretty::PrettyPrinter::new();
+        let glyph = |kind| pp.print_predicate(&Predicate::from(kind));
+        assert!(BOOLEAN_SYMBOLS.contains(&glyph(PredicateKind::True).as_str()));
+        assert!(BOOLEAN_SYMBOLS.contains(&glyph(PredicateKind::False).as_str()));
+        // No extras — every emitted symbol is one of the two literals.
+        assert_eq!(BOOLEAN_SYMBOLS.len(), 2);
     }
 
     /// The generated Neovim `operators.lua` must expose exactly the rows the LSP

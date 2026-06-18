@@ -106,7 +106,7 @@ with `eventb-toggle-input-method'."
   "Event-B alphabetic operators (exact case).")
 
 (defconst eventb-constant-symbols
-  '("ℕ1" "ℕ" "ℤ" "∅" "{}")
+  '("ℕ1" "ℕ" "ℤ" "∅" "⊤" "⊥" "{}")
   "Event-B symbolic constants.")
 
 (defconst eventb-operator-symbols

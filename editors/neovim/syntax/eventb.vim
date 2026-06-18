@@ -16,7 +16,7 @@ syn keyword eventbConstant BOOL FALSE INT NAT NAT1 TRUE bool false true
 syn keyword eventbBuiltin card finite id max min partition pred prj1 prj2 succ
 syn keyword eventbOperator INTER POW POW1 UNION circ dom mod not oftype or ran
 
-syn match eventbConstant "ℕ1\|ℕ\|ℤ\|∅\|{}"
+syn match eventbConstant "ℕ1\|ℕ\|ℤ\|∅\|⊤\|⊥\|{}"
 syn match eventbOperator "<<->>\|/<<:\|:∈\|:∣\|<->>\|<<->\|>->>\|ℙ1\|+->\|+>>\|-->\|->>\|/<:\|<->\|<<:\|<<|\|<=>\|>+>\|>->\||->\||>>\|‥\|ℙ\|→\|↔\|↠\|↣\|↦\|⇒\|⇔\|⇸\|∀\|∃\|∈\|∉\|−\|∖\|∗\|∘\|∣\|∥\|∧\|∨\|∩\|∪\|∼\|≔\|≠\|≤\|≥\|⊂\|⊄\|⊆\|⊈\|⊗\|⋂\|⋃\|▷\|◁\|⤀\|⤔\|⤖\|⦂\|⩤\|⩥\|\|\|\|\|\*\*\|\.\.\|/:\|/=\|/\\\|::\|:=\|:|\|<+\|<:\|<=\|<|\|=>\|><\|>=\|\\/\||>\|||\|¬\|·\|×\|÷\|λ\|!\|#\|%\|&\|\*\|+\|-\|\.\|/\|:\|;\|<\|=\|>\|\\\|\^\||\|\~"
 
 syn match eventbNumber "\<\d\+\>"
