@@ -8,7 +8,7 @@
 
 use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
-    Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, Range, TextEdit,
+    Documentation, InsertTextFormat, Position, Range, TextEdit,
 };
 use parking_lot::RwLock;
 use rossi::{Component, keywords, operators};
@@ -241,7 +241,7 @@ impl CompletionProvider {
 
         // Add snippet completions
         if config.enable_snippets {
-            items.extend(self.get_snippet_completions(&line_text, &word_at_cursor));
+            items.extend(self.get_snippet_completions());
         }
 
         // Add built-in type completions
@@ -416,71 +416,24 @@ impl CompletionProvider {
             .collect()
     }
 
-    /// Get snippet completions for common patterns
-    fn get_snippet_completions(&self, line_text: &str, _word: &str) -> Vec<CompletionItem> {
-        let mut items = Vec::new();
-
-        // Event snippet
-        if is_inside_events(line_text) {
-            items.push(CompletionItem {
-                label: "event".to_string(),
+    /// Snippet completions, sourced from the canonical [`rossi::snippets`]
+    /// table — the same table the editor snippet libraries are generated from.
+    /// Serving them here means the LSP (the path Sublime Text uses, since it has
+    /// no native snippet files) offers exactly the snippets every other editor
+    /// ships, so the two can never drift.
+    fn get_snippet_completions(&self) -> Vec<CompletionItem> {
+        rossi::snippets::SNIPPETS
+            .iter()
+            .map(|snippet| CompletionItem {
+                label: snippet.prefix.to_string(),
                 kind: Some(CompletionItemKind::SNIPPET),
-                detail: Some("Event template".to_string()),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: "Insert a complete event template with guards and actions".to_string(),
-                })),
-                insert_text: Some("EVENT ${1:event_name}\nWHERE\n    @${2:grd1} ${3:condition}\nTHEN\n    @${4:act1} ${5:action}\nEND".to_string()),
+                detail: Some(snippet.name.to_string()),
+                documentation: Some(Documentation::String(snippet.description.to_string())),
+                insert_text: Some(snippet.body.join("\n")),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                 ..Default::default()
-            });
-        }
-
-        // Axiom/Invariant snippet (labeled predicate)
-        if is_inside_context(line_text) || is_inside_machine(line_text) {
-            items.push(CompletionItem {
-                label: "labeled_predicate".to_string(),
-                kind: Some(CompletionItemKind::SNIPPET),
-                detail: Some("Labeled predicate (axiom/invariant)".to_string()),
-                documentation: Some(Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: "Insert a labeled predicate for axioms or invariants".to_string(),
-                })),
-                insert_text: Some("@${1:label} ${2:predicate}".to_string()),
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                ..Default::default()
-            });
-        }
-
-        // Forall quantifier snippet
-        items.push(CompletionItem {
-            label: "forall".to_string(),
-            kind: Some(CompletionItemKind::SNIPPET),
-            detail: Some("Universal quantifier".to_string()),
-            documentation: Some(Documentation::MarkupContent(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: "Insert a universal quantifier (∀ x · P ⇒ Q)".to_string(),
-            })),
-            insert_text: Some("∀ ${1:x} · ${2:x ∈ S} ⇒ ${3:predicate}".to_string()),
-            insert_text_format: Some(InsertTextFormat::SNIPPET),
-            ..Default::default()
-        });
-
-        // Exists quantifier snippet
-        items.push(CompletionItem {
-            label: "exists".to_string(),
-            kind: Some(CompletionItemKind::SNIPPET),
-            detail: Some("Existential quantifier".to_string()),
-            documentation: Some(Documentation::MarkupContent(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: "Insert an existential quantifier (∃ x · P)".to_string(),
-            })),
-            insert_text: Some("∃ ${1:x} · ${2:predicate}".to_string()),
-            insert_text_format: Some(InsertTextFormat::SNIPPET),
-            ..Default::default()
-        });
-
-        items
+            })
+            .collect()
     }
 
     /// Get built-in type and constant completions
@@ -841,11 +794,22 @@ mod tests {
     #[test]
     fn test_snippet_completions() {
         let provider = CompletionProvider::new();
-        let items = provider.get_snippet_completions("EVENTS", "");
+        let items = provider.get_snippet_completions();
 
-        assert!(items.iter().any(|item| item.label == "event"));
+        // Every snippet comes from the canonical table — one item per entry.
+        assert_eq!(items.len(), rossi::snippets::SNIPPETS.len());
+        assert!(items.iter().any(|item| item.label == "evt"));
         assert!(items.iter().any(|item| item.label == "forall"));
         assert!(items.iter().any(|item| item.label == "exists"));
+        // Every item is a snippet carrying its body.
+        assert!(items.iter().all(|item| {
+            item.kind == Some(CompletionItemKind::SNIPPET)
+                && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
+                && item.insert_text.is_some()
+        }));
+        // The old ad-hoc labels are gone now that the table is the source.
+        assert!(!items.iter().any(|item| item.label == "event"));
+        assert!(!items.iter().any(|item| item.label == "labeled_predicate"));
     }
 
     #[test]
