@@ -329,9 +329,7 @@ fn ast_parameter_references(
         return Vec::new();
     };
     let mut spans: Vec<Span> = Vec::new();
-    if let Some(param) = event.parameters.iter().find(|p| p.name == name)
-        && let Some(s) = param.span
-    {
+    if let Some(s) = crate::symbols::event_parameter_span(event, name) {
         spans.push(s);
     }
     spans.extend(formula_walk::parameter_occurrence_spans(event, name));

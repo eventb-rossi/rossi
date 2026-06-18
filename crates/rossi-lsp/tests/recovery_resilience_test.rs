@@ -102,7 +102,6 @@ fn setup() -> (DefinitionProvider, HoverProvider) {
     let mut def = DefinitionProvider::new();
     def.set_cross_reference_manager(Arc::clone(&crm));
     def.set_document_manager(Arc::clone(&dm));
-    def.update_definitions(uri().to_string(), SOURCE);
 
     let mut hov = HoverProvider::new();
     hov.set_cross_reference_manager(Arc::clone(&crm));
@@ -210,7 +209,6 @@ fn setup_broken_guard() -> DefinitionProvider {
     let mut def = DefinitionProvider::new();
     def.set_cross_reference_manager(Arc::clone(&crm));
     def.set_document_manager(Arc::clone(&dm));
-    def.update_definitions(broken_guard_uri().to_string(), BROKEN_GUARD_SOURCE);
     def
 }
 

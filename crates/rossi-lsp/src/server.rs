@@ -34,17 +34,17 @@ use crate::workspace::WorkspaceSymbolProvider;
 struct Analyzer {
     document_manager: Arc<DocumentManager>,
     cross_reference_manager: Arc<CrossReferenceManager>,
-    definition_provider: Arc<DefinitionProvider>,
     workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
     config_manager: Arc<ConfigManager>,
     client: Client,
 }
 
 impl Analyzer {
-    /// Refresh the cross-reference, definition, and workspace-symbol indexes
-    /// from `uri`'s stored parse, then publish its diagnostics. Reads the single
-    /// source of truth once and fans it out to every eager index (none of which
-    /// re-parses).
+    /// Refresh the cross-reference and workspace-symbol indexes from `uri`'s
+    /// stored parse, then publish its diagnostics. Reads the single source of
+    /// truth once and fans it out to every eager index (none of which
+    /// re-parses). Go-to-definition keeps no index — it resolves on demand
+    /// against this same stored parse.
     async fn analyze(&self, uri: Url) {
         // Read the single source of truth (and the version it is for) once, then
         // fan the same snapshot out to every eager index and the diagnostics.
@@ -55,8 +55,6 @@ impl Analyzer {
             let components = doc.components();
             self.cross_reference_manager
                 .index_components(key.clone(), components);
-            self.definition_provider
-                .index_components(key.clone(), components, &doc.text);
             self.workspace_symbol_provider
                 .index_components(key, components, &doc.text);
         }
@@ -174,15 +172,16 @@ impl RossiLanguageServer {
         let mut document_links_provider = DocumentLinkProvider::new();
         document_links_provider.set_cross_reference_manager(Arc::clone(&cross_reference_manager));
 
-        // Shared handles the analysis fans out to; Arc'd up front so the analyzer
-        // and the request-handler fields point at the same providers.
+        // Shared handles. The config manager and workspace-symbol index are Arc'd
+        // up front so the analyzer's eager indexing and the request handlers share
+        // one instance. The definition provider keeps no index — it resolves on
+        // demand — so it is a request-handler field only, not fanned out to.
         let config_manager = Arc::new(ConfigManager::new());
         let definition_provider = Arc::new(definition_provider);
         let workspace_symbol_provider = Arc::new(WorkspaceSymbolProvider::new());
         let analyzer = Analyzer {
             document_manager: Arc::clone(&document_manager),
             cross_reference_manager: Arc::clone(&cross_reference_manager),
-            definition_provider: Arc::clone(&definition_provider),
             workspace_symbol_provider: Arc::clone(&workspace_symbol_provider),
             config_manager: Arc::clone(&config_manager),
             client: client.clone(),

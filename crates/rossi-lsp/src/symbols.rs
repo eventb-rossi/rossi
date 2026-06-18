@@ -11,14 +11,22 @@
 //! resolver so the two features cannot drift on what a name means.
 
 use rossi::Component;
+use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
 use crate::component_util::{component_at_offset, parse_all};
 use crate::cross_references::{ComponentKind, CrossReferenceManager};
 use crate::document::ParsedDocument;
+use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
-use crate::lsp_types::Position;
+use crate::lsp_types::{Location, Position};
+use crate::position::span_to_range;
 use crate::text_utils;
+
+/// The canonical name of the implicit initialisation event. `enumerate_symbols`
+/// mints it and `event_declaration_span` matches it, so the spelling lives in
+/// one place rather than as two coupled string literals.
+pub(crate) const INITIALISATION_EVENT_NAME: &str = "INITIALISATION";
 
 /// The kind of an Event-B named symbol.
 ///
@@ -81,7 +89,7 @@ pub fn enumerate_symbols(component: &Component) -> Vec<SymbolRef> {
             }
             if machine.initialisation.is_some() {
                 symbols.push(SymbolRef {
-                    name: "INITIALISATION".to_string(),
+                    name: INITIALISATION_EVENT_NAME.to_string(),
                     kind: SymbolKind::Event,
                     owner: machine.name.clone(),
                     event: None,
@@ -325,4 +333,75 @@ fn local_parameter_symbol_identity_at_position(
         &machine.name,
         &event.name,
     ))
+}
+
+/// The declaration site of a resolved symbol — the source location
+/// go-to-definition jumps to.
+///
+/// Loads `symbol.owner` (the declaring component, which may differ from the one
+/// under the cursor) and reads the declared name's span from its AST: a
+/// set / constant / variable via [`formula_walk::declaration_span`], an event via
+/// its `EVENT name` token (or the `INITIALISATION` keyword), and a parameter via
+/// its `ANY`-clause name span in the owning event. `None` when the component
+/// cannot be loaded or the declaration has no recorded span.
+pub(crate) fn declaration_location(
+    symbol: &SymbolIdentity,
+    loader: &ComponentLoader,
+) -> Option<Location> {
+    let loaded = loader.load(&symbol.owner)?;
+    let span = match symbol.kind {
+        SymbolKind::Parameter => {
+            parameter_declaration_span(loaded.component(), symbol.event.as_deref()?, &symbol.name)?
+        }
+        SymbolKind::Event => event_declaration_span(loaded.component(), &symbol.name)?,
+        SymbolKind::Variable | SymbolKind::Constant | SymbolKind::Set => {
+            formula_walk::declaration_span(loaded.component(), &symbol.name)?
+        }
+    };
+    Some(Location {
+        uri: loaded.uri().clone(),
+        range: span_to_range(&span, loaded.text()),
+    })
+}
+
+/// The declaration name-span of `event`'s `ANY`-clause parameter `name`, if it
+/// declares one. Shared with find-references so go-to-definition and the
+/// declaration entry of find-references locate a parameter the same way.
+pub(crate) fn event_parameter_span(event: &rossi::Event, name: &str) -> Option<Span> {
+    event
+        .parameters
+        .iter()
+        .find(|parameter| parameter.name == name)
+        .and_then(|parameter| parameter.span)
+}
+
+/// The name span of parameter `name` declared in `event_name`'s `ANY` clause.
+fn parameter_declaration_span(component: &Component, event_name: &str, name: &str) -> Option<Span> {
+    let Component::Machine(machine) = component else {
+        return None;
+    };
+    let event = machine
+        .events
+        .iter()
+        .find(|event| event.name == event_name)?;
+    event_parameter_span(event, name)
+}
+
+/// The name-token span of an event named `name` declared in `component`, or the
+/// `INITIALISATION` keyword span for the implicit initialisation event.
+fn event_declaration_span(component: &Component, name: &str) -> Option<Span> {
+    let Component::Machine(machine) = component else {
+        return None;
+    };
+    if name == INITIALISATION_EVENT_NAME {
+        return machine
+            .initialisation
+            .as_ref()
+            .and_then(|init| init.name_span);
+    }
+    machine
+        .events
+        .iter()
+        .find(|event| event.name == name)
+        .and_then(|event| event.name_span)
 }
