@@ -1,8 +1,8 @@
 CONTEXT seed_context
 SETS
-    S, T
+    S T
 CONSTANTS
-    n, c, sub, rel, fun, pair, ps
+    n c sub rel fun pair ps
 AXIOMS
     @axm1 n = 5
     @axm2 c ∈ S

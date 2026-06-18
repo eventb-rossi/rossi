@@ -1,10 +1,10 @@
 CONTEXT relations
 SETS
-    S, T, U
+    S T U
 CONSTANTS
-    r, s, r2, sub_s,
-    dm, rn, inv, fcomp, bcomp, dprod, pprod,
-    dres, rres, dsub, rsub, img, idc
+    r s r2 sub_s
+    dm rn inv fcomp bcomp dprod pprod
+    dres rres dsub rsub img idc
 AXIOMS
     @axm1 r ∈ S ↔ T
     @axm2 s ∈ T ↔ U

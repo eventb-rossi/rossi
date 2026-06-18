@@ -2,7 +2,7 @@ CONTEXT bank_account_ctx
 SETS
     ACCOUNTS
 CONSTANTS
-    min_balance, max_balance
+    min_balance max_balance
 AXIOMS
     @axm1 min_balance ∈ ℤ
     @axm2 max_balance ∈ ℕ

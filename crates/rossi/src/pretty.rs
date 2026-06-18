@@ -398,7 +398,9 @@ impl PrettyPrinter {
             } else {
                 let param_names: Vec<&str> =
                     event.parameters.iter().map(|p| p.name.as_str()).collect();
-                writeln!(output, "{}{}", double_indent, param_names.join(", ")).unwrap();
+                // Parameters are whitespace-separated, not comma-separated, so
+                // the line reparses under the structural-list grammar.
+                writeln!(output, "{}{}", double_indent, param_names.join(" ")).unwrap();
             }
         }
 

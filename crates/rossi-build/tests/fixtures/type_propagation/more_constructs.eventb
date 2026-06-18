@@ -1,8 +1,8 @@
 CONTEXT more_constructs
 SETS
-    S, T, U
+    S T U
 CONSTANTS
-    x, y, f, dapp, ge_c, rel_prod, notin_seed
+    x y f dapp ge_c rel_prod notin_seed
 AXIOMS
     @axm1 x ∈ S
     @axm2 y ∈ T

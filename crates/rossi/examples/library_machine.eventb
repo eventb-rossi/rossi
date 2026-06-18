@@ -2,7 +2,7 @@ MACHINE library
 SEES
     library_ctx
 VARIABLES
-    available_books, loans
+    available_books loans
 INVARIANTS
     @inv1 available_books ⊆ library_collection
     @inv2 loans ∈ MEMBERS ⇸ ℙ(BOOKS)

@@ -2,7 +2,7 @@ MACHINE simple_machine
 SEES
     simple_sets_ctx
 VARIABLES
-    active_persons, stored_items
+    active_persons stored_items
 INVARIANTS
     @inv1 active_persons <: PERSONS
     @inv2 stored_items <: ITEMS

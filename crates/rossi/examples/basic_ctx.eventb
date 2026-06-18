@@ -1,6 +1,6 @@
 CONTEXT basic_ctx
 CONSTANTS
-    min_value, max_value, default_value
+    min_value max_value default_value
 AXIOMS
     @axm1 min_value = 0
     @axm2 max_value = 100

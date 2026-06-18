@@ -217,10 +217,11 @@ fn commented_parameters_print_one_per_line() {
     let printed = to_string(&parse(src).unwrap());
     assert!(printed.contains("        a // first\n        b\n"));
 
-    // Without comments the joined one-line form is preserved.
-    let src2 = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a, b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 skip\n    END\nEND\n";
+    // Without comments the joined one-line form is preserved (parameters are
+    // whitespace-separated — a comma here is a parse error).
+    let src2 = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 skip\n    END\nEND\n";
     let printed2 = to_string(&parse(src2).unwrap());
-    assert!(printed2.contains("        a, b\n"));
+    assert!(printed2.contains("        a b\n"));
 }
 
 // =========================================================================

@@ -248,7 +248,6 @@ fn collect_identifiers_from_clause(
             Rule::component_name => {
                 identifiers.push(p.as_str().to_string());
             }
-            Rule::comma => {} // optional comma separator
             // Skip the leading clause keyword (varies by call site)
             Rule::kw_extends
             | Rule::kw_constants
@@ -258,7 +257,7 @@ fn collect_identifiers_from_clause(
             | Rule::kw_any => {}
             _ => {
                 return Err(ParseError::UnexpectedRule {
-                    expected: "identifier or comma".to_string(),
+                    expected: "identifier".to_string(),
                     found: format!("{:?}", p.as_rule()),
                 });
             }
@@ -285,12 +284,11 @@ fn collect_named_elements_from_clause(
                 comment: None,
                 span: Some(Span::from_pest(p.as_span())),
             }),
-            Rule::comma => {} // optional comma separator
             // Skip the leading clause keyword (varies by call site)
             Rule::kw_constants | Rule::kw_variables | Rule::kw_any => {}
             _ => {
                 return Err(ParseError::UnexpectedRule {
-                    expected: "identifier or comma".to_string(),
+                    expected: "identifier".to_string(),
                     found: format!("{:?}", p.as_rule()),
                 });
             }
@@ -354,10 +352,9 @@ fn collect_set_declarations(
             Rule::set_declaration => {
                 declarations.push(parse_set_declaration(p)?);
             }
-            Rule::comma => {}
             _ => {
                 return Err(ParseError::UnexpectedRule {
-                    expected: "set_declaration or comma".to_string(),
+                    expected: "set_declaration".to_string(),
                     found: format!("{:?}", p.as_rule()),
                 });
             }
@@ -3779,20 +3776,21 @@ fn extract_identifier(s: &str) -> Result<String, ParseError> {
     Ok(id.to_string())
 }
 
-/// Extract multiple identifiers from a comma-separated string
 /// Split a clause line into declared identifiers, each paired with its [`Span`].
+///
+/// Items are whitespace-separated, matching the structural grammar; a stray
+/// comma is tolerated as a separator too, so recovery still salvages names from
+/// a line a user wrote comma-separated even though the strict parser rejects it.
 ///
 /// `base` is the byte offset of `s` within the text whose coordinates the
 /// returned spans should use. Each identifier is a subslice of `s`, so its
 /// offset within `s` (recovered by pointer arithmetic, always on a char
 /// boundary) added to `base` gives a byte-exact span over the name.
 fn extract_identifiers(s: &str, base: usize) -> Vec<(String, Span)> {
-    s.split(',')
-        .map(|part| part.trim())
+    s.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|part| !part.is_empty())
-        .filter_map(|part| {
-            let id = part.split(char::is_whitespace).next().unwrap_or("").trim();
-            if !id.is_empty() && id.chars().next().is_some_and(|c| c.is_alphabetic()) {
+        .filter_map(|id| {
+            if id.chars().next().is_some_and(|c| c.is_alphabetic()) {
                 let start = base + subslice_offset(s, id);
                 let span = Span {
                     start,

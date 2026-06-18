@@ -251,7 +251,7 @@ fn test_pretty_print_expressions() {
 fn test_pretty_print_set_operations() {
     let source = r#"CONTEXT test
 CONSTANTS
-    s1, s2
+    s1 s2
 AXIOMS
     @axm1 s1 = {1, 2, 3}
 END
@@ -268,7 +268,7 @@ END
 fn test_pretty_print_logical_operators() {
     let source = r#"CONTEXT test
 CONSTANTS
-    x, y
+    x y
 AXIOMS
     @axm1 x > 0
     @axm2 y > 0
@@ -895,7 +895,7 @@ fn test_roundtrip_maplet_comma_comma() {
     let source = r#"
 MACHINE test
 VARIABLES
-    r, x, y
+    r x y
 INVARIANTS
     @inv1 r = x ,, y
 END
@@ -953,7 +953,7 @@ END
 "# ; "counter_example")]
 #[test_case(r#"CONTEXT test
 CONSTANTS
-    x, y, z
+    x y z
 AXIOMS
     @axm1 x = 5
     @axm2 x > 0
@@ -964,7 +964,7 @@ END
 "# ; "complex_predicates")]
 #[test_case(r#"CONTEXT test
 CONSTANTS
-    a, b, c, d
+    a b c d
 AXIOMS
     @axm1 a = b + c
     @axm2 a = b - c

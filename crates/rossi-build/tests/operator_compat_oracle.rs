@@ -129,7 +129,7 @@ fn all_cases() -> Vec<Case> {
 /// labels it rejected with an operator-incompatibility (`EB005` whose message
 /// names the incompatibility).
 fn oracle_incompatible_labels(oracle: &str, cases: &[Case]) -> BTreeMap<String, String> {
-    let mut model = String::from("CONTEXT probe\nCONSTANTS\n    a, b, c, r, x, y, z\nAXIOMS\n");
+    let mut model = String::from("CONTEXT probe\nCONSTANTS\n    a b c r x y z\nAXIOMS\n");
     for case in cases {
         model.push_str("    ");
         model.push_str(&case.axiom);

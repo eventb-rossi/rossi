@@ -1,6 +1,6 @@
 CONTEXT arithmetic
 CONSTANTS
-    add, sub, mul, divv, modd, expp, neg, cardc, minc, maxc
+    add sub mul divv modd expp neg cardc minc maxc
 AXIOMS
     @axm1 add = 2 + 3
     @axm2 sub = 7 − 2

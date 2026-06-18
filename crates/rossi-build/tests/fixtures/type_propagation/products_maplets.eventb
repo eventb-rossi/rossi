@@ -1,8 +1,8 @@
 CONTEXT products_maplets
 SETS
-    S, T, U
+    S T U
 CONSTANTS
-    x, y, z, prod, mp, mp3
+    x y z prod mp mp3
 AXIOMS
     @axm1 x ∈ S
     @axm2 y ∈ T

@@ -7,7 +7,7 @@ MACHINE seed_machine
 SEES
     seed_machine_ctx
 VARIABLES
-    v, w
+    v w
 INVARIANTS
     @inv1 v ∈ ℤ
     @inv2 w ∈ S ↔ ℤ

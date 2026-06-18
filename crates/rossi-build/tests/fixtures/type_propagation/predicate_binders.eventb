@@ -2,7 +2,7 @@ CONTEXT predicate_binders
 SETS
     S
 CONSTANTS
-    part_a, part_b, boolc, lt, le, qexpr
+    part_a part_b boolc lt le qexpr
 AXIOMS
     @axm1 partition(S, part_a, part_b)
     @axm2 boolc = bool(1 < 2)

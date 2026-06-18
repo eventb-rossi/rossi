@@ -2,7 +2,7 @@ CONTEXT comprehensions
 SETS
     S
 CONSTANTS
-    a, comp_long, comp_short, qunion, qinter
+    a comp_long comp_short qunion qinter
 AXIOMS
     @axm1 a ⊆ S
     @axm2 comp_long = {x · x ∈ a ∣ x}
