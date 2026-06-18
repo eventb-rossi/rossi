@@ -10,49 +10,20 @@ use rossi::ast::Span;
 use rossi::keywords::KeywordId;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::{component_at_offset, parse_all};
 use crate::formula_walk;
-use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::cross_references::{ComponentKind, CrossReferenceManager, ReferenceKind};
+use crate::cross_references::{CrossReferenceManager, ReferenceKind};
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
-use crate::symbols::{SymbolKind, SymbolRef, enumerate_symbols};
+use crate::symbols::{
+    SymbolIdentity, SymbolKind, candidate_components_for_symbol, resolve_symbol_identity,
+    resolve_symbol_identity_in_component,
+};
 use crate::text_utils;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SymbolIdentity {
-    name: String,
-    kind: SymbolKind,
-    owner: String,
-    event: Option<String>,
-}
-
-impl SymbolIdentity {
-    fn parameter(name: &str, machine_name: &str, event_name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            kind: SymbolKind::Parameter,
-            owner: machine_name.to_string(),
-            event: Some(event_name.to_string()),
-        }
-    }
-}
-
-impl From<SymbolRef> for SymbolIdentity {
-    fn from(symbol: SymbolRef) -> Self {
-        Self {
-            name: symbol.name,
-            kind: symbol.kind,
-            owner: symbol.owner,
-            event: symbol.event,
-        }
-    }
-}
 
 /// Provider for finding all references to symbols
 pub struct ReferenceProvider {
@@ -194,7 +165,7 @@ impl ReferenceProvider {
         }
 
         if let Some(symbol) =
-            self.resolve_symbol_identity(text, masked, position, identifier, &loader, cursor)
+            resolve_symbol_identity(text, masked, position, identifier, &loader, cursor)
         {
             return self.find_references_for_symbol(&symbol, &loader);
         }
@@ -238,12 +209,12 @@ impl ReferenceProvider {
             return locations;
         }
 
-        for component_name in self.candidate_components_for_symbol(symbol, loader.manager()) {
+        for component_name in candidate_components_for_symbol(symbol, loader.manager()) {
             let Some(loaded) = loader.load(&component_name) else {
                 continue;
             };
 
-            if self.resolve_symbol_identity_in_component(loaded.component(), &symbol.name, loader)
+            if resolve_symbol_identity_in_component(loaded.component(), &symbol.name, loader)
                 == Some(symbol.clone())
             {
                 // Event names are not formula identifiers, so they stay on the
@@ -268,149 +239,6 @@ impl ReferenceProvider {
         }
 
         locations
-    }
-
-    fn resolve_symbol_identity(
-        &self,
-        text: &str,
-        masked: &str,
-        position: Position,
-        identifier: &str,
-        loader: &ComponentLoader,
-        cursor: Option<&ParsedDocument>,
-    ) -> Option<SymbolIdentity> {
-        let offset = position_to_offset(text, position).unwrap_or(text.len());
-
-        // Reuse the open document's stored parse when we have it; otherwise
-        // recover from local errors (via the shared helper) so a symbol
-        // elsewhere in a broken document is still resolvable. An empty result
-        // resolves to no component below. `text` and `cursor` are the same
-        // snapshot, so the offset and the component spans agree.
-        let owned;
-        let components: &[Component] = match cursor {
-            Some(parsed) => parsed.components(),
-            None => {
-                owned = parse_all(text);
-                &owned
-            }
-        };
-        let component = component_at_offset(components, offset)?;
-        self.resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
-    }
-
-    fn resolve_symbol_identity_at_position(
-        &self,
-        component: &Component,
-        masked: &str,
-        position: Position,
-        identifier: &str,
-        loader: &ComponentLoader,
-    ) -> Option<SymbolIdentity> {
-        if let Component::Machine(machine) = component
-            && let Some(parameter) =
-                local_parameter_symbol_identity_at_position(machine, masked, position, identifier)
-        {
-            return Some(parameter);
-        }
-
-        self.resolve_symbol_identity_in_component(component, identifier, loader)
-    }
-
-    fn resolve_symbol_identity_in_component(
-        &self,
-        component: &Component,
-        identifier: &str,
-        loader: &ComponentLoader,
-    ) -> Option<SymbolIdentity> {
-        if let Some(local) = local_symbol_identity(component, identifier) {
-            return Some(local);
-        }
-
-        let manager = loader.manager();
-        match component {
-            Component::Machine(machine) => {
-                for machine_name in manager.refinement_chain(&machine.name) {
-                    if let Some(loaded) = loader.load(&machine_name)
-                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                    {
-                        return Some(symbol);
-                    }
-                }
-
-                for context_name in manager.ordered_visible_contexts(&machine.name) {
-                    if let Some(loaded) = loader.load(&context_name)
-                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                    {
-                        return Some(symbol);
-                    }
-                }
-            }
-            Component::Context(context) => {
-                for context_name in manager.ordered_extends_chain(&context.name) {
-                    if let Some(loaded) = loader.load(&context_name)
-                        && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                    {
-                        return Some(symbol);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn candidate_components_for_symbol(
-        &self,
-        symbol: &SymbolIdentity,
-        manager: &CrossReferenceManager,
-    ) -> Vec<String> {
-        if symbol.kind == SymbolKind::Parameter {
-            return vec![symbol.owner.clone()];
-        }
-
-        let mut candidates = Vec::new();
-        let mut component_names = manager.all_component_names();
-        component_names.sort();
-
-        for component_name in component_names {
-            if component_name == symbol.owner {
-                candidates.push(component_name);
-                continue;
-            }
-
-            let Some(info) = manager.get_component(&component_name) else {
-                continue;
-            };
-
-            match (symbol.kind, info.kind) {
-                (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Context)
-                    if manager
-                        .ordered_extends_chain(&component_name)
-                        .contains(&symbol.owner) =>
-                {
-                    candidates.push(component_name);
-                }
-                (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Machine)
-                    if manager
-                        .ordered_visible_contexts(&component_name)
-                        .contains(&symbol.owner) =>
-                {
-                    candidates.push(component_name);
-                }
-                (SymbolKind::Variable | SymbolKind::Event, ComponentKind::Machine)
-                    if manager
-                        .refinement_chain(&component_name)
-                        .contains(&symbol.owner) =>
-                {
-                    candidates.push(component_name);
-                }
-                _ => {}
-            }
-        }
-
-        candidates.sort();
-        candidates.dedup();
-        candidates
     }
 }
 
@@ -446,34 +274,6 @@ fn find_references_in_workspace(loader: &ComponentLoader, identifier: &str) -> V
     }
 
     locations
-}
-
-/// Resolve `identifier` to a symbol declared directly in `component`.
-///
-/// Parameters are excluded here — they are scoped to an event body and resolved
-/// positionally by [`local_parameter_symbol_identity_at_position`].
-fn local_symbol_identity(component: &Component, identifier: &str) -> Option<SymbolIdentity> {
-    enumerate_symbols(component)
-        .into_iter()
-        .find(|symbol| symbol.name == identifier && symbol.kind != SymbolKind::Parameter)
-        .map(SymbolIdentity::from)
-}
-
-fn local_parameter_symbol_identity_at_position(
-    machine: &rossi::Machine,
-    masked: &str,
-    position: Position,
-    identifier: &str,
-) -> Option<SymbolIdentity> {
-    // The shared resolver owns the event-at-position scoping (also used by
-    // hover), so find-references and hover cannot disagree on whether a name is
-    // an event parameter here.
-    let event = text_utils::event_parameter_at_position(machine, masked, position, identifier)?;
-    Some(SymbolIdentity::parameter(
-        identifier,
-        &machine.name,
-        &event.name,
-    ))
 }
 
 fn push_unique_locations(

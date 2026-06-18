@@ -1,11 +1,24 @@
-//! Shared Event-B symbol model for LSP providers.
+//! Shared Event-B symbol model and cursor-to-symbol resolution for LSP providers.
 //!
 //! `SymbolKind` classifies the five kinds of named symbols, and
-//! `enumerate_symbols` walks a parsed `Component` to list them. Go-to-definition
-//! and find-references both build on this single taxonomy so it can't drift
-//! between features.
+//! `enumerate_symbols` walks a parsed `Component` to list them. On top of that
+//! taxonomy, `SymbolIdentity` names a *resolved* symbol (its declaring
+//! component, and the event for a parameter) and the `resolve_symbol_identity*`
+//! functions turn a cursor position into one, scope-aware: an event `ANY`
+//! parameter is resolved to its own event, and a global symbol is resolved to
+//! the component that declares it by walking the refinement / sees / extends
+//! chains. Go-to-definition and find-references both build on this single
+//! resolver so the two features cannot drift on what a name means.
 
 use rossi::Component;
+
+use crate::component_loader::ComponentLoader;
+use crate::component_util::{component_at_offset, parse_all};
+use crate::cross_references::{ComponentKind, CrossReferenceManager};
+use crate::document::ParsedDocument;
+use crate::identifier_utils::position_to_offset;
+use crate::lsp_types::Position;
+use crate::text_utils;
 
 /// The kind of an Event-B named symbol.
 ///
@@ -94,4 +107,222 @@ pub fn enumerate_symbols(component: &Component) -> Vec<SymbolRef> {
     }
 
     symbols
+}
+
+/// A resolved symbol: which named entity a cursor position refers to.
+///
+/// `owner` is the component that *declares* the symbol (not necessarily the
+/// component under the cursor — a name may resolve up a refinement / sees /
+/// extends chain), and `event` is the enclosing event for a parameter. This is
+/// the identity find-references groups its hits by and go-to-definition maps to
+/// a declaration site.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SymbolIdentity {
+    pub(crate) name: String,
+    pub(crate) kind: SymbolKind,
+    pub(crate) owner: String,
+    pub(crate) event: Option<String>,
+}
+
+impl SymbolIdentity {
+    pub(crate) fn parameter(name: &str, machine_name: &str, event_name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            kind: SymbolKind::Parameter,
+            owner: machine_name.to_string(),
+            event: Some(event_name.to_string()),
+        }
+    }
+}
+
+impl From<SymbolRef> for SymbolIdentity {
+    fn from(symbol: SymbolRef) -> Self {
+        Self {
+            name: symbol.name,
+            kind: symbol.kind,
+            owner: symbol.owner,
+            event: symbol.event,
+        }
+    }
+}
+
+/// Resolve the identifier at `position` to the symbol it names, scope-aware.
+///
+/// `text` is the document the offsets index into and `masked` its
+/// comment-masked form; `cursor` is the document's stored parse when it is open
+/// (its components and `text` are one snapshot). When there is no stored parse
+/// (no document manager, or a not-yet-opened file), the text is parsed with
+/// error recovery so a symbol elsewhere in a broken document is still resolvable.
+pub(crate) fn resolve_symbol_identity(
+    text: &str,
+    masked: &str,
+    position: Position,
+    identifier: &str,
+    loader: &ComponentLoader,
+    cursor: Option<&ParsedDocument>,
+) -> Option<SymbolIdentity> {
+    let offset = position_to_offset(text, position).unwrap_or(text.len());
+
+    let owned;
+    let components: &[Component] = match cursor {
+        Some(parsed) => parsed.components(),
+        None => {
+            owned = parse_all(text);
+            &owned
+        }
+    };
+    let component = component_at_offset(components, offset)?;
+    resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
+}
+
+/// Resolve `identifier` within the component the cursor sits in. An event `ANY`
+/// parameter (scoped to its event and shadowing a same-named global) is tried
+/// first, positionally, before the component-wide symbols.
+fn resolve_symbol_identity_at_position(
+    component: &Component,
+    masked: &str,
+    position: Position,
+    identifier: &str,
+    loader: &ComponentLoader,
+) -> Option<SymbolIdentity> {
+    if let Component::Machine(machine) = component
+        && let Some(parameter) =
+            local_parameter_symbol_identity_at_position(machine, masked, position, identifier)
+    {
+        return Some(parameter);
+    }
+
+    resolve_symbol_identity_in_component(component, identifier, loader)
+}
+
+/// Resolve `identifier` to a symbol visible from `component`: declared directly,
+/// or inherited through the refinement chain (machines), the visible contexts
+/// (machines), or the extends chain (contexts). The local component is checked
+/// first, so a local declaration shadows a same-named inherited one.
+pub(crate) fn resolve_symbol_identity_in_component(
+    component: &Component,
+    identifier: &str,
+    loader: &ComponentLoader,
+) -> Option<SymbolIdentity> {
+    if let Some(local) = local_symbol_identity(component, identifier) {
+        return Some(local);
+    }
+
+    let manager = loader.manager();
+    match component {
+        Component::Machine(machine) => {
+            for machine_name in manager.refinement_chain(&machine.name) {
+                if let Some(loaded) = loader.load(&machine_name)
+                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
+                {
+                    return Some(symbol);
+                }
+            }
+
+            for context_name in manager.ordered_visible_contexts(&machine.name) {
+                if let Some(loaded) = loader.load(&context_name)
+                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
+                {
+                    return Some(symbol);
+                }
+            }
+        }
+        Component::Context(context) => {
+            for context_name in manager.ordered_extends_chain(&context.name) {
+                if let Some(loaded) = loader.load(&context_name)
+                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
+                {
+                    return Some(symbol);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Every component that could hold a reference to `symbol`: its owner plus the
+/// components that inherit it (contexts/machines extending or seeing the owner,
+/// machines refining it). A parameter is event-local, so only its owner.
+pub(crate) fn candidate_components_for_symbol(
+    symbol: &SymbolIdentity,
+    manager: &CrossReferenceManager,
+) -> Vec<String> {
+    if symbol.kind == SymbolKind::Parameter {
+        return vec![symbol.owner.clone()];
+    }
+
+    let mut candidates = Vec::new();
+    let mut component_names = manager.all_component_names();
+    component_names.sort();
+
+    for component_name in component_names {
+        if component_name == symbol.owner {
+            candidates.push(component_name);
+            continue;
+        }
+
+        let Some(info) = manager.get_component(&component_name) else {
+            continue;
+        };
+
+        match (symbol.kind, info.kind) {
+            (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Context)
+                if manager
+                    .ordered_extends_chain(&component_name)
+                    .contains(&symbol.owner) =>
+            {
+                candidates.push(component_name);
+            }
+            (SymbolKind::Set | SymbolKind::Constant, ComponentKind::Machine)
+                if manager
+                    .ordered_visible_contexts(&component_name)
+                    .contains(&symbol.owner) =>
+            {
+                candidates.push(component_name);
+            }
+            (SymbolKind::Variable | SymbolKind::Event, ComponentKind::Machine)
+                if manager
+                    .refinement_chain(&component_name)
+                    .contains(&symbol.owner) =>
+            {
+                candidates.push(component_name);
+            }
+            _ => {}
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+/// Resolve `identifier` to a symbol declared directly in `component`.
+///
+/// Parameters are excluded here — they are scoped to an event body and resolved
+/// positionally by [`resolve_symbol_identity_at_position`].
+fn local_symbol_identity(component: &Component, identifier: &str) -> Option<SymbolIdentity> {
+    enumerate_symbols(component)
+        .into_iter()
+        .find(|symbol| symbol.name == identifier && symbol.kind != SymbolKind::Parameter)
+        .map(SymbolIdentity::from)
+}
+
+/// Resolve `identifier` to the event `ANY` parameter it names, when the cursor's
+/// line falls inside an event whose parameters include it. The shared resolver
+/// [`text_utils::event_parameter_at_position`] owns the event-at-position
+/// scoping (also used by hover), so the features cannot disagree on whether a
+/// name is an event parameter here.
+fn local_parameter_symbol_identity_at_position(
+    machine: &rossi::Machine,
+    masked: &str,
+    position: Position,
+    identifier: &str,
+) -> Option<SymbolIdentity> {
+    let event = text_utils::event_parameter_at_position(machine, masked, position, identifier)?;
+    Some(SymbolIdentity::parameter(
+        identifier,
+        &machine.name,
+        &event.name,
+    ))
 }
