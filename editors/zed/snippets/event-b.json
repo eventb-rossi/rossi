@@ -97,14 +97,14 @@
   "For All (Universal Quantification)": {
     "prefix": "forall",
     "body": [
-      "∀${1:x}·(${2:x} ∈ ${3:set} ⇒ ${4:predicate})"
+      "∀ ${1:x} · ${2:predicate}"
     ],
     "description": "Universal quantification (forall)"
   },
   "Exists (Existential Quantification)": {
     "prefix": "exists",
     "body": [
-      "∃${1:x}·(${2:x} ∈ ${3:set} ∧ ${4:predicate})"
+      "∃ ${1:x} · ${2:predicate}"
     ],
     "description": "Existential quantification (exists)"
   },
