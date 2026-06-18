@@ -555,8 +555,13 @@ action_list = {
 // Context
 // ==========================
 
+// Follow-set guard (single source of truth): the keywords that may open the
+// next context section. Used to bound the identifier/declaration lists below;
+// silent, since it only ever appears inside a negative lookahead.
+context_section_kw = _{ kw_extends | kw_sets | kw_constants | kw_axioms | kw_theorems | kw_end }
+
 context_clause_extends = {
-    kw_extends ~ component_name ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ component_name)*
+    kw_extends ~ component_name ~ (comma? ~ !context_section_kw ~ component_name)*
 }
 
 // Set declaration: deferred set (S) or enumerated set (S = {a, b, c})
@@ -565,11 +570,11 @@ set_declaration = {
 }
 
 context_clause_sets = {
-    kw_sets ~ set_declaration ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ set_declaration)*
+    kw_sets ~ set_declaration ~ (comma? ~ !context_section_kw ~ set_declaration)*
 }
 
 context_clause_constants = {
-    kw_constants ~ identifier ~ (comma? ~ !kw_extends ~ !kw_sets ~ !kw_constants ~ !kw_axioms ~ !kw_theorems ~ !kw_end ~ identifier)*
+    kw_constants ~ identifier ~ (comma? ~ !context_section_kw ~ identifier)*
 }
 
 // Label: "@" followed by any non-whitespace characters, per the TextEditor EBNF spec:
@@ -609,16 +614,21 @@ context = {
 // Machine
 // ==========================
 
+// Follow-set guard (single source of truth): the keywords that may open the
+// next machine section. Bounds the sees/variables lists below; silent, since it
+// only ever appears inside a negative lookahead.
+machine_section_kw = _{ kw_refines | kw_sees | kw_variables | kw_invariants | kw_theorems | kw_variant | kw_events | kw_end }
+
 machine_clause_refines = {
     kw_refines ~ component_name
 }
 
 machine_clause_sees = {
-    kw_sees ~ component_name ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ component_name)*
+    kw_sees ~ component_name ~ (comma? ~ !machine_section_kw ~ component_name)*
 }
 
 machine_clause_variables = {
-    kw_variables ~ identifier ~ (comma? ~ !kw_refines ~ !kw_sees ~ !kw_variables ~ !kw_invariants ~ !kw_theorems ~ !kw_variant ~ !kw_events ~ !kw_end ~ identifier)*
+    kw_variables ~ identifier ~ (comma? ~ !machine_section_kw ~ identifier)*
 }
 
 machine_clause_invariants = {
@@ -648,8 +658,13 @@ event_refines = {
     kw_refines ~ component_name
 }
 
+// Follow-set guard (single source of truth): the keywords that may open the
+// next event clause. Bounds the ANY parameter list; silent, since it only ever
+// appears inside a negative lookahead.
+event_section_kw = _{ kw_where | kw_when | kw_with | kw_witness | kw_then | kw_begin | kw_end }
+
 event_any = {
-    kw_any ~ identifier ~ (comma? ~ !kw_where ~ !kw_when ~ !kw_with ~ !kw_witness ~ !kw_then ~ !kw_begin ~ !kw_end ~ identifier)*
+    kw_any ~ identifier ~ (comma? ~ !event_section_kw ~ identifier)*
 }
 
 event_where = {
