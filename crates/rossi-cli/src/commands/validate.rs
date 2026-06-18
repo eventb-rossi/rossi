@@ -635,12 +635,12 @@ mod tests {
         // The reported bug: a lint diagnostic must land on the declaration
         // line, not line 1. Validating the source directly resolves the span
         // the lint attached.
-        let source = "CONTEXT C\nSETS\n    Union\nEND\n";
+        let source = "CONTEXT C\nSETS\n    UNION\nEND\n";
         let components = rossi::parse_components(source).unwrap();
         let diag = rossi_build::lint::run_component(&components[0])
             .into_iter()
             .find(|d| d.rule_id == Some(RuleId::ShadowedName))
-            .expect("Union shadows the powerset token");
+            .expect("UNION shadows the quantified-union token");
         let result = fold_diagnostic(Path::new("c.eventb"), diag, None, Some(source));
         let region = result.region.expect("region resolved from the lint span");
         assert_eq!((region.start_line, region.start_column), (3, 5));

@@ -775,8 +775,8 @@ impl PrettyPrinter {
     /// Convert a Predicate to text
     pub fn print_predicate(&self, pred: &Predicate) -> String {
         match &pred.kind {
-            PredicateKind::True => self.sym("⊤", "TRUE").to_string(),
-            PredicateKind::False => self.sym("⊥", "FALSE").to_string(),
+            PredicateKind::True => self.sym("⊤", "true").to_string(),
+            PredicateKind::False => self.sym("⊥", "false").to_string(),
 
             PredicateKind::Comparison { op, left, right } => {
                 let op_str = self.print_comparison_op(*op);

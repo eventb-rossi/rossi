@@ -104,12 +104,17 @@ pub fn is_reserved_operator_word(word: &str) -> bool {
     RESERVED_OPERATOR_WORDS.contains(&word)
 }
 
-/// Words whose grammar tokens are case-insensitive (`^"…"` rules in
-/// `grammar.pest`): every spelling of these lexes as a token (`Nat`, `TRUE`,
-/// `Union`), so no case variant can ever be an identifier. Structural
-/// keywords are covered separately by [`crate::keywords::is_keyword`].
-const CASE_INSENSITIVE_TOKEN_WORDS: &[&str] = &[
-    "bool", "true", "false", "nat", "nat1", "int", "union", "inter",
+/// Grammar keyword-token spellings (the `kw_*` atoms and quantified-set
+/// operators in `grammar.pest`), each lexing in exactly its kernel-language
+/// case — uppercase number/set atoms and boolean values/type, lowercase
+/// predicate literals and the `bool` conversion. A name spelled like any of
+/// these can never be a user identifier; other-case spellings (`Nat`, `pow`,
+/// `Bool`) are ordinary identifiers. `TRUE`/`FALSE`/`BOOL`/`bool` also live in
+/// [`RESERVED_ATOM_WORDS`] and `union`/`inter` in [`RESERVED_OPERATOR_WORDS`];
+/// they are listed here too so the keyword-token case rule sits in one place.
+/// Structural keywords are covered separately by [`crate::keywords::is_keyword`].
+const KEYWORD_TOKEN_WORDS: &[&str] = &[
+    "NAT", "NAT1", "INT", "UNION", "INTER", "BOOL", "TRUE", "FALSE", "bool", "true", "false",
 ];
 
 /// ASCII operator spellings that are tokens only in rossi's *textual syntax*
@@ -124,19 +129,17 @@ const ASCII_OPERATOR_WORDS: &[&str] = &["circ", "not", "oftype", "or", "POW", "P
 
 /// Whether `word` cannot (or cannot safely) *name* a user identifier in
 /// rossi's textual syntax — the blocklist for tools that introduce names,
-/// e.g. rename. Composes each word's own case rule:
-/// - kernel_lang §2.2 reserved words: exact-case ([`is_reserved_word`];
-///   `Dom`, `Card` stay usable, matching the parser);
-/// - case-insensitive token words: any spelling;
-/// - rossi's ASCII operator spellings: exact-case.
+/// e.g. rename. Every word is matched exact-case, matching its grammar token:
+/// - kernel_lang §2.2 reserved words ([`is_reserved_word`]; `Dom`, `Card` stay
+///   usable, matching the parser);
+/// - grammar keyword tokens (`KEYWORD_TOKEN_WORDS`; `Nat`, `pow` stay usable);
+/// - rossi's ASCII operator spellings (`ASCII_OPERATOR_WORDS`).
 ///
 /// Callers should also reject structural keywords via
 /// [`crate::keywords::is_keyword`] (case-insensitive, like their tokens).
 pub fn is_reserved_name(word: &str) -> bool {
     is_reserved_word(word)
-        || CASE_INSENSITIVE_TOKEN_WORDS
-            .iter()
-            .any(|w| w.eq_ignore_ascii_case(word))
+        || KEYWORD_TOKEN_WORDS.contains(&word)
         || ASCII_OPERATOR_WORDS.contains(&word)
 }
 
@@ -227,11 +230,17 @@ mod tests {
         assert!(is_reserved_name("pred"));
         assert!(!is_reserved_name("Dom"));
         assert!(!is_reserved_name("CARD"));
-        // Case-insensitive token words: any spelling lexes as a token.
+        // Grammar keyword tokens: exact-case only. Uppercase number/set atoms
+        // and boolean values/type; lowercase predicate literals and `bool`.
         for w in [
-            "TRUE", "True", "true", "Nat", "NAT1", "Int", "Union", "INTER",
+            "NAT", "NAT1", "INT", "UNION", "INTER", "TRUE", "FALSE", "BOOL", "true", "false",
+            "bool",
         ] {
-            assert!(is_reserved_name(w), "{w:?} always lexes as a token");
+            assert!(is_reserved_name(w), "{w:?} lexes as a token");
+        }
+        // Other-case spellings are ordinary identifiers now.
+        for w in ["Nat", "nat", "Int", "Union", "True", "Bool", "FALSe"] {
+            assert!(!is_reserved_name(w), "{w:?} must be a usable identifier");
         }
         // ASCII operator spellings: exact-case only.
         assert!(is_reserved_name("or"));

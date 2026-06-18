@@ -844,54 +844,23 @@ fn test_nat_still_works() {
     }
 }
 
-#[test]
-fn test_nat1_case_insensitive() {
+// ASCII type-set spellings are exact-case (uppercase NAT1/INT); the lowercase
+// form is an ordinary identifier, not the type set.
+#[test_case::test_case("nat1", "Naturals1" ; "nat1")]
+#[test_case::test_case("int", "Integers" ; "int")]
+fn lowercase_type_keyword_is_identifier(word: &str, type_set: &str) {
     use rossi::ExpressionKind;
 
-    let m = common::parse_machine(
-        r#"
-    MACHINE test
-    VARIABLES
-        x
-    INVARIANTS
-        @inv1 x ∈ nat1
-    END
-    "#,
-    );
-    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
-        assert_eq!(
-            *right,
-            ExpressionKind::Naturals1.into(),
-            "nat1 should parse as Naturals1"
-        );
-    } else {
+    let source = common::invariant_machine("x", &format!("x ∈ {word}"));
+    let m = common::parse_machine(&source);
+    let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind else {
         panic!("Expected Comparison predicate");
-    }
-}
-
-#[test]
-fn test_int_case_insensitive() {
-    use rossi::ExpressionKind;
-
-    let m = common::parse_machine(
-        r#"
-    MACHINE test
-    VARIABLES
-        x
-    INVARIANTS
-        @inv1 x ∈ int
-    END
-    "#,
+    };
+    assert_eq!(
+        *right,
+        ExpressionKind::Identifier(word.to_string()).into(),
+        "lowercase {word} is an ordinary identifier, not {type_set}"
     );
-    if let rossi::PredicateKind::Comparison { right, .. } = &m.invariants[0].predicate.kind {
-        assert_eq!(
-            *right,
-            ExpressionKind::Integers.into(),
-            "int should parse as Integers"
-        );
-    } else {
-        panic!("Expected Comparison predicate");
-    }
 }
 
 #[test]

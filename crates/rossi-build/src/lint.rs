@@ -204,8 +204,8 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
 /// ([`rossi::builtins::is_reserved_word`]) but deliberately accepts the rest
 /// — Rodin allows them as identifiers, so imported models must load. The
 /// trap is silent: a constant `POW` declares fine and `POW = f` works, but
-/// `POW(f)` parses as the powerset `ℙ(f)`; a constant `Nat` can never be
-/// referenced at all (`Nat` lexes as `ℕ`). Warn at the declaration.
+/// `POW(f)` parses as the powerset `ℙ(f)`; a constant `NAT` can never be
+/// referenced at all (`NAT` lexes as `ℕ`). Warn at the declaration.
 fn shadowed_name_diag(
     component: &str,
     kind: &str,
@@ -221,7 +221,7 @@ fn shadowed_name_diag(
         message: format!(
             "{kind} `{name}` collides with rossi's textual operator vocabulary; \
              uses can silently parse as the built-in token instead of this \
-             identifier (e.g. `POW(S)` is the powerset, `Nat` is ℕ) — rename it"
+             identifier (e.g. `POW(S)` is the powerset, `NAT` is ℕ) — rename it"
         ),
         rule_id: Some(RuleId::ShadowedName),
         span,
@@ -894,14 +894,21 @@ mod tests {
 
     #[test]
     fn shadowed_names_are_flagged() {
-        // `POW` (exact ASCII operator spelling) and `Nat` (case variant of
-        // the case-insensitive ℕ token) warn; `Dom`, `pow`, `OR` are ordinary
-        // identifiers and stay silent. The §2.2 reserved words never reach
-        // the lint — the parser rejects their declarations outright.
+        // `POW` (exact ASCII operator spelling) and `NAT` (the exact-case ℕ
+        // token) warn; `Dom`, `pow`, `Nat`, `OR` are ordinary identifiers and
+        // stay silent. The §2.2 reserved words never reach the lint — the
+        // parser rejects their declarations outright.
         let mut c = Context::new("C".into());
-        c.constants = vec![nv("POW"), nv("Dom"), nv("pow"), nv("OR"), nv("price")];
+        c.constants = vec![
+            nv("POW"),
+            nv("Dom"),
+            nv("pow"),
+            nv("Nat"),
+            nv("OR"),
+            nv("price"),
+        ];
         c.sets = vec![rossi::SetDeclaration::Deferred {
-            name: "Nat".into(),
+            name: "NAT".into(),
             comment: None,
             span: None,
         }];
@@ -917,7 +924,7 @@ mod tests {
             .collect();
         assert_eq!(shadowed.len(), 2, "{shadowed:?}");
         assert!(shadowed.iter().any(|d| d.origin == "C.POW"));
-        assert!(shadowed.iter().any(|d| d.origin == "C.Nat"));
+        assert!(shadowed.iter().any(|d| d.origin == "C.NAT"));
     }
 
     #[test]
@@ -933,7 +940,7 @@ mod tests {
             comment: None,
             span: Some(set_span),
         }];
-        c.constants = vec![rossi::NamedElement::with_span("Nat".into(), const_span)];
+        c.constants = vec![rossi::NamedElement::with_span("NAT".into(), const_span)];
 
         let diags = run_component(&Component::Context(c));
         let shadowed: Vec<_> = diags
@@ -946,7 +953,7 @@ mod tests {
             Some(set_span)
         );
         assert_eq!(
-            shadowed.iter().find(|d| d.origin == "C.Nat").unwrap().span,
+            shadowed.iter().find(|d| d.origin == "C.NAT").unwrap().span,
             Some(const_span)
         );
     }
