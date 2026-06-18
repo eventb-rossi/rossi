@@ -6,9 +6,9 @@
 //! - Identifiers (variables, constants, sets, parameters)
 //! - Built-in types and constants
 
-use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
+use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position};
 use rossi::{
-    Component, Expression, ExpressionKind, LabeledPredicate, Predicate, PredicateKind,
+    Component, Event, Expression, ExpressionKind, LabeledPredicate, Predicate, PredicateKind,
     PrettyPrinter,
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
@@ -21,6 +21,7 @@ use crate::component_util::component_at_offset;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::identifier_utils::position_to_offset;
+use crate::text_utils;
 
 /// Context information extracted from a parsed component
 #[derive(Debug, Clone)]
@@ -180,25 +181,29 @@ impl HoverProvider {
         // Select the cursor's component against the stored parse's own text, so
         // the offset and the component spans index one snapshot — the handler
         // `text` is a separate copy a concurrent edit can desync from the parse.
-        let hover_ctx = parsed
-            .as_deref()
-            .and_then(|parsed| {
-                let offset =
-                    position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
-                component_at_offset(parsed.components(), offset).map(|component| {
-                    HoverContext::from_component_with_refs(component, loader.as_ref())
-                })
-            })
+        // Both the global hover context and the parameter hover are views on
+        // this one component, so it is resolved once here.
+        let cursor_component = parsed.as_deref().and_then(|parsed| {
+            let offset = position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
+            component_at_offset(parsed.components(), offset)
+        });
+        let hover_ctx = cursor_component
+            .map(|component| HoverContext::from_component_with_refs(component, loader.as_ref()))
             .unwrap_or_else(HoverContext::new);
 
         // Get the token at cursor — an identifier or a whole (possibly
         // multi-character) operator like `:=`.
         let (word, range) = word_at_position(text, position)?;
 
-        // Try different hover providers in order
+        // Try different hover providers in order. An event ANY-clause parameter
+        // is scoped to its event and shadows a same-named global, so it is
+        // resolved positionally (via the resolver find-references shares) and
+        // tried before the component-wide identifier hover.
+        let parse_text = parsed.as_deref().map(|parsed| parsed.text.as_str());
         let mut hover = self
             .hover_keyword(&word)
             .or_else(|| self.hover_operator(&word))
+            .or_else(|| hover_parameter(&word, cursor_component, parse_text, position))
             .or_else(|| self.hover_identifier(&word, &hover_ctx))
             .or_else(|| self.hover_builtin(&word))?;
 
@@ -235,10 +240,7 @@ impl HoverProvider {
                 source
             );
             if let Some(constraints) = ctx.constraints.get(word) {
-                description.push_str("\n\n**Invariants:**\n");
-                for c in constraints {
-                    description.push_str(&format!("- `{}`\n", c));
-                }
+                append_constraint_section(&mut description, "Invariants", constraints);
             }
             return Some(create_hover(&format!("Variable: {}", word), &description));
         }
@@ -250,10 +252,7 @@ impl HoverProvider {
                 source
             );
             if let Some(constraints) = ctx.constraints.get(word) {
-                description.push_str("\n\n**Axioms:**\n");
-                for c in constraints {
-                    description.push_str(&format!("- `{}`\n", c));
-                }
+                append_constraint_section(&mut description, "Axioms", constraints);
             }
             return Some(create_hover(&format!("Constant: {}", word), &description));
         }
@@ -265,10 +264,7 @@ impl HoverProvider {
                 source
             );
             if let Some(constraints) = ctx.constraints.get(word) {
-                description.push_str("\n\n**Properties:**\n");
-                for c in constraints {
-                    description.push_str(&format!("- `{}`\n", c));
-                }
+                append_constraint_section(&mut description, "Properties", constraints);
             }
             return Some(create_hover(&format!("Set: {}", word), &description));
         }
@@ -520,6 +516,57 @@ fn collect_constraints(predicates: &[LabeledPredicate], id: &str) -> Vec<String>
             }
         })
         .collect()
+}
+
+/// Append a markdown bullet list of `constraints` under a bold `**{header}:**`
+/// heading to `description`, or nothing when `constraints` is empty. Shared by
+/// the variable/constant/set hovers (their invariants/axioms/properties) and
+/// the parameter hover (its guards) so the list formatting lives in one place.
+fn append_constraint_section(description: &mut String, header: &str, constraints: &[String]) {
+    if constraints.is_empty() {
+        return;
+    }
+    description.push_str(&format!("\n\n**{header}:**\n"));
+    for constraint in constraints {
+        description.push_str(&format!("- `{constraint}`\n"));
+    }
+}
+
+/// Hover for an event `ANY`-clause parameter under the cursor. `component` and
+/// `text` are the cursor's component and the stored parse's own text (the
+/// snapshot its spans index into), already resolved by `hover`. Returns `None`
+/// when the document is not open, the cursor is not inside a machine event, or
+/// `word` is not one of that event's parameters.
+fn hover_parameter(
+    word: &str,
+    component: Option<&Component>,
+    text: Option<&str>,
+    position: Position,
+) -> Option<Hover> {
+    let Component::Machine(machine) = component? else {
+        return None;
+    };
+    let masked = rossi::comments::mask_comments_chars(text?);
+    text_utils::event_parameter_at_position(machine, &masked, position, word)
+        .map(|event| build_param_hover(word, &machine.name, event))
+}
+
+/// Hover for an event `ANY`-clause parameter: the event and machine it belongs
+/// to, plus the guards that mention it (mirroring the invariants/axioms shown
+/// for variables and constants). `with` / witness predicates are intentionally
+/// excluded — those witness *abstract* symbols during refinement and would
+/// mislabel the parameter.
+fn build_param_hover(word: &str, machine_name: &str, event: &Event) -> Hover {
+    let mut description = format!(
+        "**Parameter** of event `{}` in machine `{}`\n\nLocal variable bound by the event's `ANY` clause.",
+        event.name, machine_name
+    );
+    append_constraint_section(
+        &mut description,
+        "Guards",
+        &collect_constraints(&event.guards, word),
+    );
+    create_hover(&format!("Parameter: {}", word), &description)
 }
 
 // Helper functions
@@ -1194,6 +1241,98 @@ mod tests {
             panic!("expected markup content");
         };
         assert!(content.value.contains("Constant"));
+    }
+
+    // A machine where the event parameter `p` shadows a same-named state
+    // variable, `q` is a plain parameter, and `v` is a global used inside the
+    // event body. Event `e` spans lines 7..=16.
+    const PARAM_MACHINE: &str = "MACHINE m\nVARIABLES\n    p\n    v\nINVARIANTS\n    @inv1 p ∈ ℕ\nEVENTS\n  EVENT e\n  ANY\n    q\n    p\n  WHERE\n    @grd1 q ∈ ℕ\n    @grd2 p > q\n  THEN\n    @act1 v ≔ q\n  END\nEND";
+
+    fn hover_with_doc(source: &str, line: u32, character: u32) -> Option<Hover> {
+        let uri = "file:///param.eventb";
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(
+            Url::parse(uri).unwrap(),
+            "eventb".to_string(),
+            1,
+            source.to_string(),
+        );
+        let mut provider = HoverProvider::new();
+        provider.set_document_manager(Arc::clone(&dm));
+        provider.hover(
+            &HoverParams {
+                text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                    text_document: crate::lsp_types::TextDocumentIdentifier {
+                        uri: Url::parse(uri).unwrap(),
+                    },
+                    position: Position::new(line, character),
+                },
+                work_done_progress_params: Default::default(),
+            },
+            source,
+        )
+    }
+
+    fn markup(hover: Hover) -> String {
+        match hover.contents {
+            HoverContents::Markup(content) => content.value,
+            other => panic!("expected markup content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn param_hover_at_any_declaration_names_event_and_machine() {
+        // `q` at its ANY declaration (line 9).
+        let value = markup(hover_with_doc(PARAM_MACHINE, 9, 4).expect("hover on parameter q"));
+        assert!(value.contains("Parameter"), "got: {value}");
+        assert!(value.contains("`e`"), "names the event, got: {value}");
+        assert!(value.contains("`m`"), "names the machine, got: {value}");
+    }
+
+    #[test]
+    fn param_hover_at_guard_use_lists_guards() {
+        // `q` used in @grd1 (line 12) hovers the same parameter, with the guards
+        // that mention it.
+        let value = markup(hover_with_doc(PARAM_MACHINE, 12, 10).expect("hover on parameter use"));
+        assert!(value.contains("Parameter"), "got: {value}");
+        assert!(value.contains("Guards:"), "lists guards, got: {value}");
+        assert!(
+            value.contains("grd1"),
+            "shows the guard label, got: {value}"
+        );
+    }
+
+    #[test]
+    fn param_hover_shadows_same_named_global_variable() {
+        // `p` is both a state variable and event `e`'s parameter. Inside the
+        // event (line 13) the parameter shadows the variable.
+        let value =
+            markup(hover_with_doc(PARAM_MACHINE, 13, 10).expect("hover on shadowing param"));
+        assert!(value.contains("Parameter"), "got: {value}");
+        assert!(
+            !value.contains("Variable"),
+            "the parameter shadows the global variable inside its event, got: {value}"
+        );
+    }
+
+    #[test]
+    fn global_variable_hovers_outside_the_event() {
+        // The same name `p` in the invariant (line 5) is outside every event, so
+        // it resolves to the state variable.
+        let value = markup(hover_with_doc(PARAM_MACHINE, 5, 10).expect("hover on variable"));
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(!value.contains("Parameter"), "got: {value}");
+    }
+
+    #[test]
+    fn global_variable_used_in_event_body_still_hovers_as_variable() {
+        // `v` is a global variable used in the event's action (line 15); it is
+        // not a parameter, so the positional parameter check falls through to
+        // the global identifier hover.
+        let value =
+            markup(hover_with_doc(PARAM_MACHINE, 15, 10).expect("hover on global in event"));
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(!value.contains("Parameter"), "got: {value}");
     }
 
     #[test]
