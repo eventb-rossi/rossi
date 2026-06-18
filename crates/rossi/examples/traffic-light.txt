@@ -5,24 +5,24 @@ VARIABLES
 INVARIANTS
     @inv1 cars_go ∈ BOOL
     @inv2 peds_go ∈ BOOL
-    @inv3 ¬(cars_go = ⊤ ∧ peds_go = ⊤)
+    @inv3 ¬(cars_go = TRUE ∧ peds_go = TRUE)
 EVENTS
     EVENT INITIALISATION
     THEN
-        @act1 cars_go := ⊥
-        @act2 peds_go := ⊥
+        @act1 cars_go := FALSE
+        @act2 peds_go := FALSE
     END
 
     EVENT set_peds_go
     WHERE
-        @grd1 cars_go = ⊥
+        @grd1 cars_go = FALSE
     THEN
-        @act1 peds_go := ⊤
+        @act1 peds_go := TRUE
     END
 
     EVENT set_peds_stop
     THEN
-        @act1 peds_go := ⊥
+        @act1 peds_go := FALSE
     END
 
     EVENT set_cars
@@ -30,7 +30,7 @@ EVENTS
         new_value
     WHERE
         @grd1 new_value ∈ BOOL
-        @grd2 new_value = ⊤ ⇒ peds_go = ⊥
+        @grd2 new_value = TRUE ⇒ peds_go = FALSE
     THEN
         @act1 cars_go := new_value
     END
@@ -59,9 +59,9 @@ VARIABLES
     cars_colours
 INVARIANTS
     @inv4 peds_colour ∈ COLOURS ∖ {yellow}
-    @inv5 peds_go = ⊤ ⇔ peds_colour = green
+    @inv5 peds_go = TRUE ⇔ peds_colour = green
     @inv6 cars_colours ⊆ COLOURS
-    @inv7 cars_go = ⊤ ⇔ green ∈ cars_colours
+    @inv7 cars_go = TRUE ⇔ green ∈ cars_colours
     @inv8 cars_colours ≠ {green, red}
     @inv9 cars_colours ≠ {green, yellow, red}
     @inv10 cars_colours ≠ {green, yellow}
@@ -102,7 +102,7 @@ EVENTS
         @grd5 cars_colours = {red, yellow} ⇒ new_value_colours = {green}
         @grd6 cars_colours = {green} ⇒ new_value_colours = {yellow}
     WITNESS
-        @new_value new_value = ⊤ ⇔ green ∈ new_value_colours
+        @new_value new_value = TRUE ⇔ green ∈ new_value_colours
     THEN
         @act1 cars_colours := new_value_colours
     END
@@ -123,14 +123,14 @@ INVARIANTS
 EVENTS
     EVENT INITIALISATION extends INITIALISATION
     THEN
-        @act3 button := ⊥
+        @act3 button := FALSE
     END
 
     EVENT push_button
     WHERE
         @grd1 peds_colour = red
     THEN
-        @act1 button := ⊤
+        @act1 button := TRUE
     END
 
     EVENT set_peds_green extends set_peds_green
@@ -138,12 +138,12 @@ EVENTS
 
     EVENT set_peds_red extends set_peds_red
     THEN
-        @act2 button := ⊥
+        @act2 button := FALSE
     END
 
     EVENT set_cars_colours extends set_cars_colours
     WHERE
-        @grd7 ¬(cars_colours = {red} ∧ button = ⊤)
+        @grd7 ¬(cars_colours = {red} ∧ button = TRUE)
     END
 END
 

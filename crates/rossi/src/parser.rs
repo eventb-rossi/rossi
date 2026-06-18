@@ -1789,8 +1789,8 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
             let mut inner = pair.into_inner();
             let first = inner.next().ok_or(ParseError::EmptyExpression)?;
             match first.as_rule() {
-                Rule::kw_true => Ok(Expression::new(ExpressionKind::True, node_span)),
-                Rule::kw_false => Ok(Expression::new(ExpressionKind::False, node_span)),
+                Rule::kw_bool_true => Ok(Expression::new(ExpressionKind::True, node_span)),
+                Rule::kw_bool_false => Ok(Expression::new(ExpressionKind::False, node_span)),
                 Rule::op_emptyset => Ok(Expression::new(ExpressionKind::EmptySet, node_span)),
                 Rule::kw_nat => Ok(Expression::new(ExpressionKind::Naturals, node_span)),
                 Rule::kw_nat1 => Ok(Expression::new(ExpressionKind::Naturals1, node_span)),
@@ -1810,7 +1810,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                         node_span,
                     ))
                 }
-                Rule::kw_bool => Ok(Expression::new(ExpressionKind::BoolType, node_span)),
+                Rule::kw_bool_type => Ok(Expression::new(ExpressionKind::BoolType, node_span)),
                 Rule::integer => {
                     let value = first
                         .as_str()

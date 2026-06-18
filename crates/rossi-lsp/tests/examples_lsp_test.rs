@@ -1337,7 +1337,7 @@ fn merged_semantic_tokens_broken_component_does_not_rescan_from_top() {
     // visit must start there, not at offset 0 (which would re-tokenize M0's
     // header under M1's context).
     let broken =
-        MERGED_TRAFFIC_LIGHT.replace("@inv5 peds_go = ⊤ ⇔ peds_colour = green", "@inv5 +++");
+        MERGED_TRAFFIC_LIGHT.replace("@inv5 peds_go = TRUE ⇔ peds_colour = green", "@inv5 +++");
     assert_ne!(
         broken, MERGED_TRAFFIC_LIGHT,
         "fixture drifted: M1 invariant not found"

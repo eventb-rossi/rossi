@@ -102,20 +102,30 @@ kw_anticipated = @{ ^"anticipated" ~ struct_word_boundary }
 // Action Keywords
 kw_skip = @{ ^"skip" ~ word_boundary }
 
-// Logic Keywords (case-insensitive, with word boundary guards)
-kw_true = @{ (^"true" ~ word_boundary) | "⊤" }
-kw_false = @{ (^"false" ~ word_boundary) | "⊥" }
+// Logic keywords — predicate literals. Lowercase ASCII `true`/`false` or the
+// Unicode glyphs ⊤/⊥; the uppercase boolean values/type are the kw_bool_*
+// rules below. ASCII spellings are exact-case, matching the kernel language.
+kw_true = @{ ("true" ~ word_boundary) | "⊤" }
+kw_false = @{ ("false" ~ word_boundary) | "⊥" }
 kw_theorem = @{ ^"theorem" ~ word_boundary }
 
-// Built-in types (atomic rules to prevent implicit whitespace before boundary guard)
-kw_nat1 = @{ ("ℕ1" | ^"nat1") ~ word_boundary }
-kw_nat = @{ ("ℕ" | ^"nat") ~ word_boundary }
-kw_int = @{ ("ℤ" | ^"int") ~ word_boundary }
-kw_bool = @{ ^"bool" ~ word_boundary }
+// Built-in types. ASCII spellings are exact-case (uppercase), matching the
+// kernel language; the Unicode forms ℕ/ℤ are the canonical ones.
+kw_nat1 = @{ ("ℕ1" | "NAT1") ~ word_boundary }
+kw_nat = @{ ("ℕ" | "NAT") ~ word_boundary }
+kw_int = @{ ("ℤ" | "INT") ~ word_boundary }
+// `bool(P)` conversion operator (lowercase); the BOOL type is kw_bool_type.
+kw_bool = @{ "bool" ~ word_boundary }
 
-// Quantified set operation keywords
-kw_UNION = @{ "⋃" | (^"UNION" ~ word_boundary) }
-kw_INTER = @{ "⋂" | (^"INTER" ~ word_boundary) }
+// Boolean values (TRUE/FALSE) and the BOOL type — uppercase, distinct from the
+// lowercase predicate literals true/false and the bool(…) conversion operator.
+kw_bool_true = @{ "TRUE" ~ word_boundary }
+kw_bool_false = @{ "FALSE" ~ word_boundary }
+kw_bool_type = @{ "BOOL" ~ word_boundary }
+
+// Quantified set operation keywords (uppercase ASCII or the Unicode glyphs)
+kw_UNION = @{ "⋃" | ("UNION" ~ word_boundary) }
+kw_INTER = @{ "⋂" | ("INTER" ~ word_boundary) }
 
 // ==========================
 // Operators and Symbols
@@ -221,14 +231,14 @@ bool_expr = { kw_bool ~ lparen ~ predicate ~ rparen }
 
 // Primary Expressions
 primary_expr = {
-    kw_true
-  | kw_false
+    kw_bool_true
+  | kw_bool_false
   | op_emptyset
   | kw_nat1
   | kw_nat
   | kw_int
   | bool_expr
-  | kw_bool
+  | kw_bool_type
   | integer
   | identifier
   | lparen ~ expression ~ rparen

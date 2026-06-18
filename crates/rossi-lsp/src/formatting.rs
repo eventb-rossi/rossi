@@ -143,7 +143,7 @@ mod tests {
         let source = r#"
         CONTEXT test
         AXIOMS
-            @axm1 TRUE
+            @axm1 true
         END
         "#;
 
@@ -153,6 +153,8 @@ mod tests {
         let formatted = result.unwrap()[0].new_text.clone();
         assert!(formatted.contains("CONTEXT"));
         assert!(formatted.contains("AXIOMS"));
+        // ASCII mode renders the predicate literal ⊤ as lowercase `true`.
+        assert!(formatted.contains("true"));
     }
 
     #[test]
