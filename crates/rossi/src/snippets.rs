@@ -125,13 +125,13 @@ pub const SNIPPETS: &[Snippet] = &[
         name: "For All (Universal Quantification)",
         prefix: "forall",
         description: "Universal quantification (forall)",
-        body: &["∀${1:x}·(${2:x} ∈ ${3:set} ⇒ ${4:predicate})"],
+        body: &["∀ ${1:x} · ${2:predicate}"],
     },
     Snippet {
         name: "Exists (Existential Quantification)",
         prefix: "exists",
         description: "Existential quantification (exists)",
-        body: &["∃${1:x}·(${2:x} ∈ ${3:set} ∧ ${4:predicate})"],
+        body: &["∃ ${1:x} · ${2:predicate}"],
     },
     Snippet {
         name: "Lambda Abstraction",
