@@ -11,12 +11,11 @@ use tracing::debug;
 
 use rossi::Component;
 use rossi::ast::Span;
-use rossi::ast::walk::IdentRole;
 
 use crate::component_util::{component_at_offset, parse_all};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::formula_walk::{self, Scope};
+use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
@@ -372,51 +371,24 @@ fn ast_rename_edits(
     Some(edits)
 }
 
-/// The byte spans to rewrite when renaming the identifier at `offset`. One walk
-/// of the component serves both the cursor lookup and the occurrence set.
+/// The byte spans to rewrite when renaming the identifier at `offset`.
+///
+/// A cursor on (or bound by) a binder — a quantifier / lambda / comprehension
+/// binder, or an event `ANY` parameter — renames only that binder's own scope,
+/// resolved through the shared [`formula_walk::resolve_bound_at_offset`] that
+/// go-to-definition and find-references also use, so the features cannot drift.
+/// Otherwise the cursor names a component-level symbol and its declaration plus
+/// every free use is renamed.
 fn rename_spans(component: &Component, identifier: &str, offset: usize) -> Vec<Span> {
+    // One walk of the component serves both the cursor lookup and the global
+    // occurrence set: collect the hits once, then reuse them for the free-use
+    // set when the cursor is not on a binder.
     let hits = formula_walk::collect_in_component(component, identifier);
-    // Copy the cursor occurrence out (role/span/scope are all `Copy`) so the
-    // `hits` vec can be consumed by the global branch without re-walking.
-    let cursor = hits
-        .iter()
-        .find(|h| h.span.contains(offset))
-        .map(|h| (h.role, h.span, h.scope));
-
-    // Determine the binder this rename is scoped to, if any.
-    let binder: Option<Span> = match cursor {
-        // Cursor on a binder declaration: scope to the binder introduced here
-        // (its own span, even when an outer binder of the same name shadows it).
-        Some((IdentRole::Binder, span, _)) => Some(span),
-        // Cursor on a use bound by a binder of the same name: scope to it.
-        Some((_, _, Scope::Bound(b))) => b,
-        // Free use, or a declaration site with no formula occurrence: global.
-        _ => None,
-    };
-
-    if let Some(b) = binder {
-        // Bound-local rename: the binder declaration plus uses it binds.
-        let mut spans: Vec<Span> = hits
-            .iter()
-            .filter(|h| {
-                (h.role == IdentRole::Binder && h.span == b) || h.scope == Scope::Bound(Some(b))
-            })
-            .map(|h| h.span)
-            .collect();
-        // Event parameters are seeded as binders but not emitted as formula
-        // occurrences, so add the binder declaration span explicitly.
-        if !spans.contains(&b) {
-            spans.push(b);
-        }
-        return spans;
+    if let Some(bound) = formula_walk::resolve_bound_from_hits(&hits, component, offset) {
+        return bound.spans;
     }
 
-    // Bound by a binder with no recorded span: only the cursor token is safe.
-    if matches!(cursor, Some((_, _, Scope::Bound(None)))) {
-        return cursor.map(|(_, span, _)| vec![span]).unwrap_or_default();
-    }
-
-    // Global symbol: its declaration plus every free use (reusing the one walk).
+    // Global symbol: its declaration plus every free use.
     let mut spans = formula_walk::free_spans(hits);
     if let Some(decl) = formula_walk::declaration_span(component, identifier) {
         spans.push(decl);
@@ -959,6 +931,17 @@ END
             out.contains("VARIABLES\ntotal"),
             "declaration renamed: {out}"
         );
+    }
+
+    #[test]
+    fn rename_outer_binder_leaves_shadowing_inner_untouched() {
+        // `∀ x · (∃ x · x > 0)`: the inner `∃ x` shadows the outer `x`, which has
+        // no body uses. Renaming the outer binder must touch only its own
+        // declaration — the inner quantifier and its body stay `x`.
+        let source = "MACHINE m\nINVARIANTS\n@i1 ∀ x · (∃ x · x > 0)\nEND\n";
+        let byte = source.find("∀ x").unwrap() + "∀ ".len();
+        let out = rename_at(source, byte, "y");
+        assert!(out.contains("∀ y · (∃ x · x > 0)"), "{out}");
     }
 
     #[test]
