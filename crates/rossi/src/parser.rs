@@ -2542,6 +2542,16 @@ fn clause_region(
     Some((raw, region))
 }
 
+/// Whether `name` is acceptable as a declared identifier (parameter,
+/// variable, constant, set carrier) in error-recovery output. Rejects
+/// reserved words and structural keywords so that a recovered AST never
+/// carries a name the pretty-printer or downstream consumers cannot handle.
+fn accepts_declared_name(name: &str) -> bool {
+    crate::names::is_valid_math_identifier(name)
+        && !crate::builtins::is_reserved_word(name)
+        && !crate::keywords::is_keyword(name)
+}
+
 /// Extract identifiers (each with its source [`Span`]) from a clause during
 /// error recovery. Also returns the clause's [`ClauseRegion`], recovered from the
 /// same single [`clause_region`] scan.
@@ -2559,15 +2569,6 @@ fn clause_region(
 /// providers a definition site even inside a component the strict parse
 /// rejected; reference clauses (EXTENDS/SEES/REFINES) carry spans too, harmless
 /// for callers that only want the names.
-/// Whether `name` is acceptable as a declared Event-B identifier.
-/// Mirrors the strict parser: mathematical-identifier syntax, not a builtin
-/// reserved word, and not a structural keyword (e.g. `WHERE`, `THEN`).
-fn accepts_declared_name(name: &str) -> bool {
-    crate::names::is_valid_math_identifier(name)
-        && !crate::builtins::is_reserved_word(name)
-        && !crate::keywords::is_keyword(name)
-}
-
 fn recover_identifiers(
     text: &RecoveryText,
     keyword: KeywordId,
@@ -2640,44 +2641,12 @@ fn recover_labeled_predicates(
     };
     let spelling = crate::keywords::spell(keyword);
 
-    // Collect the byte offset where each labeled predicate begins. The lexer's
-    // `@`-label spans ([`RecoveryText::labels`]) are the single source of truth
-    // for where labels are: a predicate begins at every label that falls inside
-    // the clause, pulled back over a `theorem` keyword that immediately precedes
-    // it (the grammar's `kw_theorem ~ label`). The leading segment — from the
-    // clause keyword to the first label — also covers a predicate written inline
-    // after the keyword (`AXIOMS @axm1 P`) or before the first label. Anchoring
-    // on labels rather than on `\n` keeps a predicate that spans several physical
-    // lines whole, since `WHITESPACE` includes `\n` in the grammar.
-    //
-    // A clause with no labels is a run of bare, label-less predicates (the
-    // grammar's `label?` is optional). The grammar has no token to split
-    // consecutive bare predicates on — `WHITESPACE` includes `\n` — so recovery
-    // falls back to a per-line split: each line becomes its own predicate rather
-    // than one multi-predicate segment the single-predicate parser would reject
-    // (dropping them all). This per-line heuristic is deliberate; it is the best
-    // recovery can do without label anchors.
-    let mut starts = vec![span.start];
-    let label_starts: Vec<usize> = text
-        .labels
-        .iter()
-        .filter(|label| span.contains(label.start))
-        .map(|label| predicate_start_for_label(&text.masked, span.start, label.start))
-        .collect();
-    if label_starts.is_empty() {
-        let mut line_start = span.start;
-        for line in text.masked[span.start..span.end].split_inclusive('\n') {
-            if line_start != span.start {
-                starts.push(line_start);
-            }
-            line_start += line.len();
-        }
-    } else {
-        starts.extend(label_starts);
-    }
-    starts.push(span.end);
-
-    for pair in starts.windows(2) {
+    // Segmentation: one `@`-label per segment (or per-line fallback). See
+    // [`collect_segment_starts`] for the algorithm. The leading segment still
+    // carries the clause keyword and is stripped here (the range-based variants
+    // start at `content_start`, already past the keyword, so they don't need
+    // this step).
+    for pair in collect_segment_starts(text, span.start, span.end).windows(2) {
         let (seg_start, seg_end) = (pair[0], pair[1]);
         let raw = &text.masked[seg_start..seg_end];
         // Only the leading segment still carries the clause keyword.
@@ -2694,43 +2663,95 @@ fn recover_labeled_predicates(
         let abs_start = seg_start + subslice_offset(raw, content);
         match try_parse_labeled_predicate_from_text(content) {
             Ok(mut pred) => {
-                // The segment was parsed in isolation, so its spans are relative
-                // to `content`; lift them to absolute document coordinates (as
-                // shift_component_spans does for the multi-component path).
-                shift_opt_span(&mut pred.span, abs_start);
+                // The segment was parsed in isolation with its span cleared:
+                // anchor the span at the segment extent and lift the formula
+                // spans to absolute document coordinates (as shift_component_spans
+                // does for the multi-component path).
+                pred.span = Some(segment_span(abs_start, content));
                 shift_pred_spans(&mut pred.predicate, abs_start);
                 result.push(pred);
             }
-            Err(e) => {
-                let abs_end = abs_start + content.len();
-                let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
-                let subject = leading_label(content)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        text.original[abs_start..abs_end]
-                            .lines()
-                            .next()
-                            .unwrap_or_default()
-                            .trim()
-                            .to_string()
-                    });
-                errors.push(ParseError::RecoverableError {
-                    line: err_line,
-                    column: err_col,
-                    message: format!("Failed to parse {label}: {subject}"),
-                    span: Some(Span {
-                        start: abs_start,
-                        end: abs_end,
-                    }),
-                    source: Some(Box::new(e)),
-                });
-            }
+            Err(e) => push_recovery_error(errors, text, abs_start, content, label, e),
         }
     }
     RecoveredClause {
         region: Some(region),
         data: result,
     }
+}
+
+/// The label-inclusive source span of a recovered clause segment: the trimmed
+/// `content` begins at `abs_start` and occupies `content.len()` bytes, so this
+/// anchors the recovered predicate/action in the document outline and folding.
+fn segment_span(abs_start: usize, content: &str) -> Span {
+    Span {
+        start: abs_start,
+        end: abs_start + content.len(),
+    }
+}
+
+/// Recover labeled items from the `@`-label (or per-line) segments of the byte
+/// range `[from, to)`. `parse_segment` parses one trimmed segment, given its
+/// absolute start, into a fully-spanned node; segments that fail to parse are
+/// logged to `errors` (tagged `label`) and skipped. Shared by the predicate and
+/// action range recoverers.
+fn recover_clause_in_range<T>(
+    text: &RecoveryText,
+    from: usize,
+    to: usize,
+    label: &str,
+    errors: &mut Vec<ParseError>,
+    mut parse_segment: impl FnMut(&str, usize) -> Result<T, ParseError>,
+) -> Vec<T> {
+    // `clause_content_range` can hand back content_start > content_end when a
+    // clause keyword straddles `to`; bail before collect_segment_starts slices.
+    if from >= to {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    for pair in collect_segment_starts(text, from, to).windows(2) {
+        let (seg_start, seg_end) = (pair[0], pair[1]);
+        let raw = &text.masked[seg_start..seg_end];
+        let content = raw.trim();
+        if content.is_empty() {
+            continue;
+        }
+        // `content` is a subslice of `raw`; its absolute document offset (masked
+        // and original share a byte layout).
+        let abs_start = seg_start + subslice_offset(raw, content);
+        match parse_segment(content, abs_start) {
+            Ok(node) => result.push(node),
+            Err(e) => push_recovery_error(errors, text, abs_start, content, label, e),
+        }
+    }
+    result
+}
+
+/// Recover labeled predicates from an explicit `[from, to)` byte range.
+///
+/// Unlike [`recover_labeled_predicates`], which searches for a clause keyword,
+/// this operates on a pre-computed content range. Used by [`recover_events`]
+/// for per-event WHERE/WITH/WITNESS clause recovery, where the same keyword
+/// can appear once per event.
+///
+/// Broken segments are logged to `errors` and skipped; the caller receives
+/// only predicates whose formulas parsed successfully, so
+/// `LabeledPredicate.predicate` is always populated.
+fn recover_predicates_in_range(
+    text: &RecoveryText,
+    from: usize,
+    to: usize,
+    label: &str,
+    errors: &mut Vec<ParseError>,
+) -> Vec<LabeledPredicate> {
+    recover_clause_in_range(text, from, to, label, errors, |content, abs_start| {
+        let mut pred = try_parse_labeled_predicate_from_text(content)?;
+        // The parsed span was cleared (segment-relative); anchor it at the
+        // label-inclusive segment extent, then lift the formula spans.
+        pred.span = Some(segment_span(abs_start, content));
+        shift_pred_spans(&mut pred.predicate, abs_start);
+        Ok(pred)
+    })
 }
 
 /// The byte offset where the labeled predicate at `label_start` begins, so its
@@ -2740,6 +2761,78 @@ fn recover_labeled_predicates(
 /// `floor`, the clause-keyword offset. `masked` is the comment-masked text the
 /// label offsets index; the returned offset is valid in all [`RecoveryText`]
 /// views (shared byte layout).
+/// Build the segmentation start-points for the byte range `[from, to)`.
+///
+/// Returns a `Vec` whose first element is `from`, whose last element is `to`,
+/// and whose interior elements are one entry per `@`-label inside the range
+/// (each pulled back over a preceding `theorem` keyword via
+/// [`predicate_start_for_label`]). When the range has no labels the fallback
+/// is a per-line split, matching the behaviour of [`recover_labeled_predicates`].
+///
+/// Pass the result directly to `starts.windows(2)` to iterate segments.
+fn collect_segment_starts(text: &RecoveryText, from: usize, to: usize) -> Vec<usize> {
+    let span = Span {
+        start: from,
+        end: to,
+    };
+    let mut starts = vec![from];
+    let mut label_iter = text
+        .labels
+        .iter()
+        .filter(|lbl| span.contains(lbl.start))
+        .map(|lbl| predicate_start_for_label(&text.masked, from, lbl.start))
+        .peekable();
+    if label_iter.peek().is_none() {
+        let mut line_start = from;
+        for line in text.masked[from..to].split_inclusive('\n') {
+            if line_start != from {
+                starts.push(line_start);
+            }
+            line_start += line.len();
+        }
+    } else {
+        starts.extend(label_iter);
+    }
+    starts.push(to);
+    starts
+}
+
+/// Append a [`ParseError::RecoverableError`] for a segment that failed to
+/// parse. `label` is the clause name used in the message (e.g. `"guard"` or
+/// `"action"`). `abs_start` and `content` are the absolute byte offset and
+/// trimmed text of the failing segment; `source` is the underlying parse error.
+fn push_recovery_error(
+    errors: &mut Vec<ParseError>,
+    text: &RecoveryText,
+    abs_start: usize,
+    content: &str,
+    label: &str,
+    source: ParseError,
+) {
+    let abs_end = abs_start + content.len();
+    let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
+    let subject = leading_label(content)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            text.original[abs_start..abs_end]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        });
+    errors.push(ParseError::RecoverableError {
+        line: err_line,
+        column: err_col,
+        message: format!("Failed to parse {label}: {subject}"),
+        span: Some(Span {
+            start: abs_start,
+            end: abs_end,
+        }),
+        source: Some(Box::new(source)),
+    });
+}
+
 fn predicate_start_for_label(masked: &str, floor: usize, label_start: usize) -> usize {
     let prefix = masked[floor..label_start].trim_end();
     // Start of the last whitespace-separated token, measured as its byte length
@@ -3452,7 +3545,7 @@ fn parse_machine_with_recovery(
     // runs from the event-section start through the last recovered event's END
     // (matching the strict parse, where it ends at the last event, not the
     // machine END).
-    let (initialisation, events, events_end) = recover_events(text, bound);
+    let (initialisation, events, events_end) = recover_events(text, bound, &mut errors);
     machine.initialisation = initialisation;
     machine.events = events;
     if let Some(end) = events_end
@@ -3597,17 +3690,90 @@ fn keyword_positions(
     positions
 }
 
-/// Recover a machine's events from the event region, span-only.
+/// Find the content range of an event clause within `[from, to)`: returns
+/// `(content_start, content_end)` where `content_start` is just after the
+/// clause keyword and `content_end` is the earliest of any `boundary_kws`
+/// occurrence after `content_start`. Returns `None` if no spelling of
+/// `clause_kw` appears in the range.
+fn clause_content_range(
+    text: &RecoveryText,
+    clause_kw: KeywordId,
+    boundary_kws: &[KeywordId],
+    from: usize,
+    to: usize,
+) -> Option<(usize, usize)> {
+    let (kw_pos, kw_len) = crate::keywords::keyword(clause_kw)
+        .spellings
+        .iter()
+        .filter_map(|&s| find_keyword_word(text, s, from, to).map(|p| (p, s.len())))
+        .min_by_key(|&(p, _)| p)?;
+
+    // The content ends at the earliest following boundary keyword, or at `to`
+    // if none appears. Take the minimum over every boundary spelling's first
+    // occurrence, mirroring the `min_by_key` used for the clause keyword above.
+    let content_start = kw_pos + kw_len;
+    let content_end = boundary_kws
+        .iter()
+        .flat_map(|&bkw| crate::keywords::keyword(bkw).spellings.iter().copied())
+        .filter_map(|s| find_keyword_word(text, s, content_start, to))
+        .min()
+        .unwrap_or(to);
+    Some((content_start, content_end))
+}
+
+/// Recover a named event's WITH, WITNESS, and THEN clause bodies. Called after
+/// the event-specific clauses (ANY/WHERE) have already been handled.
+/// INITIALISATION has only a THEN clause and is handled separately.
+fn recover_common_event_clauses(
+    text: &RecoveryText,
+    with: &mut Vec<LabeledPredicate>,
+    witnesses: &mut Vec<LabeledPredicate>,
+    actions: &mut Vec<LabeledAction>,
+    kw_end: usize,
+    body_end: usize,
+    errors: &mut Vec<ParseError>,
+) {
+    if let Some((content_start, content_end)) = clause_content_range(
+        text,
+        KeywordId::With,
+        &[KeywordId::Witness, KeywordId::Then, KeywordId::End],
+        kw_end,
+        body_end,
+    ) {
+        *with =
+            recover_predicates_in_range(text, content_start, content_end, "with predicate", errors);
+    }
+    if let Some((content_start, content_end)) = clause_content_range(
+        text,
+        KeywordId::Witness,
+        &[KeywordId::Then, KeywordId::End],
+        kw_end,
+        body_end,
+    ) {
+        *witnesses =
+            recover_predicates_in_range(text, content_start, content_end, "witness", errors);
+    }
+    if let Some((content_start, content_end)) =
+        clause_content_range(text, KeywordId::Then, &[KeywordId::End], kw_end, body_end)
+    {
+        *actions = recover_actions_in_range(text, content_start, content_end, errors);
+    }
+}
+
+/// Recover a machine's events from the event region.
 ///
 /// Each `EVENT name … END` / `EVENT INITIALISATION … END` is located by
 /// whole-word keyword scanning, so a label such as `@end` never closes an
 /// event. Events do not nest, so each one closes at the first `END` after its
-/// header. Bodies are not re-parsed — recovery records each event's name and
-/// source span, which is what folding and the document outline consume from a
-/// component the strict parse rejected.
+/// header. After locating each event's extent, this function attempts
+/// best-effort re-parsing of its clause bodies (WHERE/WITH/WITNESS guards,
+/// THEN/BEGIN actions) so that formula-identifier tokens survive when only
+/// one predicate in the machine has a syntax error. Parse failures for
+/// individual predicates or actions are appended to `errors` and skipped.
 fn recover_events(
     text: &RecoveryText,
     events_start: usize,
+    errors: &mut Vec<ParseError>,
 ) -> (Option<InitialisationEvent>, Vec<Event>, Option<usize>) {
     let text_end = text.masked.len();
     let end_kw = crate::keywords::spell(KeywordId::End);
@@ -3647,7 +3813,7 @@ fn recover_events(
             // start of the header tail — already located by the prefix check, so
             // no second scan is needed.
             let name_start = kw_end + (header_line.len() - rest.len());
-            initialisation = Some(InitialisationEvent {
+            let mut init = InitialisationEvent {
                 actions: Vec::new(),
                 comment: None,
                 extended: false,
@@ -3658,7 +3824,17 @@ fn recover_events(
                     start: name_start,
                     end: name_start + init_kw.len(),
                 }),
-            });
+            };
+            // INITIALISATION has only a THEN/BEGIN action clause; the grammar
+            // forbids WITH/WITNESS here and the strict parser always leaves
+            // those empty, so recover just the actions rather than synthesizing
+            // clauses a valid parse could never produce.
+            if let Some((content_start, content_end)) =
+                clause_content_range(text, KeywordId::Then, &[KeywordId::End], kw_end, body_end)
+            {
+                init.actions = recover_actions_in_range(text, content_start, content_end, errors);
+            }
+            initialisation = Some(init);
         } else {
             let (name, name_span) = extract_identifiers(header_line, kw_end)
                 .into_iter()
@@ -3670,25 +3846,20 @@ fn recover_events(
 
             // Recover ANY-clause parameters so goto-definition and semantic
             // tokens keep working for event parameters even when a guard or
-            // action failed to parse.  The search is bounded to [kw_end,
-            // body_end] so it never reaches a sibling event's ANY clause.
-            let any_kw = crate::keywords::spell(KeywordId::Any);
-            if let Some(any_pos) = find_keyword_word(text, any_kw, kw_end, body_end) {
-                let content_start = any_pos + any_kw.len();
-                let mut content_end = body_end;
-                for &id in &[
+            // action failed to parse.
+            if let Some((content_start, content_end)) = clause_content_range(
+                text,
+                KeywordId::Any,
+                &[
                     KeywordId::Where,
                     KeywordId::With,
                     KeywordId::Witness,
                     KeywordId::Then,
                     KeywordId::End,
-                ] {
-                    for &bkw in crate::keywords::keyword(id).spellings {
-                        if let Some(p) = find_keyword_word(text, bkw, content_start, content_end) {
-                            content_end = p;
-                        }
-                    }
-                }
+                ],
+                kw_end,
+                body_end,
+            ) {
                 event.parameters =
                     extract_identifiers(&text.masked[content_start..content_end], content_start)
                         .into_iter()
@@ -3696,6 +3867,33 @@ fn recover_events(
                         .map(|(name, span)| NamedElement::with_span(name, span))
                         .collect();
             }
+
+            // Recover WHERE/WHEN clause guards.
+            if let Some((content_start, content_end)) = clause_content_range(
+                text,
+                KeywordId::Where,
+                &[
+                    KeywordId::With,
+                    KeywordId::Witness,
+                    KeywordId::Then,
+                    KeywordId::End,
+                ],
+                kw_end,
+                body_end,
+            ) {
+                event.guards =
+                    recover_predicates_in_range(text, content_start, content_end, "guard", errors);
+            }
+
+            recover_common_event_clauses(
+                text,
+                &mut event.with,
+                &mut event.witnesses,
+                &mut event.actions,
+                kw_end,
+                body_end,
+                errors,
+            );
 
             events.push(event);
         }
@@ -3874,6 +4072,68 @@ fn try_parse_labeled_predicate_from_text(text: &str) -> Result<LabeledPredicate,
     }
 
     Err(strict_error)
+}
+
+/// Parse a labeled action from a string segment: `@label lhs := rhs` or
+/// bare `lhs := rhs`. Used by [`recover_actions_in_range`].
+///
+/// Returns the parsed action together with the byte offset, within (trimmed)
+/// `text`, at which the action body begins. The `@label` prefix is stripped
+/// before parsing, so the action's spans are relative to that body offset, not
+/// to `text`; the caller adds the offset when shifting spans into absolute
+/// document coordinates.
+fn try_parse_labeled_action_from_text(text: &str) -> Result<(LabeledAction, usize), ParseError> {
+    let text = text.trim();
+
+    // Extract an optional `@label` prefix, mirroring how the strict grammar
+    // parses `label? ~ action`. The label ends at the first whitespace. A bare
+    // `@` with nothing following (label_name is empty) is NOT treated as a
+    // label-with-no-name: the whole text is passed through so parse_action_str
+    // rejects it and the caller emits a diagnostic.
+    let (label, action_text) = text
+        .strip_prefix('@')
+        .and_then(|rest| {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let name = rest[..end].trim_end_matches(':');
+            (!name.is_empty()).then(|| (Some(name.to_string()), rest[end..].trim()))
+        })
+        .unwrap_or((None, text));
+
+    // `action_text` is a subslice of `text`; this is the offset of the action
+    // body past any `@label ` prefix that was stripped above.
+    let body_offset = subslice_offset(text, action_text);
+    let action = parse_action_str(action_text)?;
+    Ok((
+        LabeledAction {
+            label,
+            action,
+            span: None,
+            comment: None,
+        },
+        body_offset,
+    ))
+}
+
+/// Recover labeled actions from an explicit `[from, to)` byte range.
+///
+/// Mirrors [`recover_predicates_in_range`] but for event THEN/BEGIN clauses.
+/// Broken segments are logged to `errors` and skipped; the caller receives
+/// only actions whose bodies parsed successfully, so `LabeledAction.action`
+/// is always populated.
+fn recover_actions_in_range(
+    text: &RecoveryText,
+    from: usize,
+    to: usize,
+    errors: &mut Vec<ParseError>,
+) -> Vec<LabeledAction> {
+    recover_clause_in_range(text, from, to, "action", errors, |content, abs_start| {
+        let (mut la, body_offset) = try_parse_labeled_action_from_text(content)?;
+        // The label-inclusive span anchors the action in the outline; its body
+        // spans are relative to the body, past the stripped label.
+        la.span = Some(segment_span(abs_start, content));
+        shift_action_spans(&mut la.action, abs_start + body_offset);
+        Ok(la)
+    })
 }
 
 #[cfg(test)]

@@ -1468,3 +1468,326 @@ END
     let span = params[0].span.expect("parameter carries a span");
     assert_eq!(&source[span.start..span.end], "container");
 }
+
+#[test]
+fn recovery_populates_event_guards_and_actions() {
+    // When a machine invariant fails (forcing recovery), event WHERE/WHEN guards
+    // and THEN actions must still be populated so the formula-walk that backs
+    // semantic token coloring visits them. The broken guard is dropped (its
+    // formula cannot be parsed); the healthy ones survive.
+    let source = "\
+MACHINE m
+VARIABLES
+    x y
+INVARIANTS
+    @inv1 x ∈ ℕ
+    @inv2 invalid @#$ syntax
+EVENTS
+    EVENT step
+    ANY
+        p
+    WHERE
+        @grd1 p ∈ ℕ
+        @grd2 p   p
+        @grd3 x > 0
+    THEN
+        @act1 x := p
+        @act2 y := x
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let m = expect_machine(&result);
+
+    let event = &m.events[0];
+    assert_eq!(event.name, "step");
+
+    // ANY-clause parameter (name recovery).
+    assert_eq!(
+        event
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["p"],
+        "parameter recovered"
+    );
+
+    // Guards: @grd1 and @grd3 parse; @grd2 (`p   p` is not a predicate) is dropped.
+    let guard_labels: Vec<Option<&str>> = event.guards.iter().map(|g| g.label.as_deref()).collect();
+    assert!(
+        guard_labels.contains(&Some("grd1")),
+        "@grd1 must be recovered, got {guard_labels:?}"
+    );
+    assert!(
+        guard_labels.contains(&Some("grd3")),
+        "@grd3 must be recovered, got {guard_labels:?}"
+    );
+    assert!(
+        !guard_labels.contains(&Some("grd2")),
+        "@grd2 has a parse error and must be absent, got {guard_labels:?}"
+    );
+
+    // Actions: @act1 and @act2 both parse.
+    let action_labels: Vec<Option<&str>> =
+        event.actions.iter().map(|a| a.label.as_deref()).collect();
+    assert_eq!(
+        action_labels,
+        [Some("act1"), Some("act2")],
+        "both actions must be recovered, got {action_labels:?}"
+    );
+}
+
+#[test]
+fn recovery_populates_initialisation_actions() {
+    // INITIALISATION THEN actions must be recovered so their formula trees are
+    // available to the semantic-token formula walk.
+    let source = "\
+MACHINE m
+VARIABLES
+    x y
+INVARIANTS
+    @inv1 invalid @#$ syntax
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 x := 0
+        @act2 y := 1
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let m = expect_machine(&result);
+
+    let init = m.initialisation.as_ref().expect("initialisation recovered");
+    let action_labels: Vec<Option<&str>> =
+        init.actions.iter().map(|a| a.label.as_deref()).collect();
+    assert_eq!(
+        action_labels,
+        [Some("act1"), Some("act2")],
+        "both INITIALISATION actions must be recovered, got {action_labels:?}"
+    );
+}
+
+#[test]
+fn recovery_formula_identifier_spans_are_absolute() {
+    // Every recovered guard / action formula identifier must carry an absolute
+    // span that maps back to its own text in the source. This is what semantic
+    // tokens rely on to colour identifiers; an off-by-prefix shift would colour
+    // the wrong bytes. A label prefix (`@grd1 `, `@act1 `) must not skew the
+    // action body's spans.
+    use rossi::ast::walk::{IdentOccurrence, IdentVisitor, walk_action, walk_predicate};
+    use std::ops::ControlFlow;
+
+    let source = "\
+MACHINE m
+VARIABLES
+    counter
+INVARIANTS
+    @inv1 broken @#$ syntax
+EVENTS
+    EVENT step
+    ANY
+        amount
+    WHERE
+        @grd1 amount ∈ ℕ
+    THEN
+        @act1 counter := amount
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    let m = expect_machine(&result);
+    let event = &m.events[0];
+
+    // Collect every identifier occurrence (with a span) and assert the span
+    // slices its own name out of the source.
+    struct SpanCheck<'s> {
+        source: &'s str,
+        seen: Vec<String>,
+    }
+    impl IdentVisitor for SpanCheck<'_> {
+        fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+            if let Some(span) = occ.span {
+                assert_eq!(
+                    &self.source[span.start..span.end],
+                    occ.name,
+                    "{:?} span {:?} must slice the identifier text",
+                    occ.name,
+                    span
+                );
+                self.seen.push(occ.name.to_string());
+            }
+            ControlFlow::Continue(())
+        }
+    }
+
+    let mut check = SpanCheck {
+        source,
+        seen: Vec::new(),
+    };
+    let mut binders = Vec::new();
+    for guard in &event.guards {
+        let _ = walk_predicate(&guard.predicate, &mut binders, &mut check);
+    }
+    for action in &event.actions {
+        let _ = walk_action(&action.action, &mut binders, &mut check);
+    }
+
+    // The guard reads `amount`; the action writes `counter` from `amount`.
+    assert!(
+        check.seen.contains(&"amount".to_string()),
+        "guard/action identifier `amount` must be visited with a span, saw {:?}",
+        check.seen
+    );
+    assert!(
+        check.seen.contains(&"counter".to_string()),
+        "action write target `counter` must be visited with a span, saw {:?}",
+        check.seen
+    );
+}
+
+#[test]
+fn recovery_extracts_newline_separated_any_parameters() {
+    // Rodin-style files list ANY parameters one per line with no commas (the
+    // grammar separates declared names by whitespace). When a guard fails and
+    // forces recovery, every parameter must still be recovered with a byte-exact
+    // span — not just the first — so the LSP colours all parameter declarations,
+    // not only the one named in the broken guard.
+    let source = "\
+MACHINE m
+VARIABLES
+    v
+EVENTS
+    EVENT step
+    ANY
+        user
+        subject
+        roleName
+    WHERE
+        @grd1 user ∈ S :
+        @grd2 subject ∈ T
+    THEN
+        v ≔ 0
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "broken guard must trigger recovery");
+    let m = expect_machine(&result);
+    assert_eq!(m.events.len(), 1);
+
+    let params = &m.events[0].parameters;
+    assert_eq!(
+        params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        ["user", "subject", "roleName"],
+        "every whitespace-separated ANY parameter must be recovered, got {params:?}"
+    );
+
+    // Each parameter's span slices its own name out of the source.
+    for param in params {
+        let span = param.span.expect("recovered parameter carries a span");
+        assert_eq!(
+            &source[span.start..span.end],
+            param.name,
+            "parameter {} span {span:?} must slice its own name",
+            param.name
+        );
+    }
+}
+
+#[test]
+fn recovery_does_not_invent_with_witness_for_initialisation() {
+    // The grammar gives INITIALISATION only a THEN clause, and the strict parser
+    // always leaves with/witnesses empty. The broken invariant forces recovery;
+    // recover_events then treats `EVENT INITIALISATION` as the init event. Even
+    // with a stray WITH clause present, recovery must NOT synthesize init.with /
+    // init.witnesses (a valid parse could never produce them) while the THEN
+    // actions still recover.
+    let source = "\
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @inv1 broken @#$ syntax
+EVENTS
+    EVENT INITIALISATION
+    WITH
+        @w1 x = 0
+    THEN
+        @act1 x ≔ 0
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(
+        result.has_recovered(),
+        "the broken invariant must trigger recovery"
+    );
+    let m = expect_machine(&result);
+    let init = m.initialisation.as_ref().expect("initialisation recovered");
+    assert!(
+        init.with.is_empty(),
+        "init.with must stay empty (grammar forbids WITH on INITIALISATION), got {:?}",
+        init.with
+    );
+    assert!(
+        init.witnesses.is_empty(),
+        "init.witnesses must stay empty, got {:?}",
+        init.witnesses
+    );
+    assert_eq!(
+        init.actions
+            .iter()
+            .map(|a| a.label.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("act1")],
+        "THEN actions are still recovered"
+    );
+}
+
+#[test]
+fn recovery_anchors_guard_and_action_spans_for_the_outline() {
+    // Recovered guards/actions must carry their label-inclusive source span, so
+    // the document outline anchors each at its location instead of collapsing to
+    // (0,0). The broken invariant forces recovery; the event's clauses are healthy.
+    let source = "\
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @inv1 broken @#$ syntax
+EVENTS
+    EVENT step
+    WHERE
+        @grd1 x > 0
+    THEN
+        @act1 x ≔ 1
+    END
+END
+";
+    let result = parse_with_recovery(source);
+    assert!(result.has_recovered(), "expected recovery with errors");
+    let m = expect_machine(&result);
+    let event = &m.events[0];
+
+    let guard_span = event.guards[0]
+        .span
+        .expect("recovered guard carries a span");
+    assert_eq!(
+        &source[guard_span.start..guard_span.end],
+        "@grd1 x > 0",
+        "guard span must cover its label-inclusive source"
+    );
+
+    let action_span = event.actions[0]
+        .span
+        .expect("recovered action carries a span");
+    assert_eq!(
+        &source[action_span.start..action_span.end],
+        "@act1 x ≔ 1",
+        "action span must cover its label-inclusive source"
+    );
+}

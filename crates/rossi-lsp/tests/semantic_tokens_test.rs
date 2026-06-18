@@ -519,3 +519,31 @@ fn formula_body_identifiers_are_classified() {
     let parameters = tokens.iter().filter(|t| t.3 == parameter).count();
     assert_eq!(parameters, 2, "binder q and its bound use: {tokens:?}");
 }
+
+#[test]
+fn all_any_parameters_coloured_when_guard_parse_fails() {
+    // A broken guard forces recovery. Every whitespace-separated ANY parameter
+    // declaration must still get a PARAMETER token — not just the first, and not
+    // only the ones named in a still-valid guard. `roleName` appears in no guard,
+    // so a token on it can only come from the parameter-declaration path.
+    let text = "MACHINE m\nVARIABLES\n    v\nEVENTS\n    EVENT step\n    ANY\n        user\n        subject\n        roleName\n    WHERE\n        @grd1 user ∈ S :\n        @grd2 subject ∈ T\n    THEN\n        v ≔ 0\n    END\nEND\n";
+    assert!(rossi::parse(text).is_err(), "fixture must be broken");
+
+    let tokens = decode_tokens(text);
+    let parameter = token_type_index("parameter");
+    let lines: Vec<&str> = text.lines().collect();
+
+    let param_decl_at = |line: u32, name: &str| {
+        let col = lines[line as usize].find(name).unwrap() as u32;
+        tokens
+            .iter()
+            .any(|&(l, c, _, t)| l == line && c == col && t == parameter)
+    };
+
+    for (line, name) in [(6, "user"), (7, "subject"), (8, "roleName")] {
+        assert!(
+            param_decl_at(line, name),
+            "ANY parameter `{name}` (line {line}) must get a PARAMETER token despite the failed guard: {tokens:?}"
+        );
+    }
+}
