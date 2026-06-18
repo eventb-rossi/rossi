@@ -94,19 +94,15 @@ with `eventb-toggle-input-method'."
   "Event-B status and inline modifiers (any case).")
 
 (defconst eventb-constants-regexp
-  "\\<\\(?:[Ff][Aa][Ll][Ss][Ee]\\|[Bb][Oo][Oo][Ll]\\|[Nn][Aa][Tt]1\\|[Tt][Rr][Uu][Ee]\\|[Ii][Nn][Tt]\\|[Nn][Aa][Tt]\\)\\>"
-  "Event-B literal constants and number sets (any case).")
+  "\\<\\(?:FALSE\\|false\\|BOOL\\|NAT1\\|TRUE\\|bool\\|true\\|INT\\|NAT\\)\\>"
+  "Event-B literal constants and number sets (exact case).")
 
 (defconst eventb-builtins-regexp
   "\\<\\(?:partition\\|finite\\|card\\|pred\\|prj1\\|prj2\\|succ\\|max\\|min\\|id\\)\\>"
   "Event-B built-in functions and predicates (exact case).")
 
-(defconst eventb-quantifier-words-regexp
-  "\\<\\(?:[Ii][Nn][Tt][Ee][Rr]\\|[Uu][Nn][Ii][Oo][Nn]\\)\\>"
-  "Event-B quantifier words UNION/INTER (any case).")
-
 (defconst eventb-operator-words-regexp
-  "\\<\\(?:oftype\\|POW1\\|circ\\|POW\\|dom\\|mod\\|not\\|ran\\|or\\)\\>"
+  "\\<\\(?:oftype\\|INTER\\|UNION\\|POW1\\|circ\\|POW\\|dom\\|mod\\|not\\|ran\\|or\\)\\>"
   "Event-B alphabetic operators (exact case).")
 
 (defconst eventb-constant-symbols
@@ -125,7 +121,6 @@ with `eventb-toggle-input-method'."
     (,eventb-constants-regexp . font-lock-constant-face)
     (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
     (,eventb-builtins-regexp . font-lock-function-name-face)
-    (,eventb-quantifier-words-regexp . font-lock-builtin-face)
     (,eventb-operator-words-regexp . font-lock-builtin-face)
     (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
     ("\\<[0-9]+\\>" . font-lock-constant-face)

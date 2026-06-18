@@ -22,15 +22,13 @@ contexts:
       scope: keyword.other.eventb
     - match: '(ℕ1|ℕ|ℤ|∅|\{\})'
       scope: constant.language.eventb
-    - match: '(?i)\b(bool|false|int|nat|nat1|true)\b'
+    - match: '\b(BOOL|FALSE|INT|NAT|NAT1|TRUE|bool|false|true)\b'
       scope: constant.language.eventb
     - match: '\b(card|finite|id|max|min|partition|pred|prj1|prj2|succ)\b'
       scope: support.function.eventb
     - match: '(<<->>|/<<:|:∈|:∣|<->>|<<->|>->>|ℙ1|\+->|\+>>|-->|->>|/<:|<->|<<:|<<\||<=>|>\+>|>->|\|->|\|>>|‥|ℙ|→|↔|↠|↣|↦|⇒|⇔|⇸|∀|∃|∈|∉|−|∖|∗|∘|∣|∥|∧|∨|∩|∪|∼|≔|≠|≤|≥|⊂|⊄|⊆|⊈|⊗|⋂|⋃|▷|◁|⤀|⤔|⤖|⦂|⩤|⩥|||||\*\*|\.\.|/:|/=|/\\|::|:=|:\||<\+|<:|<=|<\||=>|><|>=|\\/|\|>|\|\||¬|·|×|÷|λ|!|#|%|&|\*|\+|-|\.|/|:|;|<|=|>|\\|\^|\||~)'
       scope: keyword.operator.eventb
-    - match: '(?i)\b(inter|union)\b'
-      scope: keyword.operator.eventb
-    - match: '\b(POW|POW1|circ|dom|mod|not|oftype|or|ran)\b'
+    - match: '\b(INTER|POW|POW1|UNION|circ|dom|mod|not|oftype|or|ran)\b'
       scope: keyword.operator.eventb
     - match: '\b[0-9]+\b'
       scope: constant.numeric.eventb

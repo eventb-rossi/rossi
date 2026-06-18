@@ -8,14 +8,14 @@
 //!
 //! Emacs regexes have no inline `(?i)`, and
 //! `font-lock-keywords-case-fold-search` is a single buffer-wide flag — with it
-//! set, the exact-case math words would fold too (`DOM`, `Card`, `pow` are
-//! ordinary identifiers; see `rossi::builtins::RESERVED_OPERATOR_WORDS`). So the
-//! mode body sets the flag to `nil` and *case-insensitive* word groups (the
-//! grammar's `^"…"` tokens: structural keywords, literals, `UNION`/`INTER`)
-//! get their folding baked into the pattern as character classes
-//! (`[Cc][Oo][Nn]…`), prebuilt here in Rust. Exact-case word groups and the
-//! symbol groups (where case cannot apply) use plain alternations; symbols
-//! still go through `regexp-opt` for escaping.
+//! set, the exact-case math words would fold too (`DOM`, `Card`, `pow`, `nat`,
+//! `union` are ordinary identifiers; see
+//! `rossi::builtins::RESERVED_OPERATOR_WORDS` / `RESERVED_ATOM_WORDS`). So the
+//! mode body sets the flag to `nil` and the only *case-insensitive* word groups
+//! — the grammar's `^"…"` structural keywords — get their folding baked into
+//! the pattern as character classes (`[Cc][Oo][Nn]…`), prebuilt here in Rust.
+//! Exact-case word groups and the symbol groups (where case cannot apply) use
+//! plain alternations; symbols still go through `regexp-opt` for escaping.
 
 use super::{Markers, MatchKind, Model, Scope, TokenGroup};
 
@@ -67,7 +67,6 @@ pub fn render(model: &Model) -> String {
     (,eventb-constants-regexp . font-lock-constant-face)
     (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
     (,eventb-builtins-regexp . font-lock-function-name-face)
-    (,eventb-quantifier-words-regexp . font-lock-builtin-face)
     (,eventb-operator-words-regexp . font-lock-builtin-face)
     (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
     ("\\<[0-9]+\\>" . font-lock-constant-face)
@@ -115,17 +114,13 @@ fn word_const(group: &TokenGroup) -> (&'static str, &'static str) {
         ),
         (Scope::ConstantLanguage, _) => (
             "eventb-constants-regexp",
-            "Event-B literal constants and number sets (any case).",
+            "Event-B literal constants and number sets (exact case).",
         ),
         (Scope::SupportFunction, _) => (
             "eventb-builtins-regexp",
             "Event-B built-in functions and predicates (exact case).",
         ),
-        (Scope::KeywordOperator, true) => (
-            "eventb-quantifier-words-regexp",
-            "Event-B quantifier words UNION/INTER (any case).",
-        ),
-        (Scope::KeywordOperator, false) => (
+        (Scope::KeywordOperator, _) => (
             "eventb-operator-words-regexp",
             "Event-B alphabetic operators (exact case).",
         ),
@@ -207,9 +202,11 @@ mod tests {
         assert!(!region.contains("[Dd][Oo][Mm]"));
         assert!(region.contains("POW1"));
         assert!(!region.contains("[Pp][Oo][Ww]"));
-        // UNION/INTER are the case-insensitive operator words.
-        assert!(region.contains("eventb-quantifier-words-regexp"));
-        assert!(region.contains("[Uu][Nn][Ii][Oo][Nn]"));
+        // UNION/INTER are now exact-case operator words — unfolded, and their
+        // separate quantifier defconst is gone.
+        assert!(region.contains("UNION"));
+        assert!(!region.contains("[Uu][Nn][Ii][Oo][Nn]"));
+        assert!(!region.contains("eventb-quantifier-words-regexp"));
     }
 
     #[test]

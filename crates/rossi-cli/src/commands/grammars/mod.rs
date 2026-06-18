@@ -29,15 +29,17 @@
 //! - **Longest-first.** Symbol groups are sorted by descending byte length so an
 //!   ordered-alternation engine (Oniguruma `|`, Vim `\|`) matches `<=>` before
 //!   `<`, `|->` before `|`, `:=` before `:`.
-//! - **Per-group case sensitivity, mirroring `grammar.pest`.** Structural
-//!   keywords, the literal atoms (`true`/`bool`/`nat`/…) and the
-//!   `UNION`/`INTER` quantifier words are case-insensitive tokens (`^"…"`
-//!   rules) and are matched case-insensitively. The mathematical operator
-//!   words (`dom`, `ran`, `mod`, `or`, …), the builtins (`card`, `finite`, …)
-//!   and `POW`/`POW1` are exact-case tokens — `DOM`, `Card`, `pow` are
-//!   ordinary identifiers ([`rossi::builtins::RESERVED_OPERATOR_WORDS`] is
-//!   exact-case, Rodin parity) — so their groups match exactly, in the
-//!   canonical spelling from the tables.
+//! - **Per-group case sensitivity, mirroring `grammar.pest`.** Only the
+//!   structural keywords are case-insensitive tokens (`^"context"` …) and so
+//!   match case-insensitively. Every other word — the literal atoms
+//!   (`NAT`/`INT`, `TRUE`/`true`/`bool`/…), the `UNION`/`INTER` quantifier
+//!   words, the mathematical operator words (`dom`, `ran`, `mod`, `or`, …),
+//!   the builtins (`card`, `finite`, …) and `POW`/`POW1` — is an exact-case
+//!   token, so `DOM`, `Card`, `pow`, `nat`, `Union` are ordinary identifiers
+//!   ([`rossi::builtins::RESERVED_OPERATOR_WORDS`] / `RESERVED_ATOM_WORDS` are
+//!   exact-case, Rodin parity). Those groups match exactly, in the canonical
+//!   spelling from the tables, with both cases of the boolean atoms emitted
+//!   (`TRUE` the value, `true` the predicate literal).
 //! - **One operator colour.** The six semantic operator sub-scopes the old
 //!   hand-written grammars used were cosmetic (themes rarely distinguish them)
 //!   and a frequent source of cross-category shadowing bugs. We collapse every
@@ -57,7 +59,7 @@ pub mod zed;
 
 use rossi::builtins::BUILTIN_WORDS;
 use rossi::keywords::{KEYWORDS, KeywordGroup};
-use rossi::operators::{OPERATOR_SPELLINGS, OperatorCategory, OperatorId};
+use rossi::operators::{OPERATOR_SPELLINGS, OperatorCategory};
 
 /// How a token group is matched in the generated regex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,8 +138,13 @@ fn is_word(spelling: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic())
 }
 
-/// Boolean atoms live in `builtins` (lowercase) but read as constants.
-const BOOLEAN_WORDS: &[&str] = &["bool", "true", "false"];
+/// The boolean atoms, every canonical spelling in its own kernel-language
+/// case: the values `TRUE`/`FALSE` and the type `BOOL` (uppercase), the
+/// predicate literals `true`/`false` and the `bool(P)` conversion (lowercase).
+/// They read as constants. `BUILTIN_WORDS` over-folds them to lowercase, so the
+/// generator sources them here instead; the `boolean_words_are_reserved_tokens`
+/// test pins each one to the parser's exact-case keyword vocabulary.
+const BOOLEAN_WORDS: &[&str] = &["TRUE", "FALSE", "BOOL", "true", "false", "bool"];
 
 /// The format-neutral token model, built once from the canonical tables.
 pub struct Model {
@@ -149,7 +156,6 @@ impl Model {
     pub fn build() -> Model {
         let mut keyword_control: Vec<String> = Vec::new();
         let mut keyword_other: Vec<String> = Vec::new();
-        let mut operator_words_ci: Vec<String> = Vec::new();
         let mut operator_words: Vec<String> = Vec::new();
         let mut operator_symbols: Vec<String> = Vec::new();
         let mut constant_words: Vec<String> = Vec::new();
@@ -157,7 +163,7 @@ impl Model {
         let mut builtins: Vec<String> = Vec::new();
 
         // Structural keywords: section/event headers vs status/inline modifiers.
-        // All case-insensitive in the grammar (`^"context"` …).
+        // The only case-insensitive words in the grammar (`^"context"` …).
         for kw in KEYWORDS {
             let bucket = match kw.group {
                 KeywordGroup::Status | KeywordGroup::Inline => &mut keyword_other,
@@ -168,50 +174,41 @@ impl Model {
             }
         }
 
-        // Operators: atoms (∅, ℕ, NAT …) read as constants and are
-        // case-insensitive tokens (`^"nat"` …). Every other spelling is split
-        // per-spelling so e.g. Or contributes `∨` (symbol) and `or` (word).
-        // The quantifier words `UNION`/`INTER` are the only case-insensitive
-        // operator words (`kw_UNION = ^"UNION"`); all other operator words are
-        // exact-case tokens kept in their canonical spelling (`dom`, `POW`).
+        // The boolean atoms, both cases (`TRUE` value vs `true` predicate
+        // literal): exact-case constants the lowercase-only `BUILTIN_WORDS`
+        // cannot supply.
+        for word in BOOLEAN_WORDS {
+            constant_words.push((*word).to_string());
+        }
+
+        // Operators: atoms (∅, ℕ, NAT …) read as constants; every other
+        // spelling is split per-spelling so e.g. Or contributes `∨` (symbol)
+        // and `or` (word). All are exact-case tokens kept in their canonical
+        // spelling (`NAT`, `UNION`, `dom`, `POW`) — Rodin reserves exact
+        // spellings, so `nat`, `Union`, `DOM`, `pow` are ordinary identifiers.
         for op in OPERATOR_SPELLINGS {
             let is_atom = op.category == OperatorCategory::ExpressionAtom;
-            let is_ci_quantifier = matches!(
-                op.id,
-                OperatorId::QuantifiedUnion | OperatorId::QuantifiedIntersection
-            );
             let (words, symbols) = if is_atom {
                 (&mut constant_words, &mut constant_symbols)
-            } else if is_ci_quantifier {
-                (&mut operator_words_ci, &mut operator_symbols)
             } else {
                 (&mut operator_words, &mut operator_symbols)
             };
-            // Case-insensitive groups fold to lowercase (case is cosmetic
-            // there); the exact group keeps the canonical spelling.
-            let fold = is_atom || is_ci_quantifier;
-            push_spelling(words, symbols, op.unicode, fold);
-            push_spelling(words, symbols, op.ascii, fold);
+            push_spelling(words, symbols, op.unicode);
+            push_spelling(words, symbols, op.ascii);
         }
 
-        // Built-ins: skip words already covered as operators (dom, ran, POW …)
-        // or constants (nat, int …); booleans read as constants (their tokens
-        // are case-insensitive); the rest are support functions/predicates
-        // (card, finite, partition …), exact-case like their grammar tokens.
+        // Built-ins: skip words already covered as operators (dom, ran, POW …),
+        // number-set atoms (nat, int …) or booleans — matched case-insensitively
+        // so a lowercase vocabulary entry resolves to its uppercase/exact
+        // canonical spelling. The rest are support functions/predicates (card,
+        // finite, partition …), exact-case like their grammar tokens.
         for word in BUILTIN_WORDS {
-            let w = word.to_lowercase();
             let covered = operator_words
                 .iter()
-                .chain(&operator_words_ci)
-                .any(|o| o.eq_ignore_ascii_case(&w))
-                || constant_words.contains(&w);
-            if covered {
-                continue;
-            }
-            if BOOLEAN_WORDS.contains(&w.as_str()) {
-                constant_words.push(w);
-            } else {
-                builtins.push(w);
+                .chain(&constant_words)
+                .any(|o| o.eq_ignore_ascii_case(word));
+            if !covered {
+                builtins.push((*word).to_string());
             }
         }
 
@@ -219,10 +216,9 @@ impl Model {
             word_group(Scope::KeywordControl, keyword_control, true),
             word_group(Scope::KeywordOther, keyword_other, true),
             symbol_group(Scope::ConstantLanguage, constant_symbols),
-            word_group(Scope::ConstantLanguage, constant_words, true),
+            word_group(Scope::ConstantLanguage, constant_words, false),
             word_group(Scope::SupportFunction, builtins, false),
             symbol_group(Scope::KeywordOperator, operator_symbols),
-            word_group(Scope::KeywordOperator, operator_words_ci, true),
             word_group(Scope::KeywordOperator, operator_words, false),
         ];
 
@@ -230,16 +226,13 @@ impl Model {
     }
 }
 
-/// Route a spelling to its word or symbol bucket. `fold` lowercases word
-/// spellings (case-insensitive groups, where case is cosmetic); exact-case
-/// groups keep the canonical spelling (`POW` must not become `pow`).
-fn push_spelling(words: &mut Vec<String>, symbols: &mut Vec<String>, spelling: &str, fold: bool) {
+/// Route a spelling to its word or symbol bucket, keeping its canonical
+/// spelling — the operator words are exact-case (`POW` must not become `pow`),
+/// and the structural keywords (the only case-insensitive words) are folded by
+/// their own loop, not here.
+fn push_spelling(words: &mut Vec<String>, symbols: &mut Vec<String>, spelling: &str) {
     if is_word(spelling) {
-        words.push(if fold {
-            spelling.to_lowercase()
-        } else {
-            spelling.to_string()
-        });
+        words.push(spelling.to_string());
     } else {
         symbols.push(spelling.to_string());
     }
@@ -438,9 +431,10 @@ mod tests {
 
     #[test]
     fn word_case_policy_mirrors_the_grammar() {
-        // Case-insensitive tokens in grammar.pest (`^"…"`): structural
-        // keywords, literal atoms, and the UNION/INTER quantifier words.
-        // Exact-case tokens: the math operator words, builtins, POW/POW1.
+        // The only case-insensitive tokens in grammar.pest (`^"…"`) are the
+        // structural keywords. Everything else — literal atoms, the boolean
+        // values/literals, UNION/INTER, the math operator words, builtins,
+        // POW/POW1 — is exact-case.
         let model = Model::build();
         let find = |member: &str| {
             model
@@ -449,14 +443,17 @@ mod tests {
                 .find(|g| g.members.iter().any(|m| m == member))
                 .unwrap_or_else(|| panic!("{member:?} not classified"))
         };
-        for ci in ["context", "true", "nat1", "union", "inter"] {
+        for ci in ["context", "skip"] {
             assert!(find(ci).case_insensitive, "{ci:?} must match (?i)");
         }
-        for exact in ["dom", "ran", "mod", "or", "POW", "POW1", "card", "finite"] {
+        for exact in [
+            "true", "TRUE", "BOOL", "NAT1", "UNION", "INTER", "dom", "ran", "mod", "or", "POW",
+            "POW1", "card", "finite",
+        ] {
             assert!(
                 !find(exact).case_insensitive,
                 "{exact:?} must match exact-case (Rodin reserves exact spellings; \
-                 `DOM`, `Card`, `pow` are ordinary identifiers)"
+                 `nat`, `Union`, `DOM`, `Card`, `pow` are ordinary identifiers)"
             );
         }
         // The (?i) regex carries the flag; the exact regex must not.
@@ -494,12 +491,35 @@ mod tests {
         let model = Model::build();
         let consts = group(&model, Scope::ConstantLanguage, MatchKind::Word);
         let funcs = group(&model, Scope::SupportFunction, MatchKind::Word);
-        for b in ["true", "false", "bool"] {
+        // Both cases: the values/type `TRUE`/`FALSE`/`BOOL` and the predicate
+        // literals / conversion `true`/`false`/`bool`.
+        for b in ["TRUE", "FALSE", "BOOL", "true", "false", "bool"] {
             assert!(consts.contains(&b.to_string()), "{b} should be a constant");
             assert!(!funcs.contains(&b.to_string()));
         }
         assert!(funcs.contains(&"card".to_string()));
         assert!(funcs.contains(&"finite".to_string()));
+        // The constant words are exact-case — the grammar split `TRUE` (the
+        // value) from `true` (the predicate literal), so neither folds.
+        let const_words = model
+            .groups
+            .iter()
+            .find(|g| g.scope == Scope::ConstantLanguage && g.kind == MatchKind::Word)
+            .expect("constant word group");
+        assert!(!const_words.case_insensitive);
+    }
+
+    /// SSOT guard: every boolean spelling the generator emits is one of the
+    /// parser's exact-case keyword tokens, so [`BOOLEAN_WORDS`] cannot drift
+    /// from the grammar's reserved boolean vocabulary (`builtins::is_reserved_name`).
+    #[test]
+    fn boolean_words_are_reserved_tokens() {
+        for w in BOOLEAN_WORDS {
+            assert!(
+                rossi::builtins::is_reserved_name(w),
+                "BOOLEAN_WORDS entry {w:?} is not a reserved keyword token"
+            );
+        }
     }
 
     /// The generated Neovim `operators.lua` must expose exactly the rows the LSP
