@@ -8,6 +8,18 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 // Basic Tokens
 // ==========================
 
+// Word-boundary guards (single source of truth). `word_char` is the set of
+// characters that continue a mathematical identifier; a keyword counts as a
+// keyword only when not immediately followed by one (otherwise it is an
+// identifier prefix, e.g. `events_of_partition` is one name). Math/logic
+// keywords keep the narrow guard so a trailing `-` reads as subtraction
+// (`NAT-1` = `ℕ − 1`); structural keywords also treat `-` as a word char so a
+// hyphenated `component_name` (`end-to-end`, `variant-x`) is never split at an
+// embedded keyword.
+word_char = _{ ASCII_ALPHANUMERIC | "_" }
+word_boundary = _{ !word_char }
+struct_word_boundary = _{ !(word_char | "-") }
+
 // Identifiers (mathematical: kernel_lang §2.2 — no hyphens; see names.rs)
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "'")* }
 
@@ -40,65 +52,62 @@ integer = @{ "-"? ~ ASCII_DIGIT+ }
 // Keywords
 // ==========================
 
-// Context Keywords (case-insensitive)
-// Atomic rules with trailing word-boundary lookahead so keywords don't greedily
-// match identifier prefixes (e.g. `events_of_partition` must parse as one
-// identifier, not `events` + `_of_partition`). Structural keywords also treat
-// `-` as a word character so a `component_name` like `end-to-end` or
-// `variant-x` is never split at an embedded keyword (math keywords keep the
-// narrower guard: `NAT-1` must stay `ℕ − 1`).
-kw_context = @{ ^"context" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_extends = @{ ^"extends" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_sets = @{ ^"sets" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_constants = @{ ^"constants" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_axioms = @{ ^"axioms" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+// Context Keywords (case-insensitive). Atomic rules carrying a trailing
+// `struct_word_boundary` so a keyword never matches an identifier/component_name
+// prefix; see the word-boundary guards above for why structural keywords admit
+// `-` while math keywords (further down) use the narrower `word_boundary`.
+kw_context = @{ ^"context" ~ struct_word_boundary }
+kw_extends = @{ ^"extends" ~ struct_word_boundary }
+kw_sets = @{ ^"sets" ~ struct_word_boundary }
+kw_constants = @{ ^"constants" ~ struct_word_boundary }
+kw_axioms = @{ ^"axioms" ~ struct_word_boundary }
 // THEOREMS section header. Distinct from the singular inline `kw_theorem` flag:
 // the trailing word-boundary guard means `THEOREMS` never matches `kw_theorem`
 // (the `s` fails its boundary) and vice-versa.
-kw_theorems = @{ ^"theorems" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_end = @{ ^"end" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_theorems = @{ ^"theorems" ~ struct_word_boundary }
+kw_end = @{ ^"end" ~ struct_word_boundary }
 
 // Machine Keywords (case-insensitive)
-kw_machine = @{ ^"machine" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_refines = @{ ^"refines" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_sees = @{ ^"sees" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_variables = @{ ^"variables" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_invariants = @{ ^"invariants" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_variant = @{ ^"variant" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_events = @{ ^"events" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_initialisation = @{ ^"initialisation" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_machine = @{ ^"machine" ~ struct_word_boundary }
+kw_refines = @{ ^"refines" ~ struct_word_boundary }
+kw_sees = @{ ^"sees" ~ struct_word_boundary }
+kw_variables = @{ ^"variables" ~ struct_word_boundary }
+kw_invariants = @{ ^"invariants" ~ struct_word_boundary }
+kw_variant = @{ ^"variant" ~ struct_word_boundary }
+kw_events = @{ ^"events" ~ struct_word_boundary }
+kw_initialisation = @{ ^"initialisation" ~ struct_word_boundary }
 
 // Event Keywords (case-insensitive)
-kw_event = @{ ^"event" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_any = @{ ^"any" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_where = @{ ^"where" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_when = @{ ^"when" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_with = @{ ^"with" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_then = @{ ^"then" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_begin = @{ ^"begin" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_witness = @{ ^"witness" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_status = @{ ^"status" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_ordinary = @{ ^"ordinary" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_convergent = @{ ^"convergent" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
-kw_anticipated = @{ ^"anticipated" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+kw_event = @{ ^"event" ~ struct_word_boundary }
+kw_any = @{ ^"any" ~ struct_word_boundary }
+kw_where = @{ ^"where" ~ struct_word_boundary }
+kw_when = @{ ^"when" ~ struct_word_boundary }
+kw_with = @{ ^"with" ~ struct_word_boundary }
+kw_then = @{ ^"then" ~ struct_word_boundary }
+kw_begin = @{ ^"begin" ~ struct_word_boundary }
+kw_witness = @{ ^"witness" ~ struct_word_boundary }
+kw_status = @{ ^"status" ~ struct_word_boundary }
+kw_ordinary = @{ ^"ordinary" ~ struct_word_boundary }
+kw_convergent = @{ ^"convergent" ~ struct_word_boundary }
+kw_anticipated = @{ ^"anticipated" ~ struct_word_boundary }
 
 // Action Keywords
-kw_skip = @{ ^"skip" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_skip = @{ ^"skip" ~ word_boundary }
 
 // Logic Keywords (case-insensitive, with word boundary guards)
-kw_true = @{ (^"true" ~ !(ASCII_ALPHANUMERIC | "_")) | "⊤" }
-kw_false = @{ (^"false" ~ !(ASCII_ALPHANUMERIC | "_")) | "⊥" }
-kw_theorem = @{ ^"theorem" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_true = @{ (^"true" ~ word_boundary) | "⊤" }
+kw_false = @{ (^"false" ~ word_boundary) | "⊥" }
+kw_theorem = @{ ^"theorem" ~ word_boundary }
 
 // Built-in types (atomic rules to prevent implicit whitespace before boundary guard)
-kw_nat1 = @{ ("ℕ1" | ^"nat1") ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_nat = @{ ("ℕ" | ^"nat") ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_int = @{ ("ℤ" | ^"int") ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_bool = @{ ^"bool" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_nat1 = @{ ("ℕ1" | ^"nat1") ~ word_boundary }
+kw_nat = @{ ("ℕ" | ^"nat") ~ word_boundary }
+kw_int = @{ ("ℤ" | ^"int") ~ word_boundary }
+kw_bool = @{ ^"bool" ~ word_boundary }
 
 // Quantified set operation keywords
-kw_UNION = @{ "⋃" | (^"UNION" ~ !(ASCII_ALPHANUMERIC | "_")) }
-kw_INTER = @{ "⋂" | (^"INTER" ~ !(ASCII_ALPHANUMERIC | "_")) }
+kw_UNION = @{ "⋃" | (^"UNION" ~ word_boundary) }
+kw_INTER = @{ "⋂" | (^"INTER" ~ word_boundary) }
 
 // ==========================
 // Operators and Symbols
@@ -106,10 +115,10 @@ kw_INTER = @{ "⋂" | (^"INTER" ~ !(ASCII_ALPHANUMERIC | "_")) }
 
 // Logical Operators
 op_and = { "∧" | "&" }
-op_or = @{ "∨" | ("or" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_or = @{ "∨" | ("or" ~ word_boundary) }
 op_implies = { "⇒" | "=>" }
 op_equivalent = { "⇔" | "<=>" }
-op_not = @{ "¬" | ("not" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_not = @{ "¬" | ("not" ~ word_boundary) }
 
 // Quantifiers
 op_forall = { "∀" | "!" }
@@ -126,10 +135,10 @@ op_union = { "∪" | "\\/" }
 op_intersection = { "∩" | "/\\" }
 op_difference = { "∖" | "\\" }
 op_cartesian = { "×" | "**" }
-op_powerset = @{ "ℙ" | ("POW" ~ !(ASCII_ALPHANUMERIC | "_")) }
-op_powerset1 = @{ "ℙ1" | ("POW1" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_powerset = @{ "ℙ" | ("POW" ~ word_boundary) }
+op_powerset1 = @{ "ℙ1" | ("POW1" ~ word_boundary) }
 op_emptyset = { "∅" | "{}" | ",," }
-op_oftype = @{ "⦂" | ("oftype" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_oftype = @{ "⦂" | ("oftype" ~ word_boundary) }
 
 // Relation Operators
 op_maplet = { "↦" | "|->" }
@@ -141,11 +150,11 @@ op_total_inj = { "↣" | ">->" }
 op_partial_surj = { "⤀" | "+>>" }
 op_total_surj = { "↠" | "->>" }
 op_bijection = { "⤖" | ">->>" }
-op_domain = @{ "dom" ~ !(ASCII_ALPHANUMERIC | "_") }
-op_range = @{ "ran" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_domain = @{ "dom" ~ word_boundary }
+op_range = @{ "ran" ~ word_boundary }
 op_inverse = { "\u{223C}" | "~" }
 op_semicolon = { ";" }
-op_composition = @{ "∘" | ("circ" ~ !(ASCII_ALPHANUMERIC | "_")) }
+op_composition = @{ "∘" | ("circ" ~ word_boundary) }
 op_domain_restrict = { "◁" | "<|" }
 op_domain_subtract = { "⩤" | "<<|" }
 op_range_restrict = { "▷" | "|>" }
@@ -165,7 +174,7 @@ op_plus = { "+" }
 op_minus = { "−" | "-" }
 op_multiply = { "∗" | "*" }
 op_divide = { "/" | "÷" }
-op_modulo = @{ "mod" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_modulo = @{ "mod" ~ word_boundary }
 op_exponent = { "^" }
 op_range_op = { ".." | "‥" }
 

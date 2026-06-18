@@ -1242,9 +1242,9 @@ mod tests {
         }
 
         // Reverse: every grammar `op_` literal is a canonical spelling, except
-        // the `,,` empty-set alias and `_`, which appears only in the
-        // `!(… | "_")` word-boundary guards.
-        let allow = [",,", "_"];
+        // the `,,` empty-set alias. The `_` of the word-boundary guards lives in
+        // the shared `word_char` rule now, so it no longer appears on `op_` lines.
+        let allow = [",,"];
         let canonical: HashSet<&str> = OPERATOR_SPELLINGS
             .iter()
             .flat_map(|op| [op.unicode, op.ascii])
