@@ -610,11 +610,7 @@ fn operator_title(spelling: &operators::OperatorSpelling) -> String {
 /// private-use-area code points (U+E000..=U+F8FF) that won't render in fonts, so
 /// fall back to the ASCII spelling for those.
 fn display_glyph(spelling: &operators::OperatorSpelling) -> &'static str {
-    if spelling
-        .unicode
-        .chars()
-        .any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
-    {
+    if operators::is_private_use_glyph(spelling.unicode) {
         spelling.ascii
     } else {
         spelling.unicode
@@ -1529,6 +1525,41 @@ mod tests {
         if let HoverContents::Markup(content) = hover.contents {
             assert!(content.value.contains("<+ (Relational override)"));
             assert!(!content.value.contains("U+E"));
+        }
+    }
+
+    /// The hand-written hover bodies for the private-use operators embed the
+    /// glyph literally; pin each to its canonical spelling so the body can't
+    /// drift from `operators` (where the code point is defined).
+    #[test]
+    fn test_private_use_hover_bodies_use_canonical_glyphs() {
+        let provider = HoverProvider::new();
+        for id in [
+            OperatorId::TotalRelation,
+            OperatorId::SurjectiveRelation,
+            OperatorId::TotalSurjectiveRelation,
+            OperatorId::Overwrite,
+        ] {
+            let spelling = operators::spelling(id);
+            assert!(
+                operators::is_private_use_glyph(spelling.unicode),
+                "{id:?} is expected to be a private-use operator"
+            );
+            let hover = provider
+                .hover_operator(spelling.ascii)
+                .unwrap_or_else(|| panic!("no hover for {id:?}"));
+            let HoverContents::Markup(content) = hover.contents else {
+                panic!("expected markup hover for {id:?}");
+            };
+            assert!(
+                content.value.contains(spelling.unicode),
+                "{id:?} hover body must show the canonical private-use glyph"
+            );
+            assert!(
+                content.value.contains(spelling.ascii),
+                "{id:?} hover body must show the ASCII alternative {:?}",
+                spelling.ascii
+            );
         }
     }
 
