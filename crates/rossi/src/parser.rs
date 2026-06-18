@@ -2102,18 +2102,31 @@ fn rule_to_logical_op(rule: Rule) -> Option<crate::ast::predicate::LogicalOp> {
     }
 }
 
+/// Whether `rule` is one of the binary-predicate precedence wrappers — the
+/// `⇒`/`⇔` and `∧`/`∨` levels (and their `_no_semi` twins). These nest as a
+/// chain of single-child wrappers down to `negation_predicate`; the dispatch in
+/// [`parse_predicate_inner`] and the operand descent in [`leading_quantifier`]
+/// both key off this set, so it lives in one place.
+fn is_binary_predicate_wrapper(rule: Rule) -> bool {
+    matches!(
+        rule,
+        Rule::implies_equiv_predicate
+            | Rule::connective_predicate
+            | Rule::implies_equiv_predicate_no_semi
+            | Rule::connective_predicate_no_semi
+    )
+}
+
 /// A bare, unparenthesised leading quantifier in `pair`, returned as its display
-/// spelling. The operand is a `negation_predicate` at the `∧`/`∨` level and a
-/// `connective_predicate` at the `⇒`/`⇔` level; peel the latter to its leading
-/// `negation_predicate` first. A parenthesised `(∀x·P)` descends through
-/// `atomic_predicate`, so its leading child is not a quantifier — only a
+/// spelling. The operand sits one wrapper deep at each logical level (a
+/// `negation_predicate` under `∧`/`∨`, a `connective_predicate` under `⇒`/`⇔`),
+/// so descend through any binary-predicate wrappers to the leading
+/// `negation_predicate` before inspecting it. A parenthesised `(∀x·P)` descends
+/// through `atomic_predicate`, so its leading child is not a quantifier — only a
 /// directly-quantified operand is reported.
 fn leading_quantifier(pair: &pest::iterators::Pair<Rule>) -> Option<String> {
     let mut operand = pair.clone();
-    if matches!(
-        operand.as_rule(),
-        Rule::connective_predicate | Rule::connective_predicate_no_semi
-    ) {
+    while is_binary_predicate_wrapper(operand.as_rule()) {
         operand = operand.into_inner().next()?;
     }
     let first = operand.into_inner().next()?;
@@ -2268,10 +2281,7 @@ fn parse_predicate_inner(
             }
             // Binary precedence wrappers. Single child = no operator at this
             // level (descend); multi-child = real chain (dispatch).
-            Rule::implies_equiv_predicate
-            | Rule::connective_predicate
-            | Rule::implies_equiv_predicate_no_semi
-            | Rule::connective_predicate_no_semi => {
+            r if is_binary_predicate_wrapper(r) => {
                 let mut probe = pair.clone().into_inner();
                 let first = probe.next().ok_or(ParseError::EmptyPredicate)?;
                 if probe.next().is_some() {
