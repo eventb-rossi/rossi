@@ -1,6 +1,6 @@
 //! Integration tests for working Event-B model examples
 
-use rossi::{Component, parse};
+use rossi::{Component, parse, parse_components};
 use std::fs;
 
 #[test]
@@ -65,30 +65,35 @@ fn test_basic_machine() {
 
 #[test]
 fn test_all_working_examples_parse() {
-    // Test that all working example files parse without errors
-    let example_files = vec![
-        "examples/counter.eventb",
-        "examples/counter_machine.eventb",
-        "examples/basic_ctx.eventb",
-        "examples/basic_machine.eventb",
-        // Files exercising a real THEOREMS section.
-        "examples/simple_sets_ctx.eventb",
-        "examples/sets_and_relations_ctx.eventb",
-        "examples/library_ctx.eventb",
-        "examples/library_machine.eventb",
-    ];
-
-    for file in example_files {
-        let source = fs::read_to_string(file).unwrap_or_else(|_| panic!("Failed to read {}", file));
-
-        let result = parse(&source);
+    // Parse *every* bundled example model — discovered from the directory rather
+    // than a hand-maintained list — so an example that stops parsing cannot rot
+    // unnoticed (every `.eventb` under `examples/` must parse cleanly).
+    let dir = "examples";
+    let mut parsed = 0;
+    for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("Failed to read {dir}/: {e}")) {
+        let path = entry.expect("directory entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("eventb") {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+        // `parse_components` handles both single- and multi-component files
+        // (e.g. base-model.eventb bundles a context and a machine).
+        let result = parse_components(&source);
         assert!(
             result.is_ok(),
             "Failed to parse {}: {:?}",
-            file,
+            path.display(),
             result.err()
         );
+        assert!(
+            !result.unwrap().is_empty(),
+            "no components parsed from {}",
+            path.display()
+        );
+        parsed += 1;
     }
+    assert!(parsed > 0, "no example models found under {dir}/");
 }
 
 #[test]
