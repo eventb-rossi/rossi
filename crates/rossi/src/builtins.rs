@@ -320,4 +320,19 @@ mod tests {
             assert!(is_builtin(a.name()));
         }
     }
+
+    /// SSOT guard: every word treated as an ASCII operator spelling is the
+    /// ASCII form of a real operator, so this lexing-collision blocklist cannot
+    /// drift from the operator tables.
+    #[test]
+    fn ascii_operator_words_are_operator_spellings() {
+        for word in ASCII_OPERATOR_WORDS {
+            assert!(
+                crate::operators::OPERATOR_SPELLINGS
+                    .iter()
+                    .any(|op| op.ascii == *word),
+                "ASCII_OPERATOR_WORDS entry {word:?} is not an operator's ASCII spelling"
+            );
+        }
+    }
 }

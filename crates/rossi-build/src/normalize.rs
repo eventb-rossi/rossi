@@ -120,20 +120,24 @@ enum TightenMode {
     Action,
 }
 
+/// Operators whose Rodin bcc/bcm canonical form drops surrounding spaces:
+/// comparison, logical, multiply (∗), centre-dot (·), additive `+`, the
+/// symmetric set ops `∪`, `∩`, `×`, and the private-use overwrite glyph
+/// (U+E103). Spaces are kept around `−`, `↦`, `‥`, and the asymmetric set ops
+/// `∖`, `⩤`, `⩥`, `◁`, `▷`.
+///
+/// Every entry must be a known operator spelling — enforced by
+/// `tests::always_tight_entries_are_known_operators`.
+const ALWAYS_TIGHT: &[&str] = &[
+    "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·", "∗",
+    "+", "∪", "∩", "×", "\u{E103}",
+];
+
 fn tighten(input: &str, mode: TightenMode) -> String {
     // Collapse runs of internal whitespace to single spaces first.
     let mut s = collapse_spaces(input);
 
-    // Always-tight operators. Rodin's bcc/bcm canonical form drops spaces
-    // around: comparison, logical, multiply (∗), centre-dot (·), additive
-    // `+`, the symmetric set ops `∪`, `∩`, `×`, and U+E103 (Rodin's
-    // private-use overwrite glyph; 1311 corpus occurrences all tight).
-    // It keeps spaces around `−`, `↦`, `‥`, and the asymmetric set ops
-    // `∖`, `⩤`, `⩥`, `◁`, `▷`.
-    const ALWAYS_TIGHT: &[&str] = &[
-        "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·",
-        "∗", "+", "∪", "∩", "×", "\u{E103}",
-    ];
+    // Strip spaces around the always-tight operators (see `ALWAYS_TIGHT`).
     for op in ALWAYS_TIGHT {
         s = strip_space_around(&s, op);
     }
@@ -215,6 +219,19 @@ mod tests {
     fn canonical_from_str(src: &str) -> String {
         let p = parse_predicate_str(src).unwrap();
         canonical_predicate(&p)
+    }
+
+    /// SSOT guard: every `ALWAYS_TIGHT` glyph is a real operator spelling, so
+    /// the spacing table cannot drift to a string that the parser/operator
+    /// tables don't recognise.
+    #[test]
+    fn always_tight_entries_are_known_operators() {
+        for op in ALWAYS_TIGHT {
+            assert!(
+                rossi::operators::lookup_token(op).is_some(),
+                "ALWAYS_TIGHT entry {op:?} is not a known operator spelling"
+            );
+        }
     }
 
     #[test]
