@@ -138,10 +138,27 @@ impl OperatorSpelling {
     }
 }
 
-pub const TOTAL_RELATION: &str = "\u{E100}";
-pub const SURJECTIVE_RELATION: &str = "\u{E101}";
-pub const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}";
-pub const RELATIONAL_OVERRIDE: &str = "\u{E103}";
+// Event-B operators that Rodin renders through Unicode **Private-Use Area** code
+// points, because they have no glyph in the standard Unicode blocks. These four
+// are the *complete* set Rodin uses (`U+E100..=U+E103`); the
+// `private_use_glyphs_match_rodin` guard test pins the operator table to them so
+// the implementation can't silently drift from Rodin.
+//
+// Source of truth: Rodin's `BinaryExpression`/`AssociativeExpression` operator
+// tables (corroborated by ProB's `UnicodeTranslator`). Each is paired with a
+// plain-ASCII spelling that renders everywhere; see [`OPERATOR_SPELLINGS`].
+pub const TOTAL_RELATION: &str = "\u{E100}"; // Rodin TREL,  ASCII `<<->`
+pub const SURJECTIVE_RELATION: &str = "\u{E101}"; // Rodin SREL,  ASCII `<->>`
+pub const TOTAL_SURJECTIVE_RELATION: &str = "\u{E102}"; // Rodin STREL, ASCII `<<->>`
+pub const RELATIONAL_OVERRIDE: &str = "\u{E103}"; // Rodin OVR,   ASCII `<+`
+
+/// True when `s` contains a Unicode Private-Use Area code point
+/// (`U+E000..=U+F8FF`) — a glyph that has no portable rendering and only shows
+/// under Rodin's math font. The four constants above are the only such spellings
+/// rossi uses, so callers (e.g. hover) fall back to ASCII when this holds.
+pub fn is_private_use_glyph(s: &str) -> bool {
+    s.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
+}
 
 pub const OPERATOR_SPELLINGS: &[OperatorSpelling] = &[
     // Predicate comparisons
@@ -1262,5 +1279,51 @@ mod tests {
                 "grammar op_ literal {lit:?} is missing from OPERATOR_SPELLINGS"
             );
         }
+    }
+
+    /// The Private-Use Area glyphs in [`OPERATOR_SPELLINGS`] are *exactly* the
+    /// four Rodin uses, mapped to the operators Rodin maps them to. This ties the
+    /// table to Rodin's source of truth: a stray PUA glyph on a new operator, or a
+    /// re-pointed code point, fails here. Raw `\u{E10x}` literals are the
+    /// independent anchor, so a wrong named constant is caught too.
+    #[test]
+    fn private_use_glyphs_match_rodin() {
+        use std::collections::HashSet;
+
+        // The named constants hold Rodin's code points verbatim.
+        assert_eq!(TOTAL_RELATION, "\u{E100}");
+        assert_eq!(SURJECTIVE_RELATION, "\u{E101}");
+        assert_eq!(TOTAL_SURJECTIVE_RELATION, "\u{E102}");
+        assert_eq!(RELATIONAL_OVERRIDE, "\u{E103}");
+
+        let expected: HashSet<(OperatorId, &str)> = [
+            (OperatorId::TotalRelation, "\u{E100}"),
+            (OperatorId::SurjectiveRelation, "\u{E101}"),
+            (OperatorId::TotalSurjectiveRelation, "\u{E102}"),
+            (OperatorId::Overwrite, "\u{E103}"),
+        ]
+        .into_iter()
+        .collect();
+
+        let actual: HashSet<(OperatorId, &str)> = OPERATOR_SPELLINGS
+            .iter()
+            .filter(|op| is_private_use_glyph(op.unicode))
+            .map(|op| (op.id, op.unicode))
+            .collect();
+
+        assert_eq!(
+            actual, expected,
+            "the private-use glyphs in OPERATOR_SPELLINGS diverged from Rodin's set"
+        );
+    }
+
+    #[test]
+    fn is_private_use_glyph_detects_only_the_pua_range() {
+        assert!(is_private_use_glyph(RELATIONAL_OVERRIDE));
+        assert!(is_private_use_glyph(TOTAL_RELATION));
+        // Standard-Unicode operator glyphs and ASCII spellings are not private-use.
+        assert!(!is_private_use_glyph("↦"));
+        assert!(!is_private_use_glyph("⦂"));
+        assert!(!is_private_use_glyph("<<->"));
     }
 }
