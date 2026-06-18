@@ -1023,18 +1023,43 @@ fn test_total_surjective_relation() {
 }
 
 // ============================================================================
-// Feature 4.1: Empty set ,, ASCII alias
+// Feature: ,, maplet alias
 // ============================================================================
 
 #[test]
-fn test_empty_set_comma_comma() {
-    let source = common::invariant_machine("s", "s = ,,");
+fn test_maplet_comma_comma() {
+    use rossi::ast::expression::BinaryOp;
+
+    // `,,` is an accepted alternative input spelling for the maplet ↦.
+    let source = common::invariant_machine("r, x, y", "r = x ,, y");
     let m = common::parse_machine(&source);
     let pred = &m.invariants[0].predicate;
     if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
-        assert!(matches!(right.kind, ExpressionKind::EmptySet));
+        assert!(
+            matches!(&right.kind, ExpressionKind::Binary { op, .. } if *op == BinaryOp::Maplet),
+            "Expected Maplet, got {:?}",
+            right
+        );
     } else {
         panic!("Expected Comparison predicate");
+    }
+}
+
+#[test]
+fn test_empty_set_spellings() {
+    for body in ["s = {}", "s = \u{2205}"] {
+        let source = common::invariant_machine("s", body);
+        let m = common::parse_machine(&source);
+        let pred = &m.invariants[0].predicate;
+        if let rossi::PredicateKind::Comparison { right, .. } = &pred.kind {
+            assert!(
+                matches!(right.kind, ExpressionKind::EmptySet),
+                "Expected EmptySet for {body:?}, got {:?}",
+                right
+            );
+        } else {
+            panic!("Expected Comparison predicate for {body:?}");
+        }
     }
 }
 
