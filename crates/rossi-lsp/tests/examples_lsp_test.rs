@@ -448,21 +448,13 @@ fn doclink_params(uri: Url) -> DocumentLinkParams {
 
 /// Build a definition provider over the whole workspace.
 ///
-/// `update_definitions` resolves cross-file definitions EAGERLY at update
-/// time, so it must run only after `Workspace::open` has registered every
-/// file in both managers; updating inside the registration loop would break
-/// on models whose zips list machines before the contexts they see.
+/// Go-to-definition keeps no index: it resolves on demand against the stored
+/// parses, so the provider needs only the two managers (every workspace file is
+/// already registered in both by `Workspace::open`).
 fn definition_provider(ws: &Workspace) -> DefinitionProvider {
     let mut provider = DefinitionProvider::new();
     provider.set_cross_reference_manager(Arc::clone(&ws.crm));
     provider.set_document_manager(Arc::clone(&ws.dm));
-    let mut seen = HashSet::new();
-    for file in &ws.files {
-        // Merged workspaces share one URI across files — update it once.
-        if seen.insert(&file.uri) {
-            provider.update_definitions(file.uri.to_string(), &file.text);
-        }
-    }
     provider
 }
 
