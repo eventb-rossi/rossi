@@ -20,7 +20,7 @@ use crate::cross_references::{CrossReferenceManager, ReferenceKind};
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{
-    SymbolIdentity, SymbolKind, candidate_components_for_symbol, resolve_symbol_identity,
+    Resolution, SymbolIdentity, SymbolKind, candidate_components_for_symbol, resolve_cursor,
     resolve_symbol_identity_in_component,
 };
 use crate::text_utils;
@@ -164,10 +164,18 @@ impl ReferenceProvider {
             return find_references_in_workspace(&loader, identifier);
         }
 
-        if let Some(symbol) =
-            resolve_symbol_identity(text, masked, position, identifier, &loader, cursor)
+        if let Some(resolution) =
+            resolve_cursor(text, masked, position, identifier, &loader, cursor)
         {
-            return self.find_references_for_symbol(&symbol, &loader);
+            return match resolution {
+                // A formula binder local to this component: its declaration and
+                // the uses it binds, all in the cursor document. Resolved before
+                // the document-wide text scan below, so a purely local binder
+                // (e.g. `r` in `∀ r · …`) is no longer over-reported across
+                // unrelated scopes.
+                Resolution::Bound(bound) => spans_to_locations(bound.spans, text, uri, identifier),
+                Resolution::Symbol(symbol) => self.find_references_for_symbol(&symbol, &loader),
+            };
         }
 
         if is_component_name {
@@ -460,6 +468,109 @@ mod tests {
     #[test]
     fn test_reference_provider_creation() {
         let _provider = ReferenceProvider::new();
+    }
+
+    /// A provider wired to a single-document workspace, so resolution runs the
+    /// scope-aware path. (A bare provider with no cross-reference manager falls
+    /// straight back to a whole-document text scan.)
+    fn provider_with(uri: &str, source: &str) -> ReferenceProvider {
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(uri.to_string(), source);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(
+            Url::parse(uri).unwrap(),
+            "eventb".to_string(),
+            1,
+            source.to_string(),
+        );
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        provider
+    }
+
+    // Issue #100 — a formula binder shadowing a same-named machine variable.
+    //   2      x              <- the variable declaration
+    //   4  @inv1 x ∈ ℕ        <- a free use of the variable (col 10)
+    //   5  @inv2 ∀ x · x > 0  <- `∀ x` binder (col 12), bound use (col 16)
+    const SHADOWING_BINDER: &str =
+        "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 ∀ x · x > 0\nEND";
+
+    #[test]
+    fn references_to_a_bound_variable_stay_in_its_scope() {
+        // The reported bug: find-references on the bound `x` in `∀ x · x > 0`
+        // returns only the binder declaration and its bound use (both on line 5),
+        // never the global variable or its free use in @inv1.
+        let uri = "file:///m.eventb";
+        let provider = provider_with(uri, SHADOWING_BINDER);
+
+        let refs = provider
+            .find_references(
+                &make_params(5, 16, Url::parse(uri).unwrap()),
+                SHADOWING_BINDER,
+            )
+            .expect("references");
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        assert!(
+            refs.iter().all(|r| r.range.start.line == 5),
+            "every reference is inside the quantifier: {refs:?}"
+        );
+    }
+
+    #[test]
+    fn references_to_a_free_variable_skip_the_shadowing_binder() {
+        // The mirror: find-references on the free `x` in @inv1 returns the
+        // declaration and the free use, excluding the bound `x` in @inv2.
+        let uri = "file:///m.eventb";
+        let provider = provider_with(uri, SHADOWING_BINDER);
+
+        let refs = provider
+            .find_references(
+                &make_params(4, 10, Url::parse(uri).unwrap()),
+                SHADOWING_BINDER,
+            )
+            .expect("references");
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        assert!(
+            refs.iter().all(|r| r.range.start.line != 5),
+            "the bound x in @inv2 is excluded: {refs:?}"
+        );
+    }
+
+    #[test]
+    fn references_on_an_outer_binder_skip_a_shadowing_inner_binder() {
+        // `∀ x · (∃ x · x > 0)`: a cursor on the outer binder reports only its own
+        // declaration — the inner `∃ x` re-declares `x` and is a separate binding,
+        // so neither its declaration nor its body use is a reference of the outer.
+        let uri = "file:///m.eventb";
+        let source = "MACHINE m\nINVARIANTS\n    @i1 ∀ x · (∃ x · x > 0)\nEND";
+        let provider = provider_with(uri, source);
+
+        // Line 2: "    @i1 ∀ x · …" → outer binder `x` at col 10.
+        let refs = provider
+            .find_references(&make_params(2, 10, Url::parse(uri).unwrap()), source)
+            .expect("references");
+        assert_eq!(refs.len(), 1, "only the outer binder declaration: {refs:?}");
+    }
+
+    #[test]
+    fn references_to_a_local_only_binder_stay_within_one_quantifier() {
+        // Issue #100 case 1: `r` exists only as a quantifier binder. Two separate
+        // `∀ r` quantifiers must not bleed into each other — find-references on
+        // @inv1's `r` returns its two occurrences, not every textual `r` (the old
+        // whole-document text-scan fallback returned all four).
+        let uri = "file:///m.eventb";
+        let source = "MACHINE m\nINVARIANTS\n    @inv1 ∀ r · r ∈ ℕ\n    @inv2 ∀ r · r > 0\nEND";
+        let provider = provider_with(uri, source);
+
+        let refs = provider
+            .find_references(&make_params(2, 12, Url::parse(uri).unwrap()), source)
+            .expect("references");
+        assert_eq!(refs.len(), 2, "only @inv1's binder + bound use: {refs:?}");
+        assert!(
+            refs.iter().all(|r| r.range.start.line == 2),
+            "never @inv2's r: {refs:?}"
+        );
     }
 
     #[test]
