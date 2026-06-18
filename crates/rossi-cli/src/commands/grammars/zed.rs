@@ -60,9 +60,9 @@ pub const MARKERS_SCM: Markers = Markers {
 /// stay free of identifier collisions. The hand-maintained `_token` rule in
 /// `grammar.js` lists exactly these names, and [`render_highlights_region`]
 /// captures them — so a new [`Scope`] variant breaks this `match` until it is
-/// handled. Operator words split by case policy: the case-insensitive
-/// quantifier words (`UNION`/`INTER`) get their own node so the exact-case
-/// `operator_word` rule never folds (`DOM`, `pow` are ordinary identifiers).
+/// handled. All operator words share one exact-case `operator_word` node
+/// (`DOM`, `pow`, `union` are ordinary identifiers — only the canonical
+/// `dom`, `POW`, `UNION` light up).
 pub fn node_name(group: &TokenGroup) -> &'static str {
     match (group.scope, group.kind) {
         (Scope::KeywordControl, _) => "keyword",
@@ -70,7 +70,6 @@ pub fn node_name(group: &TokenGroup) -> &'static str {
         (Scope::SupportFunction, _) => "builtin",
         (Scope::ConstantLanguage, MatchKind::Word) => "constant_word",
         (Scope::ConstantLanguage, MatchKind::Symbol) => "constant_sym",
-        (Scope::KeywordOperator, MatchKind::Word) if group.case_insensitive => "quantifier_word",
         (Scope::KeywordOperator, MatchKind::Word) => "operator_word",
         (Scope::KeywordOperator, MatchKind::Symbol) => "operator_sym",
     }

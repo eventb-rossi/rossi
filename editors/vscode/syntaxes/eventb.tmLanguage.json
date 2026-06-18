@@ -33,9 +33,6 @@
       "include": "#tokens_6"
     },
     {
-      "include": "#tokens_7"
-    },
-    {
       "include": "#numbers"
     },
     {
@@ -111,7 +108,7 @@
       "name": "constant.language.eventb"
     },
     "tokens_3": {
-      "match": "(?i)\\b(bool|false|int|nat|nat1|true)\\b",
+      "match": "\\b(BOOL|FALSE|INT|NAT|NAT1|TRUE|bool|false|true)\\b",
       "name": "constant.language.eventb"
     },
     "tokens_4": {
@@ -123,11 +120,7 @@
       "name": "keyword.operator.eventb"
     },
     "tokens_6": {
-      "match": "(?i)\\b(inter|union)\\b",
-      "name": "keyword.operator.eventb"
-    },
-    "tokens_7": {
-      "match": "\\b(POW|POW1|circ|dom|mod|not|oftype|or|ran)\\b",
+      "match": "\\b(INTER|POW|POW1|UNION|circ|dom|mod|not|oftype|or|ran)\\b",
       "name": "keyword.operator.eventb"
     }
   },
