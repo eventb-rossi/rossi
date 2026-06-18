@@ -104,7 +104,7 @@
       "name": "keyword.other.eventb"
     },
     "tokens_2": {
-      "match": "(ℕ1|ℕ|ℤ|∅|\\{\\})",
+      "match": "(ℕ1|ℕ|ℤ|∅|⊤|⊥|\\{\\})",
       "name": "constant.language.eventb"
     },
     "tokens_3": {

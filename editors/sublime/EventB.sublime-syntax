@@ -20,7 +20,7 @@ contexts:
       scope: keyword.control.eventb
     - match: '(?i)\b(anticipated|convergent|ordinary|skip|theorem)\b'
       scope: keyword.other.eventb
-    - match: '(ℕ1|ℕ|ℤ|∅|\{\})'
+    - match: '(ℕ1|ℕ|ℤ|∅|⊤|⊥|\{\})'
       scope: constant.language.eventb
     - match: '\b(BOOL|FALSE|INT|NAT|NAT1|TRUE|bool|false|true)\b'
       scope: constant.language.eventb
