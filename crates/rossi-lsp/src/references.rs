@@ -465,22 +465,15 @@ fn local_parameter_symbol_identity_at_position(
     position: Position,
     identifier: &str,
 ) -> Option<SymbolIdentity> {
-    let line_idx = position.line as usize;
-
-    machine.events.iter().find_map(|event| {
-        // `masked` is the comment-masked document, masked once by the caller;
-        // scanning it per event avoids re-masking the whole text each time.
-        let (start_line, end_line) = event_line_range_in(masked, &event.name)?;
-        if line_idx < start_line || line_idx > end_line {
-            return None;
-        }
-
-        event
-            .parameters
-            .iter()
-            .any(|parameter| parameter.name == identifier)
-            .then(|| SymbolIdentity::parameter(identifier, &machine.name, &event.name))
-    })
+    // The shared resolver owns the event-at-position scoping (also used by
+    // hover), so find-references and hover cannot disagree on whether a name is
+    // an event parameter here.
+    let event = text_utils::event_parameter_at_position(machine, masked, position, identifier)?;
+    Some(SymbolIdentity::parameter(
+        identifier,
+        &machine.name,
+        &event.name,
+    ))
 }
 
 fn push_unique_locations(
@@ -575,31 +568,7 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     // through the keyword table ([`text_utils::line_keyword_is`]), so a labelled
     // action whose label spells a keyword (`@end x := 0`) is not read as `END`.
     let masked = rossi::comments::mask_comments_chars(text);
-    event_line_range_in(&masked, event_name)
-}
-
-/// Find an event's `[start_line, end_line]` range over text that is already
-/// comment-masked, so a caller scanning many events masks the document once
-/// instead of per event. An `EVENT foo` or `END` inside a comment is blanked in
-/// `masked` and so cannot open or close the range; the terminator is matched
-/// through the keyword table ([`text_utils::line_keyword_is`]), so a labelled
-/// action whose label spells a keyword (`@end x := 0`) is not read as `END`.
-fn event_line_range_in(masked: &str, event_name: &str) -> Option<(usize, usize)> {
-    let lines: Vec<&str> = masked.lines().collect();
-    let start_line = lines
-        .iter()
-        .position(|line| text_utils::event_name_from_line(line).as_deref() == Some(event_name))?;
-
-    let end_line = lines
-        .iter()
-        .enumerate()
-        .skip(start_line + 1)
-        .find_map(|(line_idx, line)| {
-            text_utils::line_keyword_is(line, KeywordId::End).then_some(line_idx)
-        })
-        .unwrap_or_else(|| lines.len().saturating_sub(1));
-
-    Some((start_line, end_line))
+    text_utils::event_line_range_in(&masked, event_name)
 }
 
 /// The SEES/REFINES/EXTENDS clause `position` sits in, if any, as the dependency
