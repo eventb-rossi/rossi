@@ -225,7 +225,7 @@ mod tests {
         let region = render(&Model::build());
         let name = component_name_regex();
         assert!(
-            name.contains(r"\\(?:-[A-Za-z0-9_']+\\)*"),
+            name.contains(r"\\(?:-[A-Za-z0-9_]+\\)*"),
             "regex must include a hyphen-segment group, got {name}"
         );
         assert!(

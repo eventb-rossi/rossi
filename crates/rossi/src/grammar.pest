@@ -20,16 +20,24 @@ word_char = _{ ASCII_ALPHANUMERIC | "_" }
 word_boundary = _{ !word_char }
 struct_word_boundary = _{ !(word_char | "-") }
 
-// Identifiers (mathematical: kernel_lang §2.2 — no hyphens; see names.rs)
-identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "'")* }
+// Prime-less, hyphen-less identifier core, shared by `identifier` and
+// `component_name`; built on the single `word_char` alnum+`_` source.
+ident_core = _{ (ASCII_ALPHA | "_") ~ word_char* }
+
+// Identifier (mathematical: kernel_lang §2.2 — no hyphens; see names.rs).
+// An optional single trailing prime marks an Event-B after-state variable
+// (`x'`). The prime never repeats nor appears interior (`x''`, `x'y` are two
+// tokens), matching Rodin's lexer, where a prime attaches only to a plain
+// identifier — never to a keyword.
+identifier = @{ ident_core ~ "'"? }
 
 // Component name: machine/context names, REFINES/SEES/EXTENDS targets and
 // event names. Rodin stores these as file names / labels (bare strings, not
 // mathematical identifiers), so real models use hyphens (`A-C0`, `CTX-1`).
 // Hyphens join non-empty segments which may start with a digit (`ENV_C-1`);
-// leading/trailing/doubled hyphens never match. Kept in sync with
-// `names::check_component_name` by a parity test.
-component_name = @{ identifier ~ ("-" ~ (ASCII_ALPHANUMERIC | "_" | "'")+)* }
+// leading/trailing/doubled hyphens never match. File labels carry no prime.
+// Kept in sync with `names::check_component_name` by a parity test.
+component_name = @{ ident_core ~ ("-" ~ word_char+)* }
 
 // Typed identifier: x⦂ℤ (bound variable with optional type annotation).
 // The type uses `ident_binder_type` rather than `maplet_expr` so that

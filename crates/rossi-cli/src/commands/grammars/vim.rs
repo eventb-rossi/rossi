@@ -73,7 +73,7 @@ pub fn render(model: &Model) -> String {
     out.push_str("syn match eventbComment \"//.*$\"\n");
     out.push_str("syn region eventbComment start=\"/\\*\" end=\"\\*/\"\n");
     out.push_str("syn match eventbLabel \"@[A-Za-z0-9_]\\+\"\n");
-    out.push_str("syn match eventbIdentifier \"\\<[a-zA-Z_][a-zA-Z0-9_']*\\>\"\n");
+    out.push_str("syn match eventbIdentifier \"\\<[a-zA-Z_][a-zA-Z0-9_]*\\>\"\n");
     out.push_str("syn match eventbDelimiter \"[(){}\\[\\]]\"\n");
     out.push('\n');
 

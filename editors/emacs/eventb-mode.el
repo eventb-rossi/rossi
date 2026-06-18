@@ -120,8 +120,8 @@ with `eventb-toggle-input-method'."
 (defvar eventb-font-lock-keywords
   `((,eventb-keywords-regexp . font-lock-keyword-face)
     (,eventb-status-keywords-regexp . font-lock-keyword-face)
-    ("\\<[Ee][Vv][Ee][Nn][Tt]\\s-+\\([A-Za-z_][A-Za-z0-9_']*\\(?:-[A-Za-z0-9_']+\\)*\\)" 1 font-lock-function-name-face)
-    ("\\<\\(?:[Cc][Oo][Nn][Tt][Ee][Xx][Tt]\\|[Mm][Aa][Cc][Hh][Ii][Nn][Ee]\\)\\s-+\\([A-Za-z_][A-Za-z0-9_']*\\(?:-[A-Za-z0-9_']+\\)*\\)" 1 font-lock-type-face)
+    ("\\<[Ee][Vv][Ee][Nn][Tt]\\s-+\\([A-Za-z_][A-Za-z0-9_]*\\(?:-[A-Za-z0-9_]+\\)*\\)" 1 font-lock-function-name-face)
+    ("\\<\\(?:[Cc][Oo][Nn][Tt][Ee][Xx][Tt]\\|[Mm][Aa][Cc][Hh][Ii][Nn][Ee]\\)\\s-+\\([A-Za-z_][A-Za-z0-9_]*\\(?:-[A-Za-z0-9_]+\\)*\\)" 1 font-lock-type-face)
     (,eventb-constants-regexp . font-lock-constant-face)
     (,(regexp-opt eventb-constant-symbols) . font-lock-constant-face)
     (,eventb-builtins-regexp . font-lock-function-name-face)

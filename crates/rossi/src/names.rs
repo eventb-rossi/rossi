@@ -7,15 +7,18 @@
 //! - **Mathematical identifiers** — carrier sets, constants, variables, event
 //!   parameters, and every name inside a formula. kernel_lang §2.2 defines
 //!   these per the Unicode identifier rules (no hyphens); Rodin enforces the
-//!   same via `Character.isJavaIdentifierStart/Part`. We restrict to ASCII
-//!   plus `'` (Rodin's primed after-state variables).
+//!   same via `Character.isJavaIdentifierStart/Part`. We restrict to ASCII,
+//!   with an optional single trailing `'` for a primed after-state variable
+//!   (`x'`) — Rodin's lexer attaches one prime to a plain identifier, so the
+//!   prime is a suffix, never interior or repeated.
 //!
 //! - **Component names** — machine/context names, REFINES/SEES/EXTENDS
 //!   targets, and event names. In Rodin these are file names and labels:
 //!   bare strings never parsed as formulas, so hyphens are common in real
-//!   models (`A-C0`, `CTX-1`). Our textual format must lex them after
-//!   `MACHINE`/`EVENT`/…, so we accept the math charset extended with
-//!   interior `-` separators (the `component_name` grammar rule).
+//!   models (`A-C0`, `CTX-1`) but primes never appear. Our textual format
+//!   must lex them after `MACHINE`/`EVENT`/…, so we accept the prime-less math
+//!   charset extended with interior `-` separators (the `component_name`
+//!   grammar rule).
 //!
 //! Reserved-word checks (`dom`, `card`, …) are positional and live in
 //! [`crate::builtins`]; this module is purely lexical.
@@ -25,9 +28,10 @@ pub fn is_math_identifier_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }
 
-/// Non-first character of a mathematical identifier.
+/// Non-first character of a mathematical identifier's core. The prime suffix is
+/// positional (see [`check_math_identifier`]), so `'` is not a part char.
 pub fn is_math_identifier_part(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '\''
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 /// Regex character-class *body* (the part between `[` and `]`) matching
@@ -39,9 +43,10 @@ pub fn is_math_identifier_part(c: char) -> bool {
 pub const IDENT_START_CLASS: &str = "A-Za-z_";
 
 /// Regex character-class body matching [`is_math_identifier_part`] — the
-/// non-first chars of an identifier and the chars of a component name's
-/// `-`-joined segments. See [`IDENT_START_CLASS`].
-pub const IDENT_PART_CLASS: &str = "A-Za-z0-9_'";
+/// non-first chars of an identifier core and the chars of a component name's
+/// `-`-joined segments. The math-identifier prime suffix is positional and not
+/// part of this class. See [`IDENT_START_CLASS`].
+pub const IDENT_PART_CLASS: &str = "A-Za-z0-9_";
 
 /// Why a name failed [`check_math_identifier`] / [`check_component_name`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +54,8 @@ pub enum NameError {
     Empty,
     BadStart(char),
     BadChar(char),
-    /// A `-` not followed by a letter, digit, `_` or `'` — i.e. a trailing
-    /// or doubled hyphen. Such a name could never be re-lexed by the text
+    /// A `-` not followed by a letter, digit or `_` — i.e. a trailing or
+    /// doubled hyphen. Such a name could never be re-lexed by the text
     /// grammar's `component_name` rule.
     EmptyHyphenSegment,
 }
@@ -65,16 +70,20 @@ impl std::fmt::Display for NameError {
             NameError::BadChar(c) => write!(f, "contains unsupported character {c:?}"),
             NameError::EmptyHyphenSegment => write!(
                 f,
-                "'-' must be followed by a letter, digit, '_' or ''' (no trailing or doubled '-')"
+                "'-' must be followed by a letter, digit or '_' (no trailing or doubled '-')"
             ),
         }
     }
 }
 
-/// Check a mathematical identifier: `(ASCII_ALPHA | "_") (ASCII_ALPHANUMERIC | "_" | "'")*`.
-/// Mirrors the grammar's `identifier` rule exactly (parity-tested).
+/// Check a mathematical identifier: `(ASCII_ALPHA | "_") word_char* "'"?`.
+/// A single optional trailing prime denotes an Event-B after-state variable
+/// (`x'`); it attaches only at the end, so `x''` and `x'y` are rejected — this
+/// matches Rodin's lexer, where the prime follows a plain identifier. Mirrors
+/// the grammar's `identifier` rule exactly (parity-tested).
 pub fn check_math_identifier(s: &str) -> Result<(), NameError> {
-    let mut chars = s.chars();
+    let core = s.strip_suffix('\'').unwrap_or(s);
+    let mut chars = core.chars();
     let first = chars.next().ok_or(NameError::Empty)?;
     if !is_math_identifier_start(first) {
         return Err(NameError::BadStart(first));
@@ -87,10 +96,10 @@ pub fn check_math_identifier(s: &str) -> Result<(), NameError> {
     Ok(())
 }
 
-/// Check a component name: a math identifier optionally extended with
-/// `-`-joined segments (`identifier ("-" (ASCII_ALPHANUMERIC | "_" | "'")+)*`).
-/// Segments after a `-` may start with a digit (`ENV_C-1`). Mirrors the
-/// grammar's `component_name` rule exactly (parity-tested).
+/// Check a component name: the prime-less identifier core optionally extended
+/// with `-`-joined segments (`ident_core ("-" word_char+)*`). Segments after a
+/// `-` may start with a digit (`ENV_C-1`); file labels carry no prime. Mirrors
+/// the grammar's `component_name` rule exactly (parity-tested).
 pub fn check_component_name(s: &str) -> Result<(), NameError> {
     let mut chars = s.chars().peekable();
     let first = chars.next().ok_or(NameError::Empty)?;
@@ -127,6 +136,7 @@ mod tests {
 
     #[test]
     fn math_identifiers() {
+        // `x'` carries a lone trailing prime (after-state variable).
         for ok in ["x", "_x", "x'", "events_of_partition", "A1", "machine"] {
             assert!(is_valid_math_identifier(ok), "{ok:?} should be valid");
         }
@@ -138,6 +148,9 @@ mod tests {
             ("a-b", NameError::BadChar('-')),
             ("a b", NameError::BadChar(' ')),
             ("ä", NameError::BadStart('ä')),
+            // The prime is a single suffix: no doubled or interior prime.
+            ("x''", NameError::BadChar('\'')),
+            ("x'y", NameError::BadChar('\'')),
         ] {
             assert_eq!(check_math_identifier(bad), Err(err), "{bad:?}");
         }
@@ -151,10 +164,7 @@ mod tests {
             "do-step",
             "end-to-end",
             "a-1-2",
-            "a-b'",
-            "a-'",
             "x",
-            "x'",
             "_x",
         ] {
             assert!(is_valid_component_name(ok), "{ok:?} should be valid");
@@ -168,6 +178,11 @@ mod tests {
             ("1a", NameError::BadStart('1')),
             ("a b", NameError::BadChar(' ')),
             ("a.b", NameError::BadChar('.')),
+            // File labels carry no prime — the after-state suffix is a
+            // math-identifier feature only.
+            ("x'", NameError::BadChar('\'')),
+            ("a-b'", NameError::BadChar('\'')),
+            ("a-'", NameError::EmptyHyphenSegment),
         ] {
             assert_eq!(check_component_name(bad), Err(err), "{bad:?}");
         }
@@ -182,10 +197,10 @@ mod tests {
     #[test]
     fn ident_class_consts_match_predicates() {
         assert_eq!(IDENT_START_CLASS, "A-Za-z_");
-        assert_eq!(IDENT_PART_CLASS, "A-Za-z0-9_'");
+        assert_eq!(IDENT_PART_CLASS, "A-Za-z0-9_");
 
         let start = |c: char| c.is_ascii_alphabetic() || c == '_';
-        let part = |c: char| start(c) || c.is_ascii_digit() || c == '\'';
+        let part = |c: char| start(c) || c.is_ascii_digit();
         // ASCII plus the Latin-1 supplement (covers non-ASCII letters like 'ä').
         for c in '\0'..='\u{2ff}' {
             assert_eq!(is_math_identifier_start(c), start(c), "start {c:?}");
@@ -214,6 +229,8 @@ mod tests {
             "x",
             "_x",
             "x'",
+            "x''",
+            "x'y",
             "A1",
             "events_of_partition",
             "machine",

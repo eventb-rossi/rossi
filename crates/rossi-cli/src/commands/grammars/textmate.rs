@@ -49,7 +49,7 @@ pub fn render(model: &Model) -> String {
     includes.push(json!({ "include": "#labels" }));
     repository.insert(
         "identifiers".into(),
-        single("variable.other.eventb", "[a-zA-Z_][a-zA-Z0-9_']*"),
+        single("variable.other.eventb", "[a-zA-Z_][a-zA-Z0-9_]*'?"),
     );
     includes.push(json!({ "include": "#identifiers" }));
 
