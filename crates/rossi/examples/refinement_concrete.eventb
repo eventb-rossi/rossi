@@ -2,7 +2,7 @@ MACHINE refinement_concrete
 REFINES
     refinement_abstract
 VARIABLES
-    concrete_state, step_size
+    concrete_state step_size
 INVARIANTS
     @inv1 concrete_state ∈ ℕ
     @inv2 step_size ∈ ℕ1

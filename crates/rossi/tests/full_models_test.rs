@@ -70,7 +70,7 @@ fn test_context_extends() {
     let source = r#"
     CONTEXT child
     EXTENDS
-        parent1, parent2
+        parent1 parent2
     END
     "#;
 
@@ -132,7 +132,7 @@ fn test_multiple_variables_and_invariants() {
     let source = r#"
     MACHINE multi
     VARIABLES
-        x, y, z
+        x y z
     INVARIANTS
         @inv1 x >= 0
         @inv2 y >= 0
@@ -248,7 +248,7 @@ fn test_multiple_with_bindings() {
         REFINES
             abstract_update
         ANY
-            a, b
+            a b
         WHERE
             @grd1 a > 0
             @grd2 b > 0
@@ -348,7 +348,7 @@ fn test_variant_clause_arithmetic_expression() {
     let source = r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 x >= 0
         @inv2 y >= 0
@@ -617,7 +617,7 @@ fn test_multiple_parallel_assignment() {
     let source = r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     EVENTS
         EVENT INITIALISATION
         THEN
@@ -711,7 +711,7 @@ fn test_relational_image() {
     let source = r#"
     MACHINE test
     VARIABLES
-        r, s
+        r s
     INVARIANTS
         @inv1 r[s] = s
     END

@@ -681,7 +681,7 @@ END
 
     let mch_source = r#"
 MACHINE machine
-SEES ctx1, ctx2
+SEES ctx1 ctx2
 VARIABLES
     v
 END

@@ -2,7 +2,7 @@ CONTEXT set_ops
 SETS
     S
 CONSTANTS
-    a, b, x, uni, intr, diff, pw, pw1, ext, rng, natc, intc
+    a b x uni intr diff pw pw1 ext rng natc intc
 AXIOMS
     @axm1 a ⊆ S
     @axm2 b ⊆ S

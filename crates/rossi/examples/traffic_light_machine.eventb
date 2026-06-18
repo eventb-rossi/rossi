@@ -2,7 +2,7 @@ MACHINE traffic_light
 SEES
     traffic_light_ctx
 VARIABLES
-    lights, timer
+    lights timer
 INVARIANTS
     @inv1 lights ∈ DIRECTIONS → COLORS
     @inv2 timer ∈ ℕ

@@ -1,8 +1,8 @@
 CONTEXT functions
 SETS
-    S, T
+    S T
 CONSTANTS
-    x, pfun, tfun, pinj, tinj, psur, tsur, bij, app, lam
+    x pfun tfun pinj tinj psur tsur bij app lam
 AXIOMS
     @axm1 x ∈ S
     @axm2 pfun ∈ S ⇸ T

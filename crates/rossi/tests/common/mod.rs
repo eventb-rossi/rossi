@@ -149,12 +149,25 @@ pub fn parse_expr_axiom(source: &str) -> Expression {
 /// END
 /// ```
 pub fn axiom_context(constants: &str, axiom_body: &str) -> String {
+    let constants = ws_idents(constants);
     format!("CONTEXT test\nCONSTANTS\n    {constants}\nAXIOMS\n    @axm1 {axiom_body}\nEND\n")
 }
 
 /// Generate a MACHINE source with given variables and invariant body.
 pub fn invariant_machine(variables: &str, invariant_body: &str) -> String {
+    let variables = ws_idents(variables);
     format!(
         "MACHINE test\nVARIABLES\n    {variables}\nINVARIANTS\n    @inv1 {invariant_body}\nEND\n"
     )
+}
+
+/// Declared identifiers are whitespace-separated. Accept either spelling from a
+/// caller and normalise to whitespace so the generated fixture parses (a comma
+/// between declared names is a parse error in the real grammar).
+fn ws_idents(idents: &str) -> String {
+    idents
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }

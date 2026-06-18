@@ -1,6 +1,6 @@
 CONTEXT bool_types
 CONSTANTS
-    bt, bf, bc, predset
+    bt bf bc predset
 AXIOMS
     @axm1 bt = TRUE
     @axm2 bf = FALSE

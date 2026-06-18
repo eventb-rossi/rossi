@@ -1,8 +1,8 @@
 CONTEXT sets_and_relations_ctx
 SETS
-    PERSONS, COMPANIES
+    PERSONS COMPANIES
 CONSTANTS
-    adults, minors, employees, min_age, max_age
+    adults minors employees min_age max_age
 AXIOMS
     @axm1 min_age = 0
     @axm2 max_age = 150

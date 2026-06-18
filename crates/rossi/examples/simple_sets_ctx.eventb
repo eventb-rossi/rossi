@@ -1,8 +1,8 @@
 CONTEXT simple_sets_ctx
 SETS
-    PERSONS, ITEMS
+    PERSONS ITEMS
 CONSTANTS
-    all_persons, all_items, person_limit
+    all_persons all_items person_limit
 AXIOMS
     @axm1 all_persons <: PERSONS
     @axm2 all_items <: ITEMS

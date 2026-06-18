@@ -1,8 +1,8 @@
 CONTEXT library_ctx
 SETS
-    BOOKS, MEMBERS
+    BOOKS MEMBERS
 CONSTANTS
-    max_loans, library_collection
+    max_loans library_collection
 AXIOMS
     @axm1 max_loans ∈ ℕ1
     @axm2 max_loans = 5

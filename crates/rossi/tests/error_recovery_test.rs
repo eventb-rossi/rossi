@@ -58,7 +58,7 @@ fn test_recovery_machine_with_invalid_invariant() {
     let source = r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 x >= 0
         @inv2 invalid @#$ syntax
@@ -244,10 +244,10 @@ fn test_recovery_context_with_multiple_errors() {
     let source = r#"
     CONTEXT multi_error
     SETS
-        Set1, Set2
+        Set1 Set2
     CONSTANTS
         bad syntax here
-        c1, c2
+        c1 c2
     AXIOMS
         @axm1 c1 = 1
         @axm2 !!!! invalid
@@ -279,7 +279,7 @@ fn test_recovery_machine_with_valid_clauses() {
     SEES
         some_context
     VARIABLES
-        x, y, z
+        x y z
     INVARIANTS
         @inv1 x = 0
         @inv2 bad &&& syntax
@@ -323,11 +323,11 @@ fn test_recovery_preserves_valid_data() {
     let source = r#"
     CONTEXT recovery_test
     EXTENDS
-        parent1, parent2
+        parent1 parent2
     SETS
-        Set1, Set2, Set3
+        Set1 Set2 Set3
     CONSTANTS
-        c1, c2, c3
+        c1 c2 c3
     AXIOMS
         @axm1 c1 = 1
         @axm2 c2 = 2
@@ -389,7 +389,8 @@ fn test_recovery_with_commas_in_lists() {
 
     let result = parse_with_recovery(source);
 
-    // This should parse successfully
+    // A comma between declared names is invalid, but recovery still salvages the
+    // individual identifiers from the list rather than dropping the whole clause.
     let ctx = expect_context(&result);
     assert_eq!(ctx.name, "comma_test");
     assert!(ctx.sets.len() >= 2, "Should recover multiple sets");
@@ -893,7 +894,7 @@ fn test_recovery_inline_clause_content() {
     // must be recovered like any other.
     let source = r#"
     CONTEXT inline_clauses
-    CONSTANTS c1, c2
+    CONSTANTS c1 c2
         +
     AXIOMS @axm1 c1 = 1
         @axm2 c2 = 2

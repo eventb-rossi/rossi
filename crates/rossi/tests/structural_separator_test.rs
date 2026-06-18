@@ -1,66 +1,88 @@
-//! Separator handling in the structural list clauses (SEES, EXTENDS, SETS,
-//! CONSTANTS, VARIABLES, event ANY).
+//! Separator handling in the structural list clauses (EXTENDS, SETS,
+//! CONSTANTS, SEES, VARIABLES, event ANY).
 //!
-//! Commit 1 (this revision) characterises the *current* behaviour: the comma in
-//! these clauses is optional, so the comma and whitespace spellings parse to the
-//! same AST. The follow-set SSOT refactor must preserve exactly this. A later
-//! commit tightens the grammar to whitespace-only and flips the comma cases to
-//! rejection.
+//! Declared identifiers and component references are separated by whitespace,
+//! never by a comma — that mirrors how the real Event-B text tools work, and
+//! how Rodin stores each as its own model element. A comma is meaningful only
+//! inside formulas (set extension, quantifier lists, `partition`, parallel
+//! assignment, function-update sets), where it stays a separator.
 
 use rossi::*;
 
-/// Both spellings must parse to the same logical content. Compared through the
-/// pretty-printer, which normalises formatting and carries no spans, so the
-/// one-byte shift the comma introduces does not leak into the comparison.
-fn assert_same_render(whitespace: &str, comma: &str) {
-    let ws = to_string(
-        &parse(whitespace)
-            .unwrap_or_else(|e| panic!("whitespace form must parse: {e:?}\n{whitespace}")),
-    );
-    let cm = to_string(
-        &parse(comma).unwrap_or_else(|e| panic!("comma form must parse: {e:?}\n{comma}")),
-    );
-    assert_eq!(
-        ws, cm,
-        "comma and whitespace forms must yield the same component"
-    );
+/// Every clause spelled with a comma between items must fail to parse.
+const COMMA_FORMS: &[&str] = &[
+    "CONTEXT c EXTENDS a, b END",
+    "CONTEXT c SETS S, T END",
+    "CONTEXT c CONSTANTS a, b END",
+    "MACHINE m SEES c1, c2 END",
+    "MACHINE m VARIABLES x, y END",
+    "MACHINE m EVENTS EVENT e ANY a, b END END",
+];
+
+/// The same clauses with whitespace separation must parse.
+const WHITESPACE_FORMS: &[&str] = &[
+    "CONTEXT c EXTENDS a b END",
+    "CONTEXT c SETS S T END",
+    "CONTEXT c CONSTANTS a b END",
+    "MACHINE m SEES c1 c2 END",
+    "MACHINE m VARIABLES x y END",
+    "MACHINE m EVENTS EVENT e ANY a b END END",
+];
+
+#[test]
+fn comma_rejected_in_every_structural_clause() {
+    for src in COMMA_FORMS {
+        assert!(
+            parse(src).is_err(),
+            "a comma must not separate structural list items: {src}"
+        );
+    }
 }
 
 #[test]
-fn context_extends_comma_equals_whitespace() {
-    assert_same_render("CONTEXT c EXTENDS a b END", "CONTEXT c EXTENDS a, b END");
+fn whitespace_accepted_in_every_structural_clause() {
+    for src in WHITESPACE_FORMS {
+        parse(src).unwrap_or_else(|e| panic!("whitespace form must parse: {e:?}\n{src}"));
+    }
 }
 
 #[test]
-fn context_sets_comma_equals_whitespace() {
-    assert_same_render("CONTEXT c SETS S T END", "CONTEXT c SETS S, T END");
+fn newline_and_tab_separate_structural_lists() {
+    // "Whitespace" is any run of space / tab / CR / newline, so the common
+    // one-identifier-per-line block and tab separation parse identically.
+    for src in [
+        "CONTEXT c\nSETS\n    S\n    T\nEND",
+        "CONTEXT c\nCONSTANTS\n\ta\n\tb\nEND",
+        "MACHINE m\nVARIABLES\n    x\n    y\nEND",
+        "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a\n        b\n    END\nEND",
+    ] {
+        parse(src).unwrap_or_else(|e| panic!("multi-line form must parse: {e:?}\n{src}"));
+    }
 }
 
 #[test]
-fn context_constants_comma_equals_whitespace() {
-    assert_same_render(
-        "CONTEXT c CONSTANTS a b END",
-        "CONTEXT c CONSTANTS a, b END",
+fn commas_still_parse_inside_formulas() {
+    // Set extension, quantifier ident-list, partition, function-update set.
+    for src in ["{a, b, c}", "f{x ↦ y, u ↦ v}"] {
+        parse_expression_str(src)
+            .unwrap_or_else(|e| panic!("formula comma must parse: {e:?}\n{src}"));
+    }
+    for src in ["∀x, y · x = y", "partition(S, a, b)"] {
+        parse_predicate_str(src)
+            .unwrap_or_else(|e| panic!("formula comma must parse: {e:?}\n{src}"));
+    }
+    // Parallel assignment: comma separates both targets and values.
+    parse_action_str("x, y := 1, 2")
+        .unwrap_or_else(|e| panic!("parallel assignment must parse: {e:?}"));
+}
+
+#[test]
+fn any_parameters_round_trip_without_commas() {
+    let machine = parse("MACHINE m EVENTS EVENT e ANY p q r END END").unwrap();
+    let printed = to_string(&machine);
+    assert!(
+        printed.contains("p q r") && !printed.contains("p, q"),
+        "ANY parameters must print whitespace-separated:\n{printed}"
     );
-}
-
-#[test]
-fn machine_sees_comma_equals_whitespace() {
-    assert_same_render("MACHINE m SEES c1 c2 END", "MACHINE m SEES c1, c2 END");
-}
-
-#[test]
-fn machine_variables_comma_equals_whitespace() {
-    assert_same_render(
-        "MACHINE m VARIABLES x y END",
-        "MACHINE m VARIABLES x, y END",
-    );
-}
-
-#[test]
-fn event_any_comma_equals_whitespace() {
-    assert_same_render(
-        "MACHINE m EVENTS EVENT e ANY a b END END",
-        "MACHINE m EVENTS EVENT e ANY a, b END END",
-    );
+    parse(&printed).unwrap_or_else(|e| panic!("pretty output must reparse: {e:?}\n{printed}"));
 }

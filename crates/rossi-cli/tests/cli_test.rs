@@ -29,7 +29,7 @@ fn test_cli_version() {
 fn test_fmt_stdin_inverse_operator_conversion() {
     // ASCII `~` is accepted on input; `fmt` emits Unicode ∼ (U+223C) and
     // `fmt --ascii` emits `~` (U+007E).
-    let source = "CONTEXT test\nCONSTANTS\n    f, r\nAXIOMS\n    @axm1 r = f~\nEND\n";
+    let source = "CONTEXT test\nCONSTANTS\n    f r\nAXIOMS\n    @axm1 r = f~\nEND\n";
 
     let output = run_cli_with_stdin(&["fmt", "-"], source);
     assert!(
@@ -1104,7 +1104,7 @@ fn validate_stdin_duplicate_identifier_and_label_report_eb021_eb022() {
     // severity, so the run exits non-zero.
     let output = run_cli_with_stdin(
         &["validate", "--format", "json", "-"],
-        "MACHINE M\nVARIABLES\n    x, x\nINVARIANTS\n    @inv1 x >= 0\n    @inv1 x <= 5\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND\n",
+        "MACHINE M\nVARIABLES\n    x x\nINVARIANTS\n    @inv1 x >= 0\n    @inv1 x <= 5\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND\n",
     );
     assert!(
         !output.status.success(),

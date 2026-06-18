@@ -1,8 +1,8 @@
 CONTEXT machine_events_ctx
 SETS
-    S, T
+    S T
 CONSTANTS
-    rel, fn
+    rel fn
 AXIOMS
     @axm1 rel ∈ S ↔ T
     @axm2 fn ∈ S → T
@@ -12,7 +12,7 @@ MACHINE machine_events
 SEES
     machine_events_ctx
 VARIABLES
-    var_rel, var_int
+    var_rel var_int
 INVARIANTS
     @inv1 var_rel ∈ S ⇸ T
     @inv2 var_int ∈ ℤ

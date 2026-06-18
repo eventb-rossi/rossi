@@ -2,7 +2,7 @@ MACHINE bank_account
 SEES
     bank_account_ctx
 VARIABLES
-    balances, active_accounts
+    balances active_accounts
 INVARIANTS
     @inv1 balances ∈ ACCOUNTS → ℤ
     @inv2 active_accounts ⊆ ACCOUNTS

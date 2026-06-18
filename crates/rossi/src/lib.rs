@@ -108,7 +108,7 @@ mod tests {
         let source = r#"
         CONTEXT ctx
         SETS
-            PERSON, STATUS
+            PERSON STATUS
         END
         "#;
 

@@ -2,11 +2,11 @@ CONTEXT lambda_example_ctx
 SETS
     VALUES
 CONSTANTS
-    square, increment, double_map
+    square increment double_map
 AXIOMS
     @axm1 square = (%x·x ∈ NAT | x ∗ x)
     @axm2 increment = (%n·n ∈ INT | n + 1)
-    @axm3 double_map = (%a,b·a ∈ NAT ∧ b ∈ NAT | a + b)
+    @axm3 double_map = (%a↦b·a ∈ NAT ∧ b ∈ NAT | a + b)
     @axm4 ∀n·n ∈ NAT ⇒ square(n) = n ∗ n
     @axm5 ∀n·n ∈ INT ⇒ increment(n) = n + 1
 END

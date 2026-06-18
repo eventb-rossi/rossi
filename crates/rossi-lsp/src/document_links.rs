@@ -596,7 +596,7 @@ END
         // Create a machine that SEES multiple contexts
         let machine = r#"
 MACHINE test_mch
-SEES ctx1, ctx2, ctx3
+SEES ctx1 ctx2 ctx3
 VARIABLES
     count
 END

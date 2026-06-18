@@ -13,7 +13,7 @@ fn test_binary_addition_ast_structure() {
     let source = r#"
     CONTEXT test
     CONSTANTS
-        a, b, c
+        a b c
     AXIOMS
         @axm1 c = a + b
     END
@@ -58,7 +58,7 @@ fn test_chained_binary_operations() {
     let source = r#"
     CONTEXT test
     CONSTANTS
-        a, b, c, d
+        a b c d
     AXIOMS
         @axm1 d = a + b + c
     END
@@ -107,7 +107,7 @@ fn test_binary_predicate_conjunction() {
         r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 x > 0 ∧ y > 0
     END
@@ -135,7 +135,7 @@ fn test_chained_binary_predicates() {
         r#"
     MACHINE test
     VARIABLES
-        x, y, z
+        x y z
     INVARIANTS
         @inv1 x > 0 ∧ y > 0 ∧ z > 0
     END
@@ -550,7 +550,7 @@ fn test_maplet_binds_looser_than_arrow_in_action() {
         r#"
     MACHINE test
     VARIABLES
-        x, a, b, c
+        x a b c
     EVENTS
         EVENT update
         THEN
@@ -1059,7 +1059,7 @@ fn test_conjunction_ascii_ampersand() {
         r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 x > 0 & y > 0
     END
@@ -1091,7 +1091,7 @@ fn test_disjunction_ascii_or() {
         r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 x > 0 or y > 0
     END
@@ -1149,7 +1149,7 @@ fn test_negation_in_conjunction() {
         r#"
     MACHINE test
     VARIABLES
-        x, y
+        x y
     INVARIANTS
         @inv1 ¬(x > 0) ∧ y > 0
     END

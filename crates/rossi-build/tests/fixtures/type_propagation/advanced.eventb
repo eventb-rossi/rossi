@@ -1,13 +1,13 @@
 CONTEXT advanced
 SETS
-    S, T, U
+    S T U
 CONSTANTS
-    x, selfrel, curried, app2, nested_pow, set_of_rel,
-    gen_union, gen_inter, succ_c, pred_c, lam_pair,
-    m_pair, prj1_of, prj2_of,
-    int_set, succ_img, pred_img,
-    lam_id, comp_id, lam_prj1, comp_prj1, comp_prj2,
-    sub_s, r1, r2, r3, r4, r5, r6, r7, r8
+    x selfrel curried app2 nested_pow set_of_rel
+    gen_union gen_inter succ_c pred_c lam_pair
+    m_pair prj1_of prj2_of
+    int_set succ_img pred_img
+    lam_id comp_id lam_prj1 comp_prj1 comp_prj2
+    sub_s r1 r2 r3 r4 r5 r6 r7 r8
 AXIOMS
     @axm1 x ∈ S
     @axm2 selfrel ∈ S ↔ S

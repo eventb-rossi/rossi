@@ -2,7 +2,7 @@ MACHINE scheduler
 SEES
     scheduler_ctx
 VARIABLES
-    waiting_tasks, running_tasks, completed_tasks
+    waiting_tasks running_tasks completed_tasks
 INVARIANTS
     @inv1 waiting_tasks ⊆ TASKS
     @inv2 running_tasks ∈ PROCESSORS ⇸ TASKS

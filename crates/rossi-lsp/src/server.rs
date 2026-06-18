@@ -1141,7 +1141,7 @@ mod tests {
             "EXTENDS\n",
             "    base_ctx\n",
             "SETS\n",
-            "    BOOK, READER\n",
+            "    BOOK READER\n",
             "CONSTANTS\n",
             "    max_loans\n",
             "AXIOMS\n",
