@@ -105,6 +105,23 @@ fn all_cases() -> Vec<Case> {
         "p_explicit_compr_q",
         "c = {x·x > 0 ∧ ∃w·w > 0 ∣ x}",
     ));
+    // ⇒/⇔ are each non-associative and mutually incompatible: chaining or
+    // mixing them needs parentheses, even inside a surrounding bracket. A bare
+    // quantifier may not be a ⇒/⇔ operand either, with the ∧/∨ closing-bracket
+    // exception. Their precedence relative to ∧/∨ is real and stands bare.
+    cases.push(pred_case("p_imp_chain", "x > 0 ⇒ y > 0 ⇒ z > 0"));
+    cases.push(pred_case("p_eqv_chain", "x > 0 ⇔ y > 0 ⇔ z > 0"));
+    cases.push(pred_case("p_imp_eqv", "x > 0 ⇒ y > 0 ⇔ z > 0"));
+    cases.push(pred_case("p_eqv_imp", "x > 0 ⇔ y > 0 ⇒ z > 0"));
+    cases.push(pred_case("p_imp_chain_paren", "(x > 0 ⇒ y > 0 ⇒ z > 0)"));
+    cases.push(pred_case("p_imp_grouped", "x > 0 ⇒ (y > 0 ⇒ z > 0)"));
+    cases.push(pred_case("p_imp_grouped_left", "(x > 0 ⇒ y > 0) ⇒ z > 0"));
+    cases.push(pred_case("p_imp_or", "x > 0 ⇒ y > 0 ∨ z > 0"));
+    cases.push(pred_case("p_and_imp", "x > 0 ∧ y > 0 ⇒ z > 0"));
+    cases.push(pred_case("p_imp_exists", "x > 0 ⇒ ∃w·w > 0"));
+    cases.push(pred_case("p_eqv_exists", "x > 0 ⇔ ∃w·w > 0"));
+    cases.push(pred_case("p_imp_paren_exists", "x > 0 ⇒ (∃w·w > 0)"));
+    cases.push(pred_case("p_imp_exists_bracketed", "(x > 0 ⇒ ∃w·w > 0)"));
     cases
 }
 

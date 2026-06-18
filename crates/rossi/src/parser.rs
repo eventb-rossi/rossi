@@ -2102,12 +2102,21 @@ fn rule_to_logical_op(rule: Rule) -> Option<crate::ast::predicate::LogicalOp> {
     }
 }
 
-/// A bare, unparenthesised leading quantifier in `pair` (a `negation_predicate`
-/// operand), returned as its display spelling. A parenthesised `(∀x·P)` descends
-/// through `atomic_predicate`, so its leading child is not a quantifier — only a
+/// A bare, unparenthesised leading quantifier in `pair`, returned as its display
+/// spelling. The operand is a `negation_predicate` at the `∧`/`∨` level and a
+/// `connective_predicate` at the `⇒`/`⇔` level; peel the latter to its leading
+/// `negation_predicate` first. A parenthesised `(∀x·P)` descends through
+/// `atomic_predicate`, so its leading child is not a quantifier — only a
 /// directly-quantified operand is reported.
 fn leading_quantifier(pair: &pest::iterators::Pair<Rule>) -> Option<String> {
-    let first = pair.clone().into_inner().next()?;
+    let mut operand = pair.clone();
+    if matches!(
+        operand.as_rule(),
+        Rule::connective_predicate | Rule::connective_predicate_no_semi
+    ) {
+        operand = operand.into_inner().next()?;
+    }
+    let first = operand.into_inner().next()?;
     match first.as_rule() {
         // `display_rule` never fails, so a matched quantifier always yields
         // `Some` — the gate fails closed rather than silently accepting.
@@ -2116,12 +2125,14 @@ fn leading_quantifier(pair: &pest::iterators::Pair<Rule>) -> Option<String> {
     }
 }
 
-/// Parse a binary logical predicate (conjunction/disjunction, implication, equivalence).
+/// Parse a binary logical predicate (conjunction/disjunction, implication,
+/// equivalence). All operators in one call share a precedence level — `∧`/`∨`,
+/// or `⇒`/`⇔` — and the same compatibility rules apply at both.
 ///
 /// `bracketed` is true when this predicate is bounded on the right by a closing
-/// bracket (`)` / `}`), which lets a trailing bare quantifier stand as a `∧`/`∨`
-/// operand — the bracket plays the role of the parentheses Event-B otherwise
-/// requires. See [`parse_predicate_inner`].
+/// bracket (`)` / `}`), which lets a trailing bare quantifier stand as an operand
+/// — the bracket plays the role of the parentheses Event-B otherwise requires.
+/// See [`parse_predicate_inner`].
 fn parse_binary_predicate(
     pair: pest::iterators::Pair<Rule>,
     bracketed: bool,
@@ -2137,7 +2148,6 @@ fn parse_binary_predicate(
 
     // The operator binding the accumulated left operand, kept by `Rule` so the
     // display spelling is built only on the error path.
-    let connective_level = op_info::logical_precedence(LogicalOp::And);
     let mut prev: Option<(LogicalOp, Rule)> = None;
 
     // Process remaining (operator, operand) pairs
@@ -2146,32 +2156,32 @@ fn parse_binary_predicate(
         if let Some(op) = rule_to_logical_op(op_rule) {
             let right_pair = inner.next().ok_or(ParseError::EmptyPredicate)?;
 
-            // Conjunction/disjunction gate. ∧ and ∨ share one level: they may
-            // not be mixed, and a bare quantifier may not be a ∧/∨ operand
-            // unless a closing bracket bounds it — both otherwise need explicit
-            // parentheses. Implication and equivalence keep their own (looser)
-            // levels and are not gated here.
-            if op_info::logical_precedence(op) == connective_level {
-                // `∧`/`∨` mixed without parentheses (checked when the operator
-                // is reached, before its right operand — matching Rodin).
-                if let Some((prev_op, prev_rule)) = prev
-                    && !op_info::logical_ops_compatible(prev_op, op)
-                {
-                    return Err(incompatible_operators(
-                        op_pair.as_span(),
-                        display_rule(prev_rule),
-                        display_rule(op_rule),
-                    ));
-                }
-                // A bare quantifier as the right operand of `∧`/`∨`, when no
-                // closing bracket bounds it.
-                if !bracketed && let Some(quantifier) = leading_quantifier(&right_pair) {
-                    return Err(incompatible_operators(
-                        op_pair.as_span(),
-                        display_rule(op_rule),
-                        quantifier,
-                    ));
-                }
+            // Same-level compatibility gate, applied at both logical levels.
+            // `∧`/`∨` may not be mixed; `⇒`/`⇔` may not be chained or mixed at
+            // all (each is a non-associative singleton); and a bare quantifier
+            // may not be an operand of any of them unless a closing bracket
+            // bounds it — all otherwise need explicit parentheses.
+
+            // Operators mixed without parentheses (checked when the operator is
+            // reached, before its right operand — matching Rodin). No bracket
+            // exception: a surrounding bracket never licenses a bare chain.
+            if let Some((prev_op, prev_rule)) = prev
+                && !op_info::logical_ops_compatible(prev_op, op)
+            {
+                return Err(incompatible_operators(
+                    op_pair.as_span(),
+                    display_rule(prev_rule),
+                    display_rule(op_rule),
+                ));
+            }
+            // A bare quantifier as the right operand, when no closing bracket
+            // bounds it.
+            if !bracketed && let Some(quantifier) = leading_quantifier(&right_pair) {
+                return Err(incompatible_operators(
+                    op_pair.as_span(),
+                    display_rule(op_rule),
+                    quantifier,
+                ));
             }
 
             let right = parse_predicate_inner(right_pair, bracketed)?;
@@ -2309,9 +2319,10 @@ fn parse_predicate_inner(
                 ))
             } else if let Some(quantifier) = rule_to_quantifier(first.as_rule()) {
                 // A quantified predicate appearing as a sub-formula operand,
-                // e.g. the right side of `⇒`/`⇔` or a nested quantifier body.
-                // A bare quantifier directly under `∧`/`∨` is rejected earlier
-                // in `parse_binary_predicate` unless a closing bracket bounds it.
+                // e.g. a nested quantifier body. A bare quantifier directly
+                // under a logical connective (`∧`/`∨`/`⇒`/`⇔`) is rejected
+                // earlier in `parse_binary_predicate` unless a closing bracket
+                // bounds it.
                 let (identifiers, predicate) =
                     collect_typed_identifiers_and_predicate(&mut inner, bracketed)?;
                 Ok(Predicate::new(
