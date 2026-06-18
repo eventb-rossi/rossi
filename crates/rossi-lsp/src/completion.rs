@@ -645,9 +645,9 @@ fn get_word_at_position(line: &str, char_pos: usize) -> String {
 /// The range of the (possibly hyphenated) word ending at the cursor, used as a
 /// completion edit range so a hyphenated component name is replaced whole, not
 /// just its last `-` segment. Scans left over component-name characters
-/// (`keywords::is_structural_word_char`: ASCII alphanumerics, `_`, `'`, `-`) —
-/// the same charset the grammar accepts — so it covers a trailing `'` and never
-/// extends across a character that can't be part of a name.
+/// (`keywords::is_structural_word_char`: ASCII alphanumerics, `_`, `-`) — the
+/// same charset the grammar's `component_name` accepts — so it never extends
+/// across a character that can't be part of a name.
 fn hyphenated_word_range(masked: &str, position: Position) -> Range {
     let line = masked.lines().nth(position.line as usize).unwrap_or("");
     let chars: Vec<char> = line.chars().collect();
