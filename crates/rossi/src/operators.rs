@@ -1121,8 +1121,10 @@ mod tests {
     fn operator_at_alphabetic_needs_word_boundaries() {
         assert_eq!(operator_at("a mod b", 3), Some(("mod", 2..5)));
         assert_eq!(operator_at("model", 2), None);
-        // `'` continues an identifier (primed variables), so no `mod` here.
-        assert_eq!(operator_at("a mod' b", 3), None);
+        // A prime never extends a keyword (it attaches only to a plain
+        // identifier), so `mod` is still recognized in `mod'` — matching the
+        // grammar and Event-B, where `mod'` lexes as `mod` then `'`.
+        assert_eq!(operator_at("a mod' b", 3), Some(("mod", 2..5)));
     }
 
     #[test]
