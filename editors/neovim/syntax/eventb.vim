@@ -26,7 +26,7 @@ syn match eventbEscape "\\[nrt\\\"]" contained
 syn match eventbComment "//.*$"
 syn region eventbComment start="/\*" end="\*/"
 syn match eventbLabel "@[A-Za-z0-9_]\+"
-syn match eventbIdentifier "\<[a-zA-Z_][a-zA-Z0-9_']*\>"
+syn match eventbIdentifier "\<[a-zA-Z_][a-zA-Z0-9_]*\>"
 syn match eventbDelimiter "[(){}\[\]]"
 
 hi def link eventbKeyword Keyword
