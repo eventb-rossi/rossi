@@ -46,4 +46,11 @@ async fn operator_table_succeeds_without_params_field() {
             .any(|row| row["ascii"] == "/=" && row["unicode"] == "≠" && row["eager"] == true),
         "operator table must carry the /= -> ≠ eager mapping; got {value}"
     );
+    // `,,` is an ASCII input alias for the maplet ↦ (Rodin's keyboard); it must
+    // ride along as its own eager row so the editor converts it as you type.
+    assert!(
+        rows.iter()
+            .any(|row| row["ascii"] == ",," && row["unicode"] == "↦" && row["eager"] == true),
+        "operator table must carry the ,, -> ↦ eager mapping; got {value}"
+    );
 }
