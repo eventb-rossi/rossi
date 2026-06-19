@@ -8,11 +8,14 @@
 //!   never a same-named global it shadows;
 //! - an event `ANY` parameter resolves to *its own* event's declaration, never a
 //!   same-named parameter of a sibling event;
+//! - a cursor on an event's `refines`/`extends` target resolves to the abstract
+//!   event it names — found up the refinement chain, never the local same-named
+//!   event, even when the refined event keeps its name (`event ML_in extends ML_in`);
 //! - a variable / constant / set / event resolves to the component that declares
 //!   it, found by walking the refinement / sees / extends chains, with a local
 //!   declaration shadowing a same-named inherited one;
-//! - a cursor inside a SEES / REFINES / EXTENDS clause instead navigates to the
-//!   referenced component's own name.
+//! - a cursor inside a machine-level SEES / REFINES / EXTENDS clause instead
+//!   navigates to the referenced component's own name.
 //!
 //! There is no eager per-document index: resolution runs on demand against the
 //! document's stored parse — the same parse find-references and hover read — and
@@ -423,6 +426,53 @@ END";
 
         // `update` after "    EVENT "
         assert_goto(&provider, con_uri, con, 7, 14, abs_uri, range(4, 10, 16));
+    }
+
+    // The abstract machine declaring `EVENT ML_in`, shared by the two same-name
+    // refinement tests below (its event name span is `range(4, 10, 15)`).
+    const ML_IN_ABS_URI: &str = "file:///abstract.eventb";
+    const ML_IN_ABS: &str = "MACHINE abstract_mch\nVARIABLES\n    state\nEVENTS\n    EVENT ML_in\n    THEN\n        state ≔ state\n    END\nEND";
+
+    #[test]
+    fn refined_event_keeping_its_name_resolves_to_the_abstract_event() {
+        // The issue #84 case: an inline `extends` whose target keeps the event's
+        // own name. Clicking the *target* jumps to the abstract event; clicking
+        // the event's *own* name stays on the local declaration.
+        let con_uri = "file:///concrete.eventb";
+        let con = "MACHINE concrete_mch\nREFINES\n    abstract_mch\nVARIABLES\n    state\nEVENTS\n    EVENT ML_in extends ML_in\n    THEN\n        state ≔ state\n    END\nEND";
+        let provider = setup(&[(ML_IN_ABS_URI, ML_IN_ABS), (con_uri, con)]);
+
+        // The `extends` target (second `ML_in`, char 24) → abstract event.
+        assert_goto(
+            &provider,
+            con_uri,
+            con,
+            6,
+            26,
+            ML_IN_ABS_URI,
+            range(4, 10, 15),
+        );
+        // The event's own name (first `ML_in`, char 10) stays local.
+        assert_goto(&provider, con_uri, con, 6, 12, con_uri, range(6, 10, 15));
+    }
+
+    #[test]
+    fn refined_event_keeping_its_name_via_body_refines_resolves_to_the_abstract_event() {
+        // The same, through a body-level `REFINES` clause with the kept name.
+        let con_uri = "file:///concrete.eventb";
+        let con = "MACHINE concrete_mch\nREFINES\n    abstract_mch\nVARIABLES\n    state\nEVENTS\n    EVENT ML_in\n    REFINES ML_in\n    THEN\n        state ≔ state\n    END\nEND";
+        let provider = setup(&[(ML_IN_ABS_URI, ML_IN_ABS), (con_uri, con)]);
+
+        // The `REFINES` target (`ML_in` at char 12) → abstract event.
+        assert_goto(
+            &provider,
+            con_uri,
+            con,
+            7,
+            14,
+            ML_IN_ABS_URI,
+            range(4, 10, 15),
+        );
     }
 
     // `C1` on `context C1` spans cols 8..10 in every casing variant below.

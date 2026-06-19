@@ -7,7 +7,8 @@
 //! position into a `Resolution`, scope-aware and most-local first: a formula
 //! binder the cursor sits on or is bound by (a quantifier / lambda /
 //! comprehension binder) resolves to its own local scope; an event `ANY`
-//! parameter to its own event; and a global symbol to the component that
+//! parameter to its own event; a cursor on an event's `refines`/`extends` target
+//! to the abstract event it names; and a global symbol to the component that
 //! declares it by walking the refinement / sees / extends chains.
 //! Go-to-definition, find-references, and rename build on this one resolver (and
 //! the shared binder walk it delegates to) so the features cannot drift on what
@@ -144,6 +145,15 @@ impl SymbolIdentity {
             event: Some(event_name.to_string()),
         }
     }
+
+    pub(crate) fn event(name: &str, machine_name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            kind: SymbolKind::Event,
+            owner: machine_name.to_string(),
+            event: None,
+        }
+    }
 }
 
 impl From<SymbolRef> for SymbolIdentity {
@@ -179,8 +189,10 @@ pub(crate) enum Resolution {
 /// most-local first.
 ///
 /// A formula binder the cursor sits on or is bound by is the most local scope and
-/// resolves to a [`Resolution::Bound`]; an event `ANY` parameter and a
-/// component-level / inherited symbol resolve to a [`Resolution::Symbol`].
+/// resolves to a [`Resolution::Bound`]; a cursor on an event's `refines`/`extends`
+/// target, an event `ANY` parameter, and a component-level / inherited symbol all
+/// resolve to a [`Resolution::Symbol`] — the target to the abstract event it
+/// names, never the local same-named event.
 ///
 /// `text` is the document the offsets index into and `masked` its comment-masked
 /// form; `cursor` is the document's stored parse when it is open (its components
@@ -206,6 +218,13 @@ pub(crate) fn resolve_cursor(
         }
     };
     let component = component_at_offset(components, offset)?;
+
+    // A cursor on an event's `refines`/`extends` TARGET name resolves to the
+    // abstract event it names — found up the refinement chain, past the local
+    // same-named event that would otherwise shadow it (issue #84).
+    if let Some(symbol) = resolve_event_refinement_target(component, offset, loader) {
+        return Some(Resolution::Symbol(symbol));
+    }
 
     // A formula binder the cursor sits on or is bound by is the most local scope.
     // Event `ANY` parameters are seeded as binders too, but they keep their own
@@ -240,6 +259,42 @@ fn resolve_symbol_identity_at_position(
     }
 
     resolve_symbol_identity_in_component(component, identifier, loader)
+}
+
+/// Resolve a cursor on an event's `refines`/`extends` TARGET name to the abstract
+/// event it names.
+///
+/// The target is matched positionally by `Event::refines_span`, so it is told
+/// apart from the event's own name even when the two are identical
+/// (`event ML_in extends ML_in`). The abstract event is found up the refinement
+/// chain — which excludes the cursor's own machine — so the local same-named
+/// event never shadows it. `None` when the cursor is not on a target name, or no
+/// ancestor machine declares an event of that name.
+fn resolve_event_refinement_target(
+    component: &Component,
+    offset: usize,
+    loader: &ComponentLoader,
+) -> Option<SymbolIdentity> {
+    let Component::Machine(machine) = component else {
+        return None;
+    };
+    let target = machine
+        .events
+        .iter()
+        .find(|event| event.refines_span.is_some_and(|span| span.contains(offset)))
+        .and_then(|event| event.refines.as_deref())?;
+
+    let manager = loader.manager();
+    manager
+        .refinement_chain(&machine.name)
+        .into_iter()
+        .find(|ancestor| {
+            loader
+                .load(ancestor)
+                .and_then(|loaded| event_declaration_span(loaded.component(), target))
+                .is_some()
+        })
+        .map(|ancestor| SymbolIdentity::event(target, &ancestor))
 }
 
 /// Resolve `identifier` to a symbol visible from `component`: declared directly,

@@ -788,3 +788,36 @@ END
         Some("mch".to_string())
     );
 }
+
+/// Issue #84 — find-references stays consistent with go-to-definition on an
+/// event's `extends`/`refines` target. Clicking the *target* (which names the
+/// abstract event, even when the refined event keeps the name) resolves
+/// cross-file to the abstract event; clicking the event's *own* name stays on
+/// the local event. Before the target span was honoured, both clicks resolved
+/// to the local event.
+#[test]
+fn refines_target_references_resolve_to_the_abstract_event() {
+    let abs_uri = make_uri("abstract.eventb");
+    let con_uri = make_uri("concrete.eventb");
+    let abs = "MACHINE abstract\nVARIABLES\n    state\nEVENTS\n    EVENT step\n    THEN\n        state ≔ state\n    END\nEND";
+    let con = "MACHINE concrete\nREFINES abstract\nVARIABLES\n    state\nEVENTS\n    EVENT step extends step\n    THEN\n        state ≔ state\n    END\nEND";
+    let provider = make_reference_provider(&[(abs_uri.clone(), abs), (con_uri.clone(), con)]);
+
+    // The `extends` target (second `step`, char 24) resolves to the abstract
+    // event's declaration, not the local event.
+    let target = provider
+        .find_references(&make_reference_params(con_uri.clone(), 5, 24), con)
+        .expect("references resolve");
+    assert_eq!(target.len(), 1, "{target:?}");
+    assert_eq!(target[0].uri, abs_uri);
+    assert_eq!(target[0].range.start, Position::new(4, 10));
+
+    // The event's own name (first `step`, char 11) stays on the local event.
+    let own = provider
+        .find_references(&make_reference_params(con_uri.clone(), 5, 11), con)
+        .expect("references resolve");
+    assert!(
+        !own.is_empty() && own.iter().all(|r| r.uri == con_uri),
+        "own-name references stay local: {own:?}"
+    );
+}
