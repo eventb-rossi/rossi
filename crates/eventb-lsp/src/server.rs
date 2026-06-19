@@ -921,6 +921,7 @@ pub struct OperatorRow {
 pub fn operator_rows() -> Vec<OperatorRow> {
     use rossi::operators::{is_eager_input_spelling, is_symbolic_spelling};
 
+    let mut seen = std::collections::HashSet::new();
     rossi::operators::OPERATOR_SPELLINGS
         .iter()
         .filter_map(|entry| {
@@ -929,7 +930,7 @@ pub fn operator_rows() -> Vec<OperatorRow> {
             // unicode` here and drop out (no point converting `<+` to itself,
             // and nothing should ever substitute to a private-use glyph).
             let unicode = entry.emit_text(true);
-            (entry.ascii != unicode).then(|| OperatorRow {
+            (entry.ascii != unicode && seen.insert((entry.ascii, unicode))).then(|| OperatorRow {
                 ascii: entry.ascii.to_string(),
                 unicode: unicode.to_string(),
                 description: entry.description.to_string(),
@@ -1225,6 +1226,7 @@ mod tests {
 
         // Every row differs (ascii != unicode) and has non-empty spellings, and
         // no row substitutes to a private-use glyph that would render as tofu.
+        // ascii keys must be unique (operator_rows() deduplicates by (ascii, unicode)).
         for row in &rows {
             assert_ne!(row.ascii, row.unicode);
             assert!(!row.ascii.is_empty() && !row.unicode.is_empty());
@@ -1242,6 +1244,13 @@ mod tests {
                 "{ascii:?} should not appear in the input-method table"
             );
         }
+        let ascii_set: std::collections::HashSet<&str> =
+            rows.iter().map(|r| r.ascii.as_str()).collect();
+        assert_eq!(
+            ascii_set.len(),
+            rows.len(),
+            "operator_rows() must have unique ascii keys"
+        );
 
         // Representative symbolic op carries aliases and is eager-eligible.
         let implies = rows

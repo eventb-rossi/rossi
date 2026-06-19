@@ -22,8 +22,8 @@ use std::process::ExitCode;
 use clap::Args;
 
 use super::grammars::{
-    Markers, Model, emacs, input_emacs, operators_nvim, paths, snippets_emacs, snippets_nvim,
-    snippets_vscode, sublime, textmate, vim, zed,
+    Markers, Model, emacs, input_emacs, operators_nvim, operators_sublime, paths, snippets_emacs,
+    snippets_nvim, snippets_vscode, sublime, textmate, vim, zed,
 };
 
 #[derive(Args)]
@@ -64,6 +64,10 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
         ),
         (paths::NVIM_OPERATORS.to_string(), operators_nvim::render()),
         (paths::EMACS_INPUT.to_string(), input_emacs::render()),
+        (
+            paths::SUBLIME_OPERATORS.to_string(),
+            operators_sublime::render(),
+        ),
         (paths::TS_TOKENS.to_string(), zed::tokens_manifest(&model)),
     ];
     // Multi-file producers: each returns its own list of (rel path, content).
