@@ -55,13 +55,13 @@ git clone https://github.com/eventb-rossi/rossi
 cd rossi
 
 # Build and install the language server
-cargo install --path crates/rossi-lsp
+cargo install --path crates/eventb-lsp
 
 # Verify installation
-rossi-language-server --version
+eventb-language-server --version
 ```
 
-The server will be installed to `~/.cargo/bin/rossi-language-server`.
+The server will be installed to `~/.cargo/bin/eventb-language-server`.
 
 ### 2. Install Emacs Configuration
 
@@ -182,11 +182,11 @@ to the next syntactic scope (and `lsp-shrink-selection` reverses it).
 If the server is not in your PATH:
 
 ```elisp
-(setq rossi-language-server-command "/path/to/rossi-language-server")
+(setq eventb-language-server-command "/path/to/eventb-language-server")
 
 ;; Or with debug logging:
-(setq rossi-language-server-command
-      '("sh" "-c" "RUST_LOG=debug exec /path/to/rossi-language-server"))
+(setq eventb-language-server-command
+      '("sh" "-c" "RUST_LOG=debug exec /path/to/eventb-language-server"))
 ```
 
 ### Keybindings
@@ -542,12 +542,12 @@ Here's a complete example configuration using `use-package`:
 
 Check if the server is in your PATH:
 ```bash
-which rossi-language-server
+which eventb-language-server
 ```
 
 If not found, specify the full path:
 ```elisp
-(setq rossi-language-server-command "~/.cargo/bin/rossi-language-server")
+(setq eventb-language-server-command "~/.cargo/bin/eventb-language-server")
 ```
 
 ### No syntax highlighting

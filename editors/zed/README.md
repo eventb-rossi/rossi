@@ -1,7 +1,7 @@
 # Rossi Event-B for Zed
 
 [Zed](https://zed.dev) support for [Event-B](https://www.event-b.org/) formal
-models, powered by the Rossi language server (`rossi-language-server`) and a
+models, powered by the Rossi language server (`eventb-language-server`) and a
 tree-sitter grammar generated from the same canonical token tables as every
 other Rossi editor integration.
 
@@ -10,7 +10,7 @@ other Rossi editor integration.
 Syntax highlighting comes from the standalone
 [`tree-sitter-eventb`](https://github.com/eventb-rossi/tree-sitter-eventb)
 grammar (see the Grammar note below); everything else is provided by
-`rossi-language-server` over LSP:
+`eventb-language-server` over LSP:
 
 - Real-time diagnostics
 - Code completion (including the `\name` leader, e.g. `\and` → ∧, `\to` → →)
@@ -28,7 +28,7 @@ Build and install the language server (the project publishes no prebuilt
 binaries, so the extension expects it on your `PATH`):
 
 ```bash
-cargo install --path crates/rossi-lsp   # installs `rossi-language-server`
+cargo install --path crates/eventb-lsp   # installs `eventb-language-server`
 ```
 
 ## Installing the extension
@@ -66,7 +66,7 @@ Add to your Zed `settings.json` (per-language keys live under
     }
   },
   "lsp": {
-    "rossi-language-server": {
+    "eventb-language-server": {
       "settings": {
         "rossi": {
           "format": { "useUnicode": true, "indentation": "    " },
@@ -89,11 +89,11 @@ What each per-language key buys you (all default to `"off"` in Zed):
 
 ### Server binary and settings
 
-- **Binary discovery.** The extension uses `rossi-language-server` from your
+- **Binary discovery.** The extension uses `eventb-language-server` from your
   `PATH`. To pin a specific build, set
-  `lsp."rossi-language-server".binary.path` to an absolute path (and optionally
+  `lsp."eventb-language-server".binary.path` to an absolute path (and optionally
   `binary.arguments`).
-- **Server options.** Everything under `lsp."rossi-language-server".settings`
+- **Server options.** Everything under `lsp."eventb-language-server".settings`
   is forwarded to the server. Nest options under `rossi` as shown above; the
   available options (`format`, `diagnostics`, `completion`, `trace`)
   and their defaults match the Neovim integration

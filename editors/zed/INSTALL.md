@@ -3,17 +3,17 @@
 ## 1. Install the language server
 
 ```bash
-cargo install --path crates/rossi-lsp
+cargo install --path crates/eventb-lsp
 ```
 
-Confirm `rossi-language-server` is on your `PATH`:
+Confirm `eventb-language-server` is on your `PATH`:
 
 ```bash
-rossi-language-server --help    # or: which rossi-language-server
+eventb-language-server --help    # or: which eventb-language-server
 ```
 
 (Alternatively, pin an absolute path later via
-`lsp."rossi-language-server".binary.path` in Zed `settings.json`.)
+`lsp."eventb-language-server".binary.path` in Zed `settings.json`.)
 
 ## 2. Make the tree-sitter grammar loadable
 
@@ -72,8 +72,8 @@ If you already have a published version installed, Zed uninstalls it first.
 
 ## Troubleshooting
 
-- **No language server / "binary not found".** Ensure `rossi-language-server`
-  is on `PATH`, or set `lsp."rossi-language-server".binary.path`. Check
+- **No language server / "binary not found".** Ensure `eventb-language-server`
+  is on `PATH`, or set `lsp."eventb-language-server".binary.path`. Check
   command palette → **zed: open log** for startup errors.
 - **No highlighting.** The grammar reference in `extension.toml` must resolve
   (step 2). Reinstall the dev extension after editing `extension.toml`.

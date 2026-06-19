@@ -52,13 +52,13 @@ git clone https://github.com/eventb-rossi/rossi
 cd rossi
 
 # Build and install the language server
-cargo install --path crates/rossi-lsp
+cargo install --path crates/eventb-lsp
 
 # Verify installation
-rossi-language-server --version
+eventb-language-server --version
 ```
 
-The server will be installed to `~/.cargo/bin/rossi-language-server`.
+The server will be installed to `~/.cargo/bin/eventb-language-server`.
 
 ### 2. Install Neovim Configuration
 
@@ -222,7 +222,7 @@ If the server is not in your PATH:
 
 ```lua
 require('lspconfig').eventb.setup{
-  cmd = { '/path/to/rossi-language-server' },
+  cmd = { '/path/to/eventb-language-server' },
   -- ... other settings
 }
 ```
@@ -517,13 +517,13 @@ See [Editor Commands](#editor-commands) for the full list and suggested keymaps.
 
 Check if the server is in your PATH:
 ```bash
-which rossi-language-server
+which eventb-language-server
 ```
 
 If not found, specify the full path:
 ```lua
 require('lspconfig').eventb.setup{
-  cmd = { vim.fn.expand('~/.cargo/bin/rossi-language-server') },
+  cmd = { vim.fn.expand('~/.cargo/bin/eventb-language-server') },
 }
 ```
 

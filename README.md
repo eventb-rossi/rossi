@@ -18,7 +18,7 @@ Rossi covers the full author-to-Rodin path:
   through the Rodin toolchain.
 - **`rossi-cli`** — the `rossi` command-line tool wrapping the
   parser, checker, and language server.
-- **`rossi-lsp`** — Language Server Protocol implementation powering
+- **`eventb-lsp`** — Language Server Protocol implementation powering
   editor extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed.
 
 ## Features
@@ -57,8 +57,8 @@ cargo build --release -p rossi-cli
 ```
 
 The binary is then available at `target/release/rossi`. The standalone
-language server (`rossi-language-server`) builds the same way with
-`-p rossi-lsp`.
+language server (`eventb-language-server`) builds the same way with
+`-p eventb-lsp`.
 
 To use Rossi as a library, depend on the `rossi` crate — the parser, typed
 AST, pretty-printer, and Rodin XML/ZIP conversion. Run `cargo doc -p rossi
@@ -76,7 +76,7 @@ the `rossi-build` static checker, and the language server:
 | `export`   | Export `.eventb`/`.txt`/dir into a Rodin `.zip` archive. |
 | `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
-| `lsp`      | Run the Rossi language server over stdio (equivalent to the `rossi-language-server` binary). |
+| `lsp`      | Run the Rossi language server over stdio (equivalent to the `eventb-language-server` binary). |
 
 ### Validate
 
@@ -207,7 +207,7 @@ rossi build project.zip --output ./out
 rossi lsp
 ```
 
-This is identical to running the standalone `rossi-language-server`
+This is identical to running the standalone `eventb-language-server`
 binary; editor extensions may invoke either form.
 
 ### Exit Codes
@@ -236,7 +236,7 @@ rossi/
 │   ├── rossi/        # Core parser, AST, pretty-printer, Rodin XML
 │   ├── rossi-build/  # Static checker / Rodin .bcc / .bcm builder
 │   ├── rossi-cli/    # `rossi` command-line interface
-│   └── rossi-lsp/    # Language Server Protocol implementation
+│   └── eventb-lsp/    # Language Server Protocol implementation
 └── editors/
     ├── vscode/       # VS Code extension
     ├── neovim/       # Neovim plugin
@@ -265,7 +265,7 @@ cargo doc --open
 
 ## Language Server & IDE Support
 
-The `rossi-lsp` Language Server Protocol implementation provides modern
+The `eventb-lsp` Language Server Protocol implementation provides modern
 IDE features for Event-B development:
 
 - **Real-time diagnostics** — syntax and semantic errors with error recovery

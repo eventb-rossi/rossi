@@ -15,13 +15,13 @@ using one of these methods:
 ```bash
 git clone https://github.com/eventb-rossi/rossi.git
 cd rossi
-cargo build --release --bin rossi-language-server --bin rossi
+cargo build --release --bin eventb-language-server --bin rossi
 ```
 
 Then copy the binaries to a directory in your PATH:
 ```bash
 # Linux/macOS
-sudo cp target/release/rossi-language-server /usr/local/bin/
+sudo cp target/release/eventb-language-server /usr/local/bin/
 sudo cp target/release/rossi /usr/local/bin/
 
 # Or add to PATH in your shell config (~/.bashrc, ~/.zshrc):
@@ -72,7 +72,7 @@ command if the version differs.
 
 ### Basic Setup
 
-No configuration needed if `rossi-language-server` and `rossi` are in your PATH.
+No configuration needed if `eventb-language-server` and `rossi` are in your PATH.
 `Open in Rodin` additionally works without configuration when Rodin is available at the platform default:
 
 - macOS: `/Applications/Rodin.app`
@@ -87,14 +87,14 @@ If either Rossi binary is not in `PATH`, configure it:
 2. Search for "rossi"
 3. Set "Event-B: Language Server Path" and "Rossi: Tool Path" to the full paths:
    ```
-   /path/to/rossi-language-server
+   /path/to/eventb-language-server
    /path/to/rossi
    ```
 
 Or edit `settings.json` directly:
 ```json
 {
-  "rossi.languageServer.path": "/path/to/rossi-language-server",
+  "rossi.languageServer.path": "/path/to/eventb-language-server",
   "rossi.tool.path": "/path/to/rossi"
 }
 ```
@@ -136,7 +136,7 @@ input) and a complete example configuration, see the
 
 **LSP server not found**
 ```
-Error: spawn rossi-language-server ENOENT
+Error: spawn eventb-language-server ENOENT
 ```
 Solution: Install the server or configure the path in settings.
 

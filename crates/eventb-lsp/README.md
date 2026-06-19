@@ -1,4 +1,4 @@
-# rossi-lsp
+# eventb-lsp
 
 Language Server Protocol (LSP) implementation for Event-B formal modeling language.
 
@@ -31,17 +31,17 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 ### From Source
 
 ```bash
-cd crates/rossi-lsp
+cd crates/eventb-lsp
 cargo install --path .
 ```
 
-The binary `rossi-language-server` will be installed to `~/.cargo/bin/`.
+The binary `eventb-language-server` will be installed to `~/.cargo/bin/`.
 
 ### From Workspace Root
 
 ```bash
-cargo build --release --bin rossi-language-server
-# Binary available at: target/release/rossi-language-server
+cargo build --release --bin eventb-language-server
+# Binary available at: target/release/eventb-language-server
 ```
 
 ## Usage
@@ -54,7 +54,7 @@ Alternatively, configure manually in `.vscode/settings.json`:
 
 ```json
 {
-  "rossi.languageServer.path": "/path/to/rossi-language-server"
+  "rossi.languageServer.path": "/path/to/eventb-language-server"
 }
 ```
 
@@ -70,7 +70,7 @@ local configs = require('lspconfig.configs')
 if not configs.eventb_ls then
   configs.eventb_ls = {
     default_config = {
-      cmd = {'rossi-language-server'},
+      cmd = {'eventb-language-server'},
       filetypes = {'eventb'},
       root_dir = lspconfig.util.root_pattern('.git', 'eventb.toml') or lspconfig.util.path.dirname,
       settings = {},
@@ -107,7 +107,7 @@ Use `lsp-mode`:
   (add-to-list 'lsp-language-id-configuration '(eventb-mode . "eventb"))
   (lsp-register-client
    (make-lsp-client
-    :new-connection (lsp-stdio-connection "rossi-language-server")
+    :new-connection (lsp-stdio-connection "eventb-language-server")
     :major-modes '(eventb-mode)
     :server-id 'eventb-ls)))
 
@@ -239,7 +239,7 @@ Reusable `rossi-build` surfaces:
 
 Recommended integration path:
 
-1. Add `rossi-build` as a `rossi-lsp` dependency.
+1. Add `rossi-build` as a `eventb-lsp` dependency.
 2. Add a small LSP semantic diagnostics adapter instead of calling
    `rossi-build` internals directly from `server.rs`.
 3. Build an in-memory `Project` from open `.eventb` documents and workspace
@@ -300,7 +300,7 @@ cargo test
 Run specific test module:
 
 ```bash
-cargo test -p rossi-lsp formatting
+cargo test -p eventb-lsp formatting
 ```
 
 ### Logging
@@ -309,13 +309,13 @@ Control logging level with the `RUST_LOG` environment variable:
 
 ```bash
 # Info level (default)
-RUST_LOG=info rossi-language-server
+RUST_LOG=info eventb-language-server
 
 # Debug level (verbose)
-RUST_LOG=debug rossi-language-server
+RUST_LOG=debug eventb-language-server
 
 # Module-specific
-RUST_LOG=rossi_lsp::server=debug rossi-language-server
+RUST_LOG=eventb_lsp::server=debug eventb-language-server
 ```
 
 Logs are written to stderr and include:
@@ -329,7 +329,7 @@ Logs are written to stderr and include:
 The server follows a modular architecture:
 
 ```
-rossi-language-server
+eventb-language-server
 ├── server.rs            # LSP protocol implementation (tower-lsp)
 ├── document.rs          # Document management (ropey, dashmap)
 ├── analysis.rs          # Document symbol extraction
@@ -422,17 +422,17 @@ Current limitations are listed in [Known Limitations](#known-limitations).
 
 1. Check the server is installed:
    ```bash
-   which rossi-language-server
+   which eventb-language-server
    ```
 
 2. Test manually:
    ```bash
-   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | rossi-language-server
+   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | eventb-language-server
    ```
 
 3. Check logs:
    ```bash
-   RUST_LOG=debug rossi-language-server 2> lsp.log
+   RUST_LOG=debug eventb-language-server 2> lsp.log
    ```
 
 ### Diagnostics not appearing

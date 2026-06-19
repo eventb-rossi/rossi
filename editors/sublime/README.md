@@ -32,15 +32,15 @@ Type and select Preferences: `LSP Server Configurations`.This will open a split 
 
 ```
 {
-	"rossi-language-server": {
+	"eventb-language-server": {
       "enabled": true,
-      "command": ["rossi-language-server"],
+      "command": ["eventb-language-server"],
       "selector": "source.eventb"
     }
 }
 ```
 
-This assumes that you already installed LSP and have `rossi-language-server` in your `PATH`.
+This assumes that you already installed LSP and have `eventb-language-server` in your `PATH`.
 
 ## bat and delta
 

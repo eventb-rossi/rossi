@@ -2,7 +2,7 @@
 //!
 //! This is the single source of truth for the inter-component visibility
 //! semantics shared by the static checker ([`rossi-build`]) and the language
-//! server ([`rossi-lsp`]):
+//! server ([`eventb-lsp`]):
 //!
 //! - **topological ordering** ([`DependencyGraph::topological_order`]) — drives
 //!   the build, ensuring parents are checked before children, and aborts on a
@@ -21,7 +21,7 @@
 //! query helpers used by the language server resolve to a single node.
 //!
 //! [`rossi-build`]: https://docs.rs/rossi-build
-//! [`rossi-lsp`]: https://docs.rs/rossi-lsp
+//! [`eventb-lsp`]: https://docs.rs/eventb-lsp
 
 use crate::Component;
 use std::collections::{HashMap, HashSet, VecDeque};

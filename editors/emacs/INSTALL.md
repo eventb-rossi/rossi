@@ -42,13 +42,13 @@ This guide provides detailed installation instructions for setting up Event-B la
    cd rossi
 
    # Build and install the language server
-   cargo install --path crates/rossi-lsp
+   cargo install --path crates/eventb-lsp
 
    # Verify installation
-   rossi-language-server --version
+   eventb-language-server --version
    ```
 
-   The server will be installed to `~/.cargo/bin/rossi-language-server`.
+   The server will be installed to `~/.cargo/bin/eventb-language-server`.
 
 ### Recommended
 
@@ -379,14 +379,14 @@ Enhanced configuration with keybindings and settings:
 
 ### Custom Server Path
 
-If `rossi-language-server` is not in your PATH:
+If `eventb-language-server` is not in your PATH:
 
 ```elisp
-(setq rossi-language-server-command "~/.cargo/bin/rossi-language-server")
+(setq eventb-language-server-command "~/.cargo/bin/eventb-language-server")
 
 ;; Or with debug logging:
-(setq rossi-language-server-command
-      '("sh" "-c" "RUST_LOG=debug exec ~/.cargo/bin/rossi-language-server"))
+(setq eventb-language-server-command
+      '("sh" "-c" "RUST_LOG=debug exec ~/.cargo/bin/eventb-language-server"))
 ```
 
 ### Additional Keybindings
@@ -449,7 +449,7 @@ Then check the `*lsp-log*` buffer.
 **Solution**:
 ```bash
 # Check if server is in PATH
-which rossi-language-server
+which eventb-language-server
 
 # If not found, add to PATH or specify full path
 echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
@@ -458,7 +458,7 @@ source ~/.bashrc
 
 Or in Emacs:
 ```elisp
-(setq rossi-language-server-command "~/.cargo/bin/rossi-language-server")
+(setq eventb-language-server-command "~/.cargo/bin/eventb-language-server")
 ```
 
 ### Server Crashes on Startup
@@ -468,7 +468,7 @@ Or in Emacs:
 **Solution**:
 ```bash
 # Test the server manually
-rossi-language-server
+eventb-language-server
 
 # Check Rust installation
 cargo --version
@@ -476,7 +476,7 @@ cargo --version
 # Rebuild the server
 cd rossi
 cargo clean
-cargo install --path crates/rossi-lsp --force
+cargo install --path crates/eventb-lsp --force
 ```
 
 ### No Syntax Highlighting
@@ -594,15 +594,15 @@ M-x locate-library RET eventb-mode
 
 ### Permission Denied
 
-**Problem**: Cannot execute `rossi-language-server`
+**Problem**: Cannot execute `eventb-language-server`
 
 **Solution**:
 ```bash
 # Make the binary executable
-chmod +x ~/.cargo/bin/rossi-language-server
+chmod +x ~/.cargo/bin/eventb-language-server
 
 # Verify
-ls -l ~/.cargo/bin/rossi-language-server
+ls -l ~/.cargo/bin/eventb-language-server
 ```
 
 ### LSP Mode Not Found

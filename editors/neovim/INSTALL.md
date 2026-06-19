@@ -43,13 +43,13 @@ This guide provides detailed installation instructions for setting up Event-B la
    cd rossi
 
    # Build and install the language server
-   cargo install --path crates/rossi-lsp
+   cargo install --path crates/eventb-lsp
 
    # Verify installation
-   rossi-language-server --version
+   eventb-language-server --version
    ```
 
-   The server will be installed to `~/.cargo/bin/rossi-language-server`.
+   The server will be installed to `~/.cargo/bin/eventb-language-server`.
 
 ### Recommended
 
@@ -263,8 +263,8 @@ vim.api.nvim_create_autocmd('FileType', {
   pattern = 'eventb',
   callback = function()
     vim.lsp.start({
-      name = 'rossi-language-server',
-      cmd = {'rossi-language-server'},
+      name = 'eventb-language-server',
+      cmd = {'eventb-language-server'},
       root_dir = vim.fs.dirname(vim.fs.find({'.git', 'eventb.toml'}, { upward = true })[1]),
       settings = {
         rossi = {
@@ -364,13 +364,13 @@ lspconfig.eventb.setup{
 
 ### Custom Server Path
 
-If `rossi-language-server` is not in your PATH:
+If `eventb-language-server` is not in your PATH:
 
 ```lua
 require('lspconfig').eventb.setup{
-  cmd = { '/full/path/to/rossi-language-server' },
+  cmd = { '/full/path/to/eventb-language-server' },
   -- Or use:
-  cmd = { vim.fn.expand('~/.cargo/bin/rossi-language-server') },
+  cmd = { vim.fn.expand('~/.cargo/bin/eventb-language-server') },
 }
 ```
 
@@ -450,9 +450,9 @@ Language client log: ~/.local/state/nvim/lsp.log
 Detected filetype: eventb
 
 1 client(s) attached to this buffer:
-  Client: rossi-language-server (id: 1, bufnr: [1])
+  Client: eventb-language-server (id: 1, bufnr: [1])
     filetypes: eventb
-    cmd: rossi-language-server
+    cmd: eventb-language-server
 ```
 
 ### View LSP Logs
@@ -474,7 +474,7 @@ If something isn't working:
 **Solution**:
 ```bash
 # Check if server is in PATH
-which rossi-language-server
+which eventb-language-server
 
 # If not found, add to PATH or specify full path
 echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
@@ -488,7 +488,7 @@ source ~/.bashrc
 **Solution**:
 ```bash
 # Test the server manually
-rossi-language-server
+eventb-language-server
 
 # Check Rust installation
 cargo --version
@@ -496,7 +496,7 @@ cargo --version
 # Rebuild the server
 cd rossi
 cargo clean
-cargo install --path crates/rossi-lsp --force
+cargo install --path crates/eventb-lsp --force
 ```
 
 ### No Syntax Highlighting
@@ -553,15 +553,15 @@ cargo install --path crates/rossi-lsp --force
 
 ### Permission Denied
 
-**Problem**: Cannot execute `rossi-language-server`
+**Problem**: Cannot execute `eventb-language-server`
 
 **Solution**:
 ```bash
 # Make the binary executable
-chmod +x ~/.cargo/bin/rossi-language-server
+chmod +x ~/.cargo/bin/eventb-language-server
 
 # Verify
-ls -l ~/.cargo/bin/rossi-language-server
+ls -l ~/.cargo/bin/eventb-language-server
 ```
 
 ### LSP Configuration Not Found

@@ -83,7 +83,7 @@ The Rossi Language Server must be installed and accessible in your PATH. Rodin i
 From the project root:
 
 ```bash
-cargo build --release --bin rossi-language-server --bin rossi
+cargo build --release --bin eventb-language-server --bin rossi
 ```
 
 Add both binaries (in `target/release/`) to your PATH or specify their full
@@ -113,7 +113,7 @@ Add to your `.vscode/settings.json`:
 
 ```json
 {
-  "rossi.languageServer.path": "/path/to/rossi-language-server", // only if not in PATH
+  "rossi.languageServer.path": "/path/to/eventb-language-server", // only if not in PATH
   "rossi.tool.path": "/path/to/rossi", // only if not in PATH
   "rossi.rodin.path": "/Applications/Rodin.app", // only if Rodin isn't at the platform default
   "rossi.format.useUnicode": true,
