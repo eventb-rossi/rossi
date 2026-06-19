@@ -61,6 +61,16 @@ fn debug_assert_component_name(name: &str, role: &str) {
     );
 }
 
+/// True when a comment would actually render, i.e. it survives
+/// [`comments::normalize_comment`] — the same test [`PrettyPrinter::writeln_commented`]
+/// applies. Layout decisions that key on "has a comment" must use this, not a
+/// bare `Option::is_some`: an imported blank comment (`Some("")` from a Rodin
+/// `comment=""` attribute) prints as an empty line and reparses to `None`, so
+/// treating it as a real comment makes the round-trip non-idempotent.
+fn renders_comment(comment: Option<&str>) -> bool {
+    comment.and_then(comments::normalize_comment).is_some()
+}
+
 /// Configuration for the pretty printer
 #[derive(Debug, Clone)]
 pub struct PrettyPrinter {
@@ -400,7 +410,11 @@ impl PrettyPrinter {
 
         if !event.parameters.is_empty() {
             writeln!(output, "{}ANY", self.indent).unwrap();
-            if event.parameters.iter().any(|p| p.comment.is_some()) {
+            if event
+                .parameters
+                .iter()
+                .any(|p| renders_comment(p.comment.as_deref()))
+            {
                 // A commented parameter needs its own line for the trailing
                 // comment to re-attach to it on reparse.
                 for param in &event.parameters {

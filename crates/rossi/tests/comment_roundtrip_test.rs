@@ -9,7 +9,7 @@
 mod common;
 
 use common::{assert_roundtrip, parse_context, parse_machine};
-use rossi::{Component, PrettyPrinter, format_str, parse, to_string, to_string_ascii};
+use rossi::{Component, PrettyPrinter, format_str, parse, parse_xml, to_string, to_string_ascii};
 
 // =========================================================================
 // Attachment rules
@@ -222,6 +222,68 @@ fn commented_parameters_print_one_per_line() {
     let src2 = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 skip\n    END\nEND\n";
     let printed2 = to_string(&parse(src2).unwrap());
     assert!(printed2.contains("        a b\n"));
+}
+
+#[test]
+fn empty_xml_param_comment_does_not_force_multiline() {
+    // Regression (import_corpus): a Rodin parameter can carry an *empty*
+    // `comment=""` attribute, which import stores as `Some("")`. A blank comment
+    // renders nothing, so it must not push the ANY block to one-param-per-line —
+    // otherwise the first print is multi-line while the reparse (blank → None)
+    // prints the joined single-line form, breaking the import round-trip. The
+    // textual parser never produces `Some("")`, so this is XML-only.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="e">
+        <org.eventb.core.parameter identifier="a" org.eventb.core.comment=""/>
+        <org.eventb.core.parameter identifier="b"/>
+        <org.eventb.core.guard label="grd1" predicate="a &gt; 0 ∧ b &gt; 0"/>
+        <org.eventb.core.action label="act1" assignment="a ≔ a"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let component = parse_xml(xml).expect("xml parses");
+    // Import really did attach the blank comment (`Some("")`), the trigger.
+    let Component::Machine(m) = &component else {
+        panic!("expected machine");
+    };
+    assert_eq!(m.events[0].parameters[0].comment.as_deref(), Some(""));
+
+    // First print joins the parameters on one line (the blank renders nothing)…
+    let text1 = to_string(&component);
+    assert!(
+        text1.contains("        a b\n"),
+        "ANY block should be single-line, got:\n{text1}"
+    );
+    // …and the text round-trips: reparse + reprint is a fixed point.
+    let text2 = to_string(&parse(&text1).expect("reparse"));
+    assert_eq!(text1, text2, "import round-trip not idempotent:\n{text1}");
+}
+
+#[test]
+fn real_xml_param_comment_still_prints_per_line_and_roundtrips() {
+    // A genuine (non-blank) parameter comment must still force the per-line
+    // layout — so the trailing comment re-attaches on reparse — and round-trip.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="e">
+        <org.eventb.core.parameter identifier="a" org.eventb.core.comment="why a"/>
+        <org.eventb.core.parameter identifier="b"/>
+        <org.eventb.core.guard label="grd1" predicate="a &gt; 0 ∧ b &gt; 0"/>
+        <org.eventb.core.action label="act1" assignment="a ≔ a"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let text1 = to_string(&parse_xml(xml).expect("xml parses"));
+    assert!(
+        text1.contains("        a // why a\n        b\n"),
+        "commented param should be per-line, got:\n{text1}"
+    );
+    let text2 = to_string(&parse(&text1).expect("reparse"));
+    assert_eq!(
+        text1, text2,
+        "commented round-trip not idempotent:\n{text1}"
+    );
 }
 
 // =========================================================================
