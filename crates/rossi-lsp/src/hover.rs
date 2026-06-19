@@ -8,8 +8,7 @@
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position};
 use rossi::{
-    Component, Event, Expression, ExpressionKind, LabeledPredicate, Predicate, PredicateKind,
-    PrettyPrinter,
+    Component, Event, LabeledPredicate, PrettyPrinter,
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
 };
@@ -430,88 +429,15 @@ fn resolve_machine_symbols_with_source(
 
 // AST traversal helpers
 
-/// Check whether an expression references identifier `id`.
-fn expression_mentions_id(expr: &Expression, id: &str) -> bool {
-    match &expr.kind {
-        ExpressionKind::Identifier(name) => name == id,
-        ExpressionKind::Binary { left, right, .. } => {
-            expression_mentions_id(left, id) || expression_mentions_id(right, id)
-        }
-        ExpressionKind::Unary { operand, .. } => expression_mentions_id(operand, id),
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
-            expression_mentions_id(function, id)
-                || arguments.iter().any(|a| expression_mentions_id(a, id))
-        }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            arguments.iter().any(|a| expression_mentions_id(a, id))
-        }
-        ExpressionKind::SetEnumeration(elems) => {
-            elems.iter().any(|e| expression_mentions_id(e, id))
-        }
-        ExpressionKind::SetComprehension {
-            predicate,
-            expression,
-            ..
-        } => {
-            predicate_mentions_id(predicate, id)
-                || expression
-                    .as_ref()
-                    .is_some_and(|e| expression_mentions_id(e, id))
-        }
-        ExpressionKind::RelationalImage { relation, set } => {
-            expression_mentions_id(relation, id) || expression_mentions_id(set, id)
-        }
-        ExpressionKind::QuantifiedUnion {
-            predicate,
-            expression,
-            ..
-        }
-        | ExpressionKind::QuantifiedInter {
-            predicate,
-            expression,
-            ..
-        }
-        | ExpressionKind::Lambda {
-            predicate,
-            expression,
-            ..
-        } => predicate_mentions_id(predicate, id) || expression_mentions_id(expression, id),
-        ExpressionKind::Bool(pred) => predicate_mentions_id(pred, id),
-        _ => false, // Integer, True, False, EmptySet, Naturals, etc.
-    }
-}
-
-/// Check whether a predicate references identifier `id`.
-fn predicate_mentions_id(pred: &Predicate, id: &str) -> bool {
-    match &pred.kind {
-        PredicateKind::Comparison { left, right, .. } => {
-            expression_mentions_id(left, id) || expression_mentions_id(right, id)
-        }
-        PredicateKind::Not(p) => predicate_mentions_id(p, id),
-        PredicateKind::Logical { left, right, .. } => {
-            predicate_mentions_id(left, id) || predicate_mentions_id(right, id)
-        }
-        PredicateKind::Quantified { predicate, .. } => predicate_mentions_id(predicate, id),
-        PredicateKind::Application { arguments, .. } => {
-            arguments.iter().any(|a| expression_mentions_id(a, id))
-        }
-        PredicateKind::BuiltinApplication { arguments, .. } => {
-            arguments.iter().any(|a| expression_mentions_id(a, id))
-        }
-        PredicateKind::True | PredicateKind::False => false,
-    }
-}
-
 /// Collect formatted constraint strings from labeled predicates that mention `id`.
-/// Capped at 5 results to avoid clutter.
+/// Capped at 5 results to avoid clutter. Identifier matching is delegated to the
+/// shared walker (`formula_walk`) that find-references uses, so the clauses shown
+/// here cannot drift from where the symbol is actually used.
 fn collect_constraints(predicates: &[LabeledPredicate], id: &str) -> Vec<String> {
     let printer = PrettyPrinter::new();
     predicates
         .iter()
-        .filter(|lp| predicate_mentions_id(&lp.predicate, id))
+        .filter(|lp| formula_walk::predicate_mentions(&lp.predicate, id))
         .take(5)
         .map(|lp| {
             let text = printer.print_predicate(&lp.predicate);
@@ -1095,6 +1021,7 @@ const BUILTIN_OPERATOR_DOCS: &[DocEntry] = &[
 mod tests {
     use super::*;
     use crate::lsp_types::{Position, Range, Url};
+    use rossi::{ExpressionKind, Predicate};
 
     fn word_at(text: &str, position: Position) -> Option<String> {
         word_at_position(text, position).map(|(word, _)| word)
@@ -1642,88 +1569,6 @@ mod tests {
         assert!(provider.hover_keyword("THEOREMS").is_some());
         // Lookup is case-insensitive.
         assert!(provider.hover_keyword("theorems").is_some());
-    }
-
-    #[test]
-    fn test_expression_mentions_id() {
-        use rossi::ast::expression::BinaryOp;
-
-        // Simple identifier
-        assert!(expression_mentions_id(
-            &ExpressionKind::Identifier("x".into()).into(),
-            "x"
-        ));
-        assert!(!expression_mentions_id(
-            &ExpressionKind::Identifier("y".into()).into(),
-            "x"
-        ));
-
-        // Integer literal
-        assert!(!expression_mentions_id(
-            &ExpressionKind::Integer(42).into(),
-            "x"
-        ));
-
-        // Binary expression
-        let bin = Expression::binary(
-            BinaryOp::Add,
-            ExpressionKind::Identifier("x".into()).into(),
-            ExpressionKind::Integer(1).into(),
-        );
-        assert!(expression_mentions_id(&bin, "x"));
-        assert!(!expression_mentions_id(&bin, "y"));
-
-        // Function application
-        let app: Expression = ExpressionKind::FunctionApplication {
-            function: Box::new(ExpressionKind::Identifier("f".into()).into()),
-            arguments: vec![ExpressionKind::Identifier("x".into()).into()],
-        }
-        .into();
-        assert!(expression_mentions_id(&app, "f"));
-        assert!(expression_mentions_id(&app, "x"));
-        assert!(!expression_mentions_id(&app, "z"));
-    }
-
-    #[test]
-    fn test_predicate_mentions_id() {
-        use rossi::ast::predicate::ComparisonOp;
-
-        // Comparison
-        let pred = Predicate::comparison(
-            ComparisonOp::In,
-            ExpressionKind::Identifier("count".into()).into(),
-            ExpressionKind::Naturals.into(),
-        );
-        assert!(predicate_mentions_id(&pred, "count"));
-        assert!(!predicate_mentions_id(&pred, "other"));
-
-        // Logical
-        let pred2 = Predicate::comparison(
-            ComparisonOp::GreaterEqual,
-            ExpressionKind::Identifier("count".into()).into(),
-            ExpressionKind::Integer(0).into(),
-        );
-        let conj = Predicate::logical(rossi::ast::predicate::LogicalOp::And, pred.clone(), pred2);
-        assert!(predicate_mentions_id(&conj, "count"));
-        assert!(!predicate_mentions_id(&conj, "x"));
-
-        // Quantified
-        let quant = Predicate::quantified(
-            rossi::ast::predicate::Quantifier::ForAll,
-            vec!["y".into()],
-            pred,
-        );
-        assert!(predicate_mentions_id(&quant, "count"));
-
-        // True/False literals
-        assert!(!predicate_mentions_id(
-            &PredicateKind::True.into(),
-            "anything"
-        ));
-        assert!(!predicate_mentions_id(
-            &PredicateKind::False.into(),
-            "anything"
-        ));
     }
 
     #[test]

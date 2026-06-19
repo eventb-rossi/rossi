@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 
 use rossi::ast::Span;
 use rossi::ast::walk::{self, Binder, IdentOccurrence, IdentRole, IdentVisitor};
-use rossi::{Component, Event};
+use rossi::{Component, Event, Expression, Predicate};
 
 /// How an occurrence of the target name resolves at its position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +123,49 @@ pub fn collect_in_component(component: &Component, target: &str) -> Vec<Hit> {
     };
     drive(component, &mut c);
     c.hits
+}
+
+/// Stops at the first identifier occurrence that names the target (so the walk
+/// short-circuits via [`ControlFlow::Break`]).
+struct MentionVisitor<'a> {
+    target: &'a str,
+    found: bool,
+}
+
+impl IdentVisitor for MentionVisitor<'_> {
+    fn visit(&mut self, occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        // A binder *declaration* of the same name (`∀ x · …`) shadows the symbol
+        // rather than referencing it, so it is not a mention of the global `x`.
+        if occ.role != IdentRole::Binder && canonical(occ.name) == self.target {
+            self.found = true;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// True if any identifier occurrence in `predicate` names `name` (after-state
+/// `name'` matches the unprimed `name`). The single AST traversal — the same one
+/// that powers find-references — so "which clauses mention this symbol" cannot
+/// drift from "where is this symbol used".
+pub fn predicate_mentions(predicate: &Predicate, name: &str) -> bool {
+    let mut v = MentionVisitor {
+        target: name,
+        found: false,
+    };
+    let _ = walk::walk_predicate(predicate, &mut Vec::new(), &mut v);
+    v.found
+}
+
+/// True if any identifier occurrence in `expression` names `name` (after-state
+/// `name'` matches the unprimed `name`). See [`predicate_mentions`].
+pub fn expression_mentions(expression: &Expression, name: &str) -> bool {
+    let mut v = MentionVisitor {
+        target: name,
+        found: false,
+    };
+    let _ = walk::walk_expression(expression, &mut Vec::new(), &mut v);
+    v.found
 }
 
 /// Walk an event's guards, `with` / witness predicates, and actions with the
@@ -465,6 +508,67 @@ mod tests {
         let spans = free_occurrence_spans(&component, "v");
         // The invariant use and the VARIANT expression use.
         assert_eq!(texts(src, &spans), vec!["v", "v"]);
+    }
+
+    // ---- predicate_mentions / expression_mentions --------------------------
+
+    #[test]
+    fn predicate_mentions_only_used_identifiers() {
+        let src = "MACHINE m\nVARIABLES\nx\ny\nINVARIANTS\n@i1 x ∈ ℕ\nEND\n";
+        let component = parse(src).expect("parses");
+        let Component::Machine(m) = &component else {
+            panic!("machine");
+        };
+        let inv = &m.invariants[0].predicate;
+        assert!(predicate_mentions(inv, "x"));
+        assert!(!predicate_mentions(inv, "y"));
+    }
+
+    #[test]
+    fn expression_mentions_every_operand() {
+        let src = "MACHINE m\nVARIABLES\nx\ny\nVARIANT\ny − x\nEND\n";
+        let component = parse(src).expect("parses");
+        let Component::Machine(m) = &component else {
+            panic!("machine");
+        };
+        let variant = m.variant.as_ref().expect("variant");
+        assert!(expression_mentions(variant, "x"));
+        assert!(expression_mentions(variant, "y"));
+        assert!(!expression_mentions(variant, "z"));
+    }
+
+    #[test]
+    fn predicate_mentions_recognises_a_predicate_call_name() {
+        // The *name* of a user-defined predicate application is a reference too:
+        // `@a1 P(0)` mentions the constant `P`. (The bespoke hover matcher this
+        // replaced inspected only the arguments and missed the call name.)
+        let src = "CONTEXT c\nCONSTANTS\nP\nAXIOMS\n@a1 P(0)\nEND\n";
+        let component = parse(src).expect("parses");
+        let Component::Context(ctx) = &component else {
+            panic!("context");
+        };
+        let axm = &ctx.axioms[0].predicate;
+        assert!(predicate_mentions(axm, "P"));
+    }
+
+    #[test]
+    fn predicate_mentions_ignores_a_shadowing_binder_declaration() {
+        // `y` occurs only as a quantifier binder; the body uses `n`, not `y`. A
+        // binder declaration shadows the global `y` and is not a mention of it.
+        let src = "MACHINE m\nVARIABLES\ny\nn\nINVARIANTS\n@i1 ∀ y · n ∈ ℕ\nEND\n";
+        let component = parse(src).expect("parses");
+        let Component::Machine(m) = &component else {
+            panic!("machine");
+        };
+        let inv = &m.invariants[0].predicate;
+        assert!(
+            !predicate_mentions(inv, "y"),
+            "binder decl is not a mention"
+        );
+        assert!(
+            predicate_mentions(inv, "n"),
+            "the body use of n is a mention"
+        );
     }
 
     // ---- resolve_bound_at_offset (the binder-scope SSOT) -------------------
