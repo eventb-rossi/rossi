@@ -715,10 +715,16 @@ machine_clause_events = {
     kw_events ~ (initialisation_event | event)+
 }
 
+// Event-B defines no structural syntax (Abrial: "there is no such syntax in the
+// Event-B notation"), and Rodin processes sections as unordered element sets — so
+// the non-event clauses may appear in any order. The EVENTS block is the sole
+// exception: it is a list of `EVENT … END` closed by the machine `END`, so it is
+// the final section. Keeping it terminal is what lets a parse error inside the
+// block report just `EVENT`/`END` instead of every clause keyword.
 machine_body = {
     (machine_clause_refines | machine_clause_sees | machine_clause_variables
-     | machine_clause_invariants | machine_clause_theorems | machine_clause_variant
-     | machine_clause_events)*
+     | machine_clause_invariants | machine_clause_theorems | machine_clause_variant)*
+  ~ machine_clause_events?
 }
 
 machine = {
