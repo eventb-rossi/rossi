@@ -4,11 +4,11 @@
 //! side), exactly the edit from the report, and every navigation feature must
 //! keep working everywhere outside the broken clause.
 
-use rossi_lsp::cross_references::CrossReferenceManager;
-use rossi_lsp::definition::DefinitionProvider;
-use rossi_lsp::document::DocumentManager;
-use rossi_lsp::hover::HoverProvider;
-use rossi_lsp::lsp_types::*;
+use eventb_lsp::cross_references::CrossReferenceManager;
+use eventb_lsp::definition::DefinitionProvider;
+use eventb_lsp::document::DocumentManager;
+use eventb_lsp::hover::HoverProvider;
+use eventb_lsp::lsp_types::*;
 use std::sync::Arc;
 
 /// A two-component model (context + machine that sees it), mirroring

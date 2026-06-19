@@ -557,7 +557,7 @@ mod tests {
     /// order), and that the row count matches.
     #[test]
     fn nvim_operators_match_lsp_rows() {
-        use rossi_lsp::server::operator_rows;
+        use eventb_lsp::server::operator_rows;
         let rendered = operators_nvim::render();
         let rows = operator_rows();
 
@@ -609,7 +609,7 @@ mod tests {
     /// canonical mapping. Leader-only by design: no bare (non-backslash) rules.
     #[test]
     fn emacs_quail_matches_lsp_rows() {
-        use rossi_lsp::server::operator_rows;
+        use eventb_lsp::server::operator_rows;
         let rendered = input_emacs::render();
         let rows = operator_rows();
 

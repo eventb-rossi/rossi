@@ -4,7 +4,7 @@ members = [
     "crates/rossi",
     "crates/rossi-build",
     "crates/rossi-cli",
-    "crates/rossi-lsp",
+    "crates/eventb-lsp",
 ]
 # The Zed extension is a standalone `cdylib` built to wasm by Zed (against
 # `zed_extension_api`), not part of this workspace's native build/test. The
@@ -31,7 +31,7 @@ quick-xml = "0.40"
 zip = "8.1"
 
 # LSP dependencies
-# Protocol types are re-exported from rossi-lsp as `crate::lsp_types` so they
+# Protocol types are re-exported from eventb-lsp as `crate::lsp_types` so they
 # always match the version tower-lsp uses internally.
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
@@ -52,7 +52,7 @@ proptest = "1.6"
 # Workspace crates
 rossi = { version = "0.1.0", path = "crates/rossi" }
 rossi-build = { version = "0.1.0", path = "crates/rossi-build" }
-rossi-lsp = { version = "0.1.0", path = "crates/rossi-lsp" }
+eventb-lsp = { version = "0.1.0", path = "crates/eventb-lsp" }
 
 [profile.release]
 opt-level = 3

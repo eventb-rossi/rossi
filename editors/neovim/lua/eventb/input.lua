@@ -11,7 +11,7 @@
 -- handler exactly -- the same offset arithmetic carries over directly.
 --
 -- The operator data is the canonical generated table (`eventb.operators`,
--- itself emitted from `rossi_lsp::server::operator_rows()`), so the
+-- itself emitted from `eventb_lsp::server::operator_rows()`), so the
 -- ASCII<->Unicode mapping is never duplicated here and can never disagree with
 -- the LSP `rossi/operatorTable` request that the VS Code extension consumes.
 --

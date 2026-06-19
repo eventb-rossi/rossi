@@ -177,7 +177,7 @@ mod tests {
         // URI-keyed cache means the second name does not re-parse the file:
         // both loaded components share the same `Arc<ParsedDocument>`.
         let root = std::env::temp_dir().join(format!(
-            "rossi-lsp-loader-test-{}-{}",
+            "eventb-lsp-loader-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

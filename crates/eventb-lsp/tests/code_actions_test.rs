@@ -1,7 +1,7 @@
 //! Integration tests for code actions
 
-use rossi_lsp::code_actions::CodeActionProvider;
-use rossi_lsp::lsp_types::{
+use eventb_lsp::code_actions::CodeActionProvider;
+use eventb_lsp::lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position, Range,
     TextDocumentIdentifier, Url, WorkDoneProgressParams,
 };
@@ -515,7 +515,7 @@ fn test_new_operator_mappings() {
 
 #[test]
 fn test_diagnostic_based_action() {
-    use rossi_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
+    use eventb_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
     let provider = CodeActionProvider::new();
     let text = "MACHINE test\nVARIABLES x";
@@ -566,7 +566,7 @@ fn test_diagnostic_based_action() {
 fn test_add_missing_end_offered_for_eof_diagnostic() {
     // A missing END is reported by the parser one line PAST the last line
     // (pest's end-of-input position); the quick fix must still be offered.
-    use rossi_lsp::lsp_types::Diagnostic;
+    use eventb_lsp::lsp_types::Diagnostic;
 
     let provider = CodeActionProvider::new();
     let text = "MACHINE m\nVARIABLES\n    x\n"; // 3 lines, no END
@@ -599,7 +599,7 @@ fn test_add_missing_end_not_offered_when_terminated() {
     // A complete MACHINE … END whose only problem is a typo deep inside a
     // predicate must NOT offer "Add missing END": the component is already
     // terminated. The trigger is structural, not the diagnostic's prose.
-    use rossi_lsp::lsp_types::Diagnostic;
+    use eventb_lsp::lsp_types::Diagnostic;
 
     let provider = CodeActionProvider::new();
     let text = "MACHINE m\nINVARIANTS\n    @inv1 x ∈ ℕ sdfsdf y\nEND\n";

@@ -8,8 +8,8 @@
 //! wake-up unless its version is still the document's latest, so only the final
 //! edit of a burst analyzes.
 
+use eventb_lsp::server::RossiLanguageServer;
 use futures::StreamExt;
-use rossi_lsp::server::RossiLanguageServer;
 use serde_json::{Value, json};
 use std::time::Duration;
 use tower::{Service, ServiceExt};

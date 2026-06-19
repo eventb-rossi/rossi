@@ -1,7 +1,7 @@
 //! Integration tests for folding ranges (derived from the parsed AST).
 
-use rossi_lsp::folding::FoldingRangeProvider;
-use rossi_lsp::lsp_types::FoldingRange;
+use eventb_lsp::folding::FoldingRangeProvider;
+use eventb_lsp::lsp_types::FoldingRange;
 
 fn folds(text: &str) -> Vec<FoldingRange> {
     FoldingRangeProvider::new()

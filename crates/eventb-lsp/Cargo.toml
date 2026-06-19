@@ -1,20 +1,20 @@
 [package]
-name = "rossi-lsp"
+name = "eventb-lsp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Rossi Language Server Protocol implementation for Event-B"
+description = "Language Server Protocol implementation for Event-B"
 license.workspace = true
 repository.workspace = true
 keywords = ["lsp", "language-server", "event-b", "formal-methods"]
 categories = ["development-tools"]
 
 [lib]
-name = "rossi_lsp"
+name = "eventb_lsp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rossi-language-server"
+name = "eventb-language-server"
 path = "src/main.rs"
 
 [dependencies]

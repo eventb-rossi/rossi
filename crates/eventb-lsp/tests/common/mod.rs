@@ -1,11 +1,11 @@
-//! Helpers shared between rossi-lsp integration test binaries.
+//! Helpers shared between eventb-lsp integration test binaries.
 
-use rossi_lsp::identifier_utils::position_to_offset;
-use rossi_lsp::lsp_types::{
+use eventb_lsp::identifier_utils::position_to_offset;
+use eventb_lsp::lsp_types::{
     PartialResultParams, Range, SemanticTokensParams, SemanticTokensResult, TextDocumentIdentifier,
     Url, WorkDoneProgressParams,
 };
-use rossi_lsp::semantic_tokens::SemanticTokensProvider;
+use eventb_lsp::semantic_tokens::SemanticTokensProvider;
 
 /// Slice `text` at a char-based `range`, going through the same
 /// position-to-offset mapping the providers use (columns are characters,

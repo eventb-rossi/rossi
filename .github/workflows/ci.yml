@@ -32,13 +32,13 @@ jobs:
           set -euo pipefail
           output="$(cargo tree -i lsp-types 2>&1)" || {
             printf '%s\n' "$output"
-            echo "Expected exactly one lsp-types version; use rossi-lsp's crate::lsp_types re-export so protocol types match tower-lsp." >&2
+            echo "Expected exactly one lsp-types version; use eventb-lsp's crate::lsp_types re-export so protocol types match tower-lsp." >&2
             exit 1
           }
           printf '%s\n' "$output"
           count="$(printf '%s\n' "$output" | grep -c '^lsp-types v')"
           if [ "$count" -ne 1 ]; then
-            echo "Expected exactly one lsp-types version; use rossi-lsp's crate::lsp_types re-export so protocol types match tower-lsp." >&2
+            echo "Expected exactly one lsp-types version; use eventb-lsp's crate::lsp_types re-export so protocol types match tower-lsp." >&2
             exit 1
           fi
 

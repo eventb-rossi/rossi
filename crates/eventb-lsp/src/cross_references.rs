@@ -484,7 +484,7 @@ END
     #[test]
     fn test_scan_workspace_indexes_eventb_files_only() {
         let root = std::env::temp_dir().join(format!(
-            "rossi-lsp-scan-test-{}-{}",
+            "eventb-lsp-scan-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -514,7 +514,7 @@ END
     #[test]
     fn test_scan_workspace_survives_deeply_nested_file() {
         let root = std::env::temp_dir().join(format!(
-            "rossi-lsp-deep-scan-test-{}-{}",
+            "eventb-lsp-deep-scan-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

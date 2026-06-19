@@ -7,7 +7,7 @@
 //! end to end — a unit test calling `operator_table()` directly would bypass
 //! tower-lsp's param extraction, which is exactly where the bug lived.
 
-use rossi_lsp::server::RossiLanguageServer;
+use eventb_lsp::server::RossiLanguageServer;
 use serde_json::json;
 use tower::{Service, ServiceExt};
 use tower_lsp::LspService;

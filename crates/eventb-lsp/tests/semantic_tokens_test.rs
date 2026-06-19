@@ -1,7 +1,7 @@
 //! Tests for semantic tokens provider
 
-use rossi_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
-use rossi_lsp::semantic_tokens::SemanticTokensProvider;
+use eventb_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
+use eventb_lsp::semantic_tokens::SemanticTokensProvider;
 
 mod common;
 use common::{decode_tokens, slice_range};
@@ -45,7 +45,7 @@ END
 
     assert!(result.is_some(), "Should return semantic tokens");
 
-    if let Some(rossi_lsp::lsp_types::SemanticTokensResult::Tokens(tokens)) = result {
+    if let Some(eventb_lsp::lsp_types::SemanticTokensResult::Tokens(tokens)) = result {
         assert!(!tokens.data.is_empty(), "Should have semantic tokens");
         assert!(
             tokens.data.len() >= 5,
@@ -157,7 +157,7 @@ fn token_type_index(name: &str) -> u32 {
 /// Slice the token at `(line, col, len)` out of `text` (0-indexed,
 /// char-based columns like the provider's).
 fn comment_text(text: &str, line: u32, col: u32, len: u32) -> String {
-    use rossi_lsp::lsp_types::{Position, Range};
+    use eventb_lsp::lsp_types::{Position, Range};
     slice_range(
         text,
         Range::new(Position::new(line, col), Position::new(line, col + len)),

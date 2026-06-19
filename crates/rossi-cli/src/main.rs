@@ -61,7 +61,7 @@ fn main() -> ExitCode {
         Command::GenGrammars(args) => commands::gen_grammars::run(args),
         // The LSP brings its own runtime (with sized handler stacks); the
         // other commands are fully synchronous.
-        Command::Lsp => match rossi_lsp::run_stdio_blocking() {
+        Command::Lsp => match eventb_lsp::run_stdio_blocking() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("rossi lsp: {e}");

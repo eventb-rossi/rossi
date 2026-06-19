@@ -440,6 +440,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventb-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dashmap 6.2.1",
+ "futures",
+ "parking_lot",
+ "ropey",
+ "rossi",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower 0.5.3",
+ "tower-lsp",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1322,34 +1343,13 @@ name = "rossi-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "eventb-lsp",
  "rossi",
  "rossi-build",
- "rossi-lsp",
  "serde",
  "serde_json",
  "walkdir",
  "zip",
-]
-
-[[package]]
-name = "rossi-lsp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dashmap 6.2.1",
- "futures",
- "parking_lot",
- "ropey",
- "rossi",
- "serde",
- "serde_json",
- "tokio",
- "tower 0.5.3",
- "tower-lsp",
- "tracing",
- "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]

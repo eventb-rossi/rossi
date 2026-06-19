@@ -254,7 +254,7 @@ impl LanguageServer for RossiLanguageServer {
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "rossi-language-server".to_string(),
+                name: "eventb-language-server".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
