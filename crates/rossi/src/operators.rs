@@ -131,26 +131,44 @@ impl OperatorSpelling {
     /// as opposed to alphabetic ops (`NAT`, `or`, `dom`) which would block
     /// typing ordinary words and are only offered through the `\name` leader.
     pub fn is_symbolic(&self) -> bool {
-        !is_alphabetic_op(self.ascii)
+        is_symbolic_spelling(self.ascii)
     }
 
     /// True when an as-you-type input method should substitute this operator
-    /// eagerly (maximal munch) rather than only through the `\name` leader.
-    ///
-    /// This is the single source of truth for eager-input eligibility, kept
-    /// here with the operator data so editors never re-encode the policy. An
-    /// op qualifies when it is symbolic, does not contain the `\` leader, and
-    /// is not a bare `/` or `.` (which collide with `//` comments and decimal
-    /// or qualifier dots). Multi-character forms like `/=` and `..` still
-    /// qualify.
+    /// eagerly (maximal munch) rather than only through the `\name` leader. See
+    /// [`is_eager_input_spelling`] for the eligibility rationale.
     pub fn is_eager_input(&self) -> bool {
-        self.is_symbolic() && !self.ascii.contains('\\') && self.ascii != "/" && self.ascii != "."
+        is_eager_input_spelling(self.ascii)
     }
 
     /// Human-friendly leader-key aliases for this operator (e.g. `and`, `to`).
     pub fn aliases(&self) -> &'static [&'static str] {
         aliases_for(self.id)
     }
+}
+
+/// True when an ASCII spelling contains no word characters, so it is safe to
+/// substitute eagerly while typing (symbolic combos like `=>`, `|->`, `,,`), as
+/// opposed to alphabetic ops (`NAT`, `or`, `dom`) which would block typing
+/// ordinary words and are only offered through the `\name` leader.
+///
+/// A free function (rather than only a method) so it applies to the extra input
+/// spellings in [`ascii_input_aliases`], which have no `OperatorSpelling` of
+/// their own.
+pub fn is_symbolic_spelling(ascii: &str) -> bool {
+    !is_alphabetic_op(ascii)
+}
+
+/// True when an as-you-type input method should substitute the ASCII spelling
+/// eagerly (maximal munch) rather than only through the `\name` leader.
+///
+/// This is the single source of truth for eager-input eligibility, kept here
+/// with the operator data so editors never re-encode the policy. A spelling
+/// qualifies when it is symbolic, does not contain the `\` leader, and is not a
+/// bare `/` or `.` (which collide with `//` comments and decimal or qualifier
+/// dots). Multi-character forms like `/=` and `..` still qualify.
+pub fn is_eager_input_spelling(ascii: &str) -> bool {
+    is_symbolic_spelling(ascii) && !ascii.contains('\\') && ascii != "/" && ascii != "."
 }
 
 // Event-B operators that Rodin renders through Unicode **Private-Use Area** code
@@ -776,6 +794,12 @@ pub fn lookup_token(token: &str) -> Option<&'static OperatorSpelling> {
     OPERATOR_SPELLINGS
         .iter()
         .find(|entry| entry.unicode == token || entry.ascii == token)
+        .or_else(|| {
+            // An accepted ASCII input alias (e.g. `,,`) resolves to its operator.
+            ASCII_INPUT_ALIASES
+                .iter()
+                .find_map(|&(alias, entry)| (alias == token).then_some(entry))
+        })
 }
 
 /// Human-friendly leader-key aliases used by editor `\name` input methods,
@@ -834,6 +858,46 @@ pub fn aliases_for(id: OperatorId) -> &'static [&'static str] {
     }
 }
 
+/// Extra *symbolic* ASCII spellings accepted on input for an operator, beyond
+/// its canonical `ascii`. Unlike the word aliases in [`aliases_for`], these are
+/// not leader names: they are eager-input combos (Rodin's `,,` for the maplet
+/// `↦`) that convert as-you-type and during batch normalization but are NEVER
+/// produced on output — the canonical `↦`/`|->` is still what round-trips.
+///
+/// Source of truth for the ASCII → Unicode direction only; the Unicode → ASCII
+/// direction stays canonical (`↦` must never become `,,`). Returns `&[]` for
+/// operators without input aliases.
+pub fn ascii_input_aliases(id: OperatorId) -> &'static [&'static str] {
+    match id {
+        // Rodin's keyboard maps both `|->` and `,,` to the maplet `↦`.
+        OperatorId::Maplet => &[",,"],
+        _ => &[],
+    }
+}
+
+/// Every ASCII input alias paired with the operator it spells, in declaration
+/// order. Feeds the ASCII → Unicode derived tables (`convert_to_unicode`,
+/// `has_ascii_operators`, hover) without touching the Unicode → ASCII direction.
+static ASCII_INPUT_ALIASES: std::sync::LazyLock<Vec<(&'static str, &'static OperatorSpelling)>> =
+    std::sync::LazyLock::new(|| {
+        OPERATOR_SPELLINGS
+            .iter()
+            .flat_map(|entry| {
+                ascii_input_aliases(entry.id)
+                    .iter()
+                    .map(move |&alias| (alias, entry))
+            })
+            .collect()
+    });
+
+/// Every registered ASCII input alias paired with the operator it spells (e.g.
+/// `(",,", <maplet>)`), in declaration order. The single accessor for the full
+/// alias set, so callers (the editor operator table, conversion tables) iterate
+/// one prebuilt list instead of re-deriving it from [`ascii_input_aliases`].
+pub fn ascii_input_alias_entries() -> &'static [(&'static str, &'static OperatorSpelling)] {
+    ASCII_INPUT_ALIASES.as_slice()
+}
+
 /// Operators whose ASCII and Unicode spellings differ, in declaration order.
 static DIFFERING_SPELLINGS: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
     std::sync::LazyLock::new(|| {
@@ -843,12 +907,18 @@ static DIFFERING_SPELLINGS: std::sync::LazyLock<Vec<&'static OperatorSpelling>> 
             .collect()
     });
 
-/// Differing operators sorted by descending ASCII length so longer spellings
-/// match before their prefixes during ASCII → Unicode conversion.
-static ASCII_TO_UNICODE: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
+/// ASCII spellings to recognize during ASCII → Unicode conversion, each paired
+/// with the operator it spells. Covers every differing operator's canonical
+/// `ascii` plus the [`ASCII_INPUT_ALIASES`] (e.g. `,,` → maplet). Sorted by
+/// descending ASCII length so longer spellings match before their prefixes.
+static ASCII_TO_UNICODE: std::sync::LazyLock<Vec<(&'static str, &'static OperatorSpelling)>> =
     std::sync::LazyLock::new(|| {
-        let mut entries = DIFFERING_SPELLINGS.clone();
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ascii.len()));
+        let mut entries: Vec<(&'static str, &'static OperatorSpelling)> = DIFFERING_SPELLINGS
+            .iter()
+            .map(|entry| (entry.ascii, *entry))
+            .chain(ASCII_INPUT_ALIASES.iter().copied())
+            .collect();
+        entries.sort_by_key(|(ascii, _)| std::cmp::Reverse(ascii.len()));
         entries
     });
 
@@ -868,24 +938,24 @@ pub fn convert_to_unicode(text: &str) -> String {
         let rest = &text[byte_pos..];
         let mut matched = None;
 
-        for entry in ASCII_TO_UNICODE.iter() {
-            if rest.starts_with(entry.ascii)
-                && (!is_alphabetic_op(entry.ascii)
+        for &(ascii, entry) in ASCII_TO_UNICODE.iter() {
+            if rest.starts_with(ascii)
+                && (!is_alphabetic_op(ascii)
                     || (is_word_boundary(text, byte_pos)
-                        && is_word_boundary_end(text, byte_pos + entry.ascii.len())))
+                        && is_word_boundary_end(text, byte_pos + ascii.len())))
             {
-                matched = Some(*entry);
+                matched = Some((ascii, entry));
                 break;
             }
         }
 
-        if let Some(entry) = matched {
+        if let Some((ascii, entry)) = matched {
             // `emit_text` leaves the four private-use operators in ASCII (their
             // glyph would not render) while consuming the full ASCII match, so a
             // spelling like `<<->` is kept whole rather than partly rewritten
             // into the shorter `<->` (`↔`).
             result.push_str(entry.emit_text(true));
-            byte_pos += entry.ascii.len();
+            byte_pos += ascii.len();
         } else if let Some(ch) = rest.chars().next() {
             result.push(ch);
             byte_pos += ch.len_utf8();
@@ -913,7 +983,9 @@ pub fn has_ascii_operators(text: &str) -> bool {
         } else {
             text.contains(entry.ascii)
         }
-    })
+    }) || ASCII_INPUT_ALIASES
+        .iter()
+        .any(|&(alias, _)| text.contains(alias))
 }
 
 pub fn has_unicode_operators(text: &str) -> bool {
@@ -922,14 +994,17 @@ pub fn has_unicode_operators(text: &str) -> bool {
         .any(|entry| text.contains(entry.unicode))
 }
 
-/// Every spelling (the Unicode and ASCII form of each entry) paired with its
-/// character length, sorted by descending length so longer operators match
-/// before their prefixes and substrings (`:=` before `:` and `=`).
+/// Every spelling (the Unicode and ASCII form of each entry, plus the ASCII
+/// input aliases like `,,`) paired with its character length, sorted by
+/// descending length so longer operators match before their prefixes and
+/// substrings (`:=` before `:` and `=`). Aliases are included so hovering a
+/// literal `,,` still resolves to the maplet.
 static SPELLINGS_BY_LENGTH: std::sync::LazyLock<Vec<(&'static str, usize)>> =
     std::sync::LazyLock::new(|| {
         let mut entries: Vec<(&'static str, usize)> = OPERATOR_SPELLINGS
             .iter()
             .flat_map(|entry| [entry.unicode, entry.ascii])
+            .chain(ASCII_INPUT_ALIASES.iter().map(|&(alias, _)| alias))
             .map(|text| (text, text.chars().count()))
             .collect();
         entries.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
@@ -1128,6 +1203,28 @@ mod tests {
     }
 
     #[test]
+    fn comma_comma_is_an_eager_maplet_input_alias() {
+        // Rodin's keyboard maps `,,` to the maplet ↦, exactly like `|->`.
+        assert_eq!(ascii_input_aliases(OperatorId::Maplet), &[",,"]);
+        assert!(is_symbolic_spelling(",,"));
+        assert!(is_eager_input_spelling(",,"));
+        // It resolves back to the maplet operator (hover, operator_at).
+        assert_eq!(lookup_token(",,").map(|op| op.id), Some(OperatorId::Maplet));
+        assert_eq!(operator_at("x ,, y", 2), Some((",,", 2..4)));
+    }
+
+    #[test]
+    fn comma_comma_converts_to_maplet_but_never_back() {
+        // ASCII → Unicode rewrites `,,` to the canonical ↦ …
+        assert_eq!(convert_to_unicode("x ,, y"), "x ↦ y");
+        assert!(has_ascii_operators("x ,, y"));
+        // … while a lone comma (list separator) is left untouched.
+        assert_eq!(convert_to_unicode("f(a, b)"), "f(a, b)");
+        // Unicode → ASCII stays canonical: ↦ becomes `|->`, never `,,`.
+        assert_eq!(convert_to_ascii("x ↦ y"), "x |-> y");
+    }
+
+    #[test]
     fn operator_at_returns_whole_multichar_operator() {
         // Cursor on either character of `:=` yields the whole operator.
         assert_eq!(operator_at("count := 0", 6), Some((":=", 6..8)));
@@ -1279,23 +1376,38 @@ mod tests {
             }
         }
 
-        // Reverse: every grammar `op_` literal is a canonical spelling, except
-        // the `,,` maplet alias (an accepted alternative input spelling; the
-        // canonical maplet is `↦`/`|->`). The `_` of the word-boundary guards
-        // lives in the shared `word_char` rule now, so it no longer appears on
-        // `op_` lines.
-        let allow = [",,"];
+        // Reverse: every grammar `op_` literal is either a canonical spelling or
+        // a registered ASCII input alias (e.g. the `,,` maplet alias; the
+        // canonical maplet is `↦`/`|->`). The allowlist is derived from
+        // `ascii_input_aliases` so a new alias stays in sync automatically. The
+        // `_` of the word-boundary guards lives in the shared `word_char` rule
+        // now, so it no longer appears on `op_` lines.
+        let aliases: HashSet<&str> = OPERATOR_SPELLINGS
+            .iter()
+            .flat_map(|op| ascii_input_aliases(op.id).iter().copied())
+            .collect();
         let canonical: HashSet<&str> = OPERATOR_SPELLINGS
             .iter()
             .flat_map(|op| [op.unicode, op.ascii])
             .collect();
         for lit in &op_lits {
-            if allow.contains(&lit.as_str()) {
+            if aliases.contains(lit.as_str()) {
                 continue;
             }
             assert!(
                 canonical.contains(lit.as_str()),
                 "grammar op_ literal {lit:?} is missing from OPERATOR_SPELLINGS"
+            );
+        }
+
+        // Guard the other direction: every registered ASCII input alias must
+        // actually appear as a grammar `op_` literal, so the alias SSOT can't
+        // drift from `grammar.pest`.
+        let op_lit_set: HashSet<&str> = op_lits.iter().map(String::as_str).collect();
+        for alias in &aliases {
+            assert!(
+                op_lit_set.contains(alias),
+                "ASCII input alias {alias:?} has no op_ literal in grammar.pest"
             );
         }
     }
