@@ -49,6 +49,7 @@
 pub mod emacs;
 pub mod input_emacs;
 pub mod operators_nvim;
+pub mod operators_sublime;
 pub mod snippets_emacs;
 pub mod snippets_nvim;
 pub mod snippets_vscode;
@@ -319,7 +320,7 @@ pub(super) fn elisp_string(s: &str) -> String {
 pub mod paths {
     // Syntax-highlighting grammars.
     pub const TEXTMATE: &str = "editors/vscode/syntaxes/eventb.tmLanguage.json";
-    pub const SUBLIME: &str = "editors/sublime/EventB.sublime-syntax";
+    pub const SUBLIME: &str = "editors/sublime/EventB/EventB.sublime-syntax";
     pub const VIM: &str = "editors/neovim/syntax/eventb.vim";
     pub const EMACS: &str = "editors/emacs/eventb-mode.el";
     /// The standalone tree-sitter grammar (published as
@@ -391,6 +392,7 @@ pub mod paths {
     // Operator/input-method tables shared with the LSP `rossi/operatorTable`.
     pub const NVIM_OPERATORS: &str = "editors/neovim/lua/eventb/operators.lua";
     pub const EMACS_INPUT: &str = "editors/emacs/eventb-input.el";
+    pub const SUBLIME_OPERATORS: &str = "editors/sublime/EventB/operators.py";
 }
 
 /// Markers delimiting the generated region inside an otherwise hand-maintained
@@ -644,5 +646,55 @@ mod tests {
             emitted, expected_rules,
             "eventb-input.el emitted {emitted} rules but {expected_rules} were expected"
         );
+    }
+
+    /// The generated Sublime `operators.py` must expose exactly the rows the LSP
+    /// serves over `rossi/operatorTable` — same `ascii != unicode` filter, same
+    /// fields — so the editor input method and the language server can never
+    /// disagree on the ASCII↔Unicode mapping. We assert by reconstructing the
+    /// expected `{"ascii": …, "unicode": …, …}` entry for every
+    /// [`operator_rows`] row and checking the rendered module contains it (in
+    /// order), and that the row count matches.
+    #[test]
+    fn sublime_operators_match_lsp_rows() {
+        use eventb_lsp::server::operator_rows;
+        let rendered = operators_sublime::render();
+        let rows = operator_rows();
+
+        // One emitted entry per LSP row, no more, no fewer.
+        let emitted = rendered.matches("\"ascii\":").count();
+        assert_eq!(
+            emitted,
+            rows.len(),
+            "operators.py emitted {emitted} rows but the LSP serves {}",
+            rows.len()
+        );
+
+        // Every LSP row appears verbatim, in declaration order. Reuse the
+        // emitter's own formatting helpers so the needle matches byte-for-byte
+        // (operator glyphs include private-use codepoints `{:?}` would escape).
+        let s = operators_sublime::py_string;
+        let b = operators_sublime::py_bool;
+        let mut cursor = 0usize;
+        for row in &rows {
+            let aliases = row
+                .aliases
+                .iter()
+                .map(|a| s(a))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let needle = format!(
+                "{{\"ascii\": {}, \"unicode\": {}, \"aliases\": [{}], \"symbolic\": {}, \"eager\": {}}}",
+                s(&row.ascii),
+                s(&row.unicode),
+                aliases,
+                b(row.symbolic),
+                b(row.eager),
+            );
+            let at = rendered[cursor..].find(&needle).unwrap_or_else(|| {
+                panic!("operators.py is missing row {needle} (or it is out of order)")
+            });
+            cursor += at + needle.len();
+        }
     }
 }

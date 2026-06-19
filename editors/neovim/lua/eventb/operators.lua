@@ -46,7 +46,6 @@ return {
     { ascii = "||", unicode = "∥", aliases = { "pprod" }, symbolic = true, eager = true },
     { ascii = "oftype", unicode = "⦂", aliases = { "oftype" }, symbolic = false, eager = false },
     { ascii = "|->", unicode = "↦", aliases = { "maplet", "mapsto" }, symbolic = true, eager = true },
-    { ascii = "-", unicode = "−", aliases = {}, symbolic = true, eager = true },
     { ascii = "POW", unicode = "ℙ", aliases = { "pow", "powerset" }, symbolic = false, eager = false },
     { ascii = "POW1", unicode = "ℙ1", aliases = { "pow1" }, symbolic = false, eager = false },
     { ascii = "~", unicode = "∼", aliases = { "inv", "inverse" }, symbolic = true, eager = true },
