@@ -1089,22 +1089,21 @@ mod tests {
     use crate::lsp_types::Position;
 
     #[test]
-    fn clause_order_diagnostic_stays_on_one_line() {
-        // A misordered EXTENDS clause yields a ClauseError whose pest span
-        // covers the whole multi-line clause; the diagnostic must NOT underline
-        // all of it. With no span it falls back to a single-line, token-sized
-        // range at the offending keyword.
-        let text = "CONTEXT test\nSETS\n    S\nEXTENDS\n    other_ctx\nEND\n";
-        let error = rossi::parse(text).expect_err("EXTENDS after SETS must fail");
+    fn duplicate_clause_diagnostic_stays_on_one_line() {
+        // A duplicate SETS clause yields a span-less ClauseError; the diagnostic
+        // must be a single-line, token-sized range at the offending keyword, never
+        // the whole multi-line clause.
+        let text = "CONTEXT test\nSETS\n    S\nSETS\n    T\nEND\n";
+        let error = rossi::parse(text).expect_err("duplicate SETS must fail");
         let diagnostic = parse_error_to_diagnostic(&error, text);
         assert_eq!(
             diagnostic.range.start.line, diagnostic.range.end.line,
-            "clause-order diagnostic must stay on one line, got {:?}",
+            "clause diagnostic must stay on one line, got {:?}",
             diagnostic.range
         );
-        // Sized to the `EXTENDS` keyword on line 4 (0-indexed 3), not the body.
+        // Sized to the duplicate `SETS` keyword on line 4 (0-indexed 3), not the body.
         assert_eq!(diagnostic.range.start, Position::new(3, 0));
-        assert_eq!(diagnostic.range.end, Position::new(3, 7));
+        assert_eq!(diagnostic.range.end, Position::new(3, 4));
     }
 
     #[test]

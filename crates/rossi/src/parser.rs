@@ -403,40 +403,31 @@ fn collect_theorem_predicates(
     Ok(predicates)
 }
 
-/// Validate clause ordering within a context or machine body.
-/// Returns an error if a clause appears out of order or is duplicated.
-fn validate_clause_order(
+/// Reject a repeated section within a context or machine body.
+///
+/// Event-B has no structural syntax (Abrial), so sections may appear in any
+/// order — but Rodin models each kind as a single container, so a section
+/// keyword may appear at most once. This checks that multiplicity only; order is
+/// unconstrained (the grammar still keeps the EVENTS block last). `seen`
+/// accumulates the clause kinds already encountered in this body.
+fn validate_unique_clause(
     rule: Rule,
     span: pest::Span,
-    last_order: &mut Option<(usize, Rule)>,
-    order_fn: fn(Rule) -> Option<usize>,
-    name_fn: fn(Rule) -> &'static str,
+    seen: &mut Vec<KeywordId>,
+    keyword_fn: fn(Rule) -> Option<KeywordId>,
 ) -> Result<(), ParseError> {
-    if let Some(order) = order_fn(rule) {
-        let name = name_fn(rule);
-        let (line, col) = span.start_pos().line_col();
-        if let Some((prev_order, prev_rule)) = *last_order {
-            if order == prev_order {
-                return Err(ParseError::ClauseError {
-                    clause_type: name.to_string(),
-                    line,
-                    column: col,
-                    message: format!("Duplicate {} clause", name),
-                });
-            } else if order < prev_order {
-                return Err(ParseError::ClauseError {
-                    clause_type: name.to_string(),
-                    line,
-                    column: col,
-                    message: format!(
-                        "{} clause must appear before {} clause",
-                        name,
-                        name_fn(prev_rule)
-                    ),
-                });
-            }
+    if let Some(keyword) = keyword_fn(rule) {
+        if seen.contains(&keyword) {
+            let name = crate::keywords::spell(keyword);
+            let (line, col) = span.start_pos().line_col();
+            return Err(ParseError::ClauseError {
+                clause_type: name.to_string(),
+                line,
+                column: col,
+                message: format!("Duplicate {} clause", name),
+            });
         }
-        *last_order = Some((order, rule));
+        seen.push(keyword);
     }
     Ok(())
 }
@@ -540,19 +531,6 @@ fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError>
     Ok(result)
 }
 
-/// Return the canonical ordering index for a context clause rule.
-/// EXTENDS=0, SETS=1, CONSTANTS=2, AXIOMS=3, THEOREMS=4
-fn context_clause_order(rule: Rule) -> Option<usize> {
-    match rule {
-        Rule::context_clause_extends => Some(0),
-        Rule::context_clause_sets => Some(1),
-        Rule::context_clause_constants => Some(2),
-        Rule::context_clause_axioms => Some(3),
-        Rule::context_clause_theorems => Some(4),
-        _ => None,
-    }
-}
-
 /// Map a context clause rule to its header [`KeywordId`] (None for non-clause
 /// rules such as `kw_end`).
 fn context_clause_keyword(rule: Rule) -> Option<KeywordId> {
@@ -562,26 +540,6 @@ fn context_clause_keyword(rule: Rule) -> Option<KeywordId> {
         Rule::context_clause_constants => Some(KeywordId::Constants),
         Rule::context_clause_axioms => Some(KeywordId::Axioms),
         Rule::context_clause_theorems => Some(KeywordId::Theorems),
-        _ => None,
-    }
-}
-
-/// The clause keyword's canonical spelling (for clause-order error messages).
-fn context_clause_name(rule: Rule) -> &'static str {
-    context_clause_keyword(rule).map_or("unknown", crate::keywords::spell)
-}
-
-/// Return the canonical ordering index for a machine clause rule.
-/// REFINES=0, SEES=1, VARIABLES=2, INVARIANTS=3, THEOREMS=4, VARIANT=5, EVENTS=6
-fn machine_clause_order(rule: Rule) -> Option<usize> {
-    match rule {
-        Rule::machine_clause_refines => Some(0),
-        Rule::machine_clause_sees => Some(1),
-        Rule::machine_clause_variables => Some(2),
-        Rule::machine_clause_invariants => Some(3),
-        Rule::machine_clause_theorems => Some(4),
-        Rule::machine_clause_variant => Some(5),
-        Rule::machine_clause_events => Some(6),
         _ => None,
     }
 }
@@ -599,11 +557,6 @@ fn machine_clause_keyword(rule: Rule) -> Option<KeywordId> {
         Rule::machine_clause_events => Some(KeywordId::Events),
         _ => None,
     }
-}
-
-/// The clause keyword's canonical spelling (for clause-order error messages).
-fn machine_clause_name(rule: Rule) -> &'static str {
-    machine_clause_keyword(rule).map_or("unknown", crate::keywords::spell)
 }
 
 /// The span of `matched` (which starts at byte `start`) with trailing whitespace
@@ -642,7 +595,7 @@ fn parse_context(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
     }
 
     // Parse context body - flatten if wrapped
-    let mut last_order: Option<(usize, Rule)> = None;
+    let mut seen_clauses: Vec<KeywordId> = Vec::new();
     for pair in inner {
         let pairs_to_process = if pair.as_rule() == Rule::context_body {
             pair.into_inner().collect::<Vec<_>>()
@@ -651,12 +604,11 @@ fn parse_context(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
         };
 
         for pair in pairs_to_process {
-            validate_clause_order(
+            validate_unique_clause(
                 pair.as_rule(),
                 pair.as_span(),
-                &mut last_order,
-                context_clause_order,
-                context_clause_name,
+                &mut seen_clauses,
+                context_clause_keyword,
             )?;
 
             // Record the clause's source region (header keyword through its last
@@ -733,7 +685,7 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
     }
 
     // Parse machine body - flatten if wrapped
-    let mut last_order: Option<(usize, Rule)> = None;
+    let mut seen_clauses: Vec<KeywordId> = Vec::new();
     for pair in inner {
         let pairs_to_process = if pair.as_rule() == Rule::machine_body {
             pair.into_inner().collect::<Vec<_>>()
@@ -742,12 +694,11 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
         };
 
         for pair in pairs_to_process {
-            validate_clause_order(
+            validate_unique_clause(
                 pair.as_rule(),
                 pair.as_span(),
-                &mut last_order,
-                machine_clause_order,
-                machine_clause_name,
+                &mut seen_clauses,
+                machine_clause_keyword,
             )?;
 
             // Record the clause's source region (header keyword through its last

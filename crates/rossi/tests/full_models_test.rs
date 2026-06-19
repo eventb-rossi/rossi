@@ -1418,7 +1418,9 @@ fn test_builtin_partition_many_args_ok() {
 // ===========================================================================
 
 #[test]
-fn test_context_clause_order_sets_before_extends() {
+fn test_context_accepts_sets_before_extends() {
+    // Event-B defines no structural syntax (Abrial) and Rodin treats sections as
+    // unordered element sets, so a non-canonical order (SETS before EXTENDS) parses.
     let source = r#"
     CONTEXT test
     SETS
@@ -1428,24 +1430,11 @@ fn test_context_clause_order_sets_before_extends() {
     END
     "#;
 
-    let result = parse(source);
-    assert!(result.is_err(), "Should reject SETS before EXTENDS");
-    let err = result.unwrap_err();
-    match &err {
-        ParseError::ClauseError {
-            clause_type,
-            message,
-            ..
-        } => {
-            assert_eq!(clause_type, "EXTENDS");
-            assert!(
-                message.contains("EXTENDS") && message.contains("SETS"),
-                "Error should mention both EXTENDS and SETS, got: {}",
-                message
-            );
-        }
-        other => panic!("Expected ClauseError, got: {:?}", other),
-    }
+    let Component::Context(ctx) = parse(source).expect("non-canonical order should parse") else {
+        panic!("expected a Context");
+    };
+    assert_eq!(ctx.sets.len(), 1);
+    assert_eq!(ctx.extends, vec!["other_ctx".to_string()]);
 }
 
 #[test]
@@ -1503,7 +1492,8 @@ fn test_context_theorems_section_after_axioms() {
 }
 
 #[test]
-fn test_context_rejects_axioms_after_theorems() {
+fn test_context_accepts_axioms_after_theorems() {
+    // Free order: AXIOMS after THEOREMS is accepted; both lower into `axioms`.
     let source = r#"
     CONTEXT test
     THEOREMS
@@ -1513,19 +1503,12 @@ fn test_context_rejects_axioms_after_theorems() {
     END
     "#;
 
-    let result = parse(source);
-    assert!(result.is_err(), "AXIOMS after THEOREMS must be rejected");
-    match result.unwrap_err() {
-        ParseError::ClauseError {
-            clause_type,
-            message,
-            ..
-        } => {
-            assert_eq!(clause_type, "AXIOMS");
-            assert!(message.contains("AXIOMS") && message.contains("THEOREMS"));
-        }
-        other => panic!("Expected ClauseError, got: {:?}", other),
-    }
+    let Component::Context(ctx) = parse(source).expect("free order should parse") else {
+        panic!("expected a Context");
+    };
+    assert_eq!(ctx.axioms.len(), 2);
+    assert!(ctx.axioms.iter().any(|a| a.is_theorem));
+    assert!(ctx.axioms.iter().any(|a| !a.is_theorem));
 }
 
 #[test]
@@ -1558,7 +1541,8 @@ fn test_machine_theorems_between_invariants_and_variant() {
 }
 
 #[test]
-fn test_machine_rejects_theorems_after_variant() {
+fn test_machine_accepts_theorems_after_variant() {
+    // Free order: THEOREMS after VARIANT is accepted; theorems lower into `invariants`.
     let source = r#"
     MACHINE test
     INVARIANTS
@@ -1570,19 +1554,12 @@ fn test_machine_rejects_theorems_after_variant() {
     END
     "#;
 
-    let result = parse(source);
-    assert!(result.is_err(), "THEOREMS after VARIANT must be rejected");
-    match result.unwrap_err() {
-        ParseError::ClauseError {
-            clause_type,
-            message,
-            ..
-        } => {
-            assert_eq!(clause_type, "THEOREMS");
-            assert!(message.contains("THEOREMS") && message.contains("VARIANT"));
-        }
-        other => panic!("Expected ClauseError, got: {:?}", other),
-    }
+    let Component::Machine(mch) = parse(source).expect("free order should parse") else {
+        panic!("expected a Machine");
+    };
+    assert_eq!(mch.invariants.len(), 2);
+    assert!(mch.invariants.iter().any(|i| i.is_theorem));
+    assert!(mch.variant.is_some());
 }
 
 #[test]
@@ -1611,7 +1588,8 @@ fn test_theorems_section_roundtrips_to_inline() {
 }
 
 #[test]
-fn test_machine_clause_order_sees_before_refines() {
+fn test_machine_accepts_sees_before_refines() {
+    // Free order: SEES before REFINES is accepted.
     let source = r#"
     MACHINE test
     SEES
@@ -1621,24 +1599,11 @@ fn test_machine_clause_order_sees_before_refines() {
     END
     "#;
 
-    let result = parse(source);
-    assert!(result.is_err(), "Should reject SEES before REFINES");
-    let err = result.unwrap_err();
-    match &err {
-        ParseError::ClauseError {
-            clause_type,
-            message,
-            ..
-        } => {
-            assert_eq!(clause_type, "REFINES");
-            assert!(
-                message.contains("REFINES") && message.contains("SEES"),
-                "Error should mention both REFINES and SEES, got: {}",
-                message
-            );
-        }
-        other => panic!("Expected ClauseError, got: {:?}", other),
-    }
+    let Component::Machine(mch) = parse(source).expect("free order should parse") else {
+        panic!("expected a Machine");
+    };
+    assert_eq!(mch.sees, vec!["some_ctx".to_string()]);
+    assert_eq!(mch.refines.as_deref(), Some("abstract_m"));
 }
 
 #[test]
@@ -1673,7 +1638,10 @@ fn test_machine_duplicate_variables_clause() {
 }
 
 #[test]
-fn test_machine_clause_order_events_before_variables() {
+fn test_machine_rejects_clause_after_events() {
+    // EVENTS is the terminal section: the events block is a list of `EVENT … END`
+    // closed by the machine `END`, so a clause after it is a syntax error (only
+    // another EVENT or END may follow).
     let source = r#"
     MACHINE test
     EVENTS
@@ -1687,23 +1655,11 @@ fn test_machine_clause_order_events_before_variables() {
     "#;
 
     let result = parse(source);
-    assert!(result.is_err(), "Should reject EVENTS before VARIABLES");
-    let err = result.unwrap_err();
-    match &err {
-        ParseError::ClauseError {
-            clause_type,
-            message,
-            ..
-        } => {
-            assert_eq!(clause_type, "VARIABLES");
-            assert!(
-                message.contains("VARIABLES") && message.contains("EVENTS"),
-                "Error should mention both VARIABLES and EVENTS, got: {}",
-                message
-            );
-        }
-        other => panic!("Expected ClauseError, got: {:?}", other),
-    }
+    assert!(result.is_err(), "a section after EVENTS must be rejected");
+    assert!(
+        matches!(result.unwrap_err(), ParseError::PestError { .. }),
+        "an events-terminal violation is a plain syntax error",
+    );
 }
 
 #[test]
@@ -1720,6 +1676,55 @@ fn test_clause_error_has_line_info() {
         }
         other => panic!("Expected ClauseError, got: {:?}", other),
     }
+}
+
+#[test]
+fn misspelled_event_keyword_suggests_only_event_or_end_issue_76() {
+    // EVENTS is terminal, so inside the events block the only continuations are
+    // another EVENT (optionally status-prefixed) or the machine END. A misspelled
+    // second EVENT keyword must surface that narrow set — not every clause keyword.
+    let source = "\
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @inv1 x > 0
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        x := 0
+    END
+    EVNT foo
+    THEN
+        x := 1
+    END
+END
+";
+    let err = parse(source).expect_err("a misspelled EVENT keyword must fail");
+    let ParseError::PestError { message, .. } = err else {
+        panic!("expected a PestError, got: {err:?}");
+    };
+    let lower = message.to_lowercase();
+    // A section cannot follow the events block, so none of these may be suggested.
+    for forbidden in [
+        "variables",
+        "invariants",
+        "sees",
+        "refines",
+        "variant",
+        "theorems",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "expected-token list must not suggest {forbidden}: {message}"
+        );
+    }
+    // The two valid continuations are still offered.
+    assert!(
+        lower.contains("event"),
+        "should still suggest EVENT: {message}"
+    );
+    assert!(lower.contains("end"), "should still suggest END: {message}");
 }
 
 #[test]
