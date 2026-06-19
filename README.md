@@ -283,7 +283,7 @@ Extensions are available in the `editors/` directory:
 
 - **VS Code** (`editors/vscode/`) — syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
 - **Neovim** (`editors/neovim/`) — file detection, syntax highlighting, LSP config
-- **Sublime Text** (`editors/sublime/`) — generated syntax (also used by `bat` and `delta`)
+- **Sublime Text** (`editors/sublime/`) — syntax highlighting, LSP integration, and as-you-type ASCII→Unicode symbol input (also used by `bat` and `delta` for syntax only)
 - **Emacs** (`editors/emacs/`) — major mode for Event-B
 - **Zed** (`editors/zed/`) — LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay
 
