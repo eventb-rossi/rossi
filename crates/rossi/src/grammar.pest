@@ -547,8 +547,11 @@ labeled_action = {
     label? ~ action
 }
 
+// Bound the action list with `event_section_kw` (which includes `kw_end`): an
+// action LHS is a keyword-permissive `identifier`, so without the guard the
+// terminating `END` parses as a speculative next action. Mirrors the ANY/SEES guards.
 action_list = {
-    labeled_action+
+    labeled_action ~ (!event_section_kw ~ labeled_action)*
 }
 
 // ==========================
