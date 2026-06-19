@@ -109,14 +109,32 @@ pub(crate) fn event_line_range_in(masked: &str, event_name: &str) -> Option<(usi
 
 /// Whether `event`'s line range contains `line_idx`, scanned over comment-masked
 /// text (an `EVENT`/`END` spelled in a comment cannot bound the range). The
-/// shared containment check behind [`event_parameter_at_position`] (and, once
-/// completion needs it, the enclosing-event lookup), so callers cannot disagree
-/// on what counts as "inside this event".
+/// shared containment check behind both [`enclosing_event`] and
+/// [`event_parameter_at_position`], so the two cannot disagree on what counts as
+/// "inside this event".
 fn event_contains_line(masked: &str, event: &rossi::Event, line_idx: usize) -> bool {
     // `masked` is masked once by the caller; scanning it per event avoids
     // re-masking the whole document each time.
     event_line_range_in(masked, &event.name)
         .is_some_and(|(start, end)| (start..=end).contains(&line_idx))
+}
+
+/// The event whose line range contains `position`, if any. `masked` is the
+/// comment-masked document. Only `position.line` is consulted; the column is
+/// irrelevant to the line-range scoping.
+///
+/// Returns the first event in document order whose range contains the line —
+/// used by completion to scope the cursor's event parameters.
+pub(crate) fn enclosing_event<'a>(
+    machine: &'a rossi::Machine,
+    masked: &str,
+    position: crate::lsp_types::Position,
+) -> Option<&'a rossi::Event> {
+    let line_idx = position.line as usize;
+    machine
+        .events
+        .iter()
+        .find(|event| event_contains_line(masked, event, line_idx))
 }
 
 /// The event whose `ANY` clause declares `identifier`, when `position` falls
@@ -176,6 +194,29 @@ mod tests {
         // parameters are scoped to their event's line range, and only
         // `position.line` is consulted, so the column is irrelevant here.
         assert!(event_parameter_at_position(&machine, &masked, Position::new(2, 4), "p").is_none());
+    }
+
+    #[test]
+    fn enclosing_event_picks_the_event_whose_range_contains_the_line() {
+        // Two sibling events; a line in each must resolve to that event, and a
+        // line outside any event must resolve to nothing — independent of any
+        // parameter, since `enclosing_event` is containment only.
+        let src = "MACHINE m\nVARIABLES\n    v\nEVENTS\n  EVENT e1\n  ANY\n    p1\n  THEN\n    v := 0\n  END\n  EVENT e2\n  ANY\n    p2\n  THEN\n    v := 1\n  END\nEND";
+        let masked = rossi::comments::mask_comments_chars(src);
+        let machine = machine_of(src);
+
+        // A line inside e1's body and one inside e2's body.
+        assert_eq!(
+            enclosing_event(&machine, &masked, Position::new(7, 4)).map(|e| e.name.as_str()),
+            Some("e1")
+        );
+        assert_eq!(
+            enclosing_event(&machine, &masked, Position::new(13, 4)).map(|e| e.name.as_str()),
+            Some("e2")
+        );
+
+        // The VARIABLES line is inside no event.
+        assert!(enclosing_event(&machine, &masked, Position::new(2, 4)).is_none());
     }
 
     #[test]
