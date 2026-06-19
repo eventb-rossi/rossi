@@ -60,7 +60,14 @@ pub(crate) fn friendly_rule_name(rule: Rule) -> Option<&'static str> {
         Rule::lbracket => "[",
         Rule::rbracket => "]",
         Rule::pipe => "|",
-        _ => return rule_to_operator_id(rule).map(|id| crate::operators::spell(id, true)),
+        _ => {
+            // Keyword-headed rules render as their canonical spelling; otherwise
+            // fall back to the operator table.
+            if let Some(kw) = rule_to_keyword(rule) {
+                return Some(crate::keywords::spell(kw));
+            }
+            return rule_to_operator_id(rule).map(|id| crate::operators::spell(id, true));
+        }
     })
 }
 
@@ -110,6 +117,35 @@ fn rule_to_operator_id(rule: Rule) -> Option<crate::operators::OperatorId> {
         Rule::dot => OperatorId::Dot,
         _ => return None,
     })
+}
+
+/// Bridge a keyword-headed [`Rule`] to its [`KeywordId`], so a diagnostic names
+/// the construct by its keyword (`EVENT`, `WHERE`, …) rather than the raw rule.
+/// The token form (`kw_event`) and the clause form (`event`, `event_where`, …)
+/// both resolve, so they collapse to one entry once de-duplicated. Returns `None`
+/// for non-keyword rules, including the math-language atoms (`kw_true`,
+/// `kw_int`, …) that are absent from the keyword table.
+fn rule_to_keyword(rule: Rule) -> Option<KeywordId> {
+    // Section rules reuse the clause→keyword maps maintained for parsing.
+    if let Some(id) = machine_clause_keyword(rule).or_else(|| context_clause_keyword(rule)) {
+        return Some(id);
+    }
+    // The whole-event rules carry no keyword spelling in their name.
+    if matches!(rule, Rule::event | Rule::initialisation_event) {
+        return Some(KeywordId::Event);
+    }
+    // A `kw_<spelling>` token or `event_<spelling>` clause rule (`event_where`,
+    // `event_then`, …) resolves through the keyword table — the single source of
+    // truth — keyed on its grammar name: pest renders a rule's `Debug` as that
+    // name (the contract `display_rule` already relies on), and the table holds
+    // the aliases (`when`→WHERE, `begin`→THEN). Math atoms (`kw_true`, `kw_int`,
+    // …) and other non-keyword rules are absent from the table, so they yield
+    // `None` and fall through to the operator path.
+    let name = format!("{rule:?}");
+    let spelling = name
+        .strip_prefix("kw_")
+        .or_else(|| name.strip_prefix("event_"))?;
+    crate::keywords::lookup(spelling).map(|kw| kw.id)
 }
 
 /// Run a parse (pest + AST build) with guaranteed stack headroom.
@@ -4233,6 +4269,34 @@ mod tests {
                     "{rule:?} glyph drifted from OPERATOR_SPELLINGS"
                 );
             }
+        }
+    }
+
+    /// Drift guard for [`rule_to_keyword`] (the diagnostic friendly-naming of
+    /// keyword rules): a keyword token, a section/event clause rule, the `event`
+    /// rule that must collapse onto the `EVENT` keyword, and the aliases
+    /// (`kw_when`→`Where`, `kw_begin`→`Then`) each resolve to the listed
+    /// [`KeywordId`], rendered through [`crate::keywords::spell`] — so the surface
+    /// spelling lives only in the keyword table. If a future keyword's rule stops
+    /// resolving here, this fails. (Keywords have no glyph divergence from `spell`,
+    /// unlike the operator `GOLDEN` table, so they delegate rather than pin a
+    /// literal.)
+    #[test]
+    fn friendly_rule_name_spells_keyword_rules() {
+        use crate::keywords::{KeywordId, spell};
+        for (rule, id) in [
+            (Rule::kw_variables, KeywordId::Variables),
+            (Rule::kw_end, KeywordId::End),
+            (Rule::kw_event, KeywordId::Event),
+            (Rule::event, KeywordId::Event),
+            (Rule::event_where, KeywordId::Where),
+            (Rule::event_then, KeywordId::Then),
+            (Rule::kw_when, KeywordId::Where),
+            (Rule::kw_begin, KeywordId::Then),
+            (Rule::machine_clause_variables, KeywordId::Variables),
+            (Rule::context_clause_axioms, KeywordId::Axioms),
+        ] {
+            assert_eq!(friendly_rule_name(rule), Some(spell(id)), "{rule:?}");
         }
     }
 
