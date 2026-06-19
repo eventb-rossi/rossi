@@ -1714,18 +1714,25 @@ END
         panic!("expected a PestError, got: {err:?}");
     };
     let tokens = expected_tokens(&message);
-    // A section cannot follow the events block, so none of these may be suggested.
-    for forbidden in [
-        "VARIABLES",
-        "INVARIANTS",
-        "SEES",
-        "REFINES",
-        "VARIANT",
-        "THEOREMS",
-    ] {
+    // The prior event ends with an action; the `action_list` follow-set guard stops
+    // its terminating END from being parsed as a speculative next action, so the
+    // list must NOT leak assignment operators (≔ :∈ :∣), comma, or lparen — nor any
+    // clause keyword. The only continuations of the events block are another EVENT
+    // (with an optional `convergent`/`anticipated` status prefix) or the machine END.
+    // Build the allow-set from the same spellings the diagnostic renders (via
+    // `display_rule` → `keywords::spell`), so it tracks any casing/spelling change.
+    use rossi::keywords::{KeywordId, spell};
+    let allowed = [
+        spell(KeywordId::Event),
+        spell(KeywordId::End),
+        spell(KeywordId::Ordinary),
+        spell(KeywordId::Convergent),
+        spell(KeywordId::Anticipated),
+    ];
+    for token in &tokens {
         assert!(
-            !tokens.iter().any(|t| t == forbidden),
-            "expected-token list must not suggest {forbidden}: {tokens:?}"
+            allowed.contains(&token.as_str()),
+            "unexpected token {token:?} leaked into the list: {tokens:?}"
         );
     }
     // The two valid continuations are still offered.
