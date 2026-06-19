@@ -913,11 +913,13 @@ fn parse_event(pair: pest::iterators::Pair<Rule>) -> Result<Event, ParseError> {
             if let Some(parent_pair) = inner.next() {
                 event.extended = true;
                 event.refines = Some(parent_pair.as_str().to_string());
+                event.refines_span = Some(Span::from_pest(parent_pair.as_span()));
             }
         } else if peek.as_rule() == Rule::kw_refines {
             inner.next(); // consume kw_refines
             if let Some(parent_pair) = inner.next() {
                 event.refines = Some(parent_pair.as_str().to_string());
+                event.refines_span = Some(Span::from_pest(parent_pair.as_span()));
             }
         }
     }
@@ -949,7 +951,15 @@ fn parse_event(pair: pest::iterators::Pair<Rule>) -> Result<Event, ParseError> {
                     }
                 }
                 Rule::event_refines => {
-                    event.refines = collect_identifiers_from_clause(pair)?.into_iter().next();
+                    // `REFINES name` — capture the single target name and its span
+                    // so a cursor on the target can navigate to the abstract event.
+                    if let Some(p) = pair
+                        .into_inner()
+                        .find(|p| p.as_rule() == Rule::component_name)
+                    {
+                        event.refines = Some(p.as_str().to_string());
+                        event.refines_span = Some(Span::from_pest(p.as_span()));
+                    }
                 }
                 Rule::event_any => {
                     event
@@ -3309,6 +3319,7 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
             for event in &mut machine.events {
                 shift(&mut event.span, delta);
                 shift(&mut event.name_span, delta);
+                shift(&mut event.refines_span, delta);
                 for parameter in &mut event.parameters {
                     shift(&mut parameter.span, delta);
                 }
@@ -4309,6 +4320,86 @@ mod tests {
                 "name span should be the event's own INITIALISATION token"
             );
         }
+    }
+
+    /// The `refines`/`extends` target's span is captured (inline and body-level),
+    /// so a cursor on the target can be told apart from the event's own name —
+    /// even when the two are identical (the issue #84 case).
+    #[test]
+    fn event_refines_target_span_covers_the_target_name() {
+        // (source, expects_extended) — inline refines, inline extends, body REFINES.
+        let cases = [
+            (
+                "MACHINE m\nREFINES n\nEVENTS\n    EVENT e refines f\n    THEN\n        x := 0\n    END\nEND",
+                false,
+            ),
+            (
+                "MACHINE m\nREFINES n\nEVENTS\n    EVENT e extends f\n    THEN\n        x := 0\n    END\nEND",
+                true,
+            ),
+            (
+                "MACHINE m\nREFINES n\nEVENTS\n    EVENT e\n    REFINES f\n    THEN\n        x := 0\n    END\nEND",
+                false,
+            ),
+        ];
+        for (source, extended) in cases {
+            let Component::Machine(machine) = parse(source).expect("parses") else {
+                panic!("expected a machine");
+            };
+            let event = machine.events.first().expect("one event");
+            assert_eq!(event.refines.as_deref(), Some("f"));
+            assert_eq!(event.extended, extended);
+            let span = event.refines_span.expect("refines target span captured");
+            assert_eq!(&source[span.start..span.end], "f");
+            // The target span is the name after the keyword, never the event name.
+            assert!(span.start > event.name_span.expect("name span").end);
+        }
+
+        // Same name in source: the target span is the second occurrence, distinct
+        // from the event's own name span — the discriminator issue #84 needs.
+        let source = "MACHINE m\nREFINES n\nEVENTS\n    EVENT ML_in extends ML_in\n    THEN\n        x := 0\n    END\nEND";
+        let Component::Machine(machine) = parse(source).expect("parses") else {
+            panic!("expected a machine");
+        };
+        let event = machine.events.first().expect("one event");
+        let name = event.name_span.expect("name span");
+        let target = event.refines_span.expect("refines target span");
+        assert_eq!(&source[name.start..name.end], "ML_in");
+        assert_eq!(&source[target.start..target.end], "ML_in");
+        assert!(
+            target.start > name.end,
+            "the target span must follow the event's own name span"
+        );
+    }
+
+    /// In a multi-component document the recovery path parses each component from
+    /// its slice and lifts the slice-relative spans to absolute document offsets.
+    /// The refines target span must be lifted with the rest, or a cursor check
+    /// against it would land in the wrong component.
+    #[test]
+    fn refines_target_span_is_absolute_in_a_multi_component_document() {
+        // The broken first component forces the whole-file parse to fail, so the
+        // region-splitting recovery path runs; the machine region then starts
+        // past offset 0 and its spans are shifted.
+        let source = "CONTEXT c\nAXIOMS\n    @a x ∈\nEND\n\nMACHINE m\nREFINES n\nEVENTS\n    EVENT e extends e\n    THEN\n        skip\n    END\nEND";
+        let components = parse_components_with_recovery(source)
+            .component
+            .unwrap_or_default();
+        let machine = components
+            .iter()
+            .find_map(|c| match c {
+                Component::Machine(m) => Some(m),
+                Component::Context(_) => None,
+            })
+            .expect("machine recovered");
+        let event = machine.events.first().expect("one event");
+        let span = event.refines_span.expect("refines target span");
+        // Slices correctly only when shifted to absolute coordinates.
+        assert_eq!(&source[span.start..span.end], "e");
+        assert!(
+            span.start > event.name_span.expect("name span").end,
+            "the shifted target span follows the event's own name span"
+        );
     }
 
     /// Clause regions are recorded for every clause in source order, each

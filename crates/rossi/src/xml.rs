@@ -731,6 +731,7 @@ fn parse_machine_xml_with_name(
                                 actions: Vec::new(),
                                 span: None,
                                 name_span: None,
+                                refines_span: None,
                                 comment: event_comment,
                                 extended,
                             });
@@ -929,6 +930,7 @@ fn parse_machine_xml_with_name(
                                 actions: event_builder.actions,
                                 span: None,
                                 name_span: None,
+                                refines_span: None,
                                 comment: event_builder.comment,
                                 extended: event_builder.extended,
                             });
@@ -2105,6 +2107,7 @@ mod tests {
             }],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };
@@ -2341,6 +2344,7 @@ mod tests {
             }],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };
@@ -2356,6 +2360,7 @@ mod tests {
             actions: vec![],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };
@@ -2371,6 +2376,7 @@ mod tests {
             actions: vec![],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };
@@ -2427,6 +2433,7 @@ mod tests {
             actions: vec![],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };
@@ -2485,6 +2492,7 @@ mod tests {
             actions: vec![],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         };

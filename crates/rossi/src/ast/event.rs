@@ -50,6 +50,14 @@ pub struct Event {
     /// Source location of the event name
     pub name_span: Option<Span>,
 
+    /// Source location of the `refines`/`extends` target name (the abstract
+    /// event this one refines or extends), when one is present
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub refines_span: Option<Span>,
+
     /// Comment from Rodin XML
     pub comment: Option<String>,
 
@@ -71,6 +79,7 @@ impl Event {
             actions: Vec::new(),
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         }

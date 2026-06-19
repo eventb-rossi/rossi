@@ -1518,6 +1518,7 @@ mod tests {
             ))],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         }];
@@ -1560,6 +1561,7 @@ mod tests {
             .into())],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         }];
@@ -1613,6 +1615,7 @@ mod tests {
             .into())],
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         }];
@@ -1711,6 +1714,7 @@ mod tests {
             actions: Vec::new(),
             span: None,
             name_span: None,
+            refines_span: None,
             comment: None,
             extended: false,
         }];
