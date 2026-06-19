@@ -57,6 +57,8 @@ struct CompletionContext {
     sets: Vec<String>,
     /// Parameters from current event's ANY clause
     parameters: Vec<String>,
+    /// Formula binders (∀/∃/λ/comprehension/⋃/⋂) in scope at the cursor
+    locals: Vec<String>,
 }
 
 impl CompletionContext {
@@ -66,6 +68,7 @@ impl CompletionContext {
             constants: Vec::new(),
             sets: Vec::new(),
             parameters: Vec::new(),
+            locals: Vec::new(),
         }
     }
 
@@ -127,17 +130,29 @@ impl CompletionContext {
         ctx
     }
 
-    /// Augment the context with the symbols scoped to the cursor position: the
-    /// enclosing event's `ANY` parameters. `masked` must be the comment-masked
-    /// form of the same source the `component` was parsed from, so its event
-    /// line ranges and the component's events index one snapshot.
-    fn add_local_scope(&mut self, component: &Component, masked: &str, position: Position) {
+    /// Augment the context with the symbols scoped to the cursor: the enclosing
+    /// event's `ANY` parameters and the formula binders in scope at `offset`.
+    /// `masked` must be the comment-masked form, and `offset` the byte offset, of
+    /// the same source the `component` was parsed from, so its event line ranges
+    /// and binder spans index one snapshot.
+    fn add_local_scope(
+        &mut self,
+        component: &Component,
+        masked: &str,
+        position: Position,
+        offset: usize,
+    ) {
         if let Component::Machine(machine) = component
             && let Some(event) = text_utils::enclosing_event(machine, masked, position)
         {
             self.parameters
                 .extend(event.parameters.iter().map(|p| p.name.clone()));
         }
+        // Formula binders occur in both contexts and machines.
+        self.locals
+            .extend(crate::formula_walk::binders_in_scope_at_offset(
+                component, offset,
+            ));
     }
 }
 
@@ -224,11 +239,20 @@ impl CompletionProvider {
                 component_at_offset(parsed.components(), offset).map(|component| {
                     let mut ctx =
                         CompletionContext::from_component_with_refs(component, loader.as_ref());
-                    // Scope the event `ANY` parameters off the same snapshot the
-                    // component was parsed from, so the event line ranges line up
-                    // with the component's events.
-                    let masked = rossi::comments::mask_comments_chars(&parsed.text);
-                    ctx.add_local_scope(component, &masked, position);
+                    // Scope the event `ANY` parameters and formula binders off the
+                    // same snapshot the component was parsed from, so the event
+                    // line ranges and binder spans line up with the cursor. When
+                    // the stored parse is the same text the handler masked (the
+                    // common case — no concurrent edit), reuse that mask instead
+                    // of scanning and allocating the whole document again.
+                    let reparsed_mask;
+                    let scope_masked = if parsed.text == text {
+                        masked.as_str()
+                    } else {
+                        reparsed_mask = rossi::comments::mask_comments_chars(&parsed.text);
+                        &reparsed_mask
+                    };
+                    ctx.add_local_scope(component, scope_masked, position, offset);
                     (ctx, Some(rossi::deps::kind_and_name(component).1))
                 })
             })
@@ -338,59 +362,61 @@ impl CompletionProvider {
             .collect()
     }
 
-    /// Get identifier completions from the current context
+    /// Get identifier completions from the current context.
+    ///
+    /// The symbol classes are offered most-local first, and a name is offered
+    /// only once: an in-scope binder or event parameter shadows a same-named
+    /// global symbol, so it wins the single completion item for that name rather
+    /// than the editor showing the name twice with conflicting kinds.
     fn get_identifier_completions(
         &self,
         ctx: &CompletionContext,
         _word: &str,
     ) -> Vec<CompletionItem> {
+        // (names, kind, detail, documentation noun) — most local first.
+        let groups: [(&[String], CompletionItemKind, &str, &str); 5] = [
+            (
+                &ctx.locals,
+                CompletionItemKind::VARIABLE,
+                "Bound variable",
+                "Bound variable",
+            ),
+            (
+                &ctx.parameters,
+                CompletionItemKind::VARIABLE,
+                "Parameter",
+                "Event parameter",
+            ),
+            (
+                &ctx.variables,
+                CompletionItemKind::VARIABLE,
+                "Variable",
+                "State variable",
+            ),
+            (
+                &ctx.constants,
+                CompletionItemKind::CONSTANT,
+                "Constant",
+                "Constant",
+            ),
+            (&ctx.sets, CompletionItemKind::ENUM, "Set", "Carrier set"),
+        ];
+
         let mut items = Vec::new();
-
-        // Add variables
-        for var in &ctx.variables {
-            items.push(CompletionItem {
-                label: var.clone(),
-                kind: Some(CompletionItemKind::VARIABLE),
-                detail: Some("Variable".to_string()),
-                documentation: Some(Documentation::String(format!("State variable `{}`", var))),
-                ..Default::default()
-            });
-        }
-
-        // Add constants
-        for constant in &ctx.constants {
-            items.push(CompletionItem {
-                label: constant.clone(),
-                kind: Some(CompletionItemKind::CONSTANT),
-                detail: Some("Constant".to_string()),
-                documentation: Some(Documentation::String(format!("Constant `{}`", constant))),
-                ..Default::default()
-            });
-        }
-
-        // Add sets
-        for set in &ctx.sets {
-            items.push(CompletionItem {
-                label: set.clone(),
-                kind: Some(CompletionItemKind::ENUM),
-                detail: Some("Set".to_string()),
-                documentation: Some(Documentation::String(format!("Carrier set `{}`", set))),
-                ..Default::default()
-            });
-        }
-
-        // Add parameters
-        for param in &ctx.parameters {
-            items.push(CompletionItem {
-                label: param.clone(),
-                kind: Some(CompletionItemKind::VARIABLE),
-                detail: Some("Parameter".to_string()),
-                documentation: Some(Documentation::String(format!(
-                    "Event parameter `{}`",
-                    param
-                ))),
-                ..Default::default()
-            });
+        let mut seen = HashSet::new();
+        for (names, kind, detail, noun) in groups {
+            for name in names {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(kind),
+                    detail: Some(detail.to_string()),
+                    documentation: Some(Documentation::String(format!("{noun} `{name}`"))),
+                    ..Default::default()
+                });
+            }
         }
 
         items
@@ -834,6 +860,7 @@ mod tests {
             constants: vec!["max_value".to_string()],
             sets: vec!["STATUS".to_string()],
             parameters: vec!["x".to_string()],
+            locals: vec!["bound".to_string()],
         };
 
         let items = provider.get_identifier_completions(&ctx, "");
@@ -843,6 +870,31 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "max_value"));
         assert!(items.iter().any(|item| item.label == "STATUS"));
         assert!(items.iter().any(|item| item.label == "x"));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == "bound"
+                    && item.detail.as_deref() == Some("Bound variable"))
+        );
+    }
+
+    #[test]
+    fn identifier_completions_offer_a_shadowed_name_once_most_local_wins() {
+        let provider = CompletionProvider::new();
+        // `x` is both a state variable and an in-scope binder; the binder shadows
+        // it, so `x` is offered once, as the bound variable.
+        let ctx = CompletionContext {
+            variables: vec!["x".to_string()],
+            constants: Vec::new(),
+            sets: Vec::new(),
+            parameters: Vec::new(),
+            locals: vec!["x".to_string()],
+        };
+
+        let items = provider.get_identifier_completions(&ctx, "");
+        let xs: Vec<_> = items.iter().filter(|item| item.label == "x").collect();
+        assert_eq!(xs.len(), 1, "a shadowed name is offered once, got {xs:?}");
+        assert_eq!(xs[0].detail.as_deref(), Some("Bound variable"));
     }
 
     #[test]
@@ -1053,6 +1105,32 @@ mod tests {
         assert!(
             !labels.iter().any(|(label, _)| label == "p2"),
             "a sibling event's parameter `p2` must not be offered, got {labels:?}"
+        );
+    }
+
+    // The invariant `@i1 ∀ k · k > 0` is on line index 4; `k` is bound over the
+    // body `k > 0`. The event action `@act1 …` on line index 8 is outside it.
+    const WITH_QUANTIFIER: &str = "MACHINE m\nVARIABLES\n    v\nINVARIANTS\n    @i1 ∀ k · k > 0\nEVENTS\n    EVENT e\n    THEN\n        @act1 v := 0\n    END\nEND";
+
+    #[test]
+    fn completion_offers_in_scope_formula_binders() {
+        // Cursor inside the quantifier body `k > 0`, just past the bound use `k`.
+        let labels = complete_labels(WITH_QUANTIFIER, Position::new(4, 15));
+        assert!(
+            labels
+                .iter()
+                .any(|(label, detail)| label == "k" && detail.as_deref() == Some("Bound variable")),
+            "the in-scope binder `k` must be offered, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_omits_binders_outside_their_body() {
+        // Cursor in the event action, outside the quantifier body — `k` is gone.
+        let labels = complete_labels(WITH_QUANTIFIER, Position::new(8, 16));
+        assert!(
+            !labels.iter().any(|(label, _)| label == "k"),
+            "a binder must not be offered outside its body, got {labels:?}"
         );
     }
 

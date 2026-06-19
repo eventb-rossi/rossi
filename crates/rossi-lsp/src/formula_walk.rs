@@ -353,6 +353,51 @@ pub fn collect_all_occurrences(component: &Component) -> Vec<AnyOccurrence> {
     c.occurrences
 }
 
+/// Collects the formula binders whose body scope contains a byte offset, for
+/// offering them in completion where the cursor often sits in whitespace with no
+/// identifier occurrence to resolve.
+struct ScopeCollector {
+    offset: usize,
+    names: Vec<String>,
+}
+
+impl IdentVisitor for ScopeCollector {
+    fn visit(&mut self, _occ: IdentOccurrence<'_>) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn enter_scope(&mut self, frame: &[Binder], scope_span: Option<Span>) -> ControlFlow<()> {
+        // Inclusive end: a cursor at the very end of a half-typed body (the
+        // common completion case) still counts as inside the scope.
+        if let Some(span) = scope_span
+            && span.start <= self.offset
+            && self.offset <= span.end
+        {
+            for binder in frame {
+                if !self.names.contains(&binder.name) {
+                    self.names.push(binder.name.clone());
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// The names of every formula binder (`∀`/`∃`/`λ`/set-comprehension/`⋃`/`⋂`) in
+/// scope at byte `offset`, de-duplicated. One walk of the component keeps the
+/// binders whose body span contains the cursor (nested bodies nest, so an offset
+/// deep inside collects every enclosing binder). Event `ANY` parameters are
+/// seeded onto the occurrence stack rather than reported as scopes, so they
+/// never appear here — they are offered separately, scoped to their event.
+pub fn binders_in_scope_at_offset(component: &Component, offset: usize) -> Vec<String> {
+    let mut c = ScopeCollector {
+        offset,
+        names: Vec::new(),
+    };
+    drive(component, &mut c);
+    c.names
+}
+
 /// Declaration span of a set / constant / variable named `name`, if this
 /// component declares it. (Event parameters are declared per event; see the
 /// rename / references parameter paths.)
@@ -505,5 +550,37 @@ mod tests {
             res.is_event_parameter,
             "an event ANY parameter is flagged so callers keep its symbol path"
         );
+    }
+
+    // ---- binders_in_scope_at_offset (the completion scope query) -----------
+
+    #[test]
+    fn binders_in_scope_inside_a_quantifier_body() {
+        // Inside the `∀ x · x > 0` body, `x` is in scope.
+        let component = parse(SHADOWED).expect("parses");
+        let inside = SHADOWED.find("· x").unwrap() + "· ".len();
+        assert_eq!(
+            binders_in_scope_at_offset(&component, inside),
+            vec!["x".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_binders_in_scope_outside_a_body() {
+        // The free use `x` in @i1 sits in no binder body.
+        let component = parse(SHADOWED).expect("parses");
+        let outside = SHADOWED.find("@i1 x").unwrap();
+        assert!(binders_in_scope_at_offset(&component, outside).is_empty());
+    }
+
+    #[test]
+    fn nested_binders_collect_the_whole_stack() {
+        // `∀ x · (∃ y · x > y)`: deep inside the inner body both binders apply.
+        let src = "MACHINE m\nINVARIANTS\n@i1 ∀ x · (∃ y · x > y)\nEND\n";
+        let component = parse(src).expect("parses");
+        let inner = src.rfind('y').unwrap();
+        let mut names = binders_in_scope_at_offset(&component, inner);
+        names.sort();
+        assert_eq!(names, vec!["x".to_string(), "y".to_string()]);
     }
 }
