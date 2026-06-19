@@ -913,7 +913,14 @@ pub struct OperatorRow {
 /// *emitted* spellings differ are included: identical ones need no conversion,
 /// and the private-use operators emit ASCII (`emit_text`) so they collapse to
 /// `ascii == unicode` here and drop out.
+///
+/// Each operator's extra ASCII input aliases (e.g. `,,` for the maplet ↦) are
+/// emitted as their own rows so the editor input method converts them like any
+/// other spelling. They share the operator's emitted Unicode but carry no
+/// leader aliases of their own (those already ride on the canonical row).
 pub fn operator_rows() -> Vec<OperatorRow> {
+    use rossi::operators::{is_eager_input_spelling, is_symbolic_spelling};
+
     rossi::operators::OPERATOR_SPELLINGS
         .iter()
         .filter_map(|entry| {
@@ -931,6 +938,18 @@ pub fn operator_rows() -> Vec<OperatorRow> {
                 eager: entry.is_eager_input(),
             })
         })
+        .chain(
+            rossi::operators::ascii_input_alias_entries()
+                .iter()
+                .map(|&(alias, entry)| OperatorRow {
+                    ascii: alias.to_string(),
+                    unicode: entry.emit_text(true).to_string(),
+                    description: entry.description.to_string(),
+                    aliases: Vec::new(),
+                    symbolic: is_symbolic_spelling(alias),
+                    eager: is_eager_input_spelling(alias),
+                }),
+        )
         .collect()
 }
 
