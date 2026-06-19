@@ -3,7 +3,7 @@ name = "Event-B (Rossi)"
 version = "0.1.0"
 schema_version = 1
 authors = ["Rossi Contributors"]
-description = "Event-B language support (Rossi): rossi-language-server over LSP plus tree-sitter syntax highlighting."
+description = "Event-B language support (Rossi): eventb-language-server over LSP plus tree-sitter syntax highlighting."
 repository = "https://github.com/eventb-rossi/rossi"
 
 # The tree-sitter grammar. Zed fetches grammars from a git repository at a
@@ -17,6 +17,6 @@ repository = "https://github.com/eventb-rossi/rossi"
 repository = "https://github.com/eventb-rossi/tree-sitter-eventb"
 rev = "465d62af637dd0b95da4dce736c735f59e26347d"
 
-[language_servers.rossi-language-server]
+[language_servers.eventb-language-server]
 name = "Rossi Event-B Language Server"
 languages = ["Event-B"]

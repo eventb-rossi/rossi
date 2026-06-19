@@ -263,7 +263,7 @@
         },
         "rossi.languageServer.path": {
           "type": "string",
-          "default": "rossi-language-server",
+          "default": "eventb-language-server",
           "description": "Path to the Event-B language server executable. If not specified, searches in PATH."
         },
         "rossi.rodin.path": {

@@ -58,7 +58,7 @@ export function activate(context: ExtensionContext) {
 
     // Get configuration
     const config = workspace.getConfiguration('rossi');
-    const serverPath = config.get<string>('languageServer.path', 'rossi-language-server');
+    const serverPath = config.get<string>('languageServer.path', 'eventb-language-server');
 
     // Configure server options
     const serverOptions: ServerOptions = {

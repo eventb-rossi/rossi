@@ -36,7 +36,7 @@
 ;; Installation:
 ;;
 ;; 1. Install the Rossi Language Server:
-;;    cargo install --path crates/rossi-lsp
+;;    cargo install --path crates/eventb-lsp
 ;;
 ;; 2. Add to your Emacs configuration:
 ;;    (add-to-list 'load-path "/path/to/rossi/editors/emacs")
@@ -66,7 +66,7 @@
   :group 'languages
   :prefix "eventb-")
 
-(defcustom rossi-language-server-command "rossi-language-server"
+(defcustom eventb-language-server-command "eventb-language-server"
   "Command to start the Event-B language server.
 Can be a string (command name) or a list (command with arguments)."
   :type '(choice (string :tag "Command name")
@@ -241,9 +241,9 @@ must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
    (make-lsp-client
     :new-connection (lsp-stdio-connection
                      (lambda ()
-                       (if (listp rossi-language-server-command)
-                           rossi-language-server-command
-                         (list rossi-language-server-command))))
+                       (if (listp eventb-language-server-command)
+                           eventb-language-server-command
+                         (list eventb-language-server-command))))
     :major-modes '(eventb-mode)
     :server-id 'eventb-ls
     :priority 0

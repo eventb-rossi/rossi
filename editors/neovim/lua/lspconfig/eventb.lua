@@ -46,7 +46,7 @@ end
 return {
   default_config = {
     -- Command to start the language server
-    cmd = { 'rossi-language-server' },
+    cmd = { 'eventb-language-server' },
 
     -- File types that this server handles
     filetypes = { 'eventb' },
@@ -145,7 +145,7 @@ or when it is unavailable.
 
 Build and install the language server:
 ```bash
-cargo install --path crates/rossi-lsp
+cargo install --path crates/eventb-lsp
 ```
 
 **Configuration:**
