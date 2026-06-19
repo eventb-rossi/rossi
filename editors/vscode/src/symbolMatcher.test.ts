@@ -20,6 +20,9 @@ const ROWS: OperatorRow[] = [
     { ascii: '<=>', unicode: '⇔', description: 'iff', aliases: ['iff'], symbolic: true, eager: true },
     { ascii: '<=', unicode: '≤', description: 'le', aliases: ['le', 'leq'], symbolic: true, eager: true },
     { ascii: '|->', unicode: '↦', description: 'maplet', aliases: ['maplet'], symbolic: true, eager: true },
+    // `,,` is an ASCII input alias for the maplet (Rodin's keyboard); it rides
+    // along as its own eager row, so a lone `,` is a held prefix like `|`.
+    { ascii: ',,', unicode: '↦', description: 'maplet', aliases: [], symbolic: true, eager: true },
     { ascii: '|>', unicode: '▷', description: 'ranres', aliases: [], symbolic: true, eager: true },
     { ascii: '|>>', unicode: '⩥', description: 'ransub', aliases: [], symbolic: true, eager: true },
     { ascii: ':=', unicode: '≔', description: 'assign', aliases: ['assign'], symbolic: true, eager: true },
@@ -59,6 +62,10 @@ check('<= waits then converts on boundary', simulateEagerTyping(matcher, 'a<=b')
 check('<=> beats <=', simulateEagerTyping(matcher, 'p<=>q'), 'p⇔q');
 // Maplet is built up across three chars.
 check('|-> -> maplet', simulateEagerTyping(matcher, 'f|->x'), 'f↦x');
+// `,,` is an alias for the maplet; it converts on the second comma, while a
+// lone comma (list separator) is held one keystroke then left literal.
+check(',, -> maplet', simulateEagerTyping(matcher, 'x,,y'), 'x↦y');
+check('lone , stays a separator', simulateEagerTyping(matcher, 'f(a, b)'), 'f(a, b)');
 // |> held (because of |>>) then converts on boundary; |>> wins when completed.
 check('|> waits then converts', simulateEagerTyping(matcher, 'a|>b'), 'a▷b');
 check('|>> beats |>', simulateEagerTyping(matcher, 'a|>>b'), 'a⩥b');
