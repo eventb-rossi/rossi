@@ -107,16 +107,28 @@ pub(crate) fn event_line_range_in(masked: &str, event_name: &str) -> Option<(usi
     Some((start_line, end_line))
 }
 
+/// Whether `event`'s line range contains `line_idx`, scanned over comment-masked
+/// text (an `EVENT`/`END` spelled in a comment cannot bound the range). The
+/// shared containment check behind [`event_parameter_at_position`] (and, once
+/// completion needs it, the enclosing-event lookup), so callers cannot disagree
+/// on what counts as "inside this event".
+fn event_contains_line(masked: &str, event: &rossi::Event, line_idx: usize) -> bool {
+    // `masked` is masked once by the caller; scanning it per event avoids
+    // re-masking the whole document each time.
+    event_line_range_in(masked, &event.name)
+        .is_some_and(|(start, end)| (start..=end).contains(&line_idx))
+}
+
 /// The event whose `ANY` clause declares `identifier`, when `position` falls
-/// inside that event's line range. `masked` is the comment-masked document, so
-/// an `EVENT`/`END` spelled in a comment cannot bound the range. Returns `None`
-/// when the cursor is not inside any event or the identifier is not one of its
-/// parameters.
+/// inside that event's line range. Returns `None` when the cursor is not inside
+/// any event or the identifier is not one of its parameters.
 ///
-/// This is the single source of truth for "is this name an event parameter at
-/// this position", shared by find-references / rename and hover so the event
-/// scoping cannot drift between features. Only `position.line` is consulted;
-/// the column is irrelevant to the line-range scoping.
+/// Scans the events whose range contains the cursor line and returns the first
+/// that declares `identifier`. Usually only one event encloses a line, but error
+/// recovery can leave an unterminated event's range overlapping a later
+/// sibling's, so more than one can match; picking the event that actually
+/// declares the parameter keeps hover / find-references / rename resolving the
+/// inner event's own parameter rather than giving up on the outer one.
 pub(crate) fn event_parameter_at_position<'a>(
     machine: &'a rossi::Machine,
     masked: &str,
@@ -124,17 +136,11 @@ pub(crate) fn event_parameter_at_position<'a>(
     identifier: &str,
 ) -> Option<&'a rossi::Event> {
     let line_idx = position.line as usize;
-    machine.events.iter().find(|event| {
-        // `masked` is masked once by the caller; scanning it per event avoids
-        // re-masking the whole document each time. Events do not overlap, so the
-        // first event whose range contains the line is the enclosing one.
-        event_line_range_in(masked, &event.name)
-            .is_some_and(|(start, end)| (start..=end).contains(&line_idx))
-            && event
-                .parameters
-                .iter()
-                .any(|parameter| parameter.name == identifier)
-    })
+    machine
+        .events
+        .iter()
+        .filter(|event| event_contains_line(masked, event, line_idx))
+        .find(|event| event.parameters.iter().any(|p| p.name == identifier))
 }
 
 #[cfg(test)]
@@ -170,5 +176,26 @@ mod tests {
         // parameters are scoped to their event's line range, and only
         // `position.line` is consulted, so the column is irrelevant here.
         assert!(event_parameter_at_position(&machine, &masked, Position::new(2, 4), "p").is_none());
+    }
+
+    #[test]
+    fn event_parameter_resolves_inner_event_when_recovery_overlaps_ranges() {
+        // A missing `END` on `e1` makes its recovered line range swallow `e2`, so
+        // both events' ranges contain the cursor on `e2`'s parameter line. The
+        // resolver must still return the event that actually declares the
+        // parameter, not give up because the first (outer) event lacks it.
+        let src = "MACHINE m\nVARIABLES\n    v\nEVENTS\n  EVENT e1\n  ANY\n    p1\n  THEN\n    @act1 v := 0\n  EVENT e2\n  ANY\n    p2\n  THEN\n    @act2 v := 1\n  END\nEND";
+        let masked = rossi::comments::mask_comments_chars(src);
+        let parsed = rossi::parse_components_with_recovery(src);
+        let components = parsed.component.as_deref().expect("recovers components");
+        let Component::Machine(machine) = &components[0] else {
+            panic!("expected a machine, got {:?}", components[0]);
+        };
+        assert_eq!(machine.events.len(), 2, "recovery keeps both events");
+
+        // `p2` on its line (index 11) is inside both e1's and e2's ranges, yet
+        // resolves to `e2` — the event that declares it.
+        let event = event_parameter_at_position(machine, &masked, Position::new(11, 4), "p2");
+        assert_eq!(event.map(|e| e.name.as_str()), Some("e2"));
     }
 }
