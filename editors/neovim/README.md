@@ -26,7 +26,7 @@ This directory contains Neovim configuration for Event-B formal modeling, provid
 - Generated from the canonical Rossi snippet table, shared with the VS Code extension
 
 ### 🔍 LSP Features (via Language Server)
-- **Real-time Diagnostics**: Instant feedback on syntax errors
+- **Real-time Diagnostics**: Feedback on syntax errors as you type
 - **Document Symbols**: Hierarchical outline and quick navigation
 - **Code Formatting**: Auto-format with Unicode or ASCII operators
 - **Code Completion**: Context-aware suggestions
@@ -340,8 +340,8 @@ require('eventb.input').setup{
 }
 ```
 
-This complements the whole-file `:RossiConvertCurrentFileToUnicode` /
-`:RossiConvertCurrentFileToAscii` commands.
+This complements the whole-file `:RossiConvertUnicode` /
+`:RossiConvertAscii` commands.
 
 ## Snippets
 
@@ -372,28 +372,24 @@ stay identical across editors.
 
 ## Editor Commands
 
-The plugin exposes the same actions as the VS Code extension, as `:Rossi*`
-user commands:
+The plugin exposes these `:Rossi*` user commands:
 
-- `:RossiImportRodinProject`
-- `:RossiExportCurrentFileToRodinZip`
-- `:RossiExportWorkspaceToRodinZip`
-- `:RossiOpenInRodin`
-- `:RossiBuildCheckedRodinZip`
-- `:RossiValidateCurrentFile`
-- `:RossiValidateWorkspace`
-- `:RossiConvertCurrentFileToUnicode`
-- `:RossiConvertCurrentFileToAscii`
-- `:RossiCheckToolchain`
+- `:RossiConvertUnicode` — convert the current buffer to Unicode operators
+- `:RossiConvertAscii` — convert the current buffer to ASCII operators
+- `:RossiValidate` — validate the current buffer
+- `:RossiValidateWorkspace` — validate the Event-B workspace
+- `:RossiImport` — import a Rodin project into Event-B text
+- `:RossiExport` — export Event-B text to a Rodin ZIP
+- `:RossiBuild` — build a checked Rodin ZIP
 
 Suggested keymaps (set them in your `on_attach` or an `eventb` FileType
 autocommand):
 
 ```lua
 local opts = { noremap = true, silent = true, buffer = bufnr }
-vim.keymap.set('n', '<leader>pu', '<Cmd>RossiConvertCurrentFileToUnicode<CR>', opts)
-vim.keymap.set('n', '<leader>pa', '<Cmd>RossiConvertCurrentFileToAscii<CR>', opts)
-vim.keymap.set('n', '<leader>pv', '<Cmd>RossiValidateCurrentFile<CR>', opts)
+vim.keymap.set('n', '<leader>pu', '<Cmd>RossiConvertUnicode<CR>', opts)
+vim.keymap.set('n', '<leader>pa', '<Cmd>RossiConvertAscii<CR>', opts)
+vim.keymap.set('n', '<leader>pv', '<Cmd>RossiValidate<CR>', opts)
 ```
 
 ## Recommended Plugins
@@ -505,9 +501,9 @@ return {
 ### Rossi Commands
 | Command | Action |
 |---------|--------|
-| `:RossiConvertCurrentFileToUnicode` | Convert operators to Unicode |
-| `:RossiConvertCurrentFileToAscii` | Convert operators to ASCII |
-| `:RossiValidateCurrentFile` | Validate the current file |
+| `:RossiConvertUnicode` | Convert operators to Unicode |
+| `:RossiConvertAscii` | Convert operators to ASCII |
+| `:RossiValidate` | Validate the current buffer |
 
 See [Editor Commands](#editor-commands) for the full list and suggested keymaps.
 

@@ -122,7 +122,9 @@ Use `lsp-mode`:
 
 ### Real-time Diagnostics
 
-The server currently provides immediate feedback on syntax errors:
+The server reports syntax errors as you edit. On-type diagnostics are debounced
+by `rossi.diagnostics.debounceMs` (default 500 ms); `didOpen` and `didSave`
+analyze immediately, and `0` disables debouncing:
 
 ```eventb
 CONTEXT test
@@ -239,7 +241,7 @@ Reusable `rossi-build` surfaces:
 
 Recommended integration path:
 
-1. Add `rossi-build` as a `eventb-lsp` dependency.
+1. Add `rossi-build` as an `eventb-lsp` dependency.
 2. Add a small LSP semantic diagnostics adapter instead of calling
    `rossi-build` internals directly from `server.rs`.
 3. Build an in-memory `Project` from open `.eventb` documents and workspace
@@ -261,7 +263,6 @@ well-definedness and refinement proof checks.
 
 ## Known Limitations
 
-- Diagnostics are immediate; `rossi.diagnostics.debounceMs` is parsed but not yet used.
 - LSP diagnostics are syntax-only until the semantic diagnostics adapter is added.
 - Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
 - Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
@@ -326,10 +327,10 @@ Logs are written to stderr and include:
 
 ## Architecture
 
-The server follows a modular architecture:
+The server is organized into focused modules (principal ones shown):
 
 ```
-eventb-language-server
+eventb-lsp/src/
 ├── server.rs            # LSP protocol implementation (tower-lsp)
 ├── document.rs          # Document management (ropey, dashmap)
 ├── analysis.rs          # Document symbol extraction
@@ -343,6 +344,12 @@ eventb-language-server
 ├── code_actions.rs      # Quick fixes and refactorings
 ├── folding.rs           # Folding range provider
 ├── signature_help.rs    # Signature help provider
+├── document_links.rs    # Document links provider
+├── selection_range.rs   # Selection range provider
+├── symbols.rs           # Cursor symbol resolution (definition / references)
+├── formula_walk.rs      # Formula AST walker (binder scope)
+├── formatting.rs        # Formatting via the rossi pretty printer
+├── config.rs            # Server configuration (the `rossi` settings section)
 └── main.rs              # Entry point and initialization
 ```
 
@@ -393,7 +400,7 @@ interface RossiConfig {
   };
   diagnostics: {
     enabled: boolean;         // Enable diagnostics (default: true)
-    debounceMs: number;       // Parsed but not applied yet (default: 500)
+    debounceMs: number;       // On-type debounce window in ms (default: 500; 0 = inline)
   };
   completion: {
     enabled: boolean;         // Enable completion (default: true)

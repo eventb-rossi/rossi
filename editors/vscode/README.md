@@ -76,7 +76,7 @@ Type a prefix and press Tab:
 
 ## Requirements
 
-The Rossi Language Server must be installed and accessible in your PATH. Rodin import/export/build/validation commands also require the `rossi` CLI. `Open in Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
+The Rossi Language Server (the `eventb-language-server` binary) must be installed and accessible in your PATH. Rodin import/export/build/validation commands also require the `rossi` CLI. `Open in Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
 
 ### Installation
 

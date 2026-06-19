@@ -61,8 +61,7 @@ Add to your Zed `settings.json` (per-language keys live under
       "tab_size": 4,
       "semantic_tokens": "combined",
       "document_symbols": "on",
-      "document_folding_ranges": "on",
-      "code_lens": "on"
+      "document_folding_ranges": "on"
     }
   },
   "lsp": {
@@ -173,4 +172,4 @@ generated files drift from the tables. The extension's bundled
 Zed's extension API has no equivalent for the VS Code extension's editor
 commands, context menus, keybindings, walkthroughs, or live ASCII→Unicode input
 method. Those are replaced by the documented substitutes above (LSP completions,
-snippets, code lenses, and `rossi` CLI tasks).
+snippets, and `rossi` CLI tasks).

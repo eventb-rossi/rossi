@@ -236,7 +236,7 @@ rossi/
 │   ├── rossi/        # Core parser, AST, pretty-printer, Rodin XML
 │   ├── rossi-build/  # Static checker / Rodin .bcc / .bcm builder
 │   ├── rossi-cli/    # `rossi` command-line interface
-│   └── eventb-lsp/    # Language Server Protocol implementation
+│   └── eventb-lsp/   # Language Server Protocol implementation
 └── editors/
     ├── vscode/       # VS Code extension
     ├── neovim/       # Neovim plugin
