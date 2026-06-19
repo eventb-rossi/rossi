@@ -166,8 +166,28 @@ impl From<std::io::Error> for ParseError {
     }
 }
 
+/// Drop duplicate entries from a parsing error's expected/unexpected lists,
+/// comparing by *rendered* spelling so that distinct rules which display the
+/// same token collapse to one — e.g. `kw_event` and the `event` rule both show
+/// `EVENT`, and `kw_where`/`kw_when` both show `WHERE`. First occurrence wins, so
+/// pest's ordering is preserved.
+fn dedup_expected_rules(error: &mut pest::error::Error<crate::parser::Rule>) {
+    fn dedup_by_display(rules: &mut Vec<crate::parser::Rule>) {
+        let mut seen = std::collections::HashSet::new();
+        rules.retain(|&rule| seen.insert(crate::parser::display_rule(rule)));
+    }
+    if let pest::error::ErrorVariant::ParsingError {
+        positives,
+        negatives,
+    } = &mut error.variant
+    {
+        dedup_by_display(positives);
+        dedup_by_display(negatives);
+    }
+}
+
 impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
-    fn from(error: Box<pest::error::Error<crate::parser::Rule>>) -> Self {
+    fn from(mut error: Box<pest::error::Error<crate::parser::Rule>>) -> Self {
         let (line, column) = match &error.line_col {
             pest::error::LineColLocation::Pos(pos) => *pos,
             pest::error::LineColLocation::Span(start, _) => *start,
@@ -179,10 +199,12 @@ impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
             pest::error::InputLocation::Pos(p) => Some(Span { start: *p, end: *p }),
             pest::error::InputLocation::Span((s, e)) => Some(Span { start: *s, end: *e }),
         };
-        // Rewrite the `expected …` list from internal rule names (`op_in`,
-        // `lbrace`) to the symbols a user types (`∈`, `{`); unmapped rules keep
-        // their pest name. Renaming leaves the position fields untouched, so it
-        // happens last (it consumes the pest error).
+        // Collapse rules that render to the same token, then rewrite the
+        // `expected …` list from internal rule names (`op_in`, `kw_event`) to the
+        // symbols a user types (`∈`, `EVENT`); unmapped rules keep their pest
+        // name. Renaming leaves the position fields untouched, so it happens last
+        // (it consumes the pest error).
+        dedup_expected_rules(&mut error);
         let message = (*error)
             .renamed_rules(|rule| crate::parser::display_rule(*rule))
             .to_string();

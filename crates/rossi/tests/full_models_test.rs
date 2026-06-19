@@ -1430,9 +1430,7 @@ fn test_context_accepts_sets_before_extends() {
     END
     "#;
 
-    let Component::Context(ctx) = parse(source).expect("non-canonical order should parse") else {
-        panic!("expected a Context");
-    };
+    let ctx = common::parse_context(source);
     assert_eq!(ctx.sets.len(), 1);
     assert_eq!(ctx.extends, vec!["other_ctx".to_string()]);
 }
@@ -1503,9 +1501,7 @@ fn test_context_accepts_axioms_after_theorems() {
     END
     "#;
 
-    let Component::Context(ctx) = parse(source).expect("free order should parse") else {
-        panic!("expected a Context");
-    };
+    let ctx = common::parse_context(source);
     assert_eq!(ctx.axioms.len(), 2);
     assert!(ctx.axioms.iter().any(|a| a.is_theorem));
     assert!(ctx.axioms.iter().any(|a| !a.is_theorem));
@@ -1554,9 +1550,7 @@ fn test_machine_accepts_theorems_after_variant() {
     END
     "#;
 
-    let Component::Machine(mch) = parse(source).expect("free order should parse") else {
-        panic!("expected a Machine");
-    };
+    let mch = common::parse_machine(source);
     assert_eq!(mch.invariants.len(), 2);
     assert!(mch.invariants.iter().any(|i| i.is_theorem));
     assert!(mch.variant.is_some());
@@ -1599,9 +1593,7 @@ fn test_machine_accepts_sees_before_refines() {
     END
     "#;
 
-    let Component::Machine(mch) = parse(source).expect("free order should parse") else {
-        panic!("expected a Machine");
-    };
+    let mch = common::parse_machine(source);
     assert_eq!(mch.sees, vec!["some_ctx".to_string()]);
     assert_eq!(mch.refines.as_deref(), Some("abstract_m"));
 }
@@ -1678,6 +1670,23 @@ fn test_clause_error_has_line_info() {
     }
 }
 
+/// The individual expected-token spellings from a pest error message's
+/// `= expected …` line (the list the LSP surfaces). Tokenizing avoids substring
+/// coupling — e.g. matching "VARIANT" must not hit the "VARIANT" inside
+/// "INVARIANTS", and the source-snippet lines must not be scanned.
+fn expected_tokens(message: &str) -> Vec<String> {
+    message
+        .lines()
+        .map(str::trim_start)
+        .find_map(|l| l.strip_prefix("= expected "))
+        .unwrap_or("")
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "or")
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn misspelled_event_keyword_suggests_only_event_or_end_issue_76() {
     // EVENTS is terminal, so inside the events block the only continuations are
@@ -1704,27 +1713,52 @@ END
     let ParseError::PestError { message, .. } = err else {
         panic!("expected a PestError, got: {err:?}");
     };
-    let lower = message.to_lowercase();
+    let tokens = expected_tokens(&message);
     // A section cannot follow the events block, so none of these may be suggested.
     for forbidden in [
-        "variables",
-        "invariants",
-        "sees",
-        "refines",
-        "variant",
-        "theorems",
+        "VARIABLES",
+        "INVARIANTS",
+        "SEES",
+        "REFINES",
+        "VARIANT",
+        "THEOREMS",
     ] {
         assert!(
-            !lower.contains(forbidden),
-            "expected-token list must not suggest {forbidden}: {message}"
+            !tokens.iter().any(|t| t == forbidden),
+            "expected-token list must not suggest {forbidden}: {tokens:?}"
         );
     }
     // The two valid continuations are still offered.
     assert!(
-        lower.contains("event"),
-        "should still suggest EVENT: {message}"
+        tokens.iter().any(|t| t == "EVENT"),
+        "should still suggest EVENT: {tokens:?}"
     );
-    assert!(lower.contains("end"), "should still suggest END: {message}");
+    assert!(
+        tokens.iter().any(|t| t == "END"),
+        "should still suggest END: {tokens:?}"
+    );
+}
+
+#[test]
+fn parse_error_names_keywords_and_dedups_issue_76() {
+    // The expected-token list shows canonical keyword spellings, not raw `kw_*`
+    // rule names, and lists each token once: the `event` rule and the `kw_event`
+    // token both render as EVENT and collapse to a single entry.
+    let source = "MACHINE m\nEVENTS\n    EVENT INITIALISATION\n    END\n    EVNT foo\nEND\n";
+    let ParseError::PestError { message, .. } = parse(source).expect_err("must fail") else {
+        panic!("expected a PestError");
+    };
+    assert!(
+        !message.contains("kw_"),
+        "raw rule names must be gone: {message}"
+    );
+    let tokens = expected_tokens(&message);
+    assert_eq!(
+        tokens.iter().filter(|t| *t == "EVENT").count(),
+        1,
+        "EVENT named exactly once (kw_event + event collapsed): {tokens:?}"
+    );
+    assert!(tokens.iter().any(|t| t == "END"), "names END: {tokens:?}");
 }
 
 #[test]
