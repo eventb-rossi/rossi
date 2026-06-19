@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::references::component_reference_clause;
+use crate::text_utils;
 
 /// Configuration for completion behavior
 #[derive(Debug, Clone)]
@@ -125,6 +126,19 @@ impl CompletionContext {
 
         ctx
     }
+
+    /// Augment the context with the symbols scoped to the cursor position: the
+    /// enclosing event's `ANY` parameters. `masked` must be the comment-masked
+    /// form of the same source the `component` was parsed from, so its event
+    /// line ranges and the component's events index one snapshot.
+    fn add_local_scope(&mut self, component: &Component, masked: &str, position: Position) {
+        if let Component::Machine(machine) = component
+            && let Some(event) = text_utils::enclosing_event(machine, masked, position)
+        {
+            self.parameters
+                .extend(event.parameters.iter().map(|p| p.name.clone()));
+        }
+    }
 }
 
 /// Provides code completion for Event-B documents
@@ -208,8 +222,13 @@ impl CompletionProvider {
                 let offset =
                     position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
                 component_at_offset(parsed.components(), offset).map(|component| {
-                    let ctx =
+                    let mut ctx =
                         CompletionContext::from_component_with_refs(component, loader.as_ref());
+                    // Scope the event `ANY` parameters off the same snapshot the
+                    // component was parsed from, so the event line ranges line up
+                    // with the component's events.
+                    let masked = rossi::comments::mask_comments_chars(&parsed.text);
+                    ctx.add_local_scope(component, &masked, position);
                     (ctx, Some(rossi::deps::kind_and_name(component).1))
                 })
             })
@@ -968,6 +987,72 @@ mod tests {
         assert!(
             ctx.variables.contains(&"concrete_state".to_string()),
             "concrete_state should appear in completions"
+        );
+    }
+
+    /// Run the full completion pipeline against a single open document and return
+    /// the `(label, detail)` of every produced item — the same path an editor
+    /// drives, so the scope wiring (not just the helpers) is exercised.
+    fn complete_labels(source: &str, position: Position) -> Vec<(String, Option<String>)> {
+        use crate::lsp_types::Url;
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        let url = Url::parse("file:///m.eventb").unwrap();
+        crm.update_component(url.to_string(), source);
+        dm.open(url.clone(), "rossi".to_string(), 1, source.to_string());
+
+        let mut provider = CompletionProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+
+        let params = CompletionParams {
+            text_document_position: crate::lsp_types::TextDocumentPositionParams {
+                text_document: crate::lsp_types::TextDocumentIdentifier { uri: url },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        match provider.complete(&params, source) {
+            Some(CompletionResponse::Array(items)) => {
+                items.into_iter().map(|i| (i.label, i.detail)).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn completion_offers_the_enclosing_event_parameters() {
+        // Cursor on the action line (index 10), inside event `e` whose ANY
+        // clause declares `amount` (issue #102).
+        let source = "MACHINE m\nVARIABLES\n    v\nEVENTS\n  EVENT e\n  ANY\n    amount\n  WHERE\n    @grd1 amount > 0\n  THEN\n    @act1 v := 0\n  END\nEND";
+        let labels = complete_labels(source, Position::new(10, 8));
+
+        assert!(
+            labels
+                .iter()
+                .any(|(label, detail)| label == "amount" && detail.as_deref() == Some("Parameter")),
+            "the event's ANY parameter `amount` must be offered, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_does_not_offer_a_sibling_events_parameters() {
+        // Two events; the cursor sits in `e1` (action line, index 8). Only `e1`'s
+        // parameter is in scope — `e2`'s `p2` must not be offered.
+        let source = "MACHINE m\nVARIABLES\n    v\nEVENTS\n  EVENT e1\n  ANY\n    p1\n  THEN\n    @act1 v := 0\n  END\n  EVENT e2\n  ANY\n    p2\n  THEN\n    @act2 v := 1\n  END\nEND";
+        let labels = complete_labels(source, Position::new(8, 8));
+
+        assert!(
+            labels.iter().any(|(label, _)| label == "p1"),
+            "the enclosing event's parameter `p1` must be offered, got {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|(label, _)| label == "p2"),
+            "a sibling event's parameter `p2` must not be offered, got {labels:?}"
         );
     }
 
