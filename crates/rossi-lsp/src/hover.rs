@@ -8,7 +8,7 @@
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position};
 use rossi::{
-    Component, Event, LabeledPredicate, PrettyPrinter,
+    Component, Event, Expression, LabeledPredicate, PrettyPrinter,
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
 };
@@ -34,6 +34,10 @@ struct HoverContext {
     sets: Vec<(String, String)>,
     /// Constraints (axioms/invariants) keyed by identifier name
     constraints: HashMap<String, Vec<String>>,
+    /// Variant expressions in scope — the cursor machine's and every one down its
+    /// REFINES chain. Checked against the hovered identifier to surface the
+    /// variant that constrains it.
+    variants: Vec<Expression>,
 }
 
 impl HoverContext {
@@ -43,6 +47,7 @@ impl HoverContext {
             constants: Vec::new(),
             sets: Vec::new(),
             constraints: HashMap::new(),
+            variants: Vec::new(),
         }
     }
 
@@ -92,6 +97,9 @@ impl HoverContext {
                         ctx.constraints.insert(var.name.clone(), constraints);
                     }
                 }
+                if let Some(variant) = &machine.variant {
+                    ctx.variants.push(variant.clone());
+                }
 
                 // Resolve SEES contexts and REFINES machines
                 if let Some(loader) = loader {
@@ -114,6 +122,7 @@ impl HoverContext {
                             &mut ctx.constants,
                             &mut ctx.sets,
                             &mut ctx.constraints,
+                            &mut ctx.variants,
                             &mut visited,
                         );
                     }
@@ -246,6 +255,7 @@ impl HoverProvider {
             if let Some(constraints) = ctx.constraints.get(word) {
                 append_constraint_section(&mut description, "Invariants", constraints);
             }
+            append_variant_section(&mut description, &ctx.variants, word);
             return Some(create_hover(&format!("Variable: {}", word), &description));
         }
 
@@ -258,6 +268,7 @@ impl HoverProvider {
             if let Some(constraints) = ctx.constraints.get(word) {
                 append_constraint_section(&mut description, "Axioms", constraints);
             }
+            append_variant_section(&mut description, &ctx.variants, word);
             return Some(create_hover(&format!("Constant: {}", word), &description));
         }
 
@@ -379,6 +390,7 @@ fn resolve_machine_symbols_with_source(
     constants: &mut Vec<(String, String)>,
     sets: &mut Vec<(String, String)>,
     constraints: &mut HashMap<String, Vec<String>>,
+    variants: &mut Vec<Expression>,
     visited: &mut HashSet<String>,
 ) {
     if visited.len() >= 10 || visited.contains(machine_name) {
@@ -398,6 +410,9 @@ fn resolve_machine_symbols_with_source(
             if !c.is_empty() {
                 constraints.insert(var.name.clone(), c);
             }
+        }
+        if let Some(variant) = &m.variant {
+            variants.push(variant.clone());
         }
 
         // Resolve SEES contexts from the abstract machine
@@ -421,6 +436,7 @@ fn resolve_machine_symbols_with_source(
                 constants,
                 sets,
                 constraints,
+                variants,
                 visited,
             );
         }
@@ -447,6 +463,33 @@ fn collect_constraints(predicates: &[LabeledPredicate], id: &str) -> Vec<String>
             }
         })
         .collect()
+}
+
+/// The distinct rendered variant expressions that mention `id`, in chain order.
+/// Identifier matching reuses the shared walker, mirroring `collect_constraints`.
+/// Distinct renderings only — an abstract and a concrete machine repeating the
+/// same variant collapse to one line.
+fn variants_mentioning(variants: &[Expression], id: &str) -> Vec<String> {
+    if variants.is_empty() {
+        return Vec::new();
+    }
+    let printer = PrettyPrinter::new();
+    let mut out: Vec<String> = Vec::new();
+    for variant in variants {
+        if formula_walk::expression_mentions(variant, id) {
+            let text = printer.print_expression(variant);
+            if !out.contains(&text) {
+                out.push(text);
+            }
+        }
+    }
+    out
+}
+
+/// Append the `Variant` section listing the in-scope variants that mention `id`.
+/// Shared by the variable and constant hovers so the header and lookup live once.
+fn append_variant_section(description: &mut String, variants: &[Expression], id: &str) {
+    append_constraint_section(description, "Variant", &variants_mentioning(variants, id));
 }
 
 /// Append a markdown bullet list of `constraints` under a bold `**{header}:**`
@@ -1139,6 +1182,7 @@ mod tests {
             constants: vec![("max_value".to_string(), "counter_ctx".to_string())],
             sets: vec![("STATUS".to_string(), "counter_ctx".to_string())],
             constraints: HashMap::new(),
+            variants: Vec::new(),
         };
 
         let hover = provider.hover_identifier("count", &ctx);
@@ -1316,6 +1360,185 @@ mod tests {
             markup(hover_with_doc(PARAM_MACHINE, 15, 10).expect("hover on global in event"));
         assert!(value.contains("Variable"), "got: {value}");
         assert!(!value.contains("Parameter"), "got: {value}");
+    }
+
+    // Issue #85 — a machine VARIANT surfaced on the hover of the identifiers it
+    // constrains. The variant `flag + count` mentions variables `count` and
+    // `flag`, but not `extra`.
+    //   2      count       6  @inv1 count ∈ ℕ
+    //   3      flag        7  VARIANT
+    //   4      extra       8      flag + count
+    const VARIANT_MACHINE: &str = "MACHINE m\nVARIABLES\n    count\n    flag\n    extra\nINVARIANTS\n    @inv1 count ∈ ℕ\nVARIANT\n    flag + count\nEND";
+
+    #[test]
+    fn variable_in_the_variant_shows_it() {
+        // `count` (in @inv1, line 6) is part of the variant.
+        let value = markup(hover_with_doc(VARIANT_MACHINE, 6, 10).expect("hover on count"));
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(value.contains("**Variant:**"), "got: {value}");
+        // `flag` appears only in the variant, so it proves the variant text is shown.
+        assert!(
+            value.contains("flag"),
+            "shows the variant expression: {value}"
+        );
+    }
+
+    #[test]
+    fn variable_not_in_the_variant_has_no_variant_section() {
+        // `extra` (line 4) appears in neither an invariant nor the variant.
+        let value = markup(hover_with_doc(VARIANT_MACHINE, 4, 4).expect("hover on extra"));
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(!value.contains("**Variant:**"), "got: {value}");
+    }
+
+    #[test]
+    fn no_variant_clause_means_no_variant_section() {
+        // SHADOWING_BINDER has no VARIANT; the free `x` hover stays variant-free.
+        let value = markup(hover_with_doc(SHADOWING_BINDER, 4, 10).expect("hover on x"));
+        assert!(value.contains("**Variable**"), "got: {value}");
+        assert!(!value.contains("**Variant:**"), "got: {value}");
+    }
+
+    /// Open every `(uri, source)` in a workspace and hover `target_uri` at the
+    /// position, so cross-file SEES / REFINES resolution is available.
+    fn hover_in_workspace(
+        docs: &[(&str, &str)],
+        target_uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<Hover> {
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        for (uri, src) in docs {
+            crm.update_component((*uri).to_string(), src);
+            dm.open(
+                Url::parse(uri).unwrap(),
+                "rossi".to_string(),
+                1,
+                (*src).to_string(),
+            );
+        }
+        let mut provider = HoverProvider::new();
+        provider.set_cross_reference_manager(Arc::clone(&crm));
+        provider.set_document_manager(Arc::clone(&dm));
+        let target = docs.iter().find(|(u, _)| *u == target_uri).unwrap().1;
+        provider.hover(
+            &HoverParams {
+                text_document_position_params: crate::lsp_types::TextDocumentPositionParams {
+                    text_document: crate::lsp_types::TextDocumentIdentifier {
+                        uri: Url::parse(target_uri).unwrap(),
+                    },
+                    position: Position::new(line, character),
+                },
+                work_done_progress_params: Default::default(),
+            },
+            target,
+        )
+    }
+
+    #[test]
+    fn constant_used_in_the_variant_shows_it() {
+        // `bound` is a constant from context `c`; the machine's variant
+        // `bound + count` uses it, so hovering the constant shows the variant.
+        let ctx = "CONTEXT c\nCONSTANTS\n    bound\nAXIOMS\n    @axm1 bound ∈ ℕ\nEND";
+        let mch = "MACHINE m\nSEES\n    c\nVARIABLES\n    count\nINVARIANTS\n    @inv1 count ∈ ℕ\nVARIANT\n    bound + count\nEND";
+        // `bound` in the VARIANT body (line 8, char 4).
+        let value = markup(
+            hover_in_workspace(
+                &[("file:///c.eventb", ctx), ("file:///m.eventb", mch)],
+                "file:///m.eventb",
+                8,
+                4,
+            )
+            .expect("hover on bound"),
+        );
+        assert!(value.contains("Constant"), "got: {value}");
+        assert!(value.contains("**Variant:**"), "got: {value}");
+        assert!(
+            value.contains("count"),
+            "shows the variant expression: {value}"
+        );
+    }
+
+    #[test]
+    fn variant_from_an_abstract_machine_shows_in_the_refinement() {
+        // The abstract machine declares `VARIANT shared + 1`; the concrete
+        // machine refines it and has no variant of its own. Hovering `shared` in
+        // the concrete machine still surfaces the inherited variant (whole-chain)
+        // — asserting the rendered text, not just the section header.
+        let abstract_mch = "MACHINE m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv1 shared ∈ ℕ\nVARIANT\n    shared + 1\nEND";
+        let concrete = "MACHINE m1\nREFINES\n    m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv2 shared > 0\nEND";
+        // `shared` in the concrete invariant @inv2 (line 6, char 10).
+        let value = markup(
+            hover_in_workspace(
+                &[
+                    ("file:///m0.eventb", abstract_mch),
+                    ("file:///m1.eventb", concrete),
+                ],
+                "file:///m1.eventb",
+                6,
+                10,
+            )
+            .expect("hover on shared"),
+        );
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(value.contains("**Variant:**"), "got: {value}");
+        assert!(
+            value.contains("shared + 1"),
+            "shows the inherited variant text, not just the header: {value}"
+        );
+    }
+
+    #[test]
+    fn distinct_variants_down_the_chain_are_all_listed_in_order() {
+        // Both machines declare a variant; the concrete one (`shared + 1`) and
+        // the inherited one (`shared`) are both shown, cursor machine first.
+        let abstract_mch = "MACHINE m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv1 shared ∈ ℕ\nVARIANT\n    shared\nEND";
+        let concrete = "MACHINE m1\nREFINES\n    m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv2 shared > 0\nVARIANT\n    shared + 1\nEND";
+        let value = markup(
+            hover_in_workspace(
+                &[
+                    ("file:///m0.eventb", abstract_mch),
+                    ("file:///m1.eventb", concrete),
+                ],
+                "file:///m1.eventb",
+                6,
+                10,
+            )
+            .expect("hover on shared"),
+        );
+        let concrete_variant = value.find("shared + 1").expect("concrete variant");
+        // The closing backtick after `shared` matches only the bare inherited one.
+        let inherited = value.find("- `shared`").expect("inherited variant");
+        assert!(
+            concrete_variant < inherited,
+            "the cursor machine's variant is listed before the inherited one: {value}"
+        );
+    }
+
+    #[test]
+    fn an_identical_variant_repeated_down_the_chain_is_deduplicated() {
+        // Abstract and concrete machines declare the SAME variant `shared`; the
+        // section lists it once, not twice.
+        let abstract_mch = "MACHINE m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv1 shared ∈ ℕ\nVARIANT\n    shared\nEND";
+        let concrete = "MACHINE m1\nREFINES\n    m0\nVARIABLES\n    shared\nINVARIANTS\n    @inv2 shared > 0\nVARIANT\n    shared\nEND";
+        let value = markup(
+            hover_in_workspace(
+                &[
+                    ("file:///m0.eventb", abstract_mch),
+                    ("file:///m1.eventb", concrete),
+                ],
+                "file:///m1.eventb",
+                6,
+                10,
+            )
+            .expect("hover on shared"),
+        );
+        assert_eq!(
+            value.matches("- `shared`").count(),
+            1,
+            "the repeated variant collapses to a single line: {value}"
+        );
     }
 
     #[test]
@@ -1648,6 +1871,7 @@ mod tests {
             constants: vec![("max_value".to_string(), "counter_ctx".to_string())],
             sets: vec![],
             constraints,
+            variants: Vec::new(),
         };
 
         // Variable with invariants
