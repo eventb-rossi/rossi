@@ -2,6 +2,7 @@
 name = "rossi"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Core Event-B parser, AST, pretty-printer, and Rodin XML/ZIP conversion library for Rossi"
 license.workspace = true
@@ -29,3 +30,7 @@ proptest.workspace = true
 [features]
 default = []
 serde = ["dep:serde"]
+
+[package.metadata.docs.rs]
+# Document the `serde`-gated APIs on docs.rs.
+all-features = true

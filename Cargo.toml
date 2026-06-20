@@ -15,6 +15,9 @@ exclude = ["editors/zed", "editors/tree-sitter-eventb"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Minimum supported Rust version: the edition-2024 floor. Verified by building
+# the whole workspace with `--all-features` on 1.85.0.
+rust-version = "1.85"
 authors = ["Rossi Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eventb-rossi/rossi"

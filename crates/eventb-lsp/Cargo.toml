@@ -2,6 +2,7 @@
 name = "eventb-lsp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Language Server Protocol implementation for Event-B"
 license.workspace = true

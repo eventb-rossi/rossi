@@ -2,6 +2,7 @@
 name = "rossi-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Command-line interface for the Rossi Event-B toolchain"
 license.workspace = true
