@@ -115,3 +115,98 @@ fn machine_file_stays_accurate_despite_downgraded_events() {
         r.diagnostics
     );
 }
+
+// --------------------------------------------------------------------
+// Variant → convergence (Rodin's `TestAccuracy.testAcc_17` / `_18`).
+//
+// A *new* machine with a convergent event `evt` and an anticipated event
+// `fvt`. The convergent event needs a usable variant to decrease; the
+// anticipated event never does. The machine root stays accurate in every
+// case — only the convergent event flips.
+// --------------------------------------------------------------------
+
+/// Build a one-machine project whose variant clause is `variant_xml`
+/// (pass `""` for no variant) and return both the parsed view and the
+/// machine file's `accurate` flag.
+fn variant_case(variant_xml: &str) -> (ScView, bool) {
+    let bum = format!(
+        r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_v" org.eventb.core.identifier="v"/>
+<org.eventb.core.invariant name="_i" org.eventb.core.label="inv1" org.eventb.core.predicate="v ∈ ℕ"/>
+{variant_xml}
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_a0" org.eventb.core.assignment="v ≔ 0" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_evt" org.eventb.core.convergence="1" org.eventb.core.extended="false" org.eventb.core.label="evt">
+<org.eventb.core.parameter name="_p" org.eventb.core.identifier="x"/>
+<org.eventb.core.guard name="_g" org.eventb.core.label="grd1" org.eventb.core.predicate="x ∈ ℕ"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_fvt" org.eventb.core.convergence="2" org.eventb.core.extended="false" org.eventb.core.label="fvt">
+<org.eventb.core.parameter name="_p" org.eventb.core.identifier="x"/>
+<org.eventb.core.guard name="_g" org.eventb.core.label="grd1" org.eventb.core.predicate="x ∈ ℕ"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#
+    );
+    let project = Project::new(
+        "variant_convergence",
+        vec![ProjectComponent::from_xml("N.bum", &bum).unwrap()],
+    );
+    let r = build(&project);
+    let bcm = r.file("N.bcm").expect("N.bcm");
+    (ScView::from_xml(&bcm.contents).unwrap(), bcm.accurate)
+}
+
+/// Assert the convergent `evt` was downgraded + flipped, the anticipated
+/// `fvt` was left alone, and the machine root stayed accurate.
+fn assert_convergent_downgraded(v: &ScView, file_accurate: bool) {
+    let evt = v.events.get("evt").expect("evt");
+    assert_eq!(
+        evt.convergence.as_deref(),
+        Some("0"),
+        "evt downgraded to ordinary"
+    );
+    assert!(!evt.accurate, "evt should be inaccurate");
+
+    let fvt = v.events.get("fvt").expect("fvt");
+    assert_eq!(
+        fvt.convergence.as_deref(),
+        Some("2"),
+        "fvt stays anticipated"
+    );
+    assert!(fvt.accurate, "anticipated fvt is unaffected by the variant");
+
+    assert!(file_accurate, "the machine root stays accurate");
+}
+
+#[test]
+fn convergent_without_variant_downgrades_anticipated_untouched() {
+    // testAcc_18: no variant at all.
+    let (v, file_accurate) = variant_case("");
+    assert_convergent_downgraded(&v, file_accurate);
+}
+
+#[test]
+fn convergent_with_unusable_variant_downgrades() {
+    // testAcc_17: the variant names the event parameter `x`, which is not
+    // in machine scope — an unusable variant, so the convergent event is
+    // downgraded just as if no variant were present.
+    let (v, file_accurate) =
+        variant_case(r#"<org.eventb.core.variant name="_vr" org.eventb.core.expression="x"/>"#);
+    assert_convergent_downgraded(&v, file_accurate);
+}
+
+#[test]
+fn convergent_with_usable_variant_stays_convergent() {
+    // A well-typed variant over the machine variable keeps the convergent
+    // event convergent and accurate.
+    let (v, file_accurate) =
+        variant_case(r#"<org.eventb.core.variant name="_vr" org.eventb.core.expression="v"/>"#);
+    let evt = v.events.get("evt").expect("evt");
+    assert_eq!(evt.convergence.as_deref(), Some("1"));
+    assert!(
+        evt.accurate,
+        "evt keeps its convergence with a usable variant"
+    );
+    assert!(file_accurate);
+}
