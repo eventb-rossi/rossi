@@ -155,40 +155,30 @@ fn is_nondeterministic_assignment(action: &rossi::Action) -> bool {
     )
 }
 
-/// Whether the event's witnesses leave it accurate, emitting a warning for
-/// each unmet requirement.
+/// The witness names a refining event must provide: (a) every abstract
+/// parameter it does not itself (re)declare, and (b) the primed after-value
+/// `v'` of every disappearing variable a *non-deterministic* abstract action
+/// assigns. This is the single set both the event's accuracy flag and its
+/// emitted witness elements are derived from.
 ///
-/// A refining event must witness (a) every abstract parameter it does not
-/// itself (re)declare and (b) the primed after-value of every disappearing
-/// variable a *non-deterministic* abstract action assigns. Each requirement
-/// is met by a provided WITNESS/WITH clause with the matching label whose
-/// predicate type-checks; any unmet requirement marks the event inaccurate.
-/// Only called for refining events; a new event requires no witnesses.
-#[allow(clippy::too_many_arguments)]
-fn check_witnesses(
-    kind: EventKind<'_>,
+/// `abstract_decl` is the refined (abstract) event. Its full parameter and
+/// action sets — own plus any inherited through its own extension — are
+/// considered, since an extended abstract event carries its ancestors'
+/// parameters and actions just as Rodin's statically-checked event does.
+fn required_witness_names(
     abstract_decl: &EventDecl,
     concrete_param_names: &BTreeSet<String>,
     abstract_only: &BTreeSet<String>,
-    base_env: &TypeEnv,
-    parent: Option<&CheckedMachine>,
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
-    label: &str,
-) -> bool {
-    // The abstract event's full parameter and action sets — own plus any
-    // inherited through its own extension, since an extended abstract event
-    // carries its ancestors' parameters and actions just as Rodin's
-    // statically-checked event does. `chain_root_first` excludes the event
-    // itself, so its own actions are chained on.
+) -> BTreeSet<String> {
     let abstract_params = abstract_decl.chain_parameters();
+    // `chain_root_first` excludes the event itself, so its own actions are
+    // chained on.
     let abstract_actions = abstract_decl
         .chain_root_first()
         .into_iter()
         .flat_map(|e| e.actions.iter())
         .chain(abstract_decl.actions.iter());
 
-    // Required witness names.
     let mut required: BTreeSet<String> = BTreeSet::new();
     // Local: abstract parameters the concrete event does not (re)declare.
     for p in &abstract_params {
@@ -208,17 +198,22 @@ fn check_witnesses(
             }
         }
     }
-    if required.is_empty() {
-        return true;
-    }
+    required
+}
 
-    // Type-check scope for witness predicates: the concrete environment plus
-    // the abstract parameters and the disappearing variables (and their
-    // primed forms) the witnesses are about. Identifiers left untyped are
-    // accepted by the conservative well-typedness check.
+/// Type-check scope for witness predicates: the concrete environment plus the
+/// abstract parameters and the disappearing variables (and their primed forms)
+/// the witnesses are about. Identifiers left untyped are accepted by the
+/// conservative well-typedness check.
+fn witness_scope(
+    base_env: &TypeEnv,
+    abstract_decl: &EventDecl,
+    abstract_only: &BTreeSet<String>,
+    parent: Option<&CheckedMachine>,
+) -> TypeEnv {
     let mut wscope = base_env.clone();
     wscope.push_scope();
-    for p in &abstract_params {
+    for p in &abstract_decl.chain_parameters() {
         wscope.insert(p.name.clone(), p.ty.clone());
     }
     if let Some(parent) = parent {
@@ -229,6 +224,34 @@ fn check_witnesses(
             }
         }
     }
+    wscope
+}
+
+/// Whether the event's witnesses leave it accurate, emitting a warning for
+/// each unmet requirement.
+///
+/// A requirement (see [`required_witness_names`]) is met by a provided
+/// WITNESS/WITH clause with the matching label whose predicate type-checks;
+/// any unmet requirement marks the event inaccurate. Only called for refining
+/// events; a new event requires no witnesses.
+#[allow(clippy::too_many_arguments)]
+fn check_witnesses(
+    kind: EventKind<'_>,
+    abstract_decl: &EventDecl,
+    concrete_param_names: &BTreeSet<String>,
+    abstract_only: &BTreeSet<String>,
+    base_env: &TypeEnv,
+    parent: Option<&CheckedMachine>,
+    diags: &mut Vec<Diagnostic>,
+    machine_name: &str,
+    label: &str,
+) -> bool {
+    let mut required = required_witness_names(abstract_decl, concrete_param_names, abstract_only);
+    if required.is_empty() {
+        return true;
+    }
+
+    let wscope = witness_scope(base_env, abstract_decl, abstract_only, parent);
 
     // A provided witness clears its requirement when its label matches and
     // its predicate type-checks.
