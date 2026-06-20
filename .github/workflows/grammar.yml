@@ -20,7 +20,7 @@ permissions:
 # (e.g. one pushed straight to a side branch). Whenever the pointer moves,
 # re-run the standalone repo's checks against the pinned commit: the committed
 # src/parser.c must match grammar.js, the corpus must parse, and the token
-# contract must hold. (`gen-grammars --check` in the main CI only byte-checks
+# contract must hold. (`cargo xtask gen-grammars --check` in the main CI only byte-checks
 # the generated grammar.js/highlights regions, never parser.c.)
 jobs:
   grammar:

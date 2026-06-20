@@ -4,7 +4,7 @@
 //! Every complete component shown in a ```eventb fenced block of a git-tracked
 //! markdown file must parse, and every snippet in [`rossi::snippets::SNIPPETS`]
 //! must expand to parseable Event-B. The editor snippet libraries (VS Code,
-//! Neovim, Zed, Emacs) are generated from that table by `rossi gen-grammars`,
+//! Neovim, Zed, Emacs) are generated from that table by `cargo xtask gen-grammars`,
 //! whose `--check` mode guards file↔table sync — so validating the table covers
 //! all of them at the source. Doc blocks that intentionally show errors or UI
 //! annotations (←, ⮟, ▶, "<- ") and fragments that don't start with
@@ -220,7 +220,7 @@ fn wrap_snippet(prefix: &str, body: &str) -> Option<String> {
 
 /// Validates the canonical snippet table itself — the single source the editor
 /// snippet libraries are rendered from. File↔table drift is separately gated
-/// by `gen-grammars --check` (CI and crates/rossi-cli/tests/gen_grammars_test.rs).
+/// by `cargo xtask gen-grammars --check` (CI and crates/xtask/tests/gen_grammars_test.rs).
 #[test]
 fn canonical_snippets_expand_to_valid_eventb() {
     let mut failures = Vec::new();

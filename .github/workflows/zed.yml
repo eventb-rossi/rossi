@@ -36,7 +36,7 @@ jobs:
 
       # The tree-sitter grammar now lives in the standalone tree-sitter-eventb
       # repository, which has its own CI for `tree-sitter generate`/`test`. The
-      # main CI's `gen-grammars --check` still guards that its generated regions
+      # main CI's `cargo xtask gen-grammars --check` still guards that its generated regions
       # match the token tables. Here we only build the wasm extension.
       - name: Build extension (wasm)
         run: cargo build --locked --target wasm32-wasip1

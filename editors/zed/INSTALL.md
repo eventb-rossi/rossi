@@ -78,5 +78,5 @@ If you already have a published version installed, Zed uninstalls it first.
 - **No highlighting.** The grammar reference in `extension.toml` must resolve
   (step 2). Reinstall the dev extension after editing `extension.toml`.
 - **Grammar out of date after editing the token tables.** Re-run
-  `cargo run -p rossi-cli -- gen-grammars` and `npx tree-sitter generate` in the
+  `cargo xtask gen-grammars` and `npx tree-sitter generate` in the
   grammar directory (see [README.md](README.md#regenerating-the-grammar)).
