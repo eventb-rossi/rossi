@@ -371,7 +371,7 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
         m.events.iter().map(|e| (e.name.as_str(), e.span)).chain(
             m.initialisation
                 .as_ref()
-                .map(|i| ("INITIALISATION", i.span)),
+                .map(|i| (crate::sc::initialisation_label(), i.span)),
         ),
         RuleId::DuplicateLabel,
         "event label",
@@ -397,7 +397,7 @@ fn lint_duplicate_names_machine(m: &Machine) -> Vec<Diagnostic> {
     if let Some(init) = &m.initialisation {
         diags.extend(duplicate_names_in_event(
             &m.name,
-            "INITIALISATION",
+            crate::sc::initialisation_label(),
             std::iter::empty(),
             action_labels(&init.actions),
             pred_labels(&init.with).chain(pred_labels(&init.witnesses)),

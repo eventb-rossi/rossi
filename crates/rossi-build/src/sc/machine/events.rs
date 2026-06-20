@@ -8,7 +8,10 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use rossi::{Event, InitialisationEvent, LabeledAction, LabeledPredicate, NamedElement};
+use rossi::{
+    Action, ActionKind, Event, Ident, InitialisationEvent, LabeledAction, LabeledPredicate,
+    NamedElement, PredicateKind,
+};
 
 use crate::checked_predicate::{check_action, check_labeled_predicate};
 use crate::handles::HandleUri;
@@ -35,7 +38,7 @@ pub(super) enum EventKind<'a> {
 impl<'a> EventKind<'a> {
     fn label(&self) -> &'a str {
         match self {
-            EventKind::Init(_) => "INITIALISATION",
+            EventKind::Init(_) => crate::sc::initialisation_label(),
             EventKind::Ordinary(e) => e.name.as_str(),
         }
     }
@@ -263,6 +266,9 @@ pub(super) fn build_event_decl(
     parent: Option<&CheckedMachine>,
     abstract_only: &BTreeSet<String>,
     variant_usable: bool,
+    // This machine's concrete, typed variables in emission (alphabetical)
+    // order. Used by the INITIALISATION repair to find unassigned ones.
+    concrete_vars: &[String],
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
 ) -> Option<(EventDecl, bool)> {
@@ -378,24 +384,52 @@ pub(super) fn build_event_decl(
         }
     };
 
-    // Materialise the effective action list: an extended event's emitted
-    // actions are the inherited chain's actions followed by its own. The
-    // immediate parent decl already carries its full inherited closure, so
-    // concatenating `parent.actions ++ own` reproduces the root-first order
-    // without re-walking the chain. Doing this here (rather than splicing the
-    // chain at render time) makes the action list the single source the
-    // accuracy / vanished-variable-drop / repair passes all read.
+    // Effective actions = the inherited chain (the parent decl already
+    // carries its full root-first closure) ++ own. Materialised here rather
+    // than spliced at render time so the accuracy and INITIALISATION-repair
+    // passes read one list. Inherited actions are valid in this scope: an
+    // extended INITIALISATION that would inherit an action on a vanished
+    // variable is dropped upstream by `should_omit_initialisation`.
     let mut actions: Vec<ActionDecl> = Vec::new();
     if let Some(parent_ev) = inherited_chain.as_deref() {
         actions.extend(parent_ev.actions.iter().cloned());
     }
     actions.extend(buckets.actions);
 
-    let accurate = scope_accurate
+    let mut accurate = scope_accurate
         && buckets_accurate
         && inherited_accurate
         && convergence_accurate
         && witness_accurate;
+
+    // INITIALISATION repair: in Event-B every concrete variable must be
+    // initialised, so any concrete, typed variable that no action (inherited
+    // or own) assigns is given a default `becomesSuchThat ⊤`. All such
+    // variables are gathered into one combined action and the event (not the
+    // machine) is marked inaccurate.
+    if matches!(kind, EventKind::Init(_)) {
+        let unassigned: Vec<Ident> = {
+            let assigned: std::collections::HashSet<&str> = actions
+                .iter()
+                .flat_map(|a| lhs_variables(&a.action))
+                .collect();
+            concrete_vars
+                .iter()
+                .filter(|v| !assigned.contains(v.as_str()))
+                .map(|v| Ident::from(v.clone()))
+                .collect()
+        };
+        if !unassigned.is_empty() {
+            let repair_label = fresh_gen_label(&actions);
+            actions.push(build_repair_action(
+                repair_label,
+                &source,
+                unassigned,
+                base_env,
+            ));
+            accurate = false;
+        }
+    }
     let decl = EventDecl {
         label: label.to_string(),
         convergence,
@@ -413,6 +447,48 @@ pub(super) fn build_event_decl(
     Some((decl, accurate))
 }
 
+/// Fresh label for the synthetic INITIALISATION-repair action: `GEN`, then
+/// `GEN1`, `GEN12`, and so on — each collision appends the running index to
+/// the label until it is free among the event's existing actions. The append
+/// form only triggers when the model already declares an action named `GEN`.
+fn fresh_gen_label(actions: &[ActionDecl]) -> String {
+    let used: std::collections::HashSet<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+    let mut label = "GEN".to_string();
+    let mut index = 1;
+    while used.contains(label.as_str()) {
+        label.push_str(&index.to_string());
+        index += 1;
+    }
+    label
+}
+
+/// Build the synthetic `<vars> :∣ ⊤` repair action. The assignment text is
+/// produced through the shared [`check_action`] canonicaliser, and the
+/// `source` points at the INITIALISATION event element (the generated action
+/// has no source clause of its own).
+fn build_repair_action(
+    label: String,
+    source: &HandleUri,
+    variables: Vec<Ident>,
+    env: &TypeEnv,
+) -> ActionDecl {
+    let action = Action::from(ActionKind::BecomesSuchThat {
+        variables,
+        predicate: PredicateKind::True.into(),
+    });
+    let checked = check_action(&action, env);
+    ActionDecl {
+        label,
+        // ActionDecl.source_index is never read for actions; a generated
+        // action has no source clause, so use the same 0 placeholder as
+        // other synthetic decls.
+        source_index: 0,
+        action: checked.action,
+        canonical: checked.canonical,
+        source: source.clone(),
+    }
+}
+
 /// Resolve `(effective_refines_label, parent_event_decl)` for `kind`.
 /// INIT events implicitly refine the parent's INITIALISATION when one
 /// exists; ordinary events prefer the explicit `refines` annotation but
@@ -423,8 +499,11 @@ fn resolve_effective_refines<'a, 'b>(
 ) -> (Option<&'a str>, Option<&'b Rc<EventDecl>>) {
     let effective_refines: Option<&str> = match kind {
         EventKind::Init(_) => parent
-            .filter(|p| p.events_by_label.contains_key("INITIALISATION"))
-            .map(|_| "INITIALISATION"),
+            .filter(|p| {
+                p.events_by_label
+                    .contains_key(crate::sc::initialisation_label())
+            })
+            .map(|_| crate::sc::initialisation_label()),
         EventKind::Ordinary(e) => {
             let explicit = e.refines.as_deref();
             let implicit = if e.refines.is_none() && e.extended {
