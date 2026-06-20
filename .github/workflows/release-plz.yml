@@ -1,0 +1,63 @@
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Open/update the "Release vX.Y.Z" PR (version bump + changelog). Runs under the
+  # VERSION_BUMP_TOKEN PAT so the PR's own CI checks fire (the default GITHUB_TOKEN
+  # cannot trigger workflows on the PR it opens).
+  release-plz-pr:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: release-plz/action@v0.5.130
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
+
+  # When a release commit lands on main, publish the crates and create the single
+  # tag + GitHub release. Publishing uses crates.io Trusted Publishing (OIDC): no
+  # CARGO_REGISTRY_TOKEN secret — release-plz mints a short-lived token via the
+  # id-token permission below. The default GITHUB_TOKEN is enough for the tag /
+  # release / PR-comment work here (least privilege — no broad PAT in this job);
+  # switch it to secrets.VERSION_BUMP_TOKEN only if a future workflow must trigger
+  # on the pushed tag or published release.
+  release-plz-release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the tag, create the GitHub release
+      pull-requests: write # comment on / label the released PR
+      id-token: write # OIDC -> crates.io Trusted Publishing
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: release-plz/action@v0.5.130
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

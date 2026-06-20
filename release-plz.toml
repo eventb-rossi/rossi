@@ -1,0 +1,23 @@
+# release-plz configuration — automated releases for the Rossi crate suite.
+# https://release-plz.dev/docs/config
+#
+# The four crates share one version (`version.workspace = true`) and release in
+# lockstep: each release is a single version, a single `vX.Y.Z` tag, and a single
+# combined GitHub release. release-plz natively bumps the shared
+# `[workspace.package].version` (no `version_group` needed) and publishes the
+# crates in dependency order (rossi -> rossi-build / eventb-lsp -> rossi-cli).
+
+# Default for every crate: publish, but cut no tag/release of its own. A new
+# workspace member inherits this and is silenced automatically — no edit needed.
+[workspace]
+git_tag_enable = false
+git_release_enable = false
+
+# rossi-cli — the user-facing product and the last crate in publish order — owns
+# the single suite tag + GitHub release. If this crate is ever renamed, update
+# this override, or the suite will cut no tag/release at all.
+[[package]]
+name = "rossi-cli"
+git_tag_enable = true
+git_release_enable = true
+git_tag_name = "v{{ version }}"
