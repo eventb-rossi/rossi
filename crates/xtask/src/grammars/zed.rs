@@ -41,8 +41,8 @@ use super::{Markers, MatchKind, Model, Scope, TokenGroup};
 
 /// The generated region inside the otherwise hand-maintained `grammar.js`.
 pub const MARKERS: Markers = Markers {
-    begin: "// >>> rossi gen-grammars (generated, do not edit)",
-    end: "// <<< rossi gen-grammars",
+    begin: "// >>> cargo xtask gen-grammars (generated, do not edit)",
+    end: "// <<< cargo xtask gen-grammars",
 };
 
 /// The generated region inside the standalone grammar's `queries/highlights.scm`
@@ -51,8 +51,8 @@ pub const MARKERS: Markers = Markers {
 /// future structural nodes live outside the region, so highlighting can be
 /// hand-extended without breaking the byte check.
 pub const MARKERS_SCM: Markers = Markers {
-    begin: "; >>> rossi gen-grammars (generated, do not edit)",
-    end: "; <<< rossi gen-grammars",
+    begin: "; >>> cargo xtask gen-grammars (generated, do not edit)",
+    end: "; <<< cargo xtask gen-grammars",
 };
 
 /// The tree-sitter node (rule) name a coloured class is emitted as, split by
