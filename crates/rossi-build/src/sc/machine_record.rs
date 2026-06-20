@@ -22,7 +22,7 @@
 
 use std::rc::Rc;
 
-use rossi::{Action, Predicate};
+use rossi::{Action, EventStatus, Predicate};
 
 use crate::handles::HandleUri;
 use crate::type_env::TypeEnv;
@@ -121,10 +121,47 @@ pub struct VariantDecl {
 // Event-scoped decls
 // ---------------------------------------------------------------------
 
+/// Event convergence, conceptually ranked `Ordinary` (weakest) through
+/// `Anticipated` to `Convergent` (strongest); every static-check downgrade
+/// moves toward `Ordinary`.
+///
+/// The numeric `code` written to `org.eventb.core.convergence` is a
+/// *separate* mapping that does not follow the ranking: `Ordinary` → `0`,
+/// `Convergent` → `1`, `Anticipated` → `2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Convergence {
+    Ordinary,
+    Anticipated,
+    Convergent,
+}
+
+impl Convergence {
+    /// The convergence declared on an AST event; an absent status is
+    /// ordinary.
+    #[must_use]
+    pub fn from_status(status: Option<EventStatus>) -> Self {
+        match status {
+            Some(EventStatus::Convergent) => Self::Convergent,
+            Some(EventStatus::Anticipated) => Self::Anticipated,
+            Some(EventStatus::Ordinary) | None => Self::Ordinary,
+        }
+    }
+
+    /// The code emitted for the `org.eventb.core.convergence` attribute.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Ordinary => "0",
+            Self::Convergent => "1",
+            Self::Anticipated => "2",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EventDecl {
     pub label: String,
-    pub convergence: &'static str,
+    pub convergence: Convergence,
     pub extended: bool,
     pub accurate: bool,
     pub source: HandleUri,
@@ -373,7 +410,7 @@ fn render_event(ev: &EventDecl) -> Element {
     let mut scev = Element::new(tag::SC_EVENT)
         .attr(attr::NAME, ev.label.clone())
         .attr_bool(attr::ACCURATE, ev.accurate)
-        .attr(attr::CONVERGENCE, ev.convergence)
+        .attr(attr::CONVERGENCE, ev.convergence.code())
         .attr_bool(attr::EXTENDED, ev.extended)
         .attr(attr::LABEL, ev.label.clone())
         .attr(attr::SOURCE, ev.source.as_str());
@@ -535,7 +572,7 @@ mod tests {
     fn event_chain_root_first_walks_oldest_to_youngest() {
         let grandparent = Rc::new(EventDecl {
             label: "e".into(),
-            convergence: "0",
+            convergence: Convergence::Ordinary,
             extended: false,
             accurate: true,
             source: mk_uri(),
@@ -548,7 +585,7 @@ mod tests {
         });
         let parent = Rc::new(EventDecl {
             label: "e".into(),
-            convergence: "0",
+            convergence: Convergence::Ordinary,
             extended: true,
             accurate: true,
             source: mk_uri(),
@@ -561,7 +598,7 @@ mod tests {
         });
         let own = EventDecl {
             label: "e".into(),
-            convergence: "0",
+            convergence: Convergence::Ordinary,
             extended: true,
             accurate: true,
             source: mk_uri(),
