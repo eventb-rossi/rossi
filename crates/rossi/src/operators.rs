@@ -898,6 +898,70 @@ pub fn ascii_input_alias_entries() -> &'static [(&'static str, &'static Operator
     ASCII_INPUT_ALIASES.as_slice()
 }
 
+/// One operator spelling, projected for editor input methods. Consumed both by
+/// the LSP `rossi/operatorTable` request and by the generated editor grammars,
+/// so the mapping lives next to its source table and is never re-encoded.
+///
+/// Only operators whose ASCII and *emitted* spellings differ are included.
+/// `symbolic` marks operators with no word characters (alphabetic ops are
+/// leader-only); `eager` marks the subset an input method should substitute as
+/// you type (see [`OperatorSpelling::is_eager_input`]). The `serde` feature
+/// adds `Serialize` so the LSP can hand the rows to editor clients as JSON.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct OperatorRow {
+    pub ascii: String,
+    pub unicode: String,
+    pub description: String,
+    pub aliases: Vec<String>,
+    pub symbolic: bool,
+    pub eager: bool,
+}
+
+/// Build the operator input-method rows from the single-source table in this
+/// module. Only operators whose ASCII and *emitted* spellings differ are
+/// included: identical ones need no conversion, and the private-use operators
+/// emit ASCII (`emit_text`) so they collapse to `ascii == unicode` here and
+/// drop out.
+///
+/// Each operator's extra ASCII input aliases (e.g. `,,` for the maplet ↦) are
+/// emitted as their own rows so the editor input method converts them like any
+/// other spelling. They share the operator's emitted Unicode but carry no
+/// leader aliases of their own (those already ride on the canonical row).
+pub fn operator_rows() -> Vec<OperatorRow> {
+    let mut seen = std::collections::HashSet::new();
+    OPERATOR_SPELLINGS
+        .iter()
+        .filter_map(|entry| {
+            // `emit_text` is the spelling editors should substitute to; the
+            // private-use operators emit ASCII, so they collapse to `ascii ==
+            // unicode` here and drop out (no point converting `<+` to itself,
+            // and nothing should ever substitute to a private-use glyph).
+            let unicode = entry.emit_text(true);
+            (entry.ascii != unicode && seen.insert((entry.ascii, unicode))).then(|| OperatorRow {
+                ascii: entry.ascii.to_string(),
+                unicode: unicode.to_string(),
+                description: entry.description.to_string(),
+                aliases: entry.aliases().iter().map(|a| a.to_string()).collect(),
+                symbolic: entry.is_symbolic(),
+                eager: entry.is_eager_input(),
+            })
+        })
+        .chain(
+            ascii_input_alias_entries()
+                .iter()
+                .map(|&(alias, entry)| OperatorRow {
+                    ascii: alias.to_string(),
+                    unicode: entry.emit_text(true).to_string(),
+                    description: entry.description.to_string(),
+                    aliases: Vec::new(),
+                    symbolic: is_symbolic_spelling(alias),
+                    eager: is_eager_input_spelling(alias),
+                }),
+        )
+        .collect()
+}
+
 /// Operators whose ASCII and Unicode spellings differ, in declaration order.
 static DIFFERING_SPELLINGS: std::sync::LazyLock<Vec<&'static OperatorSpelling>> =
     std::sync::LazyLock::new(|| {
@@ -1503,5 +1567,68 @@ mod tests {
         assert_eq!(convert_to_unicode("A <<->> B"), "A <<->> B");
         // Convert-to-ASCII still cleans pasted private-use glyphs back to ASCII.
         assert_eq!(convert_to_ascii("f \u{E103} g"), "f <+ g");
+    }
+
+    #[test]
+    fn operator_rows_are_well_formed() {
+        let rows = operator_rows();
+        assert!(!rows.is_empty(), "operator table must not be empty");
+
+        // Every row differs (ascii != unicode) and has non-empty spellings, and
+        // no row substitutes to a private-use glyph that would render as tofu.
+        // ascii keys must be unique (operator_rows() deduplicates by (ascii, unicode)).
+        for row in &rows {
+            assert_ne!(row.ascii, row.unicode);
+            assert!(!row.ascii.is_empty() && !row.unicode.is_empty());
+            assert!(
+                !is_private_use_glyph(&row.unicode),
+                "operator row {:?} substitutes to a private-use glyph",
+                row.ascii
+            );
+        }
+
+        // The private-use operators emit ASCII, so they have no conversion row.
+        for ascii in ["<+", "<<->", "<->>", "<<->>"] {
+            assert!(
+                !rows.iter().any(|r| r.ascii == ascii),
+                "{ascii:?} should not appear in the input-method table"
+            );
+        }
+        let ascii_set: std::collections::HashSet<&str> =
+            rows.iter().map(|r| r.ascii.as_str()).collect();
+        assert_eq!(
+            ascii_set.len(),
+            rows.len(),
+            "operator_rows() must have unique ascii keys"
+        );
+
+        // Representative symbolic op carries aliases and is eager-eligible.
+        let implies = rows
+            .iter()
+            .find(|r| r.ascii == "=>")
+            .expect("`=>` should be present");
+        assert_eq!(implies.unicode, "⇒");
+        assert!(implies.symbolic);
+        assert!(implies.eager);
+        assert!(implies.aliases.iter().any(|a| a == "implies"));
+
+        // Alphabetic op is leader-only (symbolic and eager both false).
+        let nat = rows
+            .iter()
+            .find(|r| r.ascii == "NAT")
+            .expect("`NAT` should be present");
+        assert!(!nat.symbolic);
+        assert!(!nat.eager);
+
+        // A bare `/` is symbolic but blocklisted from eager (`//` comments).
+        let divide = rows
+            .iter()
+            .find(|r| r.ascii == "/")
+            .expect("`/` should be present");
+        assert!(divide.symbolic);
+        assert!(!divide.eager);
+
+        // The serialized JSON shape the editors consume is covered end-to-end by
+        // the LSP wire test `eventb-lsp/tests/operator_table_test.rs`.
     }
 }

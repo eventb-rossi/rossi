@@ -893,66 +893,11 @@ impl LanguageServer for RossiLanguageServer {
     }
 }
 
-/// One operator spelling, as returned by the `rossi/operatorTable` custom
-/// request. Only operators whose ASCII and Unicode spellings differ are
-/// included. `symbolic` marks operators with no word characters (alphabetic
-/// ops are leader-only); `eager` marks the subset an input method should
-/// substitute as you type (see [`rossi::operators::OperatorSpelling::is_eager_input`]).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct OperatorRow {
-    pub ascii: String,
-    pub unicode: String,
-    pub description: String,
-    pub aliases: Vec<String>,
-    pub symbolic: bool,
-    pub eager: bool,
-}
-
-/// Build the operator rows served by `rossi/operatorTable` from the
-/// single-source table in `rossi::operators`. Only operators whose ASCII and
-/// *emitted* spellings differ are included: identical ones need no conversion,
-/// and the private-use operators emit ASCII (`emit_text`) so they collapse to
-/// `ascii == unicode` here and drop out.
-///
-/// Each operator's extra ASCII input aliases (e.g. `,,` for the maplet ↦) are
-/// emitted as their own rows so the editor input method converts them like any
-/// other spelling. They share the operator's emitted Unicode but carry no
-/// leader aliases of their own (those already ride on the canonical row).
-pub fn operator_rows() -> Vec<OperatorRow> {
-    use rossi::operators::{is_eager_input_spelling, is_symbolic_spelling};
-
-    let mut seen = std::collections::HashSet::new();
-    rossi::operators::OPERATOR_SPELLINGS
-        .iter()
-        .filter_map(|entry| {
-            // `emit_text` is the spelling editors should substitute to; the
-            // private-use operators emit ASCII, so they collapse to `ascii ==
-            // unicode` here and drop out (no point converting `<+` to itself,
-            // and nothing should ever substitute to a private-use glyph).
-            let unicode = entry.emit_text(true);
-            (entry.ascii != unicode && seen.insert((entry.ascii, unicode))).then(|| OperatorRow {
-                ascii: entry.ascii.to_string(),
-                unicode: unicode.to_string(),
-                description: entry.description.to_string(),
-                aliases: entry.aliases().iter().map(|a| a.to_string()).collect(),
-                symbolic: entry.is_symbolic(),
-                eager: entry.is_eager_input(),
-            })
-        })
-        .chain(
-            rossi::operators::ascii_input_alias_entries()
-                .iter()
-                .map(|&(alias, entry)| OperatorRow {
-                    ascii: alias.to_string(),
-                    unicode: entry.emit_text(true).to_string(),
-                    description: entry.description.to_string(),
-                    aliases: Vec::new(),
-                    symbolic: is_symbolic_spelling(alias),
-                    eager: is_eager_input_spelling(alias),
-                }),
-        )
-        .collect()
-}
+/// `OperatorRow` and its builder [`rossi::operators::operator_rows`] now live
+/// next to their source table in [`rossi::operators`]. Re-exported here so the
+/// `eventb_lsp::server::OperatorRow` path stays stable for clients of the
+/// `rossi/operatorTable` request.
+pub use rossi::operators::OperatorRow;
 
 impl RossiLanguageServer {
     /// Custom request `rossi/operatorTable`: the single-source operator table
@@ -972,7 +917,7 @@ impl RossiLanguageServer {
     /// is moot: `vscode-languageclient` omits `params`, and no other client
     /// calls this method.
     pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
-        Ok(operator_rows())
+        Ok(rossi::operators::operator_rows())
     }
 
     /// Apply current configuration to all providers
@@ -1086,7 +1031,7 @@ fn parse_error_range(error: &rossi::ParseError, text: &str) -> Range {
 
 #[cfg(test)]
 mod tests {
-    use super::{operator_rows, parse_error_to_diagnostic};
+    use super::parse_error_to_diagnostic;
     use crate::lsp_types::Position;
 
     #[test]
@@ -1217,69 +1162,5 @@ mod tests {
         // The diagnostic stays on the @EntitiesPartition line (0-indexed 5),
         // never reaching @RolesPartition on line 6.
         assert!(diagnostics[0].range.end.line < 6);
-    }
-
-    #[test]
-    fn operator_rows_are_well_formed() {
-        let rows = operator_rows();
-        assert!(!rows.is_empty(), "operator table must not be empty");
-
-        // Every row differs (ascii != unicode) and has non-empty spellings, and
-        // no row substitutes to a private-use glyph that would render as tofu.
-        // ascii keys must be unique (operator_rows() deduplicates by (ascii, unicode)).
-        for row in &rows {
-            assert_ne!(row.ascii, row.unicode);
-            assert!(!row.ascii.is_empty() && !row.unicode.is_empty());
-            assert!(
-                !rossi::operators::is_private_use_glyph(&row.unicode),
-                "operator row {:?} substitutes to a private-use glyph",
-                row.ascii
-            );
-        }
-
-        // The private-use operators emit ASCII, so they have no conversion row.
-        for ascii in ["<+", "<<->", "<->>", "<<->>"] {
-            assert!(
-                !rows.iter().any(|r| r.ascii == ascii),
-                "{ascii:?} should not appear in the input-method table"
-            );
-        }
-        let ascii_set: std::collections::HashSet<&str> =
-            rows.iter().map(|r| r.ascii.as_str()).collect();
-        assert_eq!(
-            ascii_set.len(),
-            rows.len(),
-            "operator_rows() must have unique ascii keys"
-        );
-
-        // Representative symbolic op carries aliases and is eager-eligible.
-        let implies = rows
-            .iter()
-            .find(|r| r.ascii == "=>")
-            .expect("`=>` should be present");
-        assert_eq!(implies.unicode, "⇒");
-        assert!(implies.symbolic);
-        assert!(implies.eager);
-        assert!(implies.aliases.iter().any(|a| a == "implies"));
-
-        // Alphabetic op is leader-only (symbolic and eager both false).
-        let nat = rows
-            .iter()
-            .find(|r| r.ascii == "NAT")
-            .expect("`NAT` should be present");
-        assert!(!nat.symbolic);
-        assert!(!nat.eager);
-
-        // A bare `/` is symbolic but blocklisted from eager (`//` comments).
-        let divide = rows
-            .iter()
-            .find(|r| r.ascii == "/")
-            .expect("`/` should be present");
-        assert!(divide.symbolic);
-        assert!(!divide.eager);
-
-        // Serializes to a flat JSON array the extension can consume.
-        let json = serde_json::to_value(&rows).expect("serializes");
-        assert!(json.is_array());
     }
 }

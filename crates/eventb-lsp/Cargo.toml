@@ -38,8 +38,9 @@ clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# Parser
-rossi.workspace = true
+# Parser. The `serde` feature provides `Serialize` for the operator table
+# (`rossi::operators::OperatorRow`) the `rossi/operatorTable` request returns.
+rossi = { workspace = true, features = ["serde"] }
 
 # File system operations
 walkdir.workspace = true
