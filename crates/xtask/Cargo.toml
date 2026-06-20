@@ -1,0 +1,22 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Workspace maintenance tasks for the Rossi Event-B toolchain (development only, not published)"
+license.workspace = true
+repository.workspace = true
+# Development-only automation: source-tree codegen run by maintainers and CI,
+# never shipped to users. Kept off crates.io.
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+rossi.workspace = true
+clap.workspace = true
+serde_json.workspace = true
