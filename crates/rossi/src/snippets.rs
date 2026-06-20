@@ -2,7 +2,7 @@
 //!
 //! This module is the shared reference for the editor snippet libraries
 //! (VS Code, LuaSnip, yasnippet) the way [`crate::operators`] is the shared
-//! reference for operator spellings. The `rossi gen-grammars` command renders
+//! reference for operator spellings. The `cargo xtask gen-grammars` command renders
 //! this table into each editor's native snippet format, so every editor offers
 //! the same prefixes, descriptions and bodies and they can never drift.
 //!
@@ -26,7 +26,7 @@ pub struct Snippet {
 
 /// Every Event-B snippet, transcribed verbatim from
 /// `editors/vscode/snippets/eventb.json`. This is the single source of truth;
-/// the generated `eventb.json` files are produced from it by `gen-grammars`.
+/// the generated `eventb.json` files are produced from it by `cargo xtask gen-grammars`.
 pub const SNIPPETS: &[Snippet] = &[
     Snippet {
         name: "Event-B Context",
@@ -172,7 +172,7 @@ mod tests {
 
     /// Guards against accidental loss when editing the table; bump this when
     /// intentionally adding or removing a snippet. This table is the source of
-    /// truth — `gen-grammars` renders every editor's library (including VS
+    /// truth — `cargo xtask gen-grammars` renders every editor's library (including VS
     /// Code) from it.
     #[test]
     fn snippet_count_is_stable() {

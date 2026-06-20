@@ -10,7 +10,7 @@ repository = "https://github.com/eventb-rossi/rossi"
 # pinned revision (there is no local-path option). The grammar is the standalone
 # `eventb-rossi/tree-sitter-eventb` repository, developed in this monorepo as
 # the `editors/tree-sitter-eventb/` submodule and kept in sync with the
-# canonical token tables by `rossi gen-grammars`. `rev` pins the submodule's
+# canonical token tables by `cargo xtask gen-grammars`. `rev` pins the submodule's
 # commit; until the repository is published, see editors/zed/INSTALL.md for the
 # local-development `file://` workflow.
 [grammars.eventb]

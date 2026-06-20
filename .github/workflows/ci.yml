@@ -17,8 +17,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          # The tree-sitter-eventb grammar is a submodule; `gen-grammars --check`
-          # and the gen_grammars test read its grammar.js / queries.
+          # The tree-sitter-eventb grammar is a submodule; `cargo xtask
+          # gen-grammars --check` and the gen_grammars test read its grammar.js
+          # / queries.
           submodules: recursive
 
       - name: Install Rust toolchain
@@ -43,7 +44,7 @@ jobs:
           fi
 
       - name: Check editor grammars are up to date
-        run: cargo run -p rossi-cli -- gen-grammars --check
+        run: cargo xtask gen-grammars --check
 
       - name: Run tests
         run: cargo test --verbose
@@ -129,7 +130,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           # Tarpaulin runs the same tests as the test job, which read the
-          # tree-sitter-eventb submodule (gen-grammars --check, grammar.js).
+          # tree-sitter-eventb submodule (cargo xtask gen-grammars --check, grammar.js).
           submodules: recursive
 
       - name: Install Rust toolchain

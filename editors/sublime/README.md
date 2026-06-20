@@ -10,7 +10,7 @@ pager). The last two do not support the Rossi language server, only syntax highl
 
 > **`EventB/EventB.sublime-syntax` and `EventB/operators.py` are generated files —
 > do not edit by hand.** Both are produced from the canonical token tables by
-> `cargo run -p rossi-cli -- gen-grammars` and checked in CI. Change the tables
+> `cargo xtask gen-grammars` and checked in CI. Change the tables
 > in `crates/rossi/src/{operators,keywords,builtins}.rs` and regenerate.
 
 ## Sublime Text
