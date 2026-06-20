@@ -1,13 +1,16 @@
 //! Group L: a `<org.eventb.core.witness>` child of an `INITIALISATION`
 //! event must survive into the `.bcm` as `<org.eventb.core.scWitness>`.
-//! Rodin parity — verified against a real-world corpus model, where
-//! the refining machine's INITIALISATION witnesses the disappearing
-//! abstract variable.
+//! Rodin parity — verified against a real Rodin build: the abstract
+//! variable disappears and is *non-deterministically* initialised, so its
+//! after-value `e'` is a genuinely required witness; the refining
+//! machine's INITIALISATION supplies it and stays accurate. (A deterministic
+//! abstract `e ≔ 0` would not require — nor emit — the witness at all.)
 
 use rossi_build::{Project, ProjectComponent, build, sc_view::ScView};
 
 fn project_with_init_witness() -> Project {
-    // Abstract machine: variable `e`, initialised to 0.
+    // Abstract machine: variable `e`, non-deterministically initialised, so
+    // its after-value must be witnessed by any refinement that drops it.
     let m0 = ProjectComponent::from_xml(
         "M0.bum",
         r#"<?xml version="1.0"?>
@@ -15,7 +18,7 @@ fn project_with_init_witness() -> Project {
 <org.eventb.core.variable name="_v" org.eventb.core.identifier="e"/>
 <org.eventb.core.invariant name="_i" org.eventb.core.label="inv1" org.eventb.core.predicate="e ∈ ℤ"/>
 <org.eventb.core.event name="_init0" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
-<org.eventb.core.action name="_a_init" org.eventb.core.assignment="e ≔ 0" org.eventb.core.label="act1"/>
+<org.eventb.core.action name="_a_init" org.eventb.core.assignment="e :∈ ℕ" org.eventb.core.label="act1"/>
 </org.eventb.core.event>
 </org.eventb.core.machineFile>"#,
     )
