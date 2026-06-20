@@ -1,4 +1,4 @@
-//! `rossi gen-grammars` — regenerate the editor syntax-highlighting grammars
+//! `cargo xtask gen-grammars` — regenerate the editor syntax-highlighting grammars
 //! from the canonical token tables.
 //!
 //! Two modes, like `rossi fmt`:
@@ -41,7 +41,7 @@ pub fn run(args: GenGrammarsArgs) -> ExitCode {
     match run_inner(&args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("rossi gen-grammars: {e}");
+            eprintln!("cargo xtask gen-grammars: {e}");
             ExitCode::from(1)
         }
     }
@@ -177,7 +177,7 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
 
     if args.check && stale > 0 {
         eprintln!(
-            "\n{stale} editor grammar(s) are out of date; run `rossi gen-grammars` to regenerate."
+            "\n{stale} editor grammar(s) are out of date; run `cargo xtask gen-grammars` to regenerate."
         );
         return Ok(ExitCode::from(1));
     }

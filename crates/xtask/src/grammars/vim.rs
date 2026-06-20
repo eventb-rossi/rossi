@@ -15,8 +15,8 @@ use std::collections::HashSet;
 use super::{Markers, MatchKind, Model, Scope, TokenGroup};
 
 pub const MARKERS: Markers = Markers {
-    begin: "\" >>> rossi gen-grammars (generated, do not edit)",
-    end: "\" <<< rossi gen-grammars",
+    begin: "\" >>> cargo xtask gen-grammars (generated, do not edit)",
+    end: "\" <<< cargo xtask gen-grammars",
 };
 
 /// Vim syntax group + `hi def link` target for each model scope.

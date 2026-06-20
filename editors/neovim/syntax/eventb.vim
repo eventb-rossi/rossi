@@ -7,7 +7,7 @@ if exists("b:current_syntax")
   finish
 endif
 
-" >>> rossi gen-grammars (generated, do not edit)
+" >>> cargo xtask gen-grammars (generated, do not edit)
 syn case ignore
 syn keyword eventbKeyword any axioms begin constants context end event events extends initialisation invariants machine refines sees sets status then theorems variables variant when where with witness
 syn keyword eventbStatusKeyword anticipated convergent ordinary skip theorem
@@ -40,6 +40,6 @@ hi def link eventbComment Comment
 hi def link eventbLabel Label
 hi def link eventbIdentifier Identifier
 hi def link eventbDelimiter Delimiter
-" <<< rossi gen-grammars
+" <<< cargo xtask gen-grammars
 
 let b:current_syntax = "eventb"
