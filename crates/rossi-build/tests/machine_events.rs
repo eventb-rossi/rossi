@@ -98,9 +98,14 @@ fn convergence_encoding() {
             .and_then(|e| e.convergence.as_deref()),
         Some("0")
     );
+    // `Leave` is *declared* convergent ("1"), but this machine has no
+    // variant. A convergent event with no variant to decrease cannot be
+    // honoured, so the checker downgrades its convergence to ordinary and
+    // emits "0" (and marks the event inaccurate — see
+    // `convergent_event_without_variant_is_inaccurate`).
     assert_eq!(
         v.events.get("Leave").and_then(|e| e.convergence.as_deref()),
-        Some("1")
+        Some("0")
     );
 }
 
@@ -125,11 +130,23 @@ fn event_guards_and_actions_captured_by_sc_view() {
 }
 
 #[test]
-fn all_events_are_accurate() {
+fn convergent_event_without_variant_is_inaccurate() {
+    // INITIALISATION and the ordinary `Register` type-check cleanly and
+    // stay accurate. `Leave` is declared convergent but the machine has no
+    // variant, so its convergence is downgraded to ordinary and the event
+    // is marked inaccurate.
     let v = machine_view();
-    for (label, e) in &v.events {
-        assert!(e.accurate, "{label} should be accurate");
-    }
+    assert!(
+        v.events
+            .get("INITIALISATION")
+            .expect("INITIALISATION")
+            .accurate
+    );
+    assert!(v.events.get("Register").expect("Register").accurate);
+    assert!(
+        !v.events.get("Leave").expect("Leave").accurate,
+        "Leave is convergent with no variant — should be inaccurate"
+    );
 }
 
 #[test]

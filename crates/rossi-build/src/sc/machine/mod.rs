@@ -238,10 +238,16 @@ pub fn check_machine(
         })
         .unwrap_or_default();
 
-    let variant_decl = machine
-        .variant
-        .as_ref()
-        .map(|expr| build_variant_decl(&pc.rodin_ids, &file_root, expr, &env));
+    // A machine without a usable variant cannot host convergent events:
+    // each is downgraded to ordinary (and marked inaccurate). `variant_usable`
+    // is the single machine-wide flag that feeds every event's convergence.
+    let (variant_decl, variant_usable) = match &machine.variant {
+        Some(expr) => {
+            let (decl, usable) = build_variant_decl(&pc.rodin_ids, &file_root, expr, &env);
+            (Some(decl), usable)
+        }
+        None => (None, false),
+    };
 
     // Events — build typed decls; insert each into the per-label map
     // so descendants extending it can pick up the typed parent chain.
@@ -269,6 +275,7 @@ pub fn check_machine(
             &env,
             parent,
             &abstract_only_var_names,
+            variant_usable,
             &mut diags,
             &machine.name,
         )
@@ -285,6 +292,7 @@ pub fn check_machine(
             &env,
             parent,
             &abstract_only_var_names,
+            variant_usable,
             &mut diags,
             &machine.name,
         ) {
@@ -515,24 +523,37 @@ fn build_variable_decls(
     (decls, all_var_names, own_var_names)
 }
 
+/// Build the variant decl and report whether it is *usable* for the
+/// convergence rule: present, referencing only in-scope identifiers, and
+/// internally well-typed. An unusable variant (e.g. one naming an event
+/// parameter that is out of machine scope) downgrades the machine's
+/// convergent events (see [`events::build_event_decl`]). rossi does not
+/// additionally enforce Rodin's "variant is an integer or a finite set"
+/// requirement; an in-scope, internally-consistent expression counts as
+/// usable.
 fn build_variant_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     expr: &rossi::Expression,
     env: &TypeEnv,
-) -> VariantDecl {
+) -> (VariantDecl, bool) {
     // Rodin's default variant label is "vrn"; our parser drops any
     // non-default label from the .bum (only Expression is preserved).
     let label = "vrn";
     let source =
         crate::sc::file_child_source(ids, file_root, Kind::Variant, in_tag::VARIANT, label);
     let ec = check_expression(expr, env);
-    let _ = ec.free_identifier; // not yet emitted (Step-4 decision).
-    VariantDecl {
+    // Usable when it references only in-scope identifiers and is internally
+    // well-typed; a free identifier or an internal type mismatch leaves it
+    // unusable for the convergence rule.
+    let usable =
+        ec.free_identifier.is_none() && crate::wellformed::is_well_typed_expression(env, expr);
+    let decl = VariantDecl {
         label,
         expression_canonical: ec.canonical,
         source,
-    }
+    };
+    (decl, usable)
 }
 
 // =====================================================================

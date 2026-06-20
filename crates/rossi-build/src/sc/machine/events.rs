@@ -96,32 +96,52 @@ impl<'a> EventKind<'a> {
     }
 }
 
-/// Resolve an event's *effective* convergence and whether that leaves the
-/// event accurate.
+/// Resolve an event's *effective* convergence. The second tuple element is
+/// the reason it was downgraded, or `None` when the declared convergence is
+/// honoured as-is.
 ///
 /// The static checker downgrades a declared convergence toward `Ordinary`
-/// when it cannot honour it. The downgraded value is what gets emitted,
-/// and any downgrade marks the event inaccurate — it is no longer a
-/// lossless reflection of the source.
+/// when it cannot honour it. The downgraded value is what gets emitted, and
+/// any downgrade marks the event inaccurate — it is no longer a lossless
+/// reflection of the source.
 ///
-/// Rule implemented here: a concrete event refining an *ordinary* abstract
-/// event may not claim a stronger convergence.
+/// Two downgrade rules, in order:
+/// * A concrete event refining an *ordinary* abstract event may not claim a
+///   stronger convergence.
+/// * A convergent event must decrease a variant: without a usable machine
+///   variant it is downgraded, unless an abstract event is already
+///   convergent (whose variant then covers it).
 ///
 /// INITIALISATION is structurally ordinary in rossi (its AST carries no
-/// convergence), so `is_init` events never reach the downgrade and stay as
-/// declared. The variant rule — a convergent event needs a usable variant
-/// — is added where variant validity becomes available.
+/// convergence), so `is_init` events never reach either rule.
 fn resolve_convergence(
     declared: Convergence,
     abstract_cvg: Option<Convergence>,
     is_init: bool,
-) -> (Convergence, bool) {
-    let mut effective = declared;
-    if !is_init && abstract_cvg == Some(Convergence::Ordinary) && effective != Convergence::Ordinary
-    {
-        effective = Convergence::Ordinary;
+    variant_present: bool,
+) -> (Convergence, Option<&'static str>) {
+    if is_init {
+        return (declared, None);
     }
-    (effective, effective == declared)
+    if abstract_cvg == Some(Convergence::Ordinary) && declared != Convergence::Ordinary {
+        return (
+            Convergence::Ordinary,
+            Some(
+                "event declares a stronger convergence than the ordinary event it refines — \
+                 downgraded to ordinary",
+            ),
+        );
+    }
+    if declared == Convergence::Convergent
+        && abstract_cvg != Some(Convergence::Convergent)
+        && !variant_present
+    {
+        return (
+            Convergence::Ordinary,
+            Some("convergent event has no usable variant — downgraded to ordinary"),
+        );
+    }
+    (declared, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,6 +152,7 @@ pub(super) fn build_event_decl(
     base_env: &TypeEnv,
     parent: Option<&CheckedMachine>,
     abstract_only: &BTreeSet<String>,
+    variant_present: bool,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
 ) -> Option<(EventDecl, bool)> {
@@ -207,22 +228,22 @@ pub(super) fn build_event_decl(
     // inaccurate. The abstract convergence comes from the refined event
     // (resolved for both plain and extended refinements).
     let abstract_cvg = parent_event_decl.map(|p| p.convergence);
-    let (convergence, convergence_accurate) = resolve_convergence(
+    let (convergence, downgrade_reason) = resolve_convergence(
         kind.convergence(),
         abstract_cvg,
         matches!(kind, EventKind::Init(_)),
+        variant_present,
     );
-    if !convergence_accurate {
+    if let Some(reason) = downgrade_reason {
         diags.push(Diagnostic {
             severity: Severity::Warning,
             origin: format!("{machine_name}.{label}"),
-            message: "event refines an ordinary event but declares a stronger convergence — \
-                      downgraded to ordinary"
-                .to_string(),
+            message: reason.to_string(),
             rule_id: None,
             span: kind.name_span(),
         });
     }
+    let convergence_accurate = downgrade_reason.is_none();
 
     let accurate = scope_accurate && buckets_accurate && inherited_accurate && convergence_accurate;
     let decl = EventDecl {
