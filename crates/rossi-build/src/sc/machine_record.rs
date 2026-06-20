@@ -170,7 +170,11 @@ pub struct EventDecl {
     pub parameters: Vec<ParameterDecl>,
     /// Own guards, in source order.
     pub guards: Vec<GuardDecl>,
-    /// Own actions, in source order.
+    /// Effective actions in render order: the inherited chain's actions
+    /// (when `extended`) followed by this event's own, in source order.
+    /// Unlike guards/parameters (spliced from `inherited` at render time),
+    /// actions are materialised here so accuracy and the INITIALISATION
+    /// repair pass read one list.
     pub actions: Vec<ActionDecl>,
     /// Own witnesses (`with` and `witnesses` clauses, merged).
     pub witnesses: Vec<WitnessDecl>,
@@ -403,9 +407,9 @@ fn render_variant(va: &VariantDecl) -> Element {
         .attr(attr::SOURCE, va.source.as_str())
 }
 
-/// Render an event, splicing its inherited-event chain (when
-/// `extended=true`) into each child bucket: guards first, then
-/// parameters, then actions; ancestors before own at every level.
+/// Render an event. Guards and parameters splice the inherited-event chain
+/// (when `extended=true`) ancestors-before-own; actions are already
+/// materialised on the decl (inherited ++ own) and rendered verbatim.
 fn render_event(ev: &EventDecl) -> Element {
     let mut scev = Element::new(tag::SC_EVENT)
         .attr(attr::NAME, ev.label.clone())
@@ -443,11 +447,8 @@ fn render_event(ev: &EventDecl) -> Element {
         scev.push(render_parameter(p));
     }
 
-    for ancestor in &inherited {
-        for a in &ancestor.actions {
-            scev.push(render_action(a));
-        }
-    }
+    // Actions are materialised on the decl (inherited chain ++ own), so the
+    // list is rendered as-is — no chain splice here (unlike guards/params).
     for a in &ev.actions {
         scev.push(render_action(a));
     }

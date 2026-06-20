@@ -378,6 +378,19 @@ pub(super) fn build_event_decl(
         }
     };
 
+    // Materialise the effective action list: an extended event's emitted
+    // actions are the inherited chain's actions followed by its own. The
+    // immediate parent decl already carries its full inherited closure, so
+    // concatenating `parent.actions ++ own` reproduces the root-first order
+    // without re-walking the chain. Doing this here (rather than splicing the
+    // chain at render time) makes the action list the single source the
+    // accuracy / vanished-variable-drop / repair passes all read.
+    let mut actions: Vec<ActionDecl> = Vec::new();
+    if let Some(parent_ev) = inherited_chain.as_deref() {
+        actions.extend(parent_ev.actions.iter().cloned());
+    }
+    actions.extend(buckets.actions);
+
     let accurate = scope_accurate
         && buckets_accurate
         && inherited_accurate
@@ -392,7 +405,7 @@ pub(super) fn build_event_decl(
         refines: refines_decl,
         parameters: buckets.parameters,
         guards: buckets.guards,
-        actions: buckets.actions,
+        actions,
         witnesses: buckets.witnesses,
         inherited: inherited_chain,
     };
