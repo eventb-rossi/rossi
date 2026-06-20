@@ -176,7 +176,14 @@ pub(super) fn build_event_decl(
         )
     });
 
-    let accurate = scope_accurate && buckets_accurate;
+    // An extended event inherits its immediate abstract event's inaccuracy:
+    // because it copies the abstract clauses verbatim, an inaccurate parent
+    // means this event is no longer a lossless reflection of the source.
+    // `inherited_chain` is `Some` only for extended events, so a plain
+    // refinement does not propagate. The immediate parent's flag already
+    // folds in the rest of the chain (parents are checked first).
+    let inherited_accurate = inherited_chain.as_deref().is_none_or(|p| p.accurate);
+    let accurate = scope_accurate && buckets_accurate && inherited_accurate;
     let decl = EventDecl {
         label: label.to_string(),
         convergence: kind.convergence(),
