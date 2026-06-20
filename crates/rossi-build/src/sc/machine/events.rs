@@ -112,17 +112,14 @@ impl<'a> EventKind<'a> {
 ///   variant it is downgraded, unless an abstract event is already
 ///   convergent (whose variant then covers it).
 ///
-/// INITIALISATION is structurally ordinary in rossi (its AST carries no
-/// convergence), so `is_init` events never reach either rule.
+/// INITIALISATION needs no special-casing: its declared convergence is
+/// always `Ordinary` (see [`EventKind::convergence`]), and both rules are
+/// no-ops for an ordinary declaration, so an INIT event never downgrades.
 fn resolve_convergence(
     declared: Convergence,
     abstract_cvg: Option<Convergence>,
-    is_init: bool,
-    variant_present: bool,
+    variant_usable: bool,
 ) -> (Convergence, Option<&'static str>) {
-    if is_init {
-        return (declared, None);
-    }
     if abstract_cvg == Some(Convergence::Ordinary) && declared != Convergence::Ordinary {
         return (
             Convergence::Ordinary,
@@ -134,7 +131,7 @@ fn resolve_convergence(
     }
     if declared == Convergence::Convergent
         && abstract_cvg != Some(Convergence::Convergent)
-        && !variant_present
+        && !variant_usable
     {
         return (
             Convergence::Ordinary,
@@ -142,6 +139,119 @@ fn resolve_convergence(
         );
     }
     (declared, None)
+}
+
+/// A non-deterministic assignment (`x :∈ S` or `x :∣ P`) leaves the
+/// assigned variable's after-value open, so a refinement that drops that
+/// variable must witness it. A deterministic `x ≔ e` already pins the
+/// after-value and needs no witness.
+fn is_nondeterministic_assignment(action: &rossi::Action) -> bool {
+    matches!(
+        action.kind,
+        rossi::ActionKind::BecomesIn { .. } | rossi::ActionKind::BecomesSuchThat { .. }
+    )
+}
+
+/// Whether the event's witnesses leave it accurate, emitting a warning for
+/// each unmet requirement.
+///
+/// A refining event must witness (a) every abstract parameter it does not
+/// itself (re)declare and (b) the primed after-value of every disappearing
+/// variable a *non-deterministic* abstract action assigns. Each requirement
+/// is met by a provided WITNESS/WITH clause with the matching label whose
+/// predicate type-checks; any unmet requirement marks the event inaccurate.
+/// Only called for refining events; a new event requires no witnesses.
+#[allow(clippy::too_many_arguments)]
+fn check_witnesses(
+    kind: EventKind<'_>,
+    abstract_decl: &EventDecl,
+    concrete_param_names: &BTreeSet<String>,
+    abstract_only: &BTreeSet<String>,
+    base_env: &TypeEnv,
+    parent: Option<&CheckedMachine>,
+    diags: &mut Vec<Diagnostic>,
+    machine_name: &str,
+    label: &str,
+) -> bool {
+    // The abstract event's full parameter and action sets — own plus any
+    // inherited through its own extension, since an extended abstract event
+    // carries its ancestors' parameters and actions just as Rodin's
+    // statically-checked event does. `chain_root_first` excludes the event
+    // itself, so its own actions are chained on.
+    let abstract_params = abstract_decl.chain_parameters();
+    let abstract_actions = abstract_decl
+        .chain_root_first()
+        .into_iter()
+        .flat_map(|e| e.actions.iter())
+        .chain(abstract_decl.actions.iter());
+
+    // Required witness names.
+    let mut required: BTreeSet<String> = BTreeSet::new();
+    // Local: abstract parameters the concrete event does not (re)declare.
+    for p in &abstract_params {
+        if !concrete_param_names.contains(&p.name) {
+            required.insert(p.name.clone());
+        }
+    }
+    // Global: the primed after-value of each disappearing variable a
+    // non-deterministic abstract action assigns.
+    for a in abstract_actions {
+        if !is_nondeterministic_assignment(&a.action) {
+            continue;
+        }
+        for v in crate::ast_util::lhs_variables(&a.action) {
+            if abstract_only.contains(v) {
+                required.insert(format!("{v}'"));
+            }
+        }
+    }
+    if required.is_empty() {
+        return true;
+    }
+
+    // Type-check scope for witness predicates: the concrete environment plus
+    // the abstract parameters and the disappearing variables (and their
+    // primed forms) the witnesses are about. Identifiers left untyped are
+    // accepted by the conservative well-typedness check.
+    let mut wscope = base_env.clone();
+    wscope.push_scope();
+    for p in &abstract_params {
+        wscope.insert(p.name.clone(), p.ty.clone());
+    }
+    if let Some(parent) = parent {
+        for v in abstract_only {
+            if let Some(ty) = parent.env().get(v) {
+                wscope.insert(v.clone(), ty.clone());
+                wscope.insert(format!("{v}'"), ty.clone());
+            }
+        }
+    }
+
+    // A provided witness clears its requirement when its label matches and
+    // its predicate type-checks.
+    for w in kind
+        .witnesses_primary()
+        .iter()
+        .chain(kind.witnesses_with().iter())
+    {
+        if let Some(wl) = w.label.as_deref()
+            && required.contains(wl)
+            && crate::wellformed::is_well_typed_predicate(&wscope, &w.predicate)
+        {
+            required.remove(wl);
+        }
+    }
+
+    for name in &required {
+        diags.push(Diagnostic {
+            severity: Severity::Warning,
+            origin: format!("{machine_name}.{label}"),
+            message: format!("missing or ill-typed witness for '{name}' — event is inaccurate"),
+            rule_id: None,
+            span: kind.name_span(),
+        });
+    }
+    required.is_empty()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -152,7 +262,7 @@ pub(super) fn build_event_decl(
     base_env: &TypeEnv,
     parent: Option<&CheckedMachine>,
     abstract_only: &BTreeSet<String>,
-    variant_present: bool,
+    variant_usable: bool,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
 ) -> Option<(EventDecl, bool)> {
@@ -228,12 +338,8 @@ pub(super) fn build_event_decl(
     // inaccurate. The abstract convergence comes from the refined event
     // (resolved for both plain and extended refinements).
     let abstract_cvg = parent_event_decl.map(|p| p.convergence);
-    let (convergence, downgrade_reason) = resolve_convergence(
-        kind.convergence(),
-        abstract_cvg,
-        matches!(kind, EventKind::Init(_)),
-        variant_present,
-    );
+    let (convergence, downgrade_reason) =
+        resolve_convergence(kind.convergence(), abstract_cvg, variant_usable);
     if let Some(reason) = downgrade_reason {
         diags.push(Diagnostic {
             severity: Severity::Warning,
@@ -245,7 +351,38 @@ pub(super) fn build_event_decl(
     }
     let convergence_accurate = downgrade_reason.is_none();
 
-    let accurate = scope_accurate && buckets_accurate && inherited_accurate && convergence_accurate;
+    // Witnesses: only a refining event can owe them. The concrete parameter
+    // set it weighs them against includes the inherited chain (an extended
+    // event re-declares nothing but inherits its abstract's parameters).
+    let witness_accurate = match parent_event_decl {
+        None => true,
+        Some(abstract_decl) => {
+            let mut concrete_param_names: BTreeSet<String> =
+                kind.parameters().iter().map(|p| p.name.clone()).collect();
+            if let Some(ic) = inherited_chain.as_deref() {
+                for p in ic.chain_parameters() {
+                    concrete_param_names.insert(p.name.clone());
+                }
+            }
+            check_witnesses(
+                kind,
+                abstract_decl,
+                &concrete_param_names,
+                abstract_only,
+                base_env,
+                parent,
+                diags,
+                machine_name,
+                label,
+            )
+        }
+    };
+
+    let accurate = scope_accurate
+        && buckets_accurate
+        && inherited_accurate
+        && convergence_accurate
+        && witness_accurate;
     let decl = EventDecl {
         label: label.to_string(),
         convergence,
