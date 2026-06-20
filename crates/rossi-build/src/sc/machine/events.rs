@@ -227,34 +227,61 @@ fn witness_scope(
     wscope
 }
 
-/// Whether the event's witnesses leave it accurate, emitting a warning for
-/// each unmet requirement.
+/// Resolve a refining event's emitted witnesses *and* its accuracy flag from
+/// one [`required_witness_names`] set — the single source both are derived
+/// from, mirroring Rodin's witness module.
 ///
-/// A requirement (see [`required_witness_names`]) is met by a provided
-/// WITNESS/WITH clause with the matching label whose predicate type-checks;
-/// any unmet requirement marks the event inaccurate. Only called for refining
-/// events; a new event requires no witnesses.
+/// A provided WITNESS/WITH clause is *permissible* — kept and emitted — only
+/// when its label is a required name and its predicate type-checks; every
+/// other provided witness (not required, ill-typed, or unlabelled) is dropped.
+/// Each remaining unmet requirement gets a synthesized `⊤` placeholder sourced
+/// on the event element, and the event is marked inaccurate (with a warning
+/// per unmet name).
+///
+/// `abstract_decl` is `None` for a new (non-refining) event: nothing is
+/// required, so any provided witness is not-permissible and dropped.
 #[allow(clippy::too_many_arguments)]
-fn check_witnesses(
+fn resolve_witnesses(
+    ids: &RodinIds,
+    file_root: &HandleUri,
     kind: EventKind<'_>,
-    abstract_decl: &EventDecl,
-    concrete_param_names: &BTreeSet<String>,
+    abstract_decl: Option<&EventDecl>,
+    inherited_chain: Option<&EventDecl>,
     abstract_only: &BTreeSet<String>,
     base_env: &TypeEnv,
     parent: Option<&CheckedMachine>,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
     label: &str,
-) -> bool {
-    let mut required = required_witness_names(abstract_decl, concrete_param_names, abstract_only);
+) -> (Vec<WitnessDecl>, bool) {
+    let Some(abstract_decl) = abstract_decl else {
+        return (Vec::new(), true);
+    };
+    // The concrete parameter set the requirements are weighed against: own
+    // plus any inherited through extension (an extended event re-declares
+    // nothing but inherits its abstract's parameters).
+    let mut concrete_param_names: BTreeSet<String> =
+        kind.parameters().iter().map(|p| p.name.clone()).collect();
+    if let Some(ic) = inherited_chain {
+        for p in ic.chain_parameters() {
+            concrete_param_names.insert(p.name.clone());
+        }
+    }
+    let mut required = required_witness_names(abstract_decl, &concrete_param_names, abstract_only);
     if required.is_empty() {
-        return true;
+        // A refining event with nothing to witness: any provided witness is
+        // not-permissible and dropped.
+        return (Vec::new(), true);
     }
 
     let wscope = witness_scope(base_env, abstract_decl, abstract_only, parent);
 
-    // A provided witness clears its requirement when its label matches and
-    // its predicate type-checks.
+    // Keep each *permissible* provided witness, in source order, and clear its
+    // requirement: its label is a required name and its predicate type-checks.
+    // Everything else is not-permissible and dropped — an ill-typed witness
+    // for a required name leaves the requirement unmet, so a `⊤` placeholder
+    // is synthesized for it below.
+    let mut witnesses: Vec<WitnessDecl> = Vec::new();
     for w in kind
         .witnesses_primary()
         .iter()
@@ -265,9 +292,13 @@ fn check_witnesses(
             && crate::wellformed::is_well_typed_predicate(&wscope, &w.predicate)
         {
             required.remove(wl);
+            witnesses.push(build_witness_decl(ids, file_root, label, wl, w));
         }
     }
 
+    // Synthesize a `⊤` placeholder for each remaining unmet requirement, in
+    // sorted (BTreeSet) order, and warn. The event is inaccurate iff any
+    // requirement is still unmet.
     for name in &required {
         diags.push(Diagnostic {
             severity: Severity::Warning,
@@ -276,8 +307,33 @@ fn check_witnesses(
             rule_id: None,
             span: kind.name_span(),
         });
+        witnesses.push(synthesize_witness(ids, file_root, label, name));
     }
-    required.is_empty()
+
+    (witnesses, required.is_empty())
+}
+
+/// Build a synthesized `<scWitness>` placeholder for an unmet required name:
+/// predicate `⊤` (the maximally-permissive witness Rodin writes for a missing
+/// one), sourced on the event element itself since it has no source clause of
+/// its own — the same convention as the INITIALISATION-repair action.
+fn synthesize_witness(
+    ids: &RodinIds,
+    file_root: &HandleUri,
+    event_label: &str,
+    name: &str,
+) -> WitnessDecl {
+    WitnessDecl {
+        label: name.to_string(),
+        predicate_canonical: crate::normalize::canonical_predicate(&PredicateKind::True.into()),
+        source: crate::sc::file_child_source(
+            ids,
+            file_root,
+            Kind::Event,
+            in_tag::EVENT,
+            event_label,
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -380,32 +436,23 @@ pub(super) fn build_event_decl(
     }
     let convergence_accurate = downgrade_reason.is_none();
 
-    // Witnesses: only a refining event can owe them. The concrete parameter
-    // set it weighs them against includes the inherited chain (an extended
-    // event re-declares nothing but inherits its abstract's parameters).
-    let witness_accurate = match parent_event_decl {
-        None => true,
-        Some(abstract_decl) => {
-            let mut concrete_param_names: BTreeSet<String> =
-                kind.parameters().iter().map(|p| p.name.clone()).collect();
-            if let Some(ic) = inherited_chain.as_deref() {
-                for p in ic.chain_parameters() {
-                    concrete_param_names.insert(p.name.clone());
-                }
-            }
-            check_witnesses(
-                kind,
-                abstract_decl,
-                &concrete_param_names,
-                abstract_only,
-                base_env,
-                parent,
-                diags,
-                machine_name,
-                label,
-            )
-        }
-    };
+    // Witnesses: resolve the emitted set and the accuracy flag from one
+    // required-name computation. Only a refining event can owe witnesses (a new
+    // event has no abstract decl, so nothing is required and any provided
+    // witness is dropped).
+    let (witnesses, witness_accurate) = resolve_witnesses(
+        ids,
+        file_root,
+        kind,
+        parent_event_decl.map(|p| &**p),
+        inherited_chain.as_deref(),
+        abstract_only,
+        base_env,
+        parent,
+        diags,
+        machine_name,
+        label,
+    );
 
     // Effective actions = the inherited chain (the parent decl already
     // carries its full root-first closure) ++ own. Materialised here rather
@@ -463,7 +510,7 @@ pub(super) fn build_event_decl(
         parameters: buckets.parameters,
         guards: buckets.guards,
         actions,
-        witnesses: buckets.witnesses,
+        witnesses,
         inherited: inherited_chain,
     };
 
@@ -598,19 +645,19 @@ fn build_event_scope(
     (scope, accurate)
 }
 
-/// Per-event decl buckets produced by [`build_event_buckets`].
+/// Per-event decl buckets produced by [`build_event_buckets`]. Witnesses are
+/// not here — they are resolved separately by [`resolve_witnesses`], which
+/// needs the abstract event the buckets pass doesn't see.
 struct EventBuckets {
     parameters: Vec<ParameterDecl>,
     guards: Vec<GuardDecl>,
     actions: Vec<ActionDecl>,
-    witnesses: Vec<WitnessDecl>,
 }
 
-/// Build the four per-event decl buckets (guards, parameters, actions,
-/// witnesses), running per-clause checks (abstract-only references,
-/// well-typedness, LHS-declared) and dropping any clause that fails. The
-/// returned `bool` is the `accurate` flag for the event — `false` if any
-/// clause was dropped.
+/// Build the three per-event decl buckets (guards, parameters, actions),
+/// running per-clause checks (abstract-only references, well-typedness,
+/// LHS-declared) and dropping any clause that fails. The returned `bool` is
+/// the `accurate` flag for the event — `false` if any clause was dropped.
 #[allow(clippy::too_many_arguments)]
 fn build_event_buckets(
     ids: &RodinIds,
@@ -763,24 +810,11 @@ fn build_event_buckets(
         actions.push(build_action_decl(ids, file_root, label, i, act, scope));
     }
 
-    // Witnesses in `witnesses`-then-`with` order; the index is the source
-    // position the well-definedness pass uses to pair these back up.
-    let mut witnesses: Vec<WitnessDecl> = Vec::new();
-    for (i, w) in kind
-        .witnesses_primary()
-        .iter()
-        .chain(kind.witnesses_with().iter())
-        .enumerate()
-    {
-        witnesses.push(build_witness_decl(ids, file_root, label, i, w));
-    }
-
     (
         EventBuckets {
             parameters,
             guards,
             actions,
-            witnesses,
         },
         accurate,
     )
@@ -901,10 +935,9 @@ fn build_witness_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     event_label: &str,
-    source_index: usize,
+    witness_label: &str,
     w: &LabeledPredicate,
 ) -> WitnessDecl {
-    let label = w.label.clone().unwrap_or_else(|| "wit".to_string());
     // Witnesses reference dropped abstract names that aren't in env;
     // skip the free-ident check and only canonicalise. Enrich with an
     // empty env first so structural lowerings (e.g. SetComprehension
@@ -918,11 +951,10 @@ fn build_witness_decl(
         event_label,
         Kind::Witness,
         in_tag::WITNESS,
-        &label,
+        witness_label,
     );
     WitnessDecl {
-        label,
-        source_index,
+        label: witness_label.to_string(),
         predicate_canonical: canonical,
         source,
     }
