@@ -24,6 +24,13 @@ pub mod machine_record;
 
 use machine_record::EventDecl;
 
+/// Canonical INITIALISATION event label. In Event-B the static-checker
+/// event label is the grammar keyword itself, so it is sourced from rossi's
+/// keyword table rather than spelled out at each use site.
+pub(crate) fn initialisation_label() -> &'static str {
+    rossi::keywords::spell(rossi::keywords::KeywordId::Initialisation)
+}
+
 /// Build the `source=` URI for a file-scoped child element of a context
 /// or machine root: `<file_root>/<child_tag>` with a `Scope::File` id
 /// lookup. Centralises the `get_or` + `.child()` pair used at every

@@ -224,10 +224,12 @@ pub fn check_machine(
         build_variable_decls(machine, &env, parent, &pc.rodin_ids, &file_root);
 
     // Variables inherited from the parent but not redeclared in this
-    // machine vanish to abstract-only. References from concrete events
-    // are dropped; an extended INITIALISATION whose parent INIT
-    // assigns to any abstract-only var is omitted entirely (Group R,
-    // rodin-docker-verified).
+    // machine vanish to abstract-only. Concrete events that reference such
+    // a variable drop the offending clause and are marked inaccurate. An
+    // extended INITIALISATION that would inherit a parent action on a
+    // vanished variable is omitted entirely: an extended event cannot drop
+    // part of its inherited action set, so Rodin marks it erroneous and
+    // emits no scEvent (confirmed against a real refinement in the corpus).
     let abstract_only_var_names: BTreeSet<String> = parent
         .map(|p| {
             p.visible_variables
@@ -248,6 +250,17 @@ pub fn check_machine(
         }
         None => (None, false),
     };
+
+    // This machine's concrete (own-declared), typed variables, in the same
+    // alphabetical order as the emitted scVariables. These are the candidates
+    // the INITIALISATION repair gives a default `becomesSuchThat ⊤` when no
+    // action covers them; deriving from `variable_decls` keeps the repair set
+    // and the emitted variables a single source.
+    let concrete_typed_vars: Vec<String> = variable_decls
+        .iter()
+        .filter(|d| d.is_concrete)
+        .map(|d| d.name.clone())
+        .collect();
 
     // Events — build typed decls; insert each into the per-label map
     // so descendants extending it can pick up the typed parent chain.
@@ -276,12 +289,16 @@ pub fn check_machine(
             parent,
             &abstract_only_var_names,
             variant_usable,
+            &concrete_typed_vars,
             &mut diags,
             &machine.name,
         )
     {
         let rc = Rc::new(decl);
-        events_by_label.insert("INITIALISATION".to_string(), Rc::clone(&rc));
+        events_by_label.insert(
+            crate::sc::initialisation_label().to_string(),
+            Rc::clone(&rc),
+        );
         event_decls.push(rc);
     }
     for event in &machine.events {
@@ -293,6 +310,7 @@ pub fn check_machine(
             parent,
             &abstract_only_var_names,
             variant_usable,
+            &concrete_typed_vars,
             &mut diags,
             &machine.name,
         ) {
@@ -370,11 +388,16 @@ pub fn check_machine(
     ))
 }
 
-/// Rodin omits a child's INITIALISATION from the `.bcm` when the
-/// child extends the parent's INITIALISATION AND the parent's INIT
-/// assigns to at least one variable that's abstract-only in the child
-/// (declared in parent but not redeclared here, no witness given).
-/// Verified by rodin-docker probes (Group R).
+/// An extended child INITIALISATION inherits its parent's INIT actions
+/// wholesale. If the parent assigns a variable that vanished here (declared
+/// in the parent, not redeclared, no witness given), the inherited action
+/// references a disappeared variable. An extended event cannot drop part of
+/// its inherited action set, so Rodin marks the event erroneous and emits
+/// no scEvent; we match by omitting the child INITIALISATION.
+///
+/// `parent_init.actions` is the parent's full effective action list
+/// (inherited ++ own, plus any generated repair), so an assignment a
+/// grandparent contributed up the chain is covered too.
 fn should_omit_initialisation(
     init: &rossi::InitialisationEvent,
     parent: Option<&CheckedMachine>,
@@ -386,7 +409,10 @@ fn should_omit_initialisation(
     let Some(parent_cm) = parent else {
         return false;
     };
-    let Some(parent_init) = parent_cm.events_by_label.get("INITIALISATION") else {
+    let Some(parent_init) = parent_cm
+        .events_by_label
+        .get(crate::sc::initialisation_label())
+    else {
         return false;
     };
     parent_init.actions.iter().any(|a| {

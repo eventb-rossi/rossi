@@ -13,12 +13,14 @@
 //!   render layer takes the parent's full closure (`Vec<Rc<Element>>`)
 //!   as an external argument; we don't store the parent record on
 //!   every child. The `Rc` wrapping makes the per-element clone cheap.
-//! - **Event children** (parameters / guards / actions) travel along
-//!   the *extended-event* chain (a separate edge, label-matched to
-//!   the parent machine's events). Each [`EventDecl`] carries
-//!   `inherited: Option<Rc<EventDecl>>` so the render and parameter-
-//!   inference passes can walk that chain in typed form, without
-//!   round-tripping through `<scGuard predicate="…">` strings.
+//! - **Event children** travel along the *extended-event* chain (a
+//!   separate edge, label-matched to the parent machine's events). Each
+//!   [`EventDecl`] carries `inherited: Option<Rc<EventDecl>>` so passes
+//!   can walk that chain in typed form, without round-tripping through
+//!   `<scGuard predicate="…">` strings. Guards and parameters are spliced
+//!   from the chain at render time; actions are instead materialised onto
+//!   each [`EventDecl`] (inherited ++ own) so the accuracy and
+//!   INITIALISATION-repair passes read one list.
 
 use std::rc::Rc;
 
