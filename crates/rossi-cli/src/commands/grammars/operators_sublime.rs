@@ -18,7 +18,7 @@
 //! ]
 //! ```
 
-use eventb_lsp::server::operator_rows;
+use rossi::operators::operator_rows;
 
 /// Render the complete `operators.py` module.
 pub fn render() -> String {
