@@ -233,10 +233,6 @@ pub struct ActionDecl {
 #[derive(Debug, Clone)]
 pub struct WitnessDecl {
     pub label: String,
-    /// Position of this witness in the *raw* event's witnesses, taken in
-    /// `witnesses`-then-`with` order (the order the SC builds them) — see
-    /// [`super::context_record::AxiomDecl::source_index`].
-    pub source_index: usize,
     pub predicate_canonical: String,
     pub source: HandleUri,
 }
