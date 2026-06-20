@@ -6,7 +6,7 @@ use std::process::Command;
 
 #[test]
 fn editor_grammars_are_up_to_date() {
-    let bin = env!("CARGO_BIN_EXE_rossi");
+    let bin = env!("CARGO_BIN_EXE_xtask");
     let output = Command::new(bin)
         .args(["gen-grammars", "--check"])
         .output()

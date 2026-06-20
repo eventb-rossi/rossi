@@ -21,7 +21,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use super::grammars::{
+use crate::grammars::{
     Markers, Model, emacs, input_emacs, operators_nvim, operators_sublime, paths, snippets_emacs,
     snippets_nvim, snippets_vscode, sublime, textmate, vim, zed,
 };

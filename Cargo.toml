@@ -5,6 +5,7 @@ members = [
     "crates/rossi-build",
     "crates/rossi-cli",
     "crates/eventb-lsp",
+    "crates/xtask",
 ]
 # The Zed extension is a standalone `cdylib` built to wasm by Zed (against
 # `zed_extension_api`), not part of this workspace's native build/test. The
