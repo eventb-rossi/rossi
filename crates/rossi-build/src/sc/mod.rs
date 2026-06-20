@@ -59,6 +59,11 @@ pub struct CheckedContext {
     /// Rendered `scExtendsContext` rows. Same sharing semantics as
     /// `body`.
     pub extends_elems: Vec<Rc<Element>>,
+    /// The `accurate` flag of this context's emitted `ScFile`. Dependents
+    /// read it to propagate inaccuracy: a context that EXTENDS an
+    /// inaccurate context, or a machine that SEES one, is itself
+    /// inaccurate.
+    pub accurate: bool,
 }
 
 impl CheckedContext {
@@ -107,6 +112,10 @@ pub struct CheckedMachine {
     /// `Predicate` and `Action` ASTs survive all the way through, no
     /// XML round-trip required.
     pub events_by_label: HashMap<String, Rc<EventDecl>>,
+    /// The `accurate` flag of this machine's emitted `ScFile`. A refining
+    /// machine reads it to propagate inaccuracy: refining an inaccurate
+    /// machine makes the refinement inaccurate too.
+    pub accurate: bool,
 }
 
 impl CheckedMachine {
