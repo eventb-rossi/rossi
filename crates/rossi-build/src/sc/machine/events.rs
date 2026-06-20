@@ -8,9 +8,7 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use rossi::{
-    Event, EventStatus, InitialisationEvent, LabeledAction, LabeledPredicate, NamedElement,
-};
+use rossi::{Event, InitialisationEvent, LabeledAction, LabeledPredicate, NamedElement};
 
 use crate::checked_predicate::{check_action, check_labeled_predicate};
 use crate::handles::HandleUri;
@@ -18,7 +16,7 @@ use crate::infer::infer_constants;
 use crate::rodin_ids::{Kind, RodinIds, Scope};
 use crate::sc::CheckedMachine;
 use crate::sc::machine_record::{
-    ActionDecl, EventDecl, GuardDecl, ParameterDecl, RefinesEventDecl, WitnessDecl,
+    ActionDecl, Convergence, EventDecl, GuardDecl, ParameterDecl, RefinesEventDecl, WitnessDecl,
 };
 use crate::type_env::TypeEnv;
 use crate::types::Type;
@@ -77,10 +75,10 @@ impl<'a> EventKind<'a> {
             EventKind::Ordinary(e) => e.extended,
         }
     }
-    fn convergence(&self) -> &'static str {
+    fn convergence(&self) -> Convergence {
         match self {
-            EventKind::Init(_) => "0",
-            EventKind::Ordinary(e) => convergence_code(e.status),
+            EventKind::Init(_) => Convergence::Ordinary,
+            EventKind::Ordinary(e) => Convergence::from_status(e.status),
         }
     }
     fn explicit_refines(&self) -> Option<&'a str> {
@@ -98,12 +96,32 @@ impl<'a> EventKind<'a> {
     }
 }
 
-fn convergence_code(status: Option<EventStatus>) -> &'static str {
-    match status {
-        Some(EventStatus::Convergent) => "1",
-        Some(EventStatus::Anticipated) => "2",
-        Some(EventStatus::Ordinary) | None => "0",
+/// Resolve an event's *effective* convergence and whether that leaves the
+/// event accurate.
+///
+/// The static checker downgrades a declared convergence toward `Ordinary`
+/// when it cannot honour it. The downgraded value is what gets emitted,
+/// and any downgrade marks the event inaccurate — it is no longer a
+/// lossless reflection of the source.
+///
+/// Rule implemented here: a concrete event refining an *ordinary* abstract
+/// event may not claim a stronger convergence.
+///
+/// INITIALISATION is structurally ordinary in rossi (its AST carries no
+/// convergence), so `is_init` events never reach the downgrade and stay as
+/// declared. The variant rule — a convergent event needs a usable variant
+/// — is added where variant validity becomes available.
+fn resolve_convergence(
+    declared: Convergence,
+    abstract_cvg: Option<Convergence>,
+    is_init: bool,
+) -> (Convergence, bool) {
+    let mut effective = declared;
+    if !is_init && abstract_cvg == Some(Convergence::Ordinary) && effective != Convergence::Ordinary
+    {
+        effective = Convergence::Ordinary;
     }
+    (effective, effective == declared)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -183,10 +201,33 @@ pub(super) fn build_event_decl(
     // refinement does not propagate. The immediate parent's flag already
     // folds in the rest of the chain (parents are checked first).
     let inherited_accurate = inherited_chain.as_deref().is_none_or(|p| p.accurate);
-    let accurate = scope_accurate && buckets_accurate && inherited_accurate;
+
+    // Convergence: a declared convergence the checker cannot honour is
+    // downgraded toward ordinary, and the downgrade itself marks the event
+    // inaccurate. The abstract convergence comes from the refined event
+    // (resolved for both plain and extended refinements).
+    let abstract_cvg = parent_event_decl.map(|p| p.convergence);
+    let (convergence, convergence_accurate) = resolve_convergence(
+        kind.convergence(),
+        abstract_cvg,
+        matches!(kind, EventKind::Init(_)),
+    );
+    if !convergence_accurate {
+        diags.push(Diagnostic {
+            severity: Severity::Warning,
+            origin: format!("{machine_name}.{label}"),
+            message: "event refines an ordinary event but declares a stronger convergence — \
+                      downgraded to ordinary"
+                .to_string(),
+            rule_id: None,
+            span: kind.name_span(),
+        });
+    }
+
+    let accurate = scope_accurate && buckets_accurate && inherited_accurate && convergence_accurate;
     let decl = EventDecl {
         label: label.to_string(),
-        convergence: kind.convergence(),
+        convergence,
         extended: kind.extended(),
         accurate,
         source,
