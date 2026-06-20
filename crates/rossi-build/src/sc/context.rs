@@ -46,7 +46,15 @@ pub fn check_context(
     let mut env = TypeEnv::new();
     for parent_name in &ctx.extends {
         match checked.get(parent_name) {
-            Some(parent) => merge_env(&mut env, parent.env()),
+            Some(parent) => {
+                merge_env(&mut env, parent.env());
+                // Extending an inaccurate context makes this context
+                // inaccurate too (silent — the inaccuracy is the parent's
+                // own reported problem).
+                if !parent.accurate {
+                    accurate = false;
+                }
+            }
             None => {
                 diags.push(Diagnostic {
                     severity: Severity::Error,
@@ -181,6 +189,7 @@ pub fn check_context(
         record,
         body: own_body,
         extends_elems,
+        accurate,
     };
 
     Ok((file, cc, diags))

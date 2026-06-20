@@ -110,6 +110,12 @@ pub fn check_machine(
                 for (k, v) in ctx.env().iter() {
                     env.insert_if_absent(k, v.clone());
                 }
+                // Seeing an inaccurate context makes this machine
+                // inaccurate too (silent — the inaccuracy is the context's
+                // own reported problem).
+                if !ctx.accurate {
+                    accurate = false;
+                }
             }
             None => {
                 diags.push(Diagnostic {
@@ -145,6 +151,12 @@ pub fn check_machine(
     if let Some(p) = parent {
         for (k, v) in p.env().iter() {
             env.insert_if_absent(k, v.clone());
+        }
+        // Refining an inaccurate machine makes this machine inaccurate too
+        // (silent — the inaccuracy is the abstract machine's own reported
+        // problem).
+        if !p.accurate {
+            accurate = false;
         }
     }
 
@@ -336,6 +348,7 @@ pub fn check_machine(
         visible_variables,
         invariant_elems: full_invariant_elems,
         events_by_label,
+        accurate,
     };
 
     Ok((
@@ -588,6 +601,11 @@ fn emit_decomposition_stub(
         visible_variables: BTreeSet::new(),
         invariant_elems: Vec::new(),
         events_by_label: HashMap::new(),
+        // The stub's file-level `accurate=false` reflects an empty body,
+        // not a checking error, so it must not taint a machine that
+        // refines it. (Rodin emits no `accurate` attribute on the stub at
+        // all; reading it back would error rather than yield `false`.)
+        accurate: true,
     };
     let file = ScFile {
         filename: pc.output_filename(),
