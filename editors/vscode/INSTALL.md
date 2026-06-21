@@ -5,13 +5,22 @@ features, settings, and usage, see the [README](README.md).
 
 ## Quick Install
 
-### Step 1: Install the LSP Server and CLI
+### Step 1: Get the LSP Server and CLI
 
-The extension requires the Rossi Language Server for editor features and the
-`rossi` CLI for Rodin import/export/build/validation commands. Install them
-using one of these methods:
+The extension needs the Rossi language server for editor features and the
+`rossi` CLI for the Rodin import/export/build/validation commands.
 
-**Option A: From Source (Recommended)**
+**The extension installs them for you.** On first activation, if neither binary
+is found through the `rossi.languageServer.path` / `rossi.tool.path` settings or
+on your `PATH`, the extension downloads the prebuilt binaries for your platform
+from [GitHub Releases](https://github.com/eventb-rossi/rossi/releases), verifies
+them against the release `SHA256SUMS`, and caches them. No manual step is needed
+on Linux, macOS, or Windows (x86_64 or ARM64).
+
+To install the binaries yourself instead — for an unsupported platform, an
+offline machine, or a custom build — build them from source; the extension then
+picks them up from `PATH` (or point the settings at them):
+
 ```bash
 git clone https://github.com/eventb-rossi/rossi.git
 cd rossi
@@ -27,10 +36,6 @@ sudo cp target/release/rossi /usr/local/bin/
 # Or add to PATH in your shell config (~/.bashrc, ~/.zshrc):
 export PATH="$PATH:/path/to/rossi/target/release"
 ```
-
-**Option B: Download Pre-built Binary**
-*(When available)*
-Download from [GitHub Releases](https://github.com/eventb-rossi/rossi/releases)
 
 ### Step 2: Install the VS Code Extension
 
@@ -138,7 +143,10 @@ input) and a complete example configuration, see the
 ```
 Error: spawn eventb-language-server ENOENT
 ```
-Solution: Install the server or configure the path in settings.
+Solution: The extension downloads the server automatically, so this usually
+means the download was skipped or failed (no network, or an unsupported
+platform). Check the Rossi output channel, then install the server manually
+(Step 1) or set `rossi.languageServer.path`.
 
 **LSP server crashes**
 ```

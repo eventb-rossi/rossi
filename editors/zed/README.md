@@ -24,8 +24,8 @@ highlighting for richer, meaning-aware colors — see Configuration.
 
 ## Prerequisites
 
-Build and install the language server (the project publishes no prebuilt
-binaries, so the extension expects it on your `PATH`):
+The extension expects the language server (`eventb-language-server`) on your
+`PATH`. Build and install it from source:
 
 ```bash
 cargo install --path crates/eventb-lsp   # installs `eventb-language-server`
