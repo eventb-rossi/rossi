@@ -210,41 +210,6 @@ rossi lsp
 This is identical to running the standalone `eventb-language-server`
 binary; editor extensions may invoke either form.
 
-### Exit Codes
-
-- `0` - All files validated successfully
-- `1` - One or more files failed validation or file not found
-
-## Examples
-
-See the `crates/rossi/examples/` directory for Event-B model files:
-
-- `counter.eventb` / `counter_machine.eventb` - Simple counter
-- `library_ctx.eventb` / `library_machine.eventb` - Library management
-- `traffic_light_ctx.eventb` / `traffic_light_machine.eventb` - Traffic light controller
-- `scheduler_ctx.eventb` / `scheduler_machine.eventb` - Process scheduler
-- `refinement_abstract.eventb` / `refinement_concrete.eventb` - Refinement example
-- `lambda_example_ctx.eventb` - Lambda expressions and set comprehensions
-
-## Architecture
-
-The project is organized as a Cargo workspace with four public crates:
-
-```
-rossi/
-├── crates/
-│   ├── rossi/        # Core parser, AST, pretty-printer, Rodin XML
-│   ├── rossi-build/  # Static checker / Rodin .bcc / .bcm builder
-│   ├── rossi-cli/    # `rossi` command-line interface
-│   └── eventb-lsp/   # Language Server Protocol implementation
-└── editors/
-    ├── vscode/       # VS Code extension
-    ├── neovim/       # Neovim plugin
-    ├── sublime/      # Sublime Text syntax (also used by bat, delta)
-    ├── emacs/        # Emacs major mode
-    └── zed/          # Zed extension (LSP + tree-sitter grammar)
-```
-
 ## Development
 
 ```bash
@@ -311,8 +276,6 @@ Licensed under either of:
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
 
 ## References
 
