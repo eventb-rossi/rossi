@@ -1,0 +1,141 @@
+name: release
+
+# Build prebuilt binaries and attach them to the GitHub Release.
+#
+# release-plz owns the release lifecycle (version bump, changelog, the `v{version}`
+# tag, the GitHub Release object, crates.io publish — see release-plz.yml). This
+# workflow is a pure consumer: it fires once that Release is published, builds the
+# `rossi` CLI and the `eventb-language-server` for the mainstream platforms, and
+# uploads the archives as release assets. `workflow_dispatch` lets you (re)build the
+# assets for an existing tag by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build assets for, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # release event -> the published tag; manual run -> the input.
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # upload release assets
+      id-token: write # build-provenance attestation (OIDC)
+      attestations: write # build-provenance attestation
+    strategy:
+      fail-fast: false
+      # These target triples are mirrored by TARGET_TRIPLES in
+      # editors/vscode/src/binaryManager.ts (the extension downloads the matching
+      # archive); keep the two in sync when adding or removing a platform.
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # No-op when the host already targets this triple (everything except the
+          # ARM64-Windows cross-build, which compiles on the x64 Windows runner).
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build binaries
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin rossi --bin eventb-language-server
+
+      # One flat archive per platform holding BOTH binaries plus the licenses and
+      # README. Flat (no enclosing directory) keeps the VSCode downloader and a
+      # future Scoop/Homebrew `bin.install` trivial. Names are version-less so the
+      # URL is stable: …/releases/download/<tag>/rossi-<triple>.<ext>.
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bindir="target/${{ matrix.target }}/release"
+          stage="$(mktemp -d)"
+          cp "$bindir/rossi" "$bindir/eventb-language-server" "$stage/"
+          cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
+          archive="rossi-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "$stage" .
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bindir = "target/${{ matrix.target }}/release"
+          $stage = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "stage")
+          Copy-Item "$bindir/rossi.exe", "$bindir/eventb-language-server.exe" $stage
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, README.md $stage
+          $archive = "rossi-${{ matrix.target }}.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
+          "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+      - name: Upload assets to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Hash every uploaded archive centrally (one OS, one format) into a single
+  # SHA256SUMS file — the canonical checksum manifest the VSCode downloader and
+  # any future Scoop/Winget/Homebrew manifest verify against. Doing it here also
+  # doubles as a check that the uploaded archives are intact.
+  checksums:
+    name: SHA256SUMS
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Build and upload SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'rossi-*.tar.gz' --pattern 'rossi-*.zip'
+          archives=(rossi-*.tar.gz rossi-*.zip)
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No release archives found for $TAG" >&2
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
