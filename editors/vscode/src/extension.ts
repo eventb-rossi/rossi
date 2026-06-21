@@ -7,6 +7,7 @@ import {
 } from 'vscode-languageclient/node';
 import { registerRossiCommands } from './rossiCommands';
 import { registerSymbolInput } from './symbolInput';
+import { resolveBinaries, ResolvedBinaries } from './binaryManager';
 
 let client: LanguageClient;
 
@@ -49,20 +50,33 @@ function getRossiConfiguration(): RossiConfiguration {
     };
 }
 
-export function activate(context: ExtensionContext) {
+export async function activate(context: ExtensionContext) {
     console.log('Rossi Event-B extension is now active');
 
     const diagnostics = languages.createDiagnosticCollection('rossi');
     const output = window.createOutputChannel('Rossi');
     context.subscriptions.push(diagnostics, output);
 
-    // Get configuration
     const config = workspace.getConfiguration('rossi');
-    const serverPath = config.get<string>('languageServer.path', 'eventb-language-server');
+
+    // Locate (and, if missing, download) the CLI and language-server binaries.
+    // On failure, fall back to the bare command names so a developer with the
+    // binaries on PATH still works and the error message guides everyone else.
+    let binaries: ResolvedBinaries;
+    try {
+        binaries = await resolveBinaries(context, output);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        window.showErrorMessage(
+            `Rossi: could not obtain the Event-B toolchain (${message}). ` +
+            'Falling back to PATH — see the extension\'s install guide to set it up manually.'
+        );
+        binaries = { languageServer: 'eventb-language-server', cli: 'rossi' };
+    }
 
     // Configure server options
     const serverOptions: ServerOptions = {
-        command: serverPath,
+        command: binaries.languageServer,
         args: [],
         options: <ExecutableOptions>{
             env: {
@@ -101,7 +115,7 @@ export function activate(context: ExtensionContext) {
         throw error;
     });
     languageServerReady.catch(() => undefined);
-    registerRossiCommands(context, diagnostics, output, () => languageServerReady);
+    registerRossiCommands(context, diagnostics, output, binaries.cli, () => languageServerReady);
 
     // Editor-side ASCII -> Unicode input method (type `=>`, `\and`, ...).
     registerSymbolInput(context, client, languageServerReady, output);
