@@ -26,6 +26,15 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Release builds never reuse incremental state; skip the cruft. (rust-cache
+  # also exports this, but being explicit keeps the intent at the top.)
+  CARGO_INCREMENTAL: 0
+  # Ride out transient crates.io HTTP/2 download drops (the curl [55]/[56]
+  # "Failed receiving HTTP2 data" flake), and the same class of error during the
+  # rustup toolchain/target install. If a fetch ever survives 10 retries, the
+  # next escalation is `CARGO_HTTP_MULTIPLEXING: false` — don't enable preemptively.
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
   # release event -> the published tag; manual run -> the input.
   TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
@@ -42,12 +51,21 @@ jobs:
       # These target triples are mirrored by TARGET_TRIPLES in
       # editors/vscode/src/binaryManager.ts (the extension downloads the matching
       # archive); keep the two in sync when adding or removing a platform.
+      #
+      # `macosx_deployment_target` pins the minimum macOS the archived binary will
+      # run on. Without it a binary inherits the build host's SDK floor, so the
+      # Intel build on macos-15-intel would refuse to launch on older Intel Macs.
       matrix:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
-          - { target: x86_64-apple-darwin, os: macos-13 }
-          - { target: aarch64-apple-darwin, os: macos-14 }
+          # Both darwin arches build on the macOS 15 generation: macos-13 is retired
+          # and macos-14 enters deprecation 2026-07-06 (unsupported 2026-11-02), so
+          # macos-14 would only queue up the next breakage. macos-15-intel is GitHub's
+          # native Intel host; the deployment-target pins keep the binaries runnable
+          # on older macOS regardless of the newer build host.
+          - { target: x86_64-apple-darwin, os: macos-15-intel, macosx_deployment_target: "10.12" }
+          - { target: aarch64-apple-darwin, os: macos-15, macosx_deployment_target: "11.0" }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
           - { target: aarch64-pc-windows-msvc, os: windows-latest }
     steps:
@@ -67,6 +85,9 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build binaries
+        # Empty on non-macOS rows, where the unset deployment target is ignored.
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_deployment_target }}
         run: cargo build --release --locked --target ${{ matrix.target }} --bin rossi --bin eventb-language-server
 
       # One flat archive per platform holding BOTH binaries plus the licenses and
