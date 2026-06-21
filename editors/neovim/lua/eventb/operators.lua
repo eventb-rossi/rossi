@@ -57,6 +57,8 @@ return {
     { ascii = ":=", unicode = "≔", aliases = { "assign", "becomes" }, symbolic = true, eager = true },
     { ascii = "::", unicode = ":∈", aliases = {}, symbolic = true, eager = true },
     { ascii = ":|", unicode = ":∣", aliases = {}, symbolic = true, eager = true },
+    { ascii = "-->>", unicode = "↠", aliases = {}, symbolic = true, eager = true },
+    { ascii = "+->>", unicode = "⤀", aliases = {}, symbolic = true, eager = true },
     { ascii = ",,", unicode = "↦", aliases = {}, symbolic = true, eager = true },
   },
 }

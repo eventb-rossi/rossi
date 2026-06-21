@@ -166,8 +166,10 @@ op_partial_fn = { "⇸" | "+->" }
 op_total_fn = { "→" | "-->" }
 op_partial_inj = { "⤔" | ">+>" }
 op_total_inj = { "↣" | ">->" }
-op_partial_surj = { "⤀" | "+>>" }
-op_total_surj = { "↠" | "->>" }
+// `+->>`/`-->>` are accepted alternative input spellings for the surjection
+// arrows (Rodin's keyboard registers both `+>>`/`+->>` and `->>`/`-->>`).
+op_partial_surj = { "⤀" | "+>>" | "+->>" }
+op_total_surj = { "↠" | "->>" | "-->>" }
 op_bijection = { "⤖" | ">->>" }
 op_domain = @{ "dom" ~ word_boundary }
 op_range = @{ "ran" ~ word_boundary }

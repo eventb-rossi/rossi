@@ -1475,3 +1475,36 @@ fn test_deep_predicate_fits_in_small_stack() {
         .unwrap_or(false);
     assert!(parsed, "file-system invariant must parse on a 1 MB stack");
 }
+
+// ===== Surjection alias spellings parse at the grammar level =====
+//
+// `+->>`/`-->>` are accepted alternative ASCII input spellings for the
+// surjection arrows (Rodin's keyboard). Eager input converts them to ⤀/↠
+// before the parser sees them, but raw text (pasted, or with eager input off)
+// must still parse — and as the *surjection*, not the `+->`/`-->` function
+// arrow they extend with a dangling `>`. These pin the `op_partial_surj` /
+// `op_total_surj` grammar alternatives so a future reorder can't regress them.
+
+fn binary_op_of(src: &str) -> rossi::ast::expression::BinaryOp {
+    match parse_expression_str(src)
+        .unwrap_or_else(|e| panic!("expected `{src}` to parse, got: {e}"))
+        .kind
+    {
+        ExpressionKind::Binary { op, .. } => op,
+        other => panic!("expected `{src}` to be a binary expression, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_surjection_alias_spellings_parse_as_surjections() {
+    use rossi::ast::expression::BinaryOp;
+    assert_eq!(binary_op_of("S +->> T"), BinaryOp::PartialSurjection);
+    assert_eq!(binary_op_of("S -->> T"), BinaryOp::TotalSurjection);
+    // The canonical forms still parse identically.
+    assert_eq!(binary_op_of("S +>> T"), BinaryOp::PartialSurjection);
+    assert_eq!(binary_op_of("S ->> T"), BinaryOp::TotalSurjection);
+    // …and the shorter function arrows they extend are unaffected (no
+    // dangling `>` left behind by a greedy surjection match).
+    assert_eq!(binary_op_of("S +-> T"), BinaryOp::PartialFunction);
+    assert_eq!(binary_op_of("S --> T"), BinaryOp::TotalFunction);
+}

@@ -29,6 +29,15 @@ const ROWS: OperatorRow[] = [
     { ascii: ':', unicode: '∈', description: 'in', aliases: ['in'], symbolic: true, eager: true },
     { ascii: '::', unicode: ':∈', description: 'becomesin', aliases: [], symbolic: true, eager: true },
     { ascii: '<:', unicode: '⊆', description: 'subseteq', aliases: ['subseteq'], symbolic: true, eager: true },
+    // Function/surjection arrows: `+->`/`-->` are extended by `+->>`/`-->>`
+    // (alias rows for the canonical `+>>`/`->>` surjections), so the function
+    // arrow must be held one keystroke longer and still convert on a boundary.
+    { ascii: '+->', unicode: '⇸', description: 'pfun', aliases: [], symbolic: true, eager: true },
+    { ascii: '-->', unicode: '→', description: 'tfun', aliases: [], symbolic: true, eager: true },
+    { ascii: '+>>', unicode: '⤀', description: 'psur', aliases: [], symbolic: true, eager: true },
+    { ascii: '->>', unicode: '↠', description: 'tsur', aliases: [], symbolic: true, eager: true },
+    { ascii: '+->>', unicode: '⤀', description: 'psur', aliases: [], symbolic: true, eager: true },
+    { ascii: '-->>', unicode: '↠', description: 'tsur', aliases: [], symbolic: true, eager: true },
     { ascii: '/=', unicode: '≠', description: 'neq', aliases: ['neq'], symbolic: true, eager: true },
     // Symbolic but NOT eager (server policy): bare `/` and backslash ops.
     { ascii: '/', unicode: '÷', description: 'divide', aliases: ['div'], symbolic: true, eager: false },
@@ -74,6 +83,15 @@ check(':= -> assign', simulateEagerTyping(matcher, 'x:=y'), 'x≔y');
 check(': -> in on boundary', simulateEagerTyping(matcher, 'x:y'), 'x∈y');
 check(':: -> becomes-in', simulateEagerTyping(matcher, 'x::y'), 'x:∈y');
 check('<: -> subseteq', simulateEagerTyping(matcher, 'S<:T'), 'S⊆T');
+
+// Surjection alias forms `+->>`/`-->>` convert eagerly to the canonical arrows,
+// while the function arrows `+->`/`-->` they extend still convert on a boundary.
+check('+->> -> partial surjection', simulateEagerTyping(matcher, 'S+->>T'), 'S⤀T');
+check('-->> -> total surjection', simulateEagerTyping(matcher, 'S-->>T'), 'S↠T');
+check('+-> still -> partial fn', simulateEagerTyping(matcher, 'S+->T'), 'S⇸T');
+check('--> still -> total fn', simulateEagerTyping(matcher, 'S-->T'), 'S→T');
+check('+>> -> partial surjection', simulateEagerTyping(matcher, 'S+>>T'), 'S⤀T');
+check('->> -> total surjection', simulateEagerTyping(matcher, 'S->>T'), 'S↠T');
 
 // Blocklisted single chars stay literal; their extensions still convert.
 check('// stays a comment', simulateEagerTyping(matcher, '// a=>b'), '// a⇒b');

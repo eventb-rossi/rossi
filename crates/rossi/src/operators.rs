@@ -871,6 +871,12 @@ pub fn ascii_input_aliases(id: OperatorId) -> &'static [&'static str] {
     match id {
         // Rodin's keyboard maps both `|->` and `,,` to the maplet `↦`.
         OperatorId::Maplet => &[",,"],
+        // Rodin's keyboard registers a second ASCII form for each surjection
+        // arrow (`+->>` for `⤀`, `-->>` for `↠`) alongside the canonical
+        // `+>>`/`->>`; these longer forms are what the Event-B summary documents.
+        // Input-only: emission stays `+>>`/`->>`.
+        OperatorId::PartialSurjection => &["+->>"],
+        OperatorId::TotalSurjection => &["-->>"],
         _ => &[],
     }
 }
@@ -1286,6 +1292,40 @@ mod tests {
         assert_eq!(convert_to_unicode("f(a, b)"), "f(a, b)");
         // Unicode → ASCII stays canonical: ↦ becomes `|->`, never `,,`.
         assert_eq!(convert_to_ascii("x ↦ y"), "x |-> y");
+    }
+
+    #[test]
+    fn surjection_arrows_have_eager_alternative_input_spellings() {
+        // Rodin's keyboard registers `+->>`/`-->>` beside `+>>`/`->>`; both are
+        // eager-input aliases for the surjection arrows.
+        assert_eq!(
+            ascii_input_aliases(OperatorId::PartialSurjection),
+            &["+->>"]
+        );
+        assert_eq!(ascii_input_aliases(OperatorId::TotalSurjection), &["-->>"]);
+        assert!(is_eager_input_spelling("+->>"));
+        assert!(is_eager_input_spelling("-->>"));
+        assert_eq!(
+            lookup_token("+->>").map(|op| op.id),
+            Some(OperatorId::PartialSurjection)
+        );
+        assert_eq!(
+            lookup_token("-->>").map(|op| op.id),
+            Some(OperatorId::TotalSurjection)
+        );
+    }
+
+    #[test]
+    fn surjection_aliases_convert_to_unicode_but_never_back() {
+        // ASCII → Unicode rewrites the longer forms to the canonical arrows …
+        assert_eq!(convert_to_unicode("S +->> T"), "S ⤀ T");
+        assert_eq!(convert_to_unicode("S -->> T"), "S ↠ T");
+        // … while the partial/total function arrows they extend stay distinct.
+        assert_eq!(convert_to_unicode("S +-> T"), "S ⇸ T");
+        assert_eq!(convert_to_unicode("S --> T"), "S → T");
+        // Unicode → ASCII stays canonical: `+>>`/`->>`, never the alias forms.
+        assert_eq!(convert_to_ascii("S ⤀ T"), "S +>> T");
+        assert_eq!(convert_to_ascii("S ↠ T"), "S ->> T");
     }
 
     #[test]

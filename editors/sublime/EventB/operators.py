@@ -56,5 +56,7 @@ OPERATOR_ROWS = [
     {"ascii": ":=", "unicode": "≔", "aliases": ["assign", "becomes"], "symbolic": True, "eager": True},
     {"ascii": "::", "unicode": ":∈", "aliases": [], "symbolic": True, "eager": True},
     {"ascii": ":|", "unicode": ":∣", "aliases": [], "symbolic": True, "eager": True},
+    {"ascii": "-->>", "unicode": "↠", "aliases": [], "symbolic": True, "eager": True},
+    {"ascii": "+->>", "unicode": "⤀", "aliases": [], "symbolic": True, "eager": True},
     {"ascii": ",,", "unicode": "↦", "aliases": [], "symbolic": True, "eager": True},
 ]
