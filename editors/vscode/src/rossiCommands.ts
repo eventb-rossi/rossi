@@ -69,15 +69,18 @@ type InputKind =
 export class RossiCommandController {
     private readonly diagnostics: DiagnosticCollection;
     private readonly output: OutputChannel;
+    private readonly cliPath: string;
     private readonly waitForLanguageServer?: () => Promise<void>;
 
     constructor(
         diagnostics: DiagnosticCollection,
         output: OutputChannel,
+        cliPath: string,
         waitForLanguageServer?: () => Promise<void>
     ) {
         this.diagnostics = diagnostics;
         this.output = output;
+        this.cliPath = cliPath;
         this.waitForLanguageServer = waitForLanguageServer;
     }
 
@@ -466,8 +469,16 @@ export class RossiCommandController {
         }
     }
 
+    // An explicit `rossi.tool.path` override always wins and stays live (no
+    // window reload needed); otherwise use the path resolved at activation
+    // (a copy on PATH or the one downloaded into the extension's storage).
+    private resolveToolPath(): string {
+        const configured = workspace.getConfiguration('rossi').get<string>('tool.path', 'rossi').trim();
+        return configured && configured !== 'rossi' ? configured : this.cliPath;
+    }
+
     private async runRossi(args: string[], options: RossiRunOptions): Promise<RossiRunResult> {
-        const toolPath = workspace.getConfiguration('rossi').get<string>('tool.path', 'rossi');
+        const toolPath = this.resolveToolPath();
         const cwd = options.cwd ?? workspace.workspaceFolders?.[0]?.uri.fsPath;
         const commandLine = formatCommand(toolPath, args);
 
@@ -756,9 +767,10 @@ export function registerRossiCommands(
     context: ExtensionContext,
     diagnostics: DiagnosticCollection,
     output: OutputChannel,
+    cliPath: string,
     waitForLanguageServer?: () => Promise<void>
 ): void {
-    const controller = new RossiCommandController(diagnostics, output, waitForLanguageServer);
+    const controller = new RossiCommandController(diagnostics, output, cliPath, waitForLanguageServer);
     context.subscriptions.push(
         vscodeCommands.registerCommand('rossi.importRodinProject', (uri?: Uri) => controller.runCommand(() => controller.importRodinProject(uri))),
         vscodeCommands.registerCommand('rossi.exportCurrentFileToRodinZip', (uri?: Uri) => controller.runCommand(() => controller.exportCurrentFileToRodinZip(uri))),
