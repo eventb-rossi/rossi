@@ -71,6 +71,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Build the tag's source, not the dispatched branch. A manual
+          # workflow_dispatch otherwise checks out the default branch and ships
+          # binaries that don't match the tag (the `tag` input only labels the
+          # upload). TAG resolves to the published tag or the dispatch input.
+          ref: ${{ env.TAG }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
