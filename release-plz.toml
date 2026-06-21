@@ -7,17 +7,60 @@
 # `[workspace.package].version` (no `version_group` needed) and publishes the
 # crates in dependency order (rossi -> rossi-build / eventb-lsp -> rossi-cli).
 
-# Default for every crate: publish, but cut no tag/release of its own. A new
-# workspace member inherits this and is silenced automatically — no edit needed.
+# Default for every crate: publish, but cut no tag/release and write no changelog
+# of its own. A new workspace member inherits this automatically — no edit needed.
 [workspace]
 git_tag_enable = false
 git_release_enable = false
+changelog_update = false  # only rossi-cli writes the single combined changelog
 
 # rossi-cli — the user-facing product and the last crate in publish order — owns
-# the single suite tag + GitHub release. If this crate is ever renamed, update
-# this override, or the suite will cut no tag/release at all.
+# the single suite tag + GitHub release, and writes the single combined changelog.
+# Its `changelog_include` aggregates the libraries' entries so the changelog (and
+# the GitHub release body) cover every change, not just CLI-path commits. If this
+# crate is ever renamed, update this override.
 [[package]]
 name = "rossi-cli"
 git_tag_enable = true
 git_release_enable = true
 git_tag_name = "v{{ version }}"
+changelog_update = true
+# `changelog_path` is a per-package key (release-plz rejects it under [workspace]);
+# point rossi-cli's changelog at the repo root so the suite has one combined file.
+changelog_path = "./CHANGELOG.md"
+changelog_include = ["rossi", "rossi-build", "eventb-lsp"]
+
+# Curated "keep a changelog" format. Group feat->Added, refactor->Changed,
+# revert->Removed, fix->Fixed, perf->Performance, docs->Documentation; skip
+# housekeeping (chore, ci, test, build/dependabot, style) and editor-only scopes;
+# show the commit scope and link `(#NN)` issue/PR refs. Type patterns are anchored
+# to the conventional `type:` form, so a non-conventional subject that merely starts
+# with one of these words is never silently dropped (it falls through to Changed).
+# The `<!-- N -->` markers pin section order and are stripped by the postprocessor.
+[changelog]
+header = "# Changelog\n"
+trim = true
+protect_breaking_commits = true
+commit_preprocessors = [
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/eventb-rossi/rossi/issues/${1}))" },
+]
+commit_parsers = [
+  { message = '^feat(\(.+?\))?!?:',     group = "<!-- 0 -->Added" },
+  { message = '^refactor(\(.+?\))?!?:', group = "<!-- 1 -->Changed" },
+  { message = '^revert(\(.+?\))?!?:',   group = "<!-- 2 -->Removed" },
+  { message = '^fix(\(.+?\))?!?:',      group = "<!-- 3 -->Fixed" },
+  { message = '^perf(\(.+?\))?!?:',     group = "<!-- 4 -->Performance" },
+  { message = '^docs?(\(.+?\))?!?:',    group = "<!-- 5 -->Documentation" },
+  { message = '^(chore|ci|test|build|style)(\(.+?\))?!?:', skip = true },
+  { message = '^(sublime|vscode|neovim|emacs|editors|gen-grammars)(\(.+?\))?!?:', skip = true },
+  { message = '.*', group = "<!-- 1 -->Changed" },
+]
+postprocessors = [
+  { pattern = '<!-- \d+ -->', replace = "" },
+]
+body = """
+## [{{ version }}]{% if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | upper_first }}
+{% endfor %}{% endfor %}"""
