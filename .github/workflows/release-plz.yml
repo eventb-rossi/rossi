@@ -3,6 +3,11 @@ name: release-plz
 on:
   push:
     branches: [main]
+  # Refresh the preview Release PR on a daily schedule and on demand, rather than
+  # on every merge — see the release-plz-pr job comment.
+  schedule:
+    - cron: "17 5 * * *" # daily, UTC; off-the-hour per GitHub's scheduling guidance
+  workflow_dispatch:
 
 permissions: {}
 
@@ -10,18 +15,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Open/update the "Release vX.Y.Z" PR (version bump + changelog). Runs under the
-  # VERSION_BUMP_TOKEN PAT so the PR's own CI checks fire (the default GITHUB_TOKEN
-  # cannot trigger workflows on the PR it opens).
+  # Open/update the "Release vX.Y.Z" PR (version bump + changelog). The PR is just a
+  # preview, so refresh it on the daily schedule / manual dispatch rather than on
+  # every merge to main (each refresh is a runner job; this skips it per-merge).
+  # Runs under the VERSION_BUMP_TOKEN PAT so the PR's own CI checks fire (the default
+  # GITHUB_TOKEN cannot trigger workflows on the PR it opens).
   release-plz-pr:
     name: Release PR
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     concurrency:
       group: release-plz-${{ github.ref }}
-      cancel-in-progress: false
+      cancel-in-progress: true # a burst of refreshes collapses to the newest run
     steps:
       - uses: actions/checkout@v6
         with:
@@ -44,6 +52,8 @@ jobs:
   # (release.yml) must fire on the published release.
   release-plz-release:
     name: Release
+    # Publish only when a release commit lands on main; never on schedule/dispatch.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the tag, create the GitHub release

@@ -13,6 +13,7 @@
 git_tag_enable = false
 git_release_enable = false
 changelog_update = false  # only rossi-cli writes the single combined changelog
+semver_check = false  # pre-1.0: breaking changes are expected, so skip the cargo-semver-checks build (the PR job's biggest cost)
 
 # rossi-cli — the user-facing product and the last crate in publish order — owns
 # the single suite tag + GitHub release, and writes the single combined changelog.
