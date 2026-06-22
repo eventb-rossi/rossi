@@ -1,0 +1,44 @@
+name: Docs
+
+# Documentation-only changes skip the full CI suite (see ci.yml's paths-ignore).
+# This lightweight job still guards the Event-B examples embedded in markdown:
+# crates/rossi/tests/doc_snippets_test.rs parses every ```eventb fenced block in
+# tracked markdown, plus the canonical snippet table and the VS Code starter
+# files. It compiles only the rossi crate, so it is far cheaper than CI's
+# whole-workspace test job. On a release tag, ci.yml's full `cargo test` already
+# covers this test, so no tag trigger is needed here.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  doc-snippets:
+    name: Doc snippets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Validate Event-B doc blocks and snippets
+        run: cargo test -p rossi --test doc_snippets_test
