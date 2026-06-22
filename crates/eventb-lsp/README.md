@@ -1,5 +1,7 @@
 # eventb-lsp
 
+[![crates.io](https://img.shields.io/crates/v/eventb-lsp?label=crates.io)](https://crates.io/crates/eventb-lsp)
+
 Language Server Protocol (LSP) implementation for Event-B formal modeling language.
 
 ## Overview
@@ -28,16 +30,28 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 
 ## Installation
 
-### From Source
+The `eventb-language-server` binary ships **alongside the `rossi` CLI**: the VS
+Code / VSCodium extension downloads it on first activation, and every
+package-manager install of `rossi` (Homebrew, Scoop, Gentoo, Fedora COPR)
+includes it — see the
+[project README](https://github.com/eventb-rossi/rossi#installation).
+
+### From crates.io
+
+```bash
+cargo install eventb-lsp
+```
+
+This installs `eventb-language-server` to `~/.cargo/bin/`.
+
+### From source
 
 ```bash
 cd crates/eventb-lsp
 cargo install --path .
 ```
 
-The binary `eventb-language-server` will be installed to `~/.cargo/bin/`.
-
-### From Workspace Root
+### From workspace root
 
 ```bash
 cargo build --release --bin eventb-language-server

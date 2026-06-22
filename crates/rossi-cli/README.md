@@ -1,5 +1,7 @@
 # rossi-cli
 
+[![crates.io](https://img.shields.io/crates/v/rossi-cli?label=crates.io)](https://crates.io/crates/rossi-cli)
+
 The `rossi` command-line tool for the Event-B formal modeling language —
 part of the
 [Rossi](https://github.com/eventb-rossi/rossi) toolchain. It wraps the
@@ -10,11 +12,33 @@ single binary named `rossi`.
 
 ## Installation
 
+From crates.io:
+
 ```bash
 cargo install rossi-cli
 ```
 
-This installs a `rossi` executable.
+This installs a `rossi` executable. Prebuilt packages are also available from
+the major package managers (each also installs the `eventb-language-server`):
+
+```bash
+# Homebrew (macOS / Linux)
+brew tap eventb-rossi/tap
+brew install rossi
+
+# Scoop (Windows)
+scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
+scoop install eventb/rossi
+
+# Gentoo
+eselect repository eventb-rossi
+emaint sync -r eventb-rossi
+emerge -av rossi
+
+# Fedora (COPR)
+sudo dnf copr enable @eventb-rossi/eventb-copr
+sudo dnf install rossi
+```
 
 ## Subcommands
 
