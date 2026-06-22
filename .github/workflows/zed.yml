@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The extension is a wasm cdylib (excluded from the workspace); building it
       # validates src/lib.rs against zed_extension_api and the committed Cargo.lock.

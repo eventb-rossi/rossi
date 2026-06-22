@@ -70,7 +70,7 @@ jobs:
           - { target: aarch64-pc-windows-msvc, os: windows-latest }
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Build the tag's source, not the dispatched branch. A manual
           # workflow_dispatch otherwise checks out the default branch and ships
