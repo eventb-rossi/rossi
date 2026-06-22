@@ -1,6 +1,25 @@
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/rossi.event-b.svg)](https://marketplace.visualstudio.com/items?itemName=rossi.event-b)
+[![Open VSX](https://img.shields.io/open-vsx/v/rossi/event-b?label=Open%20VSX)](https://open-vsx.org/extension/rossi/event-b)
+
 # Event-B (Rossi) for VS Code
 
 This extension provides comprehensive language support for Event-B formal modeling in Visual Studio Code, powered by the Rossi Language Server.
+
+## Installation
+
+Install **Event-B (Rossi)** from your editor's marketplace:
+
+- **VS Code** — the [Marketplace](https://marketplace.visualstudio.com/items?itemName=rossi.event-b),
+  the Extensions view (`Ctrl+Shift+X` → search "Event-B"), or
+  `code --install-extension rossi.event-b`
+- **VSCodium** — [Open VSX](https://open-vsx.org/extension/rossi/event-b) or
+  `codium --install-extension rossi.event-b`
+
+On first activation the extension downloads the prebuilt `eventb-language-server`
+and `rossi` binaries for your platform (Linux/macOS/Windows, x86_64 or ARM64),
+verifies them against the release `SHA256SUMS`, and caches them — so for most
+users no further setup is needed. See [INSTALL.md](INSTALL.md) for step-by-step
+setup, verification, and troubleshooting.
 
 ## Features
 
@@ -76,19 +95,36 @@ Type a prefix and press Tab:
 
 ## Requirements
 
-The Rossi Language Server (the `eventb-language-server` binary) must be installed and accessible in your PATH. Rodin import/export/build/validation commands also require the `rossi` CLI. `Open in Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
+The extension uses the Rossi Language Server (`eventb-language-server`) for
+editor features and the `rossi` CLI for the Rodin import/export/build/validation
+commands. **It downloads both for you on first activation** (see
+[Installation](#installation)), so usually nothing else is required. `Open in
+Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
 
-### Installation
+### Installing the binaries yourself
 
-From the project root:
+For an unsupported platform, an offline machine, or a custom build, install the
+binaries yourself and the extension will pick them up from your `PATH` (or point
+`rossi.languageServer.path` / `rossi.tool.path` at them):
 
 ```bash
-cargo build --release --bin eventb-language-server --bin rossi
+# Homebrew (macOS / Linux)
+brew tap eventb-rossi/tap && brew install rossi
+
+# Scoop (Windows)
+scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
+scoop install eventb/rossi
+
+# cargo
+cargo install rossi-cli eventb-lsp
 ```
 
-Add both binaries (in `target/release/`) to your PATH or specify their full
-paths in settings. See [INSTALL.md](INSTALL.md) for step-by-step installation,
-verification, and troubleshooting.
+The package managers (and `cargo`) install both `rossi` and
+`eventb-language-server`. To build from source instead, run
+`cargo build --release --bin eventb-language-server --bin rossi` from the project
+root and add `target/release/` to your `PATH`. See [INSTALL.md](INSTALL.md) and
+the [main Installation guide](../../README.md#installation) for the full matrix
+(Gentoo, Fedora COPR, …), verification, and troubleshooting.
 
 ## Extension Settings
 

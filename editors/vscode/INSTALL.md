@@ -18,8 +18,29 @@ them against the release `SHA256SUMS`, and caches them. No manual step is needed
 on Linux, macOS, or Windows (x86_64 or ARM64).
 
 To install the binaries yourself instead — for an unsupported platform, an
-offline machine, or a custom build — build them from source; the extension then
-picks them up from `PATH` (or point the settings at them):
+offline machine, or a custom build — use a package manager (each installs both
+`rossi` and `eventb-language-server`); the extension then picks them up from
+`PATH` (or point the settings at them):
+
+```bash
+# Homebrew (macOS / Linux)
+brew tap eventb-rossi/tap && brew install rossi
+
+# Scoop (Windows)
+scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
+scoop install eventb/rossi
+
+# Gentoo
+eselect repository eventb-rossi && emaint sync -r eventb-rossi && emerge -av rossi
+
+# Fedora (COPR)
+sudo dnf copr enable @eventb-rossi/eventb-copr && sudo dnf install rossi
+
+# cargo
+cargo install rossi-cli eventb-lsp
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/eventb-rossi/rossi.git
@@ -39,7 +60,17 @@ export PATH="$PATH:/path/to/rossi/target/release"
 
 ### Step 2: Install the VS Code Extension
 
-**Option A: From VSIX File**
+**Option A: From the Marketplace / Open VSX (recommended)**
+
+- **VS Code** — open Extensions (`Ctrl+Shift+X`), search "Event-B", and click
+  Install; install from the
+  [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=rossi.event-b);
+  or run `code --install-extension rossi.event-b`.
+- **VSCodium** — install from
+  [Open VSX](https://open-vsx.org/extension/rossi/event-b) or run
+  `codium --install-extension rossi.event-b`.
+
+**Option B: From a VSIX file**
 
 Build the VSIX from the repository, then install it. From the repository root:
 ```bash
@@ -51,12 +82,6 @@ code --install-extension event-b-0.1.0.vsix
 
 `npm run package` prints the name of the generated `.vsix`; adjust the install
 command if the version differs.
-
-**Option B: From VS Code Marketplace**
-*(When published)*
-1. Open Extensions (Ctrl+Shift+X)
-2. Search for "Event-B"
-3. Click Install
 
 ### Step 3: Verify Installation
 
