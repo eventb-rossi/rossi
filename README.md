@@ -1,4 +1,8 @@
-# Rossi
+[![crates.io](https://img.shields.io/crates/v/rossi-cli?label=crates.io)](https://crates.io/crates/rossi-cli)
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/rossi.event-b.svg)](https://marketplace.visualstudio.com/items?itemName=rossi.event-b)
+[![Open VSX](https://img.shields.io/open-vsx/v/rossi/event-b?label=Open%20VSX)](https://open-vsx.org/extension/rossi/event-b)
+
+# Event-B Rossi
 
 A Rust toolchain for the Event-B formal modeling language: parser,
 static checker, command-line tool, and Language Server Protocol
@@ -48,7 +52,50 @@ Rossi covers the full author-to-Rodin path:
 
 ## Installation
 
-Build the `rossi` command-line tool from source:
+### Editor extension (VS Code / VSCodium)
+
+Install **Event-B (Rossi)** from your editor's marketplace. The extension bundles
+syntax highlighting and the language server, and downloads the prebuilt `rossi` /
+`eventb-language-server` binaries for your platform on first activation — so for
+most users this is the only step.
+
+- **VS Code** — [Marketplace](https://marketplace.visualstudio.com/items?itemName=rossi.event-b)
+  or `code --install-extension rossi.event-b`
+- **VSCodium** — [Open VSX](https://open-vsx.org/extension/rossi/event-b)
+  or `codium --install-extension rossi.event-b`
+
+### CLI — package managers
+
+The `rossi` command-line tool (each package also installs the
+`eventb-language-server`) is available from the major package managers:
+
+```bash
+# Homebrew (macOS / Linux)
+brew tap eventb-rossi/tap
+brew install rossi
+
+# Scoop (Windows)
+scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
+scoop install eventb/rossi
+
+# Gentoo
+eselect repository eventb-rossi
+emaint sync -r eventb-rossi
+emerge -av rossi
+
+# Fedora (COPR)
+sudo dnf copr enable @eventb-rossi/eventb-copr
+sudo dnf install rossi
+```
+
+### CLI — from crates.io
+
+```bash
+cargo install rossi-cli   # the `rossi` CLI
+cargo install eventb-lsp  # the standalone `eventb-language-server`
+```
+
+### CLI — from source
 
 ```bash
 git clone https://github.com/eventb-rossi/rossi
@@ -59,6 +106,8 @@ cargo build --release -p rossi-cli
 The binary is then available at `target/release/rossi`. The standalone
 language server (`eventb-language-server`) builds the same way with
 `-p eventb-lsp`.
+
+### As a library
 
 To use Rossi as a library, depend on the `rossi` crate — the parser, typed
 AST, pretty-printer, and Rodin XML/ZIP conversion. Run `cargo doc -p rossi
@@ -200,15 +249,19 @@ rossi build project.zip --output project-checked.zip
 rossi build project.zip --output ./out
 ```
 
-### LSP
+## Language Server & IDE Support
 
-```bash
-# Start the language server over stdio
-rossi lsp
-```
+The `eventb-lsp` Language Server Protocol implementation provides modern
+IDE features for Event-B development:
 
-This is identical to running the standalone `eventb-language-server`
-binary; editor extensions may invoke either form.
+- **Real-time diagnostics** — syntax and semantic errors with error recovery
+- **Completion & hover** — context-aware keywords, operators, identifiers, snippets
+- **Navigation** — go-to-definition, find references, and document/workspace symbols
+- **Rename refactoring** — safe identifier renaming with validation
+- **Formatting & semantic highlighting** — Unicode/ASCII operators, AST-based tokens
+- **Code actions** — Unicode/ASCII conversion, extract constant, sort clauses
+- **Code folding, smart selection, signature help, and document links**
+- **Cross-file resolution** — transitive SEES / REFINES / EXTENDS traversal
 
 ## Development
 
@@ -228,45 +281,9 @@ cargo test -- --nocapture
 cargo doc --open
 ```
 
-## Language Server & IDE Support
-
-The `eventb-lsp` Language Server Protocol implementation provides modern
-IDE features for Event-B development:
-
-- **Real-time diagnostics** — syntax and semantic errors with error recovery
-- **Completion & hover** — context-aware keywords, operators, identifiers, snippets
-- **Navigation** — go-to-definition, find references, and document/workspace symbols
-- **Rename refactoring** — safe identifier renaming with validation
-- **Formatting & semantic highlighting** — Unicode/ASCII operators, AST-based tokens
-- **Code actions** — Unicode/ASCII conversion, extract constant, sort clauses
-- **Code folding, smart selection, signature help, and document links**
-- **Cross-file resolution** — transitive SEES / REFINES / EXTENDS traversal
-
-### Editor Extensions
-
-Extensions are available in the `editors/` directory:
-
-- **VS Code** (`editors/vscode/`) — syntax highlighting, LSP integration, snippets, and as-you-type ASCII→Unicode symbol input
-- **Neovim** (`editors/neovim/`) — file detection, syntax highlighting, LSP config
-- **Sublime Text** (`editors/sublime/`) — syntax highlighting, LSP integration, and as-you-type ASCII→Unicode symbol input (also used by `bat` and `delta` for syntax only)
-- **Emacs** (`editors/emacs/`) — major mode for Event-B
-- **Zed** (`editors/zed/`) — LSP integration plus a tree-sitter grammar for highlighting; semantic-token overlay
-
-See each editor's README and INSTALL files for setup instructions.
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all checks pass: `cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test`
-5. Submit a pull request
-
 ## Related Projects
 
-- [Rodin Platform](https://www.event-b.org/) - Eclipse-based IDE for Event-B
+- [Rodin Platform](https://eventb-soton.github.io/en-us/) - Eclipse-based IDE for Event-B
 - [ProB](https://prob.de/) - Animator and model checker for Event-B
 - [Event-B Documentation](https://wiki.event-b.org/)
 
