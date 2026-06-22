@@ -7,11 +7,26 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'LICENSE*'
+      # Editor-plugin sources have their own workflows (vscode.yml, zed.yml) and
+      # a lightweight consistency guard (editors.yml runs gen-grammars --check +
+      # doc_snippets). They don't affect the Rust workspace, so skip the heavy
+      # suite. editors/tree-sitter-eventb (the submodule) is intentionally NOT
+      # listed: a pointer bump feeds gen-grammars --check + the grammar tests.
+      - 'editors/vscode/**'
+      - 'editors/zed/**'
+      - 'editors/neovim/**'
+      - 'editors/emacs/**'
+      - 'editors/sublime/**'
   pull_request:
     branches: [ main ]
     paths-ignore:
       - '**/*.md'
       - 'LICENSE*'
+      - 'editors/vscode/**'
+      - 'editors/zed/**'
+      - 'editors/neovim/**'
+      - 'editors/emacs/**'
+      - 'editors/sublime/**'
 
 # Cancel superseded in-progress runs on the same PR; never cancel main or tag
 # (release) runs — cancel-in-progress is false for push events.

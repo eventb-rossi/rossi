@@ -1,0 +1,58 @@
+name: Editors
+
+# Editor-plugin-only changes skip the full CI suite (see ci.yml's paths-ignore).
+# This lightweight job preserves the two real couplings between editor files and
+# the Rust workspace: `cargo xtask gen-grammars --check` byte-checks the generated
+# grammar/snippet files under editors/{vscode,zed,neovim,emacs,sublime}, and
+# doc_snippets_test parses editors/vscode/src/rossiCommands.ts (the New-Project
+# starter files). editors/tree-sitter-eventb (the submodule) still runs full CI.
+# On a release tag, ci.yml's full suite already runs both, so no tag trigger here.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'editors/vscode/**'
+      - 'editors/zed/**'
+      - 'editors/neovim/**'
+      - 'editors/emacs/**'
+      - 'editors/sublime/**'
+      - '.github/workflows/editors.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'editors/vscode/**'
+      - 'editors/zed/**'
+      - 'editors/neovim/**'
+      - 'editors/emacs/**'
+      - 'editors/sublime/**'
+      - '.github/workflows/editors.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  editor-consistency:
+    name: Editor grammar consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # gen-grammars --check reads the tree-sitter-eventb submodule's grammar.js region.
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check editor grammars are up to date
+        run: cargo xtask gen-grammars --check
+
+      - name: Validate VS Code starter files
+        run: cargo test -p rossi --test doc_snippets_test
