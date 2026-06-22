@@ -1,0 +1,92 @@
+name: vscode-release
+
+# Publish the VS Code extension to the VS Code Marketplace and Open VSX.
+#
+# Fires once a GitHub Release is published — the same trigger as release.yml, which
+# attaches the prebuilt binary archives to that Release. Publishing on the Release
+# keeps the extension version locked to the `v{version}` tag: binaryManager.ts pins
+# its toolchain download to `v${package.json.version}`, so the extension a user
+# installs always resolves the binaries from its own release. The version is taken
+# from the tag here, so cutting a release is enough — no separate package.json bump.
+#
+# `workflow_dispatch` lets you (re)publish an existing tag by hand.
+#
+# Requires repository secrets VSCE_PAT (Marketplace, scope Marketplace > Manage) and
+# OVSX_PAT (Open VSX, namespace `rossi`); @vscode/vsce and ovsx read them from the
+# environment. Re-running for an already-published version is a no-op failure by
+# design — the registries reject a duplicate version.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)publish, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: vscode-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  # release event -> the published tag; manual run -> the input.
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  publish:
+    name: Publish extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: editors/vscode
+
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run compile
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test symbol matcher
+        run: npm run test:matcher
+
+      # Lock package.json to the tag so the published version and the binaryManager
+      # download pin (`v${version}`) both match this release's assets.
+      - name: Set version from tag
+        run: npm version --no-git-tag-version --allow-same-version "${TAG#v}"
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Verify packaged VSIX
+        run: npm run check:vsix
+
+      - name: Publish to VS Code Marketplace
+        run: npm run publish:vsce
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        run: npm run publish:ovsx
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
