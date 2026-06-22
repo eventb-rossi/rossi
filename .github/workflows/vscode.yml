@@ -47,7 +47,7 @@ jobs:
         run: npm run test:matcher
 
       - name: Package VSIX
-        run: npm run package -- --out /tmp/rossi-eventb.vsix
+        run: npm run package -- --out /tmp/event-b.vsix
 
       - name: Verify packaged VSIX
-        run: npm run check:vsix -- /tmp/rossi-eventb.vsix
+        run: npm run check:vsix -- /tmp/event-b.vsix

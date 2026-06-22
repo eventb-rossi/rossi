@@ -3,9 +3,10 @@ extension.vsixmanifest
 extension/INSTALL.md
 extension/LICENSE-MIT
 extension/LICENSE.txt
+extension/changelog.md
 extension/dist/extension.js
-extension/icons/eventb-icon.png
 extension/icons/eventb-icon.svg
+extension/icons/rossi-icon.png
 extension/language-configuration.json
 extension/package.json
 extension/readme.md

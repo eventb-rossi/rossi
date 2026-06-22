@@ -834,7 +834,7 @@ END
 function starterReadme(name: string): string {
     return `# ${name}
 
-An Event-B project edited with the Rossi Event-B extension.
+An Event-B project edited with the Event-B (Rossi) extension.
 
 ## Getting started
 

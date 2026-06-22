@@ -51,7 +51,7 @@ function getRossiConfiguration(): RossiConfiguration {
 }
 
 export async function activate(context: ExtensionContext) {
-    console.log('Rossi Event-B extension is now active');
+    console.log('Event-B (Rossi) extension is now active');
 
     const diagnostics = languages.createDiagnosticCollection('rossi');
     const output = window.createOutputChannel('Rossi');

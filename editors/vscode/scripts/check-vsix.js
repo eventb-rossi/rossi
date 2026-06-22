@@ -4,7 +4,7 @@
 // Usage:
 //   node scripts/check-vsix.js [path-to.vsix] [--update]
 //
-// With no path, checks rossi-eventb-<version>.vsix next to package.json
+// With no path, checks <name>-<version>.vsix next to package.json
 // (build it first with `npm run package`). --update rewrites the expected
 // manifest from the vsix instead of failing on a mismatch.
 //
@@ -21,13 +21,14 @@ const path = require('path');
 
 const extensionDir = path.dirname(__dirname);
 const manifestPath = path.join(__dirname, 'expected-vsix-files.txt');
+const pkg = require(path.join(extensionDir, 'package.json'));
 
 const args = process.argv.slice(2);
 const update = args.includes('--update');
 const vsixArg = args.find(a => a !== '--update');
 const vsixPath = vsixArg
     ? path.resolve(vsixArg)
-    : path.join(extensionDir, `rossi-eventb-${require(path.join(extensionDir, 'package.json')).version}.vsix`);
+    : path.join(extensionDir, `${pkg.name}-${pkg.version}.vsix`);
 
 if (!fs.existsSync(vsixPath)) {
     console.error(`vsix not found: ${vsixPath} (build it with \`npm run package\`)`);

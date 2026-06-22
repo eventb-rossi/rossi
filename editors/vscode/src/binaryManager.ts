@@ -20,7 +20,7 @@ const CLI_NAME = 'rossi';
 // prebuilt assets are attached to each GitHub Release by .github/workflows/release.yml.
 const REPO = 'eventb-rossi/rossi';
 const RELEASES = `https://github.com/${REPO}/releases`;
-const USER_AGENT = 'rossi-eventb-vscode';
+const USER_AGENT = 'eventb-vscode';
 
 // `${process.platform}-${process.arch}` -> Rust target triple. Mirrors the
 // release workflow's build matrix.

@@ -1,6 +1,6 @@
-# Rossi Event-B - Installation Guide
+# Event-B (Rossi) — Installation Guide
 
-Quick guide to installing the Rossi Event-B extension for VS Code. For
+Quick guide to installing the Event-B (Rossi) extension for VS Code. For
 features, settings, and usage, see the [README](README.md).
 
 ## Quick Install
@@ -46,7 +46,7 @@ Build the VSIX from the repository, then install it. From the repository root:
 cd editors/vscode
 npm ci
 npm run package
-code --install-extension rossi-eventb-0.1.0.vsix
+code --install-extension event-b-0.1.0.vsix
 ```
 
 `npm run package` prints the name of the generated `.vsix`; adjust the install
@@ -55,7 +55,7 @@ command if the version differs.
 **Option B: From VS Code Marketplace**
 *(When published)*
 1. Open Extensions (Ctrl+Shift+X)
-2. Search for "Rossi Event-B"
+2. Search for "Event-B"
 3. Click Install
 
 ### Step 3: Verify Installation
@@ -177,7 +177,7 @@ Solution: Check server is built correctly, try rebuilding.
 ## Uninstalling
 
 ```bash
-code --uninstall-extension rossi.rossi-eventb
+code --uninstall-extension rossi.event-b
 ```
 
 Or via Extensions view: Right-click extension > Uninstall

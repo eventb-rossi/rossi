@@ -1,4 +1,4 @@
-# Rossi Event-B for VS Code
+# Event-B (Rossi) for VS Code
 
 This extension provides comprehensive language support for Event-B formal modeling in Visual Studio Code, powered by the Rossi Language Server.
 
