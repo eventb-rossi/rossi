@@ -49,6 +49,13 @@ This directory contains Emacs configuration for Event-B formal modeling, providi
 
 ### 1. Install the Language Server
 
+Install `eventb-language-server` via your package manager (Homebrew, Scoop,
+Gentoo, or Fedora COPR — each installs it alongside the `rossi` CLI) or with
+`cargo install eventb-lsp`. See the
+[main Installation guide](../../README.md#installation) for the full matrix.
+
+To build from a clone instead:
+
 ```bash
 # Clone the repository (if you haven't already)
 git clone https://github.com/eventb-rossi/rossi

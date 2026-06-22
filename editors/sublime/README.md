@@ -34,7 +34,12 @@ Files ending in `.eventb` highlight automatically once the syntax file is presen
 
 ### Language Server (hover, completion, go-to-definition, …)
 
-Install [Package Control](https://docs.sublimetext.io/guide/package-control/usage.html)
+First install the `eventb-language-server` binary via your package manager
+(Homebrew, Scoop, Gentoo, or Fedora COPR — each installs it alongside the `rossi`
+CLI) or with `cargo install eventb-lsp`; see the
+[main Installation guide](../../README.md#installation).
+
+Then install [Package Control](https://docs.sublimetext.io/guide/package-control/usage.html)
 and the [LSP package](https://packages.sublimetext.io/packages/LSP).
 
 Open the Command Palette:
