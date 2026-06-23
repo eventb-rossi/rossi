@@ -166,3 +166,18 @@ jobs:
           sha256sum "${archives[@]}" > SHA256SUMS
           cat SHA256SUMS
           gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Tell the eventb-rossi packaging repos a new rossi release exists, so their
+  # version-check workflows run immediately instead of waiting for the daily cron.
+  # Gated to real releases (not manual asset rebuilds) and run after the archives +
+  # SHA256SUMS are uploaded, so packagers see a complete release. See
+  # eventb-rossi/release-automation for the reusable workflow.
+  notify-downstream:
+    needs: [build, checksums]
+    if: github.event_name == 'release'
+    uses: eventb-rossi/release-automation/.github/workflows/notify-downstream.yml@main
+    with:
+      tool: rossi
+      version: ${{ github.event.release.tag_name }}
+    secrets:
+      dispatch-token: ${{ secrets.VERSION_BUMP_TOKEN }}
