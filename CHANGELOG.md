@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.1](https://github.com/eventb-rossi/rossi/compare/v0.1.0...v0.1.1) - 2026-06-23
+
+### Added
+- *(operators)* Accept +->> and -->> surjection input spellings
+
+### Changed
+- *(rossi)* Host the operator input-method table in rossi::operators
+
+### Fixed
+- *(parser)* Guard predicate lists against section keywords
+- *(parser)* Treat Unicode space separators as whitespace (Rodin parity)
+- *(infer)* Type identifiers buried in operand expressions (Rodin parity)
+
+### Documentation
+- Document the Ubuntu APT install channel
+- Document package-manager and extension installs
+- Point CI and editor docs at `cargo xtask gen-grammars`
+
 ## [0.1.0] - 2026-06-20
 
 Initial release of the Rossi toolchain for the Event-B formal modeling language —
