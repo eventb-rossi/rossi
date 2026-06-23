@@ -620,14 +620,14 @@ labeled_predicate = {
 }
 
 context_clause_axioms = {
-    kw_axioms ~ labeled_predicate ~ (labeled_predicate)*
+    kw_axioms ~ labeled_predicate ~ (!context_section_kw ~ labeled_predicate)*
 }
 
 // A THEOREMS section is sugar for theorem-flagged axioms: the parser lowers each
 // member into `Context.axioms` with `is_theorem = true` (Rodin models a theorem as
 // a boolean attribute on an axiom, not as a separate container).
 context_clause_theorems = {
-    kw_theorems ~ labeled_predicate ~ (labeled_predicate)*
+    kw_theorems ~ labeled_predicate ~ (!context_section_kw ~ labeled_predicate)*
 }
 
 context_body = {
@@ -661,14 +661,14 @@ machine_clause_variables = {
 }
 
 machine_clause_invariants = {
-    kw_invariants ~ labeled_predicate ~ (labeled_predicate)*
+    kw_invariants ~ labeled_predicate ~ (!machine_section_kw ~ labeled_predicate)*
 }
 
 // A THEOREMS section is sugar for theorem-flagged invariants: the parser lowers each
 // member into `Machine.invariants` with `is_theorem = true` (Rodin models a theorem
 // as a boolean attribute on an invariant, not as a separate container).
 machine_clause_theorems = {
-    kw_theorems ~ labeled_predicate ~ (labeled_predicate)*
+    kw_theorems ~ labeled_predicate ~ (!machine_section_kw ~ labeled_predicate)*
 }
 
 machine_clause_variant = {
