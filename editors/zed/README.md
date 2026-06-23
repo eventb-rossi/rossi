@@ -25,8 +25,8 @@ highlighting for richer, meaning-aware colors — see Configuration.
 ## Prerequisites
 
 The extension expects the language server (`eventb-language-server`) on your
-`PATH`. Install it via your package manager (Homebrew, Scoop, Gentoo, or Fedora
-COPR — each installs it alongside the `rossi` CLI) or with `cargo install
+`PATH`. Install it via your package manager (Homebrew, APT, Scoop, Gentoo, or
+Fedora COPR — each installs it alongside the `rossi` CLI) or with `cargo install
 eventb-lsp`; see the [main Installation guide](../../README.md#installation).
 From a clone, build it with:
 

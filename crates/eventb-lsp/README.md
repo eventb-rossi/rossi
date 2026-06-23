@@ -32,7 +32,7 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 
 The `eventb-language-server` binary ships **alongside the `rossi` CLI**: the VS
 Code / VSCodium extension downloads it on first activation, and every
-package-manager install of `rossi` (Homebrew, Scoop, Gentoo, Fedora COPR)
+package-manager install of `rossi` (Homebrew, APT, Scoop, Gentoo, Fedora COPR)
 includes it — see the
 [project README](https://github.com/eventb-rossi/rossi#installation).
 

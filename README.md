@@ -74,6 +74,14 @@ The `rossi` command-line tool (each package also installs the
 brew tap eventb-rossi/tap
 brew install rossi
 
+# APT (Ubuntu 26.04 "Resolute" or later)
+curl -fsSL https://eventb-rossi.github.io/apt/KEY.gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/eventb.gpg
+echo "deb [signed-by=/etc/apt/keyrings/eventb.gpg] https://eventb-rossi.github.io/apt resolute main" \
+  | sudo tee /etc/apt/sources.list.d/eventb.list
+sudo apt update
+sudo apt install rossi
+
 # Scoop (Windows)
 scoop bucket add eventb https://github.com/eventb-rossi/scoop-eventb
 scoop install eventb/rossi

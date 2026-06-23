@@ -124,7 +124,7 @@ The package managers (and `cargo`) install both `rossi` and
 `cargo build --release --bin eventb-language-server --bin rossi` from the project
 root and add `target/release/` to your `PATH`. See [INSTALL.md](INSTALL.md) and
 the [main Installation guide](../../README.md#installation) for the full matrix
-(Gentoo, Fedora COPR, …), verification, and troubleshooting.
+(APT, Gentoo, Fedora COPR, …), verification, and troubleshooting.
 
 ## Extension Settings
 
