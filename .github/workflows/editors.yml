@@ -6,7 +6,7 @@ name: Editors
 # grammar/snippet files under editors/{vscode,zed,neovim,emacs,sublime}, and
 # doc_snippets_test parses editors/vscode/src/rossiCommands.ts (the New-Project
 # starter files). editors/tree-sitter-eventb (the submodule) still runs full CI.
-# On a release tag, ci.yml's full suite already runs both, so no tag trigger here.
+# ci.yml's full suite already runs both on main-branch pushes, so no duplication here.
 on:
   push:
     branches: [ main ]
