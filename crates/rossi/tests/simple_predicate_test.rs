@@ -1508,3 +1508,53 @@ fn test_surjection_alias_spellings_parse_as_surjections() {
     assert_eq!(binary_op_of("S +-> T"), BinaryOp::PartialFunction);
     assert_eq!(binary_op_of("S --> T"), BinaryOp::TotalFunction);
 }
+
+#[test]
+fn test_unicode_whitespace_matches_rodin() {
+    // Rodin's math lexer treats any Unicode space separator as whitespace
+    // (LexicalClass.isWhitespace + FormulaFactory.isEventBWhiteSpace), including
+    // the non-breaking spaces Java's Character.isWhitespace omits. rossi's
+    // WHITESPACE rule mirrors that set, so a predicate separated by such spaces
+    // parses identically to the ASCII-space form. Real Rodin XML in the wild puts
+    // U+00A0 around operators like `=` and `≤`, which Rodin accepts.
+    let ascii = rossi::parse_predicate_str("sense_ev = TRUE ⇒ ct ≤ st")
+        .expect("ASCII-spaced predicate should parse");
+
+    // U+00A0 NO-BREAK SPACE separating the operands and operators.
+    let nbsp = rossi::parse_predicate_str("sense_ev\u{a0}=\u{a0}TRUE ⇒ ct\u{a0}≤\u{a0}st")
+        .expect("U+00A0-separated predicate should parse");
+    assert_eq!(
+        nbsp, ascii,
+        "U+00A0 must be whitespace, same AST as ASCII spaces"
+    );
+
+    // U+2007 FIGURE SPACE — another non-breaking Zs space Java excludes but Rodin
+    // accepts; confirms we matched the category, not just the one codepoint.
+    let figure = rossi::parse_predicate_str("sense_ev\u{2007}=\u{2007}TRUE ⇒ ct ≤ st")
+        .expect("U+2007-separated predicate should parse");
+    assert_eq!(
+        figure, ascii,
+        "U+2007 must be whitespace, same AST as ASCII spaces"
+    );
+
+    // Negative parity: U+200B ZERO WIDTH SPACE is category Cf, not a space
+    // separator — Rodin does NOT treat it as whitespace, so neither do we. It
+    // must fail rather than silently glue tokens together.
+    assert!(
+        rossi::parse_predicate_str("sense_ev\u{200b}=\u{200b}TRUE").is_err(),
+        "U+200B is not whitespace in Rodin; it must not parse as a separator"
+    );
+}
+
+#[test]
+fn test_label_terminates_on_unicode_whitespace() {
+    // A label is "@" then non-whitespace up to the next whitespace. The grammar's
+    // whitespace set now includes U+00A0, and the `label_text` rule references
+    // WHITESPACE, so a label followed by a U+00A0 must terminate at it — not
+    // swallow the following predicate into the label. With a U+00A0 between the
+    // label and the predicate, the label is still `axm1` and `1 = 1` parses as
+    // the axiom predicate.
+    let ctx = common::parse_context("CONTEXT c\nAXIOMS\n@axm1\u{a0}1 = 1\nEND\n");
+    assert_eq!(ctx.axioms.len(), 1);
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some("axm1"));
+}

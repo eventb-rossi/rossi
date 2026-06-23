@@ -1,7 +1,24 @@
 // Event-B Grammar Definition for pest parser
 // This grammar defines the syntax for Event-B formal modeling language
 
-WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+// Whitespace mirrors Rodin's math lexer: a code point is whitespace iff
+//   Character.isWhitespace(cp) || FormulaFactory.isEventBWhiteSpace(cp)
+// (RodinCore org.eventb.core.ast: LexicalClass.isWhitespace +
+//  FormulaFactory.isEventBWhiteSpace). The union is the control ranges
+// U+0009..U+000D and U+001C..U+001F plus every Unicode Space/Line/Paragraph
+// separator (Zs/Zl/Zp) -- including the non-breaking spaces (U+00A0/U+2007/U+202F)
+// that Java's Character.isWhitespace omits. U+200B (Cf) is NOT whitespace.
+// Ordinary ASCII space dominates real input, so it leads the ordered choice
+// (pest tries alternatives left-to-right and stops at the first match).
+WHITESPACE = _{
+      " "                                            // U+0020 SPACE (Zs) -- most common, tried first
+    | "\t" | "\n" | "\u{0B}" | "\u{0C}" | "\r"        // U+0009..U+000D
+    | "\u{1C}" | "\u{1D}" | "\u{1E}" | "\u{1F}"      // U+001C..U+001F
+    | "\u{A0}" | "\u{1680}"                          // Zs: NO-BREAK SPACE, OGHAM
+    | '\u{2000}'..'\u{200A}'                          // Zs: EN QUAD .. HAIR SPACE
+    | "\u{2028}" | "\u{2029}"                         // Zl LINE SEP / Zp PARAGRAPH SEP
+    | "\u{202F}" | "\u{205F}" | "\u{3000}"            // Zs: NNBSP, MMSP, IDEOGRAPHIC
+}
 COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 
 // ==========================
@@ -590,7 +607,10 @@ context_clause_constants = {
 // "all characters following '@' belong to the label until the next whitespace character is found."
 // This supports labels with non-identifier chars like SAF5" from Rodin XML &quot; escapes.
 // The optional trailing colon supports eventb-to-txt reference output (e.g. "@inv1:").
-label_text = @{ (!(" " | "\t" | "\n" | "\r") ~ ANY)+ }
+// `!WHITESPACE` (not a hardcoded ASCII list) keeps the label boundary in lockstep
+// with the parser's whitespace set, so a label terminates on the same Unicode
+// spaces (e.g. U+00A0) the rest of the grammar skips.
+label_text = @{ (!WHITESPACE ~ ANY)+ }
 label = ${ "@" ~ label_text }
 
 // Accepts both orderings: "@label theorem pred" and "theorem @label pred"

@@ -1088,7 +1088,9 @@ fn test_recovery_unicode_whitespace_before_label_does_not_panic() {
     // A multibyte Unicode whitespace (U+00A0, no-break space) between the clause
     // keyword and a labelled predicate must not crash recovery: the segment-start
     // scan walks chars, not raw bytes, so it never slices inside a multibyte
-    // whitespace. The U+00A0 itself fails the strict parse and drives recovery.
+    // whitespace. The grammar now treats U+00A0 as whitespace (Rodin parity), so
+    // here the trailing `$$$` is what fails the strict parse and drives recovery;
+    // the recovery byte-scanners stay ASCII-only and still walk over the U+00A0.
     let source = "CONTEXT c\nAXIOMS\n\u{a0}theorem @thm1 broken $$$\nEND\n";
     // Reaching this assertion at all is the regression check — the byte-index
     // scan this once used panicked here. Recovery should also report the broken
