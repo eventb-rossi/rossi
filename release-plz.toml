@@ -25,6 +25,7 @@ name = "rossi-cli"
 git_tag_enable = true
 git_release_enable = true
 git_tag_name = "v{{ version }}"
+git_release_name = "Rossi v{{ version }}"
 changelog_update = true
 # `changelog_path` is a per-package key (release-plz rejects it under [workspace]);
 # point rossi-cli's changelog at the repo root so the suite has one combined file.
