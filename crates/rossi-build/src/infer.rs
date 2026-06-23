@@ -91,11 +91,32 @@ impl From<&Type> for ITy {
 struct Unifier {
     /// `slots[i]` is the binding for `Var(i)` (`None` while unsolved).
     slots: Vec<Option<ITy>>,
+    /// One untyped identifier to type as a fresh variable rather than via
+    /// `env` — Rodin's `getIdentType`, which mints a fresh `TypeVariable`
+    /// for any free identifier absent from the type environment so the
+    /// surrounding equations can solve it. `None` (the default) leaves
+    /// `synth` behaving exactly as before, so `type_of_expression` and
+    /// every existing caller are unaffected; only
+    /// [`infer_ident_via_unification`] sets it.
+    target: Option<(String, u32)>,
 }
 
 impl Unifier {
     fn new() -> Unifier {
-        Unifier { slots: Vec::new() }
+        Unifier {
+            slots: Vec::new(),
+            target: None,
+        }
+    }
+
+    /// The variable type standing in for `name`, if `name` is this
+    /// unifier's [`Unifier::target`]. Holds no borrow of `target` across
+    /// the `synth` identifier arm.
+    fn target_var(&self, name: &str) -> Option<ITy> {
+        match &self.target {
+            Some((n, var)) if n == name => Some(ITy::Var(*var)),
+            _ => None,
+        }
     }
 
     /// Mint a fresh, unbound variable.
@@ -103,6 +124,14 @@ impl Unifier {
         let id = self.slots.len() as u32;
         self.slots.push(None);
         ITy::Var(id)
+    }
+
+    /// Mint a fresh variable and return its slot id (for callers that
+    /// [`ground`] the variable directly rather than threading the `ITy`).
+    fn fresh_var(&mut self) -> u32 {
+        let id = self.slots.len() as u32;
+        self.slots.push(None);
+        id
     }
 
     /// Apply the current substitution everywhere (Rodin's `solve`).
@@ -292,8 +321,17 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         }
         ExpressionKind::BoolType => Some(ITy::pow(ITy::Boolean)),
         // Relational atoms (`id`/`prj1`/`prj2`/`pred`/`succ`) are their own AST
-        // node now; an `Identifier` is always an env-typed user name.
-        ExpressionKind::Identifier(name) => env.get(name).map(ITy::from),
+        // node now; an `Identifier` is an env-typed user name — or the
+        // unifier's `target` (if any), which synthesizes as its fresh
+        // variable so the surrounding equations can solve it (Rodin's
+        // `getIdentType`). `env` is consulted first so a same-named binder
+        // (inserted into the cloned local scope by the binder arms below)
+        // shadows the target — the target being inferred is never itself in
+        // `env`, so a free occurrence still falls through to its variable.
+        ExpressionKind::Identifier(name) => match env.get(name) {
+            Some(t) => Some(ITy::from(t)),
+            None => u.target_var(name),
+        },
         ExpressionKind::AtomicBuiltin(kind) => Some(atomic_builtin_type(*kind, u)),
         // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
         // keeps a free variable and drops; in context (`∅ ∪ r`, `∅ ⦂ T`)
@@ -1012,11 +1050,13 @@ pub fn infer_constant_from_predicate(
             | ComparisonOp::SubsetStrict
             | ComparisonOp::NotSubset
             | ComparisonOp::NotSubsetStrict => {
-                let name = as_ident(left)?;
-                if name != constant_name {
-                    return None;
+                // `c ⊆ S` types `c : typeof(S)`. Return `None` as a value
+                // (not via `?`) so a buried target — e.g. `{c} ⊆ S` — falls
+                // through to the `.or_else` chain below.
+                match as_ident(left) {
+                    Some(name) if name == constant_name => type_of_expression(env, right),
+                    _ => None,
                 }
-                type_of_expression(env, right)
             }
             ComparisonOp::Equal | ComparisonOp::NotEqual => {
                 // Both `c = expr` and `c ≠ expr` constrain `c` to
@@ -1094,6 +1134,7 @@ pub fn infer_constant_from_predicate(
         _ => None,
     }
     .or_else(|| infer_from_function_argument(env, predicate, constant_name))
+    .or_else(|| infer_ident_via_unification(env, predicate, constant_name))
 }
 
 /// Last-resort typing: scan `pred` for an [`ExpressionKind::FunctionApplication`] whose
@@ -1208,6 +1249,140 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
         ExpressionKind::Bool(p) => walk_pred_for_arg(env, p, target, found),
         _ => {}
     }
+}
+
+/// Last-resort, Rodin-faithful typing of a *buried* identifier — one that
+/// the syntactic patterns above never reach because it appears only inside
+/// an operand expression (e.g. `w` in `v ∈ a ⇸ S ∖ {w}`). Give `target`
+/// the fresh-variable treatment Rodin's `getIdentType` gives every free
+/// identifier, synthesize the predicate's expression operands with that
+/// variable in place, register the relational equation Rodin's
+/// `RelationalPredicate.typeCheck` registers, and read the solved type back
+/// (`ground` — Rodin's `solveTypeVariables`, which drops an unsolved
+/// variable). Descends `∧`/`∨`/`⇒`/`⇔`/`¬` and quantifier bodies
+/// (a same-named binder shadows `target`).
+fn infer_ident_via_unification(env: &TypeEnv, pred: &Predicate, target: &str) -> Option<Type> {
+    match &pred.kind {
+        PredicateKind::Comparison { op, left, right } => {
+            infer_ident_from_comparison(env, op, left, right, target)
+        }
+        PredicateKind::Logical { left, right, .. } => {
+            infer_ident_via_unification(env, left, target)
+                .or_else(|| infer_ident_via_unification(env, right, target))
+        }
+        PredicateKind::Not(inner) => infer_ident_via_unification(env, inner, target),
+        PredicateKind::Quantified {
+            identifiers,
+            predicate: body,
+            ..
+        } if !identifiers.iter().any(|t| t.name == target) => {
+            infer_ident_via_unification(env, body, target)
+        }
+        _ => None,
+    }
+}
+
+/// Type `target` from a single comparison. First try the target's own
+/// operand alone (its internal operators may already pin it, as `S ∖ {w}`
+/// pins `w`); then, if both operands synthesize, add the comparison's
+/// relational equation and solve. Only ever grounds the target variable
+/// after the synth that could bind it returned `Some` — a type is committed
+/// only when the expression type-checks, exactly as Rodin commits a type
+/// only when `solveTypeVariables` succeeds.
+fn infer_ident_from_comparison(
+    env: &TypeEnv,
+    op: &ComparisonOp,
+    left: &Expression,
+    right: &Expression,
+    target: &str,
+) -> Option<Type> {
+    // `expr_mentions` reports a *free* occurrence; a target that appears
+    // only as a same-named binder is not mentioned, and neither path should
+    // run for it (the binder is a different identifier).
+    let in_left = expr_mentions(left, target);
+    let in_right = expr_mentions(right, target);
+    if !in_left && !in_right {
+        return None;
+    }
+
+    // 1. Operand-self: `prs ⇸ FACTORY ∖ {rf}` synthesizes and the inner
+    //    SETMINUS pins `rf` without needing the other operand.
+    if in_left && let Some(t) = synth_ident_in_expr(env, left, target) {
+        return Some(t);
+    }
+    if in_right && let Some(t) = synth_ident_in_expr(env, right, target) {
+        return Some(t);
+    }
+
+    // 2. Relational equation across both operands (RelationalPredicate.typeCheck).
+    //    Requires both operands to synthesize — `?` enforces ground-after-Some,
+    //    so `a = b` with both sides untyped yields no spurious type.
+    let (mut u, tv) = target_unifier(target);
+    let lt = synth(env, left, &mut u)?;
+    let rt = synth(env, right, &mut u)?;
+    apply_relational_equation(&mut u, op, &lt, &rt);
+    ground(&u, &ITy::Var(tv))
+}
+
+/// A fresh unifier whose [`Unifier::target`] is `name`, plus that target's
+/// variable id — the shared setup for the buried-identifier attempts.
+fn target_unifier(name: &str) -> (Unifier, u32) {
+    let mut u = Unifier::new();
+    let tv = u.fresh_var();
+    u.target = Some((name.to_string(), tv));
+    (u, tv)
+}
+
+/// Synthesize `expr` with `target` standing in as a fresh variable, then
+/// read that variable's solved type. `None` unless `synth` succeeds (no
+/// type from an aborted synth) and the variable grounds to a concrete type.
+fn synth_ident_in_expr(env: &TypeEnv, expr: &Expression, target: &str) -> Option<Type> {
+    let (mut u, tv) = target_unifier(target);
+    synth(env, expr, &mut u)?;
+    ground(&u, &ITy::Var(tv))
+}
+
+/// The unification equation `RelationalPredicate.typeCheck` registers for
+/// `op`, applied to already-synthesized operand types. Clashes are ignored
+/// (`.ok()`): the caller decides nothing was learned when the target
+/// variable fails to ground.
+fn apply_relational_equation(u: &mut Unifier, op: &ComparisonOp, lt: &ITy, rt: &ITy) {
+    match op {
+        // `x = y` / `x ≠ y`: both sides share a type.
+        ComparisonOp::Equal | ComparisonOp::NotEqual => {
+            u.unify(lt, rt).ok();
+        }
+        // `x ∈ S` / `x ∉ S`: `S : ℙ(typeof x)`.
+        ComparisonOp::In | ComparisonOp::NotIn => {
+            u.unify(rt, &ITy::pow(lt.clone())).ok();
+        }
+        // `x ⊆ S` (and strict / negated): both sides are `ℙ(α)`.
+        ComparisonOp::Subset
+        | ComparisonOp::SubsetStrict
+        | ComparisonOp::NotSubset
+        | ComparisonOp::NotSubsetStrict => {
+            let alpha = u.fresh();
+            u.unify(lt, &ITy::pow(alpha.clone())).ok();
+            u.unify(rt, &ITy::pow(alpha)).ok();
+        }
+        // Integer ordering: both sides are ℤ.
+        ComparisonOp::LessThan
+        | ComparisonOp::LessEqual
+        | ComparisonOp::GreaterThan
+        | ComparisonOp::GreaterEqual => {
+            u.unify(lt, &ITy::Integer).ok();
+            u.unify(rt, &ITy::Integer).ok();
+        }
+    }
+}
+
+/// Does `target` occur free (not shadowed by an inner binder) anywhere in
+/// `expr`? Reuses [`collect_free_identifiers`], which already handles
+/// lambda / comprehension / quantifier shadowing.
+fn expr_mentions(expr: &Expression, target: &str) -> bool {
+    let mut names: Vec<&str> = Vec::new();
+    collect_free_identifiers(expr, &mut names);
+    names.contains(&target)
 }
 
 fn as_ident(e: &Expression) -> Option<&str> {
@@ -1507,6 +1682,73 @@ mod tests {
         let p = parse_predicate_str("∀i · (i ∈ 0‥7 ⇒ P(i) ∈ 0‥6)").unwrap();
         let ty = infer_constant_from_predicate(&env, &p, "P");
         assert_eq!(ty, Some(Type::relation(Type::Integer, Type::Integer)));
+    }
+
+    // --- Identifiers buried inside an operand expression ---------------
+    // These mirror Rodin: every free identifier gets a fresh type variable
+    // (`getIdentType`) and the surrounding equations solve it. The patterns
+    // above only reach an identifier that is the *bare operand* of the
+    // predicate; these need the `infer_ident_via_unification` fall-back.
+
+    #[test]
+    fn infer_buried_in_set_difference() {
+        // `v ∈ A ⇸ S ∖ {w}`: `w` only appears inside the SETMINUS operand,
+        // which forces `{w} : ℙ(S)`, hence `w : S`. (The shape that the
+        // proof-language model's `rf` needs.)
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("A");
+        env.add_carrier_set("S");
+        let p = parse_predicate_str("v ∈ A ⇸ S ∖ {w}").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "w");
+        assert_eq!(ty, Some(Type::GivenSet("S".into())));
+    }
+
+    #[test]
+    fn infer_buried_in_singleton_subset() {
+        // `{w} ⊆ S`: the subset equation makes both sides `ℙ(α)`, so `w : S`.
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        let p = parse_predicate_str("{w} ⊆ S").unwrap();
+        let ty = infer_constant_from_predicate(&env, &p, "w");
+        assert_eq!(ty, Some(Type::GivenSet("S".into())));
+    }
+
+    #[test]
+    fn infer_buried_in_cartesian_product_equality() {
+        // `p = q × {w}` with `p : ℙ(A × S)`, `q : ℙ(A)`: the equality
+        // equation pins `{w} : ℙ(S)`, hence `w : S`.
+        let env = env_with(&[
+            (
+                "p",
+                Type::relation(Type::GivenSet("A".into()), Type::GivenSet("S".into())),
+            ),
+            ("q", Type::pow(Type::GivenSet("A".into()))),
+        ]);
+        let pr = parse_predicate_str("p = q × {w}").unwrap();
+        let ty = infer_constant_from_predicate(&env, &pr, "w");
+        assert_eq!(ty, Some(Type::GivenSet("S".into())));
+    }
+
+    #[test]
+    fn no_type_from_equality_of_two_untyped_idents() {
+        // `a = b` with neither side typed pins nothing — the fall-back must
+        // not invent a type (locks in ground-after-Some).
+        let env = TypeEnv::new();
+        let p = parse_predicate_str("a = b").unwrap();
+        assert_eq!(infer_constant_from_predicate(&env, &p, "a"), None);
+    }
+
+    #[test]
+    fn no_type_from_shadowing_binder_of_same_name() {
+        // `x` here is a *comprehension binder*, not a free identifier — it
+        // does not type the machine variable `x`. The fall-back must respect
+        // the binder scope and infer nothing (a free identifier in `synth`
+        // must defer to a same-named binder in the local scope).
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        env.insert("c", Type::pow(Type::GivenSet("S".into())));
+        let p = parse_predicate_str("c = {x · x ∈ S ∣ x}").unwrap();
+        assert_eq!(infer_constant_from_predicate(&env, &p, "x"), None);
     }
 
     #[test]
