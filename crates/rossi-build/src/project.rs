@@ -247,6 +247,126 @@ impl Project {
     }
 }
 
+/// A single Rodin project discovered inside a (possibly multi-project) archive.
+///
+/// A Rodin `.zip` exported by Eclipse's Archive-File wizard holds one top-level
+/// directory per project (each with its own `.project` descriptor); Rodin
+/// imports it back as one project per directory. [`discover_projects`] yields
+/// this unit so each project can be built and repackaged under its own
+/// directory rather than flattened into one.
+#[derive(Debug, Clone)]
+pub struct DiscoveredProject {
+    /// Archive path prefix for this project's entries, e.g. `"MyProject/"`,
+    /// or `""` for a flat (root-level) archive. Includes the trailing `/` when
+    /// non-empty, matching the repack layer's prefix convention.
+    pub prefix: String,
+    /// Resolved project name — the leading `/name/` segment stamped into every
+    /// emitted handle URI (see name resolution in [`discover_projects`]).
+    pub name: String,
+    /// The components (contexts and machines) belonging to this project only.
+    pub components: Vec<ProjectComponent>,
+}
+
+impl DiscoveredProject {
+    /// Materialize as a [`Project`] ready for [`crate::build`].
+    #[must_use]
+    pub fn into_project(self) -> Project {
+        Project::new(self.name, self.components)
+    }
+}
+
+/// Split a Rodin archive into its constituent projects.
+///
+/// A Rodin `.zip` may bundle several top-level project directories, each with
+/// its own `.project` and a self-contained set of `.buc`/`.bum` (Eclipse's
+/// Archive-File export, which Rodin imports back as one project per directory).
+/// Entries are grouped by their top-level segment (the part before the first
+/// `/`; `""` when an entry sits at the archive root). A group becomes a project
+/// when it holds a `.project` and/or any `.buc`/`.bum`; stray root files that
+/// are neither are ignored here (the repack layer still copies them verbatim).
+///
+/// Each project's name is resolved for byte-exact handle parity with Rodin:
+/// 1. the name embedded in that project's own first `.bcc`/`.bcm` handle URIs,
+/// 2. else the `<name>` in that project's `.project` descriptor,
+/// 3. else the top-level directory segment,
+/// 4. else (a flat archive with neither) `fallback_name`.
+///
+/// The returned projects are sorted by `prefix` for deterministic output.
+pub fn discover_projects(zip_bytes: &[u8], fallback_name: &str) -> Result<Vec<DiscoveredProject>> {
+    #[derive(Default)]
+    struct Group {
+        components: Vec<ProjectComponent>,
+        checked_name: Option<String>,
+        project_name: Option<String>,
+        has_project: bool,
+    }
+
+    let reader = std::io::Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(reader)?;
+    // BTreeMap keys (= prefixes) keep the output deterministically prefix-sorted.
+    let mut groups: std::collections::BTreeMap<String, Group> = std::collections::BTreeMap::new();
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+        let prefix = match name.find('/') {
+            Some(slash) => name[..=slash].to_string(),
+            None => String::new(),
+        };
+
+        if is_xml_input(&name) {
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut xml)?;
+            let component = ProjectComponent::from_xml(name, &xml)?;
+            groups.entry(prefix).or_default().components.push(component);
+        } else if name == format!("{prefix}.project") {
+            // Only the descriptor at this group's top level marks the project;
+            // a deeper `sub/.project` belongs to a nested resource, not here.
+            // A non-UTF-8 descriptor only costs us the name (a fallback covers
+            // it), so a read error is skipped rather than failing the build.
+            let group = groups.entry(prefix).or_default();
+            group.has_project = true;
+            let mut xml = String::new();
+            if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
+                group.project_name = rossi::read_project_name(&xml);
+            }
+        } else if name.ends_with(".bcc") || name.ends_with(".bcm") {
+            // Only the first readable checked file per group is needed for the
+            // name; a stale/non-UTF-8 one is skipped (we never built from these
+            // before, so a read error must not abort an otherwise-valid build).
+            let group = groups.entry(prefix).or_default();
+            if group.checked_name.is_none() {
+                let mut xml = String::new();
+                if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
+                    group.checked_name = infer_project_name_from_checked_xml(&xml);
+                }
+            }
+        }
+    }
+
+    let mut projects = Vec::new();
+    for (prefix, group) in groups {
+        if group.components.is_empty() && !group.has_project {
+            continue;
+        }
+        let name = group
+            .checked_name
+            .or(group.project_name)
+            .or_else(|| {
+                let seg = prefix.trim_end_matches('/');
+                (!seg.is_empty()).then(|| seg.to_string())
+            })
+            .unwrap_or_else(|| fallback_name.to_string());
+        projects.push(DiscoveredProject {
+            prefix,
+            name,
+            components: group.components,
+        });
+    }
+
+    Ok(projects)
+}
+
 /// A Rodin XML component file (`.buc` context / `.bum` machine).
 fn is_xml_input(name: &str) -> bool {
     name.ends_with(".buc") || name.ends_with(".bum")
@@ -273,30 +393,6 @@ pub fn infer_project_name_from_checked_xml(xml: &str) -> Option<String> {
     let rest = &xml[i + marker.len()..];
     let slash = rest.find('/')?;
     Some(rest[..slash].to_string())
-}
-
-/// Scan a `.zip` archive for the first `.bcc` / `.bcm` and infer the Rodin
-/// project name from its handle URIs. Returns `None` for archives without
-/// pre-built checked files.
-pub fn infer_project_name_from_archive_bytes(zip_bytes: &[u8]) -> Option<String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).ok()?;
-    for i in 0..archive.len() {
-        let Ok(mut entry) = archive.by_index(i) else {
-            continue;
-        };
-        let n = entry.name().to_string();
-        if !(n.ends_with(".bcc") || n.ends_with(".bcm")) {
-            continue;
-        }
-        let mut xml = String::new();
-        if std::io::Read::read_to_string(&mut entry, &mut xml).is_err() {
-            continue;
-        }
-        if let Some(name) = infer_project_name_from_checked_xml(&xml) {
-            return Some(name);
-        }
-    }
-    None
 }
 
 fn basename(path: &str) -> &str {
@@ -343,5 +439,145 @@ mod tests {
             .expect("untyped constant should be flagged");
         let span = diag.span.expect("semantic diagnostic should carry a span");
         assert_eq!(&text[span.start..span.end], "k");
+    }
+
+    // --- discover_projects -------------------------------------------------
+
+    use std::io::Write;
+    use zip::write::{SimpleFileOptions, ZipWriter};
+
+    fn ctx_xml() -> &'static str {
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <org.eventb.core.contextFile version=\"3\" \
+         org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.contextFile>\n"
+    }
+    fn mch_xml() -> &'static str {
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <org.eventb.core.machineFile version=\"5\" \
+         org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.machineFile>\n"
+    }
+    fn project_xml(name: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?>\n<projectDescription>\n  <name>{name}</name>\n</projectDescription>\n"
+        )
+    }
+    fn checked_xml(project: &str) -> String {
+        format!("<x org.eventb.core.source=\"/{project}/foo.buc|t#c\"/>")
+    }
+
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut w = ZipWriter::new(&mut cursor);
+        let opts = SimpleFileOptions::default();
+        for (name, body) in entries {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(body).unwrap();
+        }
+        w.finish().unwrap();
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn discover_flat_archive_is_one_project() {
+        let zip = make_zip(&[
+            ("C.buc", ctx_xml().as_bytes()),
+            ("M.bum", mch_xml().as_bytes()),
+        ]);
+        let projects = discover_projects(&zip, "fallback").unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].prefix, "");
+        // No checked file and no `.project`: flat archive falls back to caller name.
+        assert_eq!(projects[0].name, "fallback");
+        assert_eq!(projects[0].components.len(), 2);
+    }
+
+    #[test]
+    fn discover_splits_sibling_dirs_with_colliding_basenames() {
+        // Two projects each with a `context.buc` and same-named machine — the
+        // exact shape that the old flat loader collapsed.
+        let zip = make_zip(&[
+            ("A/.project", project_xml("A").as_bytes()),
+            ("A/context.buc", ctx_xml().as_bytes()),
+            ("A/M1.bum", mch_xml().as_bytes()),
+            ("B/.project", project_xml("B").as_bytes()),
+            ("B/context.buc", ctx_xml().as_bytes()),
+            ("B/M1.bum", mch_xml().as_bytes()),
+        ]);
+        let projects = discover_projects(&zip, "fallback").unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].prefix, "A/");
+        assert_eq!(projects[1].prefix, "B/");
+        // Each project carries only its own components — no cross-contamination.
+        assert_eq!(projects[0].components.len(), 2);
+        assert_eq!(projects[1].components.len(), 2);
+    }
+
+    #[test]
+    fn discover_keeps_project_only_dir_with_no_components() {
+        // A source-only `.project` dir (no `.buc`/`.bum`) beside a real
+        // Event-B project dir — both are discovered, the former empty.
+        let zip = make_zip(&[
+            ("src/.project", project_xml("src").as_bytes()),
+            ("src/diagram.txt", b"diagram"),
+            ("model/.project", project_xml("model").as_bytes()),
+            ("model/M.bum", mch_xml().as_bytes()),
+        ]);
+        let projects = discover_projects(&zip, "fallback").unwrap();
+        assert_eq!(projects.len(), 2);
+        let src = projects.iter().find(|p| p.prefix == "src/").unwrap();
+        assert!(src.components.is_empty());
+        let model = projects.iter().find(|p| p.prefix == "model/").unwrap();
+        assert_eq!(model.components.len(), 1);
+    }
+
+    #[test]
+    fn discover_name_resolution_priority() {
+        // (a) checked .bcm handle prefix wins even over the dir segment.
+        let a = make_zip(&[
+            ("dir/.project", project_xml("ProjName").as_bytes()),
+            ("dir/M.bum", mch_xml().as_bytes()),
+            ("dir/M.bcm", checked_xml("HandleName").as_bytes()),
+        ]);
+        assert_eq!(discover_projects(&a, "fb").unwrap()[0].name, "HandleName");
+
+        // (b) no checked file -> the `.project` <name> wins over the dir segment.
+        let b = make_zip(&[
+            ("dir/.project", project_xml("ProjName").as_bytes()),
+            ("dir/M.bum", mch_xml().as_bytes()),
+        ]);
+        assert_eq!(discover_projects(&b, "fb").unwrap()[0].name, "ProjName");
+
+        // (c) neither checked nor `.project` -> the top-level dir segment.
+        let c = make_zip(&[("dir/M.bum", mch_xml().as_bytes())]);
+        assert_eq!(discover_projects(&c, "fb").unwrap()[0].name, "dir");
+    }
+
+    #[test]
+    fn discover_ignores_nested_project_descriptor() {
+        // A descriptor deeper than the top level (A/sub/.project) must not be
+        // mistaken for project A's own .project (which would steal A's name).
+        let zip = make_zip(&[
+            ("A/.project", project_xml("RealName").as_bytes()),
+            ("A/M.bum", mch_xml().as_bytes()),
+            ("A/sub/.project", project_xml("WrongName").as_bytes()),
+        ]);
+        let projects = discover_projects(&zip, "fb").unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "RealName");
+    }
+
+    #[test]
+    fn discover_tolerates_non_utf8_checked_file() {
+        // A stale/corrupt non-UTF-8 .bcm must be skipped for name inference,
+        // not abort discovery — the valid .bum source still builds.
+        let zip = make_zip(&[
+            ("dir/M.bum", mch_xml().as_bytes()),
+            ("dir/M.bcm", b"\xff\xfe not valid utf-8"),
+        ]);
+        let projects = discover_projects(&zip, "fb").unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].components.len(), 1);
+        // Name falls through past the unreadable checked file to the dir segment.
+        assert_eq!(projects[0].name, "dir");
     }
 }
