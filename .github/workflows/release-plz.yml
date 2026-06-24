@@ -48,6 +48,62 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
 
+      # release-plz bumps the shared [workspace.package].version but cannot touch
+      # the VS Code extension's package.json — it is an npm package, not a cargo
+      # crate, and release-plz has no hook / extra-files mechanism for it. Mirror
+      # the new version onto the open release PR so the Cargo bump, changelog, and
+      # extension version land in one reviewable PR and the committed manifest
+      # tracks every release. Editing the release PR is supported (release-plz FAQ).
+      # We locate the PR ourselves (not via the action output) and re-check every
+      # run, so the sync self-heals if release-plz ever rewrites the branch. (The
+      # publish step in vscode-release.yml still pins the version from the tag, so
+      # this only keeps the in-repo manifest honest.) No-op when already in sync.
+      - name: Find the open release PR
+        id: release_pr
+        env:
+          GH_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
+        run: |
+          set -euo pipefail
+          # release-plz's PR branch uses the default `release-plz-` prefix.
+          branch=$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("release-plz"))][0].headRefName // ""')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          [ -n "$branch" ] && echo "Release PR branch: $branch" || echo "No open release PR."
+      - name: Check out the release PR branch
+        if: steps.release_pr.outputs.branch != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release_pr.outputs.branch }}
+          token: ${{ secrets.VERSION_BUMP_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        if: steps.release_pr.outputs.branch != ''
+        with:
+          node-version: 24
+      - name: Sync VS Code extension version to the release PR
+        if: steps.release_pr.outputs.branch != ''
+        env:
+          BRANCH: ${{ steps.release_pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # The suite version release-plz bumped onto the release PR branch.
+          version=$(awk -F'"' '/^\[workspace\.package\]/{f=1} f && /^version[[:space:]]*=/{print $2; exit}' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "Could not read [workspace.package].version from Cargo.toml" >&2
+            exit 1
+          fi
+          current=$(node -p "require('./editors/vscode/package.json').version")
+          if [ "$current" = "$version" ]; then
+            echo "Extension manifest already at $version; nothing to sync."
+            exit 0
+          fi
+          ( cd editors/vscode && npm version --no-git-tag-version --allow-same-version "$version" )
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add editors/vscode/package.json editors/vscode/package-lock.json
+          git commit -m "chore(vscode): sync extension manifest to $version"
+          git push origin "HEAD:$BRANCH"
+
   # When a release commit lands on main, publish the crates and create the single
   # tag + GitHub release. Publishing uses crates.io Trusted Publishing (OIDC): no
   # CARGO_REGISTRY_TOKEN secret — release-plz mints a short-lived token via the

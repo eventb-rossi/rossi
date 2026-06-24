@@ -6,8 +6,10 @@ name: vscode-release
 # attaches the prebuilt binary archives to that Release. Publishing on the Release
 # keeps the extension version locked to the `v{version}` tag: binaryManager.ts pins
 # its toolchain download to `v${package.json.version}`, so the extension a user
-# installs always resolves the binaries from its own release. The version is taken
-# from the tag here, so cutting a release is enough — no separate package.json bump.
+# installs always resolves the binaries from its own release. The committed
+# editors/vscode/package.json already tracks the release (release-plz.yml bumps it
+# in the release PR); the `Set version from tag` step below re-pins it from the tag
+# as a safety net so the published version always matches this release's assets.
 #
 # `workflow_dispatch` lets you (re)publish an existing tag by hand.
 #
