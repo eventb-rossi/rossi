@@ -26,6 +26,11 @@ setup, verification, and troubleshooting.
 ### 🎨 Syntax Highlighting
 - Full syntax highlighting for Event-B constructs
 - Support for both Unicode (∧, ∨, ⇒, ∈) and ASCII operators (/\, \/, =>, :)
+- Semantic highlighting from the language server is on by default, so
+  identifiers, carrier sets, constants, labels, and event parameters render
+  distinctly under any theme — no configuration required
+- The ambiguous / non-basic-ASCII Unicode warnings are turned off for `.eventb`
+  files, so math operators (`∀ ∃ ⇒ ∈ ↦ ℕ`) don't trigger spurious warnings
 - Syntax highlighting for:
   - Keywords (CONTEXT, MACHINE, EVENTS, etc.)
   - Logical operators

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Sensible per-language editor defaults for `.eventb` files: semantic
+  highlighting is enabled out of the box, and the ambiguous / non-basic-ASCII
+  Unicode warnings are silenced so Event-B's math operators (`∀ ∃ ⇒ ∈ ↦ ℕ`) no
+  longer trigger spurious warnings. Scoped to Event-B only — other languages are
+  unaffected, and no theme colors are overridden.
+
 ## 0.1.0
 
 Initial release.

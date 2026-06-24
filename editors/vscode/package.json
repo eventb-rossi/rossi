@@ -328,6 +328,13 @@
         }
       }
     },
+    "configurationDefaults": {
+      "[eventb]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.unicodeHighlight.ambiguousCharacters": false,
+        "editor.unicodeHighlight.nonBasicASCII": false
+      }
+    },
     "walkthroughs": [
       {
         "id": "rossi.getStarted",
