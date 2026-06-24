@@ -9,10 +9,8 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use rossi_build::project::{
-    infer_project_name_from_archive_bytes, infer_project_name_from_checked_xml,
-};
-use rossi_build::repack::repackage_zip_bytes;
+use rossi_build::project::discover_projects;
+use rossi_build::repack::repackage_zip_bytes_multi;
 use rossi_build::{BuildResult, Project, Severity, build};
 
 use rossi::{NamedComponent, to_zip};
@@ -61,27 +59,33 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
     };
 
     write_output(input, out_path, &outcome)?;
-    report_diagnostics(&outcome.result);
+    report_diagnostics(&outcome);
 
     let errors = outcome
-        .result
-        .diagnostics
+        .results
         .iter()
+        .flat_map(|(_, r)| &r.diagnostics)
         .filter(|d| d.severity == Severity::Error)
         .count();
+    let files: usize = outcome.results.iter().map(|(_, r)| r.files.len()).sum();
     eprintln!(
-        "rossi build: wrote {} -> {} ({} file(s), {} error diagnostic(s))",
+        "rossi build: wrote {} -> {} ({} file(s) across {} project(s), {} error diagnostic(s))",
         input.display(),
         out_path.display(),
-        outcome.result.files.len(),
+        files,
+        outcome.results.len(),
         errors
     );
     Ok(())
 }
 
 struct BuildOutcome {
-    result: BuildResult,
-    /// Original archive bytes when the input was a `.zip` (needed for repack).
+    /// One entry per project: (archive prefix, BuildResult). Length 1 for
+    /// directory / text / single-file inputs; one per top-level project for a
+    /// multi-project `.zip`.
+    results: Vec<(String, BuildResult)>,
+    /// Original archive bytes when the input was (or was serialized to) a
+    /// `.zip` — needed to repackage. `None` for a Rodin project directory.
     archive_bytes: Option<Vec<u8>>,
 }
 
@@ -93,8 +97,10 @@ fn build_one(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
         if !eventb_io::collect_rodin_xml_files(&[input.to_path_buf()])?.is_empty() {
             let project = Project::from_directory(input)?;
             let result = build(&project);
+            // A Rodin project directory is a single project with no source
+            // archive to repack against; loose-file output is written flat.
             return Ok(BuildOutcome {
-                result,
+                results: vec![(String::new(), result)],
                 archive_bytes: None,
             });
         }
@@ -143,35 +149,40 @@ fn build_from_components(
         return Err("no Event-B components to build".into());
     }
     let bytes = to_zip(&components)?;
-    let project = Project::from_zip_bytes(name, &bytes)?;
-    let result = build(&project);
-    Ok(BuildOutcome {
-        result,
-        archive_bytes: Some(bytes),
-    })
+    build_zip_bytes(name, bytes)
 }
 
 /// Build a project from a Rodin `.zip` archive on disk.
 fn build_from_zip(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
     let bytes = std::fs::read(input)?;
-    // Use Rodin's project name when the archive carries one.
-    let name =
-        infer_project_name_from_archive_bytes(&bytes).unwrap_or_else(|| file_project_name(input));
-    let project = Project::from_zip_bytes(&name, &bytes)?;
-    let result = build(&project);
-    // Sanity check: also confirm the inferred name against our own
-    // generated bcc/bcm (so users see a hint if names diverge).
-    if let Some(f) = result.files.first()
-        && let Some(rodin) = infer_project_name_from_checked_xml(&f.contents)
-        && rodin != name
-    {
-        eprintln!(
-            "rossi build: warning: emitted project name {name:?} differs from \
-             internal handle {rodin:?}"
-        );
+    build_zip_bytes(&file_project_name(input), bytes)
+}
+
+/// Discover every project bundled in `bytes`, build each independently, and
+/// return one `(prefix, BuildResult)` per project. A Rodin `.zip` may hold
+/// several top-level projects; each is checked under its own name so handle
+/// URIs stay byte-exact and sibling components never collide. `fallback_name`
+/// names a flat archive that carries neither checked files nor a `.project`.
+fn build_zip_bytes(
+    fallback_name: &str,
+    bytes: Vec<u8>,
+) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
+    let projects = discover_projects(&bytes, fallback_name)?;
+    // No project (no `.buc`/`.bum`, no `.project`) would otherwise repackage to
+    // a zip stripped of its checked/proof files with nothing regenerated — a
+    // silently destructive "success". Fail loudly instead.
+    if projects.is_empty() {
+        return Err("no Event-B projects found in archive".into());
     }
+    let results = projects
+        .into_iter()
+        .map(|dp| {
+            let prefix = dp.prefix.clone();
+            (prefix, build(&dp.into_project()))
+        })
+        .collect();
     Ok(BuildOutcome {
-        result,
+        results,
         archive_bytes: Some(bytes),
     })
 }
@@ -206,7 +217,7 @@ fn write_output(
     if is_zip_out {
         write_zip(input, out_path, outcome)
     } else {
-        write_dir(out_path, &outcome.result)
+        write_dir(out_path, outcome)
     }
 }
 
@@ -221,20 +232,46 @@ fn write_zip(
         std::fs::create_dir_all(parent)?;
     }
     let bytes = match &outcome.archive_bytes {
-        Some(b) => repackage_zip_bytes(b, &outcome.result)?,
-        // Directory input → no source archive to repack, so just emit
-        // our checked files into a fresh flat archive.
-        None => synthesize_flat_zip(input, &outcome.result)?,
+        // Each project's checked files are dropped under its own prefix.
+        Some(b) => repackage_zip_bytes_multi(
+            b,
+            outcome
+                .results
+                .iter()
+                .map(|(prefix, result)| (prefix.as_str(), result)),
+        )?,
+        // Directory input → no source archive to repack, so just emit our
+        // checked files into a fresh flat archive (always a single project).
+        None => {
+            let empty = BuildResult {
+                files: vec![],
+                diagnostics: vec![],
+            };
+            let result = outcome.results.first().map_or(&empty, |(_, r)| r);
+            synthesize_flat_zip(input, result)?
+        }
     };
     std::fs::write(out_path, bytes)?;
     Ok(())
 }
 
-fn write_dir(out_dir: &Path, result: &BuildResult) -> Result<(), Box<dyn std::error::Error>> {
+fn write_dir(out_dir: &Path, outcome: &BuildOutcome) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(out_dir)?;
-    for f in &result.files {
-        let p = out_dir.join(&f.filename);
-        std::fs::write(&p, &f.contents)?;
+    // A single project writes its files flat into `out_dir` (unchanged loose
+    // output); a multi-project archive writes each under its own subdirectory
+    // so colliding component filenames across projects don't overwrite.
+    let multi = outcome.results.len() > 1;
+    for (prefix, result) in &outcome.results {
+        let base = if multi {
+            let dir = out_dir.join(prefix.trim_end_matches('/'));
+            std::fs::create_dir_all(&dir)?;
+            dir
+        } else {
+            out_dir.to_path_buf()
+        };
+        for f in &result.files {
+            std::fs::write(base.join(&f.filename), &f.contents)?;
+        }
     }
     Ok(())
 }
@@ -264,8 +301,22 @@ fn synthesize_flat_zip(
     Ok(cursor.into_inner())
 }
 
-fn report_diagnostics(result: &BuildResult) {
-    for d in &result.diagnostics {
-        eprintln!("{d}");
+fn report_diagnostics(outcome: &BuildOutcome) {
+    // A diagnostic's Display carries only the bare component name, so in a
+    // multi-project archive (where sibling projects can share component names)
+    // print a per-project header to disambiguate which project each came from.
+    let multi = outcome.results.len() > 1;
+    for (prefix, result) in &outcome.results {
+        if multi && !result.diagnostics.is_empty() {
+            let label = if prefix.is_empty() {
+                "(root)"
+            } else {
+                prefix.trim_end_matches('/')
+            };
+            eprintln!("--- {label} ---");
+        }
+        for d in &result.diagnostics {
+            eprintln!("{d}");
+        }
     }
 }
