@@ -1408,6 +1408,32 @@ pub fn write_project_directory<P: AsRef<std::path::Path>>(
     Ok(())
 }
 
+/// Extract the project name from a Rodin/Eclipse `.project` descriptor.
+///
+/// The descriptor is fixed Eclipse XML whose first `<name>…</name>` element
+/// holds the Eclipse `IProject` name — the same string Rodin uses as the
+/// leading `/ProjectName/` segment of every handle URI. The later `<name>`
+/// inside `<buildCommand>` (`org.rodinp.core.rodinbuilder`) is never the first
+/// match, so taking the first occurrence is correct. Returns `None` if no
+/// `<name>` element is present. The inverse of `rodin_project_file_xml`.
+#[must_use]
+pub fn read_project_name(xml: &str) -> Option<String> {
+    let start = xml.find("<name>")? + "<name>".len();
+    let end = xml[start..].find("</name>")? + start;
+    let name = unescape_xml(xml[start..end].trim());
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Reverse of [`escape_xml`] for the five predefined XML entities. `&amp;` is
+/// decoded last so an escaped entity like `&amp;lt;` round-trips to `&lt;`.
+fn unescape_xml(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
 fn rodin_project_file_xml(project_name: &str) -> String {
     let project_name = if project_name.trim().is_empty() {
         "rossi_project"
@@ -2729,6 +2755,25 @@ mod tests {
         let zip_data = to_zip(&[]).unwrap();
         let parsed = parse_zip(&zip_data).unwrap();
         assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn test_read_project_name_round_trips_writer() {
+        // The first <name> is the project name; the <name> inside buildCommand
+        // (org.rodinp.core.rodinbuilder) must not be picked up.
+        let xml = rodin_project_file_xml("MyProject");
+        assert_eq!(read_project_name(&xml).as_deref(), Some("MyProject"));
+
+        // Entities are unescaped (inverse of escape_xml).
+        let xml = rodin_project_file_xml("Rossi & <Project>");
+        assert_eq!(
+            read_project_name(&xml).as_deref(),
+            Some("Rossi & <Project>")
+        );
+
+        // No descriptor / empty name -> None.
+        assert_eq!(read_project_name("<projectDescription/>"), None);
+        assert_eq!(read_project_name("<name></name>"), None);
     }
 
     #[test]

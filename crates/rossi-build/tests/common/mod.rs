@@ -12,9 +12,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rossi_build::project::infer_project_name_from_archive_bytes;
-use rossi_build::repack::repackage_zip_bytes;
-use rossi_build::{Project, build};
+use rossi_build::BuildResult;
+use rossi_build::build;
+use rossi_build::project::discover_projects;
+use rossi_build::repack::repackage_zip_bytes_multi;
 
 /// The workspace root (two levels up from this crate's manifest).
 pub fn workspace_root() -> PathBuf {
@@ -89,15 +90,21 @@ pub fn is_executable_file(path: &Path) -> bool {
 /// corpus harness.
 pub fn regen_one(zip: &Path, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read(zip)?;
-    let name = infer_project_name_from_archive_bytes(&bytes).unwrap_or_else(|| {
-        zip.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("project")
-            .to_string()
-    });
-    let project = Project::from_zip_bytes(&name, &bytes)?;
-    let result = build(&project);
-    let new_bytes = repackage_zip_bytes(&bytes, &result)?;
+    let fallback = zip
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    // A corpus archive may bundle several top-level Rodin projects (Eclipse's
+    // multi-project Archive export); build each under its own name and drop its
+    // checked files back under its own directory.
+    let builds: Vec<(String, BuildResult)> = discover_projects(&bytes, fallback)?
+        .into_iter()
+        .map(|dp| (dp.prefix.clone(), build(&dp.into_project())))
+        .collect();
+    let new_bytes = repackage_zip_bytes_multi(
+        &bytes,
+        builds.iter().map(|(prefix, r)| (prefix.as_str(), r)),
+    )?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
     }
