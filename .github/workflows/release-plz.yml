@@ -1,8 +1,13 @@
 name: release-plz
 
 on:
-  push:
-    branches: [main]
+  # Gate publishing on CI passing: only fire when the CI workflow completes
+  # successfully on main. A bare `push` would race with CI (both start on the
+  # same commit); workflow_run ensures tests finish first.
+  workflow_run:
+    workflows: ["CI"] # must match name: in ci.yml exactly
+    types: [completed]
+    branches: [main]  # excludes tag pushes and PR runs; never fires twice on the same commit
   # Refresh the preview Release PR on a daily schedule and on demand, rather than
   # on every merge — see the release-plz-pr job comment.
   schedule:
@@ -52,9 +57,15 @@ jobs:
   # (release.yml) must fire on the published release.
   release-plz-release:
     name: Release
-    # Publish only when a release commit lands on main; never on schedule/dispatch.
-    if: github.event_name == 'push'
+    # Publish only when CI passes on main; never on schedule/dispatch.
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # Serialize releases: a burst of CI completions on main (a re-run, or rapid
+    # merges) would otherwise spawn parallel release jobs. Never cancel in
+    # progress — a half-finished publish must run to completion.
+    concurrency:
+      group: release-plz-release
+      cancel-in-progress: false
     permissions:
       contents: write # push the tag, create the GitHub release
       pull-requests: write # comment on / label the released PR
@@ -64,6 +75,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          # Check out the BRANCH, not a SHA: release-plz resolves the current
+          # branch via @{upstream}, so HEAD must point to a branch (a detached
+          # SHA fails with "HEAD does not point to a branch"). The branches filter
+          # guarantees head_branch is main; its tip is the merged release commit
+          # CI just validated.
+          ref: ${{ github.event.workflow_run.head_branch }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: release-plz/action@v0.5.130
