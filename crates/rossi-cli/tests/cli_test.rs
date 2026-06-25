@@ -1130,6 +1130,84 @@ fn fmt_normalizes_rodin_zip() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+#[test]
+fn fmt_preserves_multi_project_archive_structure() {
+    // A two-project archive with a component and a non-component (proof) entry
+    // per project. fmt normalises the components under their original paths,
+    // leaving the per-project layout and the proof bytes intact.
+    let tmp = tempdir_unique("rossi-cli-fmt-multi");
+    let in_zip = tmp.join("decomp.zip");
+    let out_zip = tmp.join("out.zip");
+
+    let machine_xml = std::fs::read("../rossi/examples/counter.bum").unwrap();
+    let proofs = [("A", b"PROOF-A".to_vec()), ("B", b"PROOF-B".to_vec())];
+    let proj_a = project_descriptor("A");
+    let proj_b = project_descriptor("B");
+    write_zip(
+        &in_zip,
+        &[
+            ("A/.project", &proj_a),
+            ("A/M.bum", &machine_xml),
+            ("A/M.bpr", &proofs[0].1),
+            ("B/.project", &proj_b),
+            ("B/M.bum", &machine_xml),
+            ("B/M.bpr", &proofs[1].1),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "fmt",
+            in_zip.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "multi-project fmt should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let entry_names = |path: &std::path::Path| -> Vec<String> {
+        let mut a = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut names: Vec<String> = (0..a.len())
+            .map(|i| a.by_index(i).unwrap().name().to_string())
+            .collect();
+        names.sort();
+        names
+    };
+    // The per-project layout (every prefix) survives unchanged.
+    assert_eq!(entry_names(&in_zip), entry_names(&out_zip));
+
+    // Non-component proof entries are byte-identical; components stay valid XML.
+    let mut out = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
+    for (proj, proof) in &proofs {
+        let mut buf = Vec::new();
+        out.by_name(&format!("{proj}/M.bpr"))
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        assert_eq!(&buf, proof, "proof entry must be preserved verbatim");
+        let mut xml = String::new();
+        out.by_name(&format!("{proj}/M.bum"))
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(
+            xml.contains("machineFile"),
+            "component should remain a machine file"
+        );
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 fn dir_has_rodin_file(dir: &std::path::Path) -> bool {
     dir_has_ext(dir, &["buc", "bum"])
 }

@@ -7,7 +7,9 @@
 //! - Rodin `.buc`/`.bum`/`.zip` inputs are re-serialised to rossi's canonical
 //!   Unicode XML. (Rodin requires Unicode, so `--ascii` is rejected for these;
 //!   `--indent` does not affect XML. Non-component zip entries — e.g. proofs —
-//!   are preserved verbatim.)
+//!   are preserved verbatim.) A multi-project archive keeps its per-project
+//!   directory layout: every entry is rewritten under its original path, so a
+//!   bundled decomposition normalises in place without flattening.
 //!
 //! Three write modes, mutually exclusive: `-i`/`--in-place` rewrites inputs,
 //! `--check` reports unformatted inputs and exits non-zero, and `-o`/`--output`
@@ -253,11 +255,7 @@ fn render(path: &Path, kind: InputKind, printer: &PrettyPrinter) -> CmdResult<(F
 
 impl Formatted {
     fn write_to(&self, path: &Path) -> CmdResult<()> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
+        eventb_io::ensure_parent_dir(path)?;
         match self {
             Formatted::Text(s) => fs::write(path, s)?,
             Formatted::Zip(b) => fs::write(path, b)?,
@@ -273,6 +271,12 @@ fn stored_options() -> zip::write::SimpleFileOptions {
 /// Re-serialise every `.buc`/`.bum` entry of a Rodin zip to canonical Unicode
 /// XML, copying all other entries (proofs, etc.) through unchanged. Returns the
 /// rebuilt archive and whether any component entry was not already canonical.
+///
+/// Each entry is rewritten under its original name, so a multi-project archive's
+/// `<project>/` directory layout is preserved exactly — components are
+/// normalised per file regardless of which project they belong to. (Bare
+/// directory entries are dropped, which is harmless: Rodin reconstructs
+/// directories from the file paths on re-import.)
 fn normalize_zip(bytes: &[u8]) -> CmdResult<(Vec<u8>, bool)> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
     let mut out = Vec::new();
