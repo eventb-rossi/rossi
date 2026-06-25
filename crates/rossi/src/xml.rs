@@ -995,6 +995,23 @@ pub struct NamedComponent {
     pub component: Component,
 }
 
+/// A named Rodin project — a project name plus the components that belong to it.
+///
+/// This is the unit written under its own `<name>/` directory by
+/// [`to_multi_project_zip`] / [`write_multi_project_directory`], so a model
+/// holding several top-level Rodin projects (e.g. a decomposition) round-trips
+/// without sibling components colliding. A single-project export uses the flat
+/// [`to_project_zip`] / [`write_project_directory`] writers instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct NamedProject {
+    /// The Rodin project name. Used both as the `<name>/` archive/directory
+    /// prefix and as the `.project` descriptor's `<name>`.
+    pub name: String,
+    /// The components (contexts and machines) belonging to this project.
+    pub components: Vec<NamedComponent>,
+}
+
 /// Parses all Event-B components from a zip archive
 ///
 /// Rodin Event-B models are stored as zip archives containing .buc (context)
@@ -1304,7 +1321,7 @@ pub fn component_filename(component: &Component) -> String {
 /// assert_eq!(parsed.len(), 1);
 /// ```
 pub fn to_zip(components: &[NamedComponent]) -> Result<Vec<u8>> {
-    write_components_zip(components, None)
+    write_projects_zip([("", None, components)])
 }
 
 /// Creates a Rodin project zip archive in memory from named components.
@@ -1312,14 +1329,62 @@ pub fn to_zip(components: &[NamedComponent]) -> Result<Vec<u8>> {
 /// The archive contains a root `.project` descriptor plus each component
 /// serialized to its native Rodin XML format.
 pub fn to_project_zip(components: &[NamedComponent], project_name: &str) -> Result<Vec<u8>> {
-    write_components_zip(components, Some(project_name))
+    write_projects_zip([("", Some(project_name), components)])
 }
 
-/// Serializes named components into an in-memory zip archive, optionally
-/// prefixed with a Rodin `.project` descriptor when `project_name` is given.
-fn write_components_zip(
-    components: &[NamedComponent],
-    project_name: Option<&str>,
+/// Creates a multi-project Rodin zip archive in memory.
+///
+/// Each [`NamedProject`] is written under its own `<name>/` directory prefix,
+/// carrying its own `<name>/.project` descriptor plus its components' Rodin XML.
+/// This is what an Eclipse "Archive File" export of several top-level projects
+/// looks like, so a decomposition exported here re-imports as one project per
+/// directory and sibling components sharing a basename never overwrite. A
+/// single-project export should use the flat [`to_project_zip`].
+///
+/// # Example
+/// ```
+/// use rossi::{Component, Context, Machine, NamedComponent, NamedProject, to_multi_project_zip, parse_zip};
+///
+/// let a = NamedProject {
+///     name: "A".to_string(),
+///     components: vec![NamedComponent {
+///         filename: "C.buc".to_string(),
+///         component: Component::Context(Context::new("C".to_string())),
+///     }],
+/// };
+/// let b = NamedProject {
+///     name: "B".to_string(),
+///     components: vec![NamedComponent {
+///         filename: "M.bum".to_string(),
+///         component: Component::Machine(Machine::new("M".to_string())),
+///     }],
+/// };
+/// let zip_data = to_multi_project_zip(&[a, b]).unwrap();
+/// // Both projects' components survive, namespaced by their directory prefix.
+/// assert_eq!(parse_zip(&zip_data).unwrap().len(), 2);
+/// ```
+pub fn to_multi_project_zip(projects: &[NamedProject]) -> Result<Vec<u8>> {
+    // Each project's entries live under `<name>/`; pre-materialize the prefixes
+    // so the shared writer can borrow them.
+    let prefixes: Vec<String> = projects.iter().map(|p| format!("{}/", p.name)).collect();
+    write_projects_zip(projects.iter().zip(&prefixes).map(|(p, prefix)| {
+        (
+            prefix.as_str(),
+            Some(p.name.as_str()),
+            p.components.as_slice(),
+        )
+    }))
+}
+
+/// Serializes one or more projects into an in-memory zip archive.
+///
+/// Each project is `(prefix, descriptor_name, components)`: its entries are
+/// written at `{prefix}{filename}` (so `prefix` is `""` for a flat archive or
+/// `"Name/"` for a sub-project), preceded by a `{prefix}.project` descriptor
+/// when `descriptor_name` is `Some`. Taking the projects as an iterator of
+/// borrows lets the flat wrappers pass a single entry without allocating.
+fn write_projects_zip<'a>(
+    projects: impl IntoIterator<Item = (&'a str, Option<&'a str>, &'a [NamedComponent])>,
 ) -> Result<Vec<u8>> {
     use std::io::Write;
     use zip::ZipWriter;
@@ -1331,19 +1396,25 @@ fn write_components_zip(
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
-        if let Some(project_name) = project_name {
-            writer
-                .start_file(".project", options)
-                .map_err(|e| ParseError::IoError(format!("Failed to write zip entry: {}", e)))?;
-            writer.write_all(rodin_project_file_xml(project_name).as_bytes())?;
-        }
+        for (prefix, descriptor_name, components) in projects {
+            if let Some(name) = descriptor_name {
+                writer
+                    .start_file(format!("{prefix}.project"), options)
+                    .map_err(|e| {
+                        ParseError::IoError(format!("Failed to write zip entry: {}", e))
+                    })?;
+                writer.write_all(rodin_project_file_xml(name).as_bytes())?;
+            }
 
-        for named in components {
-            let xml = to_xml(&named.component);
-            writer
-                .start_file(&named.filename, options)
-                .map_err(|e| ParseError::IoError(format!("Failed to write zip entry: {}", e)))?;
-            writer.write_all(xml.as_bytes())?;
+            for named in components {
+                let xml = to_xml(&named.component);
+                writer
+                    .start_file(format!("{prefix}{}", named.filename), options)
+                    .map_err(|e| {
+                        ParseError::IoError(format!("Failed to write zip entry: {}", e))
+                    })?;
+                writer.write_all(xml.as_bytes())?;
+            }
         }
         writer
             .finish()
@@ -1393,16 +1464,60 @@ pub fn write_project_directory<P: AsRef<std::path::Path>>(
     components: &[NamedComponent],
     project_name: &str,
 ) -> Result<()> {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path)?;
-    std::fs::write(path.join(".project"), rodin_project_file_xml(project_name))?;
+    write_projects_directory(path.as_ref(), [("", Some(project_name), components)])
+}
 
-    for named in components {
-        let file_path = path.join(&named.filename);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)?;
+/// Creates a multi-project Rodin directory tree from named projects.
+///
+/// The on-disk analogue of [`to_multi_project_zip`]: each [`NamedProject`] is
+/// written under its own `<root>/<name>/` subdirectory with its own `.project`
+/// descriptor and component XML, so sibling projects sharing a component
+/// basename never collide. A single-project export uses [`write_project_directory`].
+pub fn write_multi_project_directory<P: AsRef<std::path::Path>>(
+    path: P,
+    projects: &[NamedProject],
+) -> Result<()> {
+    write_projects_directory(
+        path.as_ref(),
+        projects.iter().map(|p| {
+            (
+                p.name.as_str(),
+                Some(p.name.as_str()),
+                p.components.as_slice(),
+            )
+        }),
+    )
+}
+
+/// Writes one or more projects into a directory tree rooted at `root`.
+///
+/// Each project is `(subdir, descriptor_name, components)`: an empty `subdir`
+/// writes the project flat into `root` (the single-project case), otherwise it
+/// goes under `root/subdir`. A `.project` descriptor is written when
+/// `descriptor_name` is `Some`. Shared by [`write_project_directory`] and
+/// [`write_multi_project_directory`].
+fn write_projects_directory<'a>(
+    root: &std::path::Path,
+    projects: impl IntoIterator<Item = (&'a str, Option<&'a str>, &'a [NamedComponent])>,
+) -> Result<()> {
+    for (subdir, descriptor_name, components) in projects {
+        let base = if subdir.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(subdir)
+        };
+        std::fs::create_dir_all(&base)?;
+        if let Some(name) = descriptor_name {
+            std::fs::write(base.join(".project"), rodin_project_file_xml(name))?;
         }
-        std::fs::write(file_path, to_xml(&named.component))?;
+
+        for named in components {
+            let file_path = base.join(&named.filename);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(file_path, to_xml(&named.component))?;
+        }
     }
 
     Ok(())
@@ -2823,5 +2938,93 @@ mod tests {
         let mut project_xml = String::new();
         std::io::Read::read_to_string(&mut project, &mut project_xml).unwrap();
         assert!(project_xml.contains("<name>rossi_project</name>"));
+    }
+
+    fn ctx_named(name: &str) -> NamedComponent {
+        NamedComponent {
+            filename: format!("{name}.buc"),
+            component: Component::Context(Context::new(name.to_string())),
+        }
+    }
+
+    fn entry_names(zip_data: &[u8]) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data)).unwrap();
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_to_multi_project_zip_namespaces_each_project() {
+        // Two projects whose component basenames collide ("C.buc" in both) —
+        // the case a flat archive would overwrite.
+        let projects = [
+            NamedProject {
+                name: "A".to_string(),
+                components: vec![ctx_named("C")],
+            },
+            NamedProject {
+                name: "B".to_string(),
+                components: vec![ctx_named("C")],
+            },
+        ];
+        let zip_data = to_multi_project_zip(&projects).unwrap();
+        let names = entry_names(&zip_data);
+        assert_eq!(
+            names,
+            vec!["A/.project", "A/C.buc", "B/.project", "B/C.buc"],
+            "each project is namespaced under its own directory prefix",
+        );
+
+        // Each `.project` descriptor carries its own project name.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&zip_data)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("A/.project").unwrap(), &mut xml)
+            .unwrap();
+        assert!(xml.contains("<name>A</name>"));
+    }
+
+    #[test]
+    fn test_single_project_zip_keeps_flat_rodin_layout() {
+        // Pin the Rodin-compatible layout the generalized writer must preserve:
+        // a root `.project` descriptor first, then each component flat at its
+        // basename (no directory prefix), in input order. A refactor of
+        // `write_projects_zip` that prefixed or reordered entries would break
+        // Rodin import — this guards against that, unlike comparing the writer
+        // to itself.
+        let components = [
+            ctx_named("C0"),
+            NamedComponent {
+                filename: "M0.bum".to_string(),
+                component: Component::Machine(Machine::new("M0".to_string())),
+            },
+        ];
+        let zip = to_project_zip(&components, "rossi_project").unwrap();
+        assert_eq!(entry_names(&zip), vec![".project", "C0.buc", "M0.bum"]);
+    }
+
+    #[test]
+    fn test_write_multi_project_directory_namespaces_each_project() {
+        let dir = tempdir_unique("rossi-multi-project-dir");
+        let projects = [
+            NamedProject {
+                name: "A".to_string(),
+                components: vec![ctx_named("C")],
+            },
+            NamedProject {
+                name: "B".to_string(),
+                components: vec![ctx_named("C")],
+            },
+        ];
+        write_multi_project_directory(&dir, &projects).unwrap();
+
+        for proj in ["A", "B"] {
+            let proj_dir = dir.join(proj);
+            assert!(proj_dir.join("C.buc").exists());
+            let descriptor = std::fs::read_to_string(proj_dir.join(".project")).unwrap();
+            assert!(descriptor.contains(&format!("<name>{proj}</name>")));
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -77,9 +77,10 @@ pub use pretty::{
 };
 pub use selection::enclosing_spans;
 pub use xml::{
-    NamedComponent, component_filename, parse_xml, parse_zip, parse_zip_file,
-    parse_zip_file_with_recovery, parse_zip_with_recovery, read_project_name, to_project_zip,
-    to_xml, to_zip, write_project_directory, write_project_zip_file, write_zip_file,
+    NamedComponent, NamedProject, component_filename, parse_xml, parse_zip, parse_zip_file,
+    parse_zip_file_with_recovery, parse_zip_with_recovery, read_project_name, to_multi_project_zip,
+    to_project_zip, to_xml, to_zip, write_multi_project_directory, write_project_directory,
+    write_project_zip_file, write_zip_file,
 };
 
 #[cfg(test)]
