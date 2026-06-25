@@ -151,6 +151,12 @@ jobs:
 
   coverage:
     name: Code Coverage
+    # Tarpaulin is the slowest job, only feeds Codecov's PR diff, is non-gating
+    # (fail_ci_if_error: false), and never part of the release gate. Run it on PRs
+    # only so it doesn't run a second time on the post-merge push to main: with
+    # fast-forward merges the PR head SHA is exactly what lands on main, so Codecov
+    # already holds that commit's report as the baseline for the next PR.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
