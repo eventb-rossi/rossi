@@ -1046,6 +1046,122 @@ fn export_eventb_to_rodin_directory_includes_project_descriptor() {
 }
 
 #[test]
+fn export_directory_of_subprojects_to_multi_project_zip() {
+    // A directory whose Event-B text lives only under immediate subdirectories
+    // exports as one Rodin project per subdirectory (the inverse of a
+    // multi-project import). Each project gets its own `<name>/` prefix and
+    // `.project`, so sibling components sharing a basename never collide.
+    let tmp = tempdir_unique("rossi-cli-export-multi");
+    let src = tmp.join("src");
+    for (proj, comp, body) in [
+        ("ProjA", "shared.eventb", "CONTEXT shared\nEND\n"),
+        ("ProjB", "shared.eventb", "MACHINE shared\nEND\n"),
+    ] {
+        let dir = src.join(proj);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(comp), body).unwrap();
+    }
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "export",
+            src.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "multi-project export should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+    // The colliding `shared` component is kept apart under each project prefix.
+    for expected in [
+        "ProjA/.project",
+        "ProjA/shared.buc",
+        "ProjB/.project",
+        "ProjB/shared.bum",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "expected {expected} in {names:?}"
+        );
+    }
+    let mut descriptor = String::new();
+    archive
+        .by_name("ProjA/.project")
+        .unwrap()
+        .read_to_string(&mut descriptor)
+        .unwrap();
+    assert!(descriptor.contains("<name>ProjA</name>"));
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn export_stray_top_level_txt_still_splits_subprojects() {
+    // A benign generic .txt (README/notes) directly under the source directory
+    // must NOT collapse the per-subdirectory project split — only a definite
+    // `.eventb` source does.
+    let tmp = tempdir_unique("rossi-cli-export-strawtxt");
+    let src = tmp.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("README.txt"), "just notes, not Event-B\n").unwrap();
+    for (proj, body) in [("ProjA", "CONTEXT a\nEND\n"), ("ProjB", "MACHINE b\nEND\n")] {
+        let dir = src.join(proj);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("c.eventb"), body).unwrap();
+    }
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "export",
+            src.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+    // Both subdirectories became their own project despite the stray README.txt.
+    assert!(
+        names.iter().any(|n| n == "ProjA/.project"),
+        "names={names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "ProjB/.project"),
+        "names={names:?}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_zip_wrong_root_reports_eb002() {
     // A .buc whose root is neither contextFile nor machineFile passes
     // parse_zip_file_with_recovery silently (the per-extension parser is

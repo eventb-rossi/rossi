@@ -24,6 +24,16 @@ pub(crate) fn is_text_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("eventb") || ext.eq_ignore_ascii_case("txt")
 }
 
+/// Whether an extension is the canonical Event-B source extension (`.eventb`).
+///
+/// Unlike [`is_text_ext`], this excludes the generic `.txt` — used where a file
+/// must be treated as a definite Event-B component (e.g. deciding a directory's
+/// project layout), mirroring `rossi-build`'s "a `README.txt` is not a
+/// component" convention.
+pub(crate) fn is_eventb_ext(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("eventb")
+}
+
 /// Whether an extension is a Rodin `.zip` archive.
 pub(crate) fn is_zip_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("zip")
@@ -192,4 +202,18 @@ pub(crate) fn collect_rodin_xml_files(inputs: &[PathBuf]) -> CmdResult<Vec<PathB
 
     files.sort();
     Ok(files)
+}
+
+/// Create an output file's parent directory, skipping a missing/empty parent.
+///
+/// Shared by the commands that write a single output file (`.zip`, `.eventb`);
+/// the directory writers create their own root, so this is only needed for file
+/// outputs.
+pub(crate) fn ensure_parent_dir(path: &Path) -> CmdResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
