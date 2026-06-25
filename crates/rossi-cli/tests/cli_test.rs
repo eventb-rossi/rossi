@@ -626,6 +626,155 @@ fn import_rodin_directory_to_eventb_files() {
 }
 
 #[test]
+fn import_multi_project_archive_writes_per_project_subdirs() {
+    // A machine reused under two sibling projects with the SAME component
+    // basename ("M.bum") — the case the old flat import collapsed into one
+    // overwritten output file.
+    let tmp = tempdir_unique("rossi-cli-import-multi");
+    let zip_path = tmp.join("decomp.zip");
+    let out_dir = tmp.join("out");
+
+    let machine_xml = std::fs::read("../rossi/examples/counter.bum").unwrap();
+    let proj_a = project_descriptor("A");
+    let proj_b = project_descriptor("B");
+    write_zip(
+        &zip_path,
+        &[
+            ("A/.project", &proj_a),
+            ("A/M.bum", &machine_xml),
+            ("B/.project", &proj_b),
+            ("B/M.bum", &machine_xml),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "import",
+            zip_path.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "multi-project import should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Each project's component lands under its own subdirectory (the component
+    // is renamed to its file stem `M`); neither overwrites the other, and
+    // nothing is written flat at the output root.
+    assert!(out_dir.join("A").join("M.eventb").exists());
+    assert!(out_dir.join("B").join("M.eventb").exists());
+    assert!(!out_dir.join("M.eventb").exists());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn import_keys_subdirs_on_prefix_not_colliding_name() {
+    // Two sibling projects whose `.project` descriptors resolve to the SAME
+    // name but sit under distinct archive directories. Keying output on the
+    // unique prefix (not the resolved name) keeps them apart instead of one
+    // overwriting the other.
+    let tmp = tempdir_unique("rossi-cli-import-namecollide");
+    let zip_path = tmp.join("decomp.zip");
+    let out_dir = tmp.join("out");
+    let machine_xml = std::fs::read("../rossi/examples/counter.bum").unwrap();
+    // Both descriptors claim the same project name "Dup".
+    let dup = project_descriptor("Dup");
+    write_zip(
+        &zip_path,
+        &[
+            ("A/.project", &dup),
+            ("A/M.bum", &machine_xml),
+            ("B/.project", &dup),
+            ("B/N.bum", &machine_xml),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "import",
+            zip_path.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Subdirs are the archive prefixes A/ and B/, not the colliding name "Dup".
+    assert!(out_dir.join("A").join("M.eventb").exists());
+    assert!(out_dir.join("B").join("N.eventb").exists());
+    assert!(!out_dir.join("Dup").exists());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn import_contains_path_traversal_project_name() {
+    // A hostile archive whose project directory is `..` must not write outside
+    // the chosen output directory; the segment is sanitized to a safe name.
+    // Two distinct prefixes so multi-project (subdir) mode triggers; one tries
+    // to escape via `../`.
+    let tmp = tempdir_unique("rossi-cli-import-traversal");
+    let zip_path = tmp.join("evil.zip");
+    let out_dir = tmp.join("out");
+    let machine_xml = std::fs::read("../rossi/examples/counter.bum").unwrap();
+    write_zip(
+        &zip_path,
+        &[
+            ("../escape/M.bum", &machine_xml),
+            ("safe/N.bum", &machine_xml),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "import",
+            zip_path.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The `../` project is neutralized to the safe fallback segment `project/`
+    // inside out/, and nothing escapes to the output's parent.
+    assert!(out_dir.join("safe").join("N.eventb").exists());
+    assert!(out_dir.join("project").join("M.eventb").exists());
+    assert!(
+        !tmp.join("escape").exists(),
+        "import escaped the output directory"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn export_eventb_file_to_zip() {
     let tmp = tempdir_unique("rossi-cli-export-eventb");
     let out_zip = tmp.join("out.zip");
@@ -1305,6 +1454,11 @@ fn write_zip(zip_path: &std::path::Path, entries: &[(&str, &[u8])]) {
         std::io::Write::write_all(&mut zw, body).unwrap();
     }
     zw.finish().unwrap();
+}
+
+/// The bytes of a minimal Rodin `.project` descriptor naming `name`.
+fn project_descriptor(name: &str) -> Vec<u8> {
+    format!("<projectDescription><name>{name}</name></projectDescription>").into_bytes()
 }
 
 fn tempdir_unique(prefix: &str) -> PathBuf {

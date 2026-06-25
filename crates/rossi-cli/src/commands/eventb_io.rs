@@ -217,3 +217,16 @@ pub(crate) fn ensure_parent_dir(path: &Path) -> CmdResult<()> {
     }
     Ok(())
 }
+
+/// Reduce an untrusted name (a Rodin project name from a `.project` descriptor,
+/// or an archive directory segment that may contain `..` or be absolute) to a
+/// single safe path component, so it can never escape the chosen output
+/// directory. Falls back to `"project"` when no usable final component remains.
+pub(crate) fn safe_path_segment(name: &str) -> String {
+    Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("project")
+        .to_string()
+}
