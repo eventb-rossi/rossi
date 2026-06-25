@@ -1,5 +1,6 @@
 use clap::{Args, ValueEnum};
-use rossi::{Component, ParseError, parse_components, parse_zip_file_with_recovery};
+use rossi::{Component, ParseError, parse_components, parse_zip_with_recovery};
+use rossi_build::project::discover_projects;
 use rossi_build::{Diagnostic, Project, RuleId, Severity, error::ProjectError};
 use serde::{Serialize, Serializer};
 use std::fs;
@@ -245,8 +246,97 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
     }
 }
 
+/// Validate a Rodin `.zip`, project by project.
+///
+/// A Rodin archive may bundle several top-level projects (an Eclipse "Archive
+/// File" export of a decomposition). Discovering and checking each project on
+/// its own keeps semantic checks correct — sibling projects that share a
+/// component name (each its own `M.bum`) no longer flag false duplicate /
+/// cross-reference diagnostics — and lets every row be attributed to the
+/// project it came from. Component rows carry a project-qualified
+/// `inner_filename` (e.g. `A/M.bum`) only when more than one project is present,
+/// so a single project (flat or nested under one directory) keeps its bare
+/// basename, exactly as before.
+///
+/// Discovery is strict: one malformed component aborts it. In that case we fall
+/// back to the tolerant flat parse ([`validate_zip_flat_fallback`]) so every bad
+/// file still gets a granular diagnostic — an already-broken archive forgoes
+/// per-project attribution, which it never had.
 fn validate_zip_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
-    let parse_result = parse_zip_file_with_recovery(file);
+    let bytes = match fs::read(file) {
+        Ok(b) => b,
+        Err(e) => {
+            return vec![error_result(
+                file,
+                None,
+                format!("Failed to read zip file: {e}"),
+                None,
+            )];
+        }
+    };
+    let fallback = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+    let projects = match discover_projects(&bytes, fallback) {
+        Ok(projects) => projects,
+        // Reuse the already-read bytes — the fallback must not re-read the file.
+        Err(_) => return validate_zip_flat_fallback(file, &bytes, fallback, cli),
+    };
+
+    // Drop source-only projects (a stray `.project` with no components): they
+    // carry no rows and must not flip the multi gate — otherwise a single real
+    // project beside a root-level descriptor would be spuriously prefix-qualified
+    // (and diverge from `rossi import`, which also drops them).
+    let projects: Vec<_> = projects
+        .into_iter()
+        .filter(|p| !p.components.is_empty())
+        .collect();
+    if projects.is_empty() {
+        return vec![error_result(
+            file,
+            None,
+            "No Event-B components found in zip file".to_string(),
+            None,
+        )];
+    }
+
+    let multi = projects.len() > 1;
+    let mut results = Vec::new();
+    for dp in projects {
+        // Qualify rows by project only when sibling projects could otherwise be
+        // confused; a lone project keeps its bare basename.
+        let prefix = if multi {
+            dp.prefix.clone()
+        } else {
+            String::new()
+        };
+        for pc in &dp.components {
+            results.push(success_result(
+                file,
+                Some(format!("{prefix}{}", pc.filename)),
+                &pc.component,
+            ));
+        }
+        if !cli.no_semantic {
+            let project = dp.into_project();
+            fold_semantic(&project, file, cli, &prefix, &mut results);
+        }
+    }
+    results
+}
+
+/// Tolerant flat validation of a `.zip`, used when strict project discovery
+/// fails on a malformed component. Reports each parse failure granularly and,
+/// when the archive otherwise parses, folds the whole archive's semantic
+/// diagnostics as a single project — the historical behavior.
+fn validate_zip_flat_fallback(
+    file: &Path,
+    bytes: &[u8],
+    name: &str,
+    cli: &ValidateArgs,
+) -> Vec<ValidationResult> {
+    let parse_result = parse_zip_with_recovery(bytes);
     let mut results = Vec::new();
     let mut had_parse_error = false;
 
@@ -285,8 +375,9 @@ fn validate_zip_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
     }
 
     if !cli.no_semantic && !had_parse_error {
-        match Project::from_zip_file(file) {
-            Ok(project) => fold_semantic(&project, file, cli, &mut results),
+        match Project::from_zip_bytes(name, bytes) {
+            // The fallback treats the whole archive as one project (no prefix).
+            Ok(project) => fold_semantic(&project, file, cli, "", &mut results),
             Err(e) => results.push(error_result(
                 file,
                 None,
@@ -321,7 +412,8 @@ fn validate_directory(dir: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
                     &pc.component,
                 ));
             }
-            fold_semantic(&project, dir, cli, &mut results);
+            // A directory is loaded as a single project (no prefix).
+            fold_semantic(&project, dir, cli, "", &mut results);
         }
         Err(e) => results.push(error_result(
             dir,
@@ -334,19 +426,24 @@ fn validate_directory(dir: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
     results
 }
 
+/// Fold a project's build + lint diagnostics into rows, qualifying each row's
+/// `inner_filename` with `prefix` (the project's archive prefix, or `""` for a
+/// single project / directory) so a multi-project archive's rows say which
+/// project they came from.
 fn fold_semantic(
     project: &Project,
     file: &Path,
     cli: &ValidateArgs,
+    prefix: &str,
     out: &mut Vec<ValidationResult>,
 ) {
     let build = rossi_build::build(project);
     for diag in build.diagnostics {
-        out.push(fold_project_diagnostic(file, diag, project));
+        out.push(fold_project_diagnostic(file, diag, project, prefix));
     }
     if !cli.no_lints {
         for diag in rossi_build::lint::run(project) {
-            out.push(fold_project_diagnostic(file, diag, project));
+            out.push(fold_project_diagnostic(file, diag, project, prefix));
         }
     }
 }
@@ -401,15 +498,22 @@ fn fold_diagnostic(
 /// Fold a project (build/lint) diagnostic, resolving it against the component
 /// it belongs to: the leading dot-separated segment of `origin` is the
 /// component name, which yields that component's source (for the region) and
-/// filename (for `inner_filename`). Components imported from Rodin XML carry no
-/// source, so their diagnostics stay region-less.
-fn fold_project_diagnostic(file: &Path, diag: Diagnostic, project: &Project) -> ValidationResult {
+/// filename (for `inner_filename`). `prefix` is prepended to the filename so a
+/// multi-project archive's rows are project-qualified (empty for a single
+/// project). Components imported from Rodin XML carry no source, so their
+/// diagnostics stay region-less.
+fn fold_project_diagnostic(
+    file: &Path,
+    diag: Diagnostic,
+    project: &Project,
+    prefix: &str,
+) -> ValidationResult {
     let component = diag.origin.split('.').next().unwrap_or(&diag.origin);
     let pc = project
         .components
         .iter()
         .find(|pc| pc.component.name() == component);
-    let inner = pc.map(|pc| pc.filename.clone());
+    let inner = pc.map(|pc| format!("{prefix}{}", pc.filename));
     let source = pc.and_then(|pc| pc.source.as_deref());
     fold_diagnostic(file, diag, inner, source)
 }
@@ -660,9 +764,25 @@ mod tests {
             .into_iter()
             .find(|d| d.message.contains("could not infer type"))
             .expect("untyped constant is flagged");
-        let result = fold_project_diagnostic(Path::new("proj"), diag, &project);
+        let result = fold_project_diagnostic(Path::new("proj"), diag, &project, "");
         assert_eq!(result.inner_filename.as_deref(), Some("C.eventb"));
         let region = result.region.expect("region from the component source");
         assert_eq!((region.start_line, region.start_column), (3, 5));
+    }
+
+    #[test]
+    fn project_diagnostic_inner_filename_is_prefix_qualified() {
+        // In a multi-project archive each row is namespaced by its project's
+        // prefix so editors (and users) can tell sibling projects apart.
+        let source = "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 ⊤\nEND\n";
+        let components = rossi_build::ProjectComponent::from_eventb("C.buc", source).unwrap();
+        let project = rossi_build::Project::new("Sub", components);
+        let diag = rossi_build::build(&project)
+            .diagnostics
+            .into_iter()
+            .find(|d| d.message.contains("could not infer type"))
+            .expect("untyped constant is flagged");
+        let result = fold_project_diagnostic(Path::new("proj"), diag, &project, "Sub/");
+        assert_eq!(result.inner_filename.as_deref(), Some("Sub/C.buc"));
     }
 }

@@ -275,6 +275,119 @@ fn test_cli_zip_file_json_output() {
 }
 
 #[test]
+fn validate_multi_project_archive_is_per_project() {
+    // Two sibling projects each define a context named `C` (same `C.buc`
+    // basename). Flattened into one project this falsely fires EB019
+    // (duplicate component); validating each project on its own must not, and
+    // the rows must be project-qualified so editors can tell them apart.
+    let tmp = tempdir_unique("rossi-cli-validate-multi");
+    let zip_path = tmp.join("decomp.zip");
+    let ctx_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        <org.eventb.core.contextFile version=\"3\" \
+        org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.contextFile>\n";
+    let proj_a = project_descriptor("A");
+    let proj_b = project_descriptor("B");
+    write_zip(
+        &zip_path,
+        &[
+            ("A/.project", &proj_a),
+            ("A/C.buc", ctx_xml.as_bytes()),
+            ("B/.project", &proj_b),
+            ("B/C.buc", ctx_xml.as_bytes()),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            zip_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "multi-project validate should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Each project's component is reported under its own prefix.
+    assert!(
+        stdout.contains("\"inner_filename\": \"A/C.buc\""),
+        "expected A/C.buc in {stdout}"
+    );
+    assert!(
+        stdout.contains("\"inner_filename\": \"B/C.buc\""),
+        "expected B/C.buc in {stdout}"
+    );
+    // The same name across projects is NOT a duplicate component.
+    assert!(
+        !stdout.contains("EB019"),
+        "sibling projects sharing a component name must not flag EB019: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn validate_stray_root_descriptor_keeps_single_project_basenames() {
+    // One real project under `Sub/` plus a stray root-level `.project`
+    // descriptor (no components). The descriptor-only group must not count
+    // toward the multi gate, so rows keep their bare basename rather than being
+    // spuriously prefix-qualified.
+    let tmp = tempdir_unique("rossi-cli-validate-strayproj");
+    let zip_path = tmp.join("model.zip");
+    let ctx_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        <org.eventb.core.contextFile version=\"3\" \
+        org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.contextFile>\n";
+    let root = project_descriptor("root");
+    let sub = project_descriptor("Sub");
+    write_zip(
+        &zip_path,
+        &[
+            (".project", &root),
+            ("Sub/.project", &sub),
+            ("Sub/C.buc", ctx_xml.as_bytes()),
+        ],
+    );
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            zip_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"inner_filename\": \"C.buc\""),
+        "a single real project keeps the bare basename: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Sub/C.buc"),
+        "a descriptor-only sibling must not trigger prefix-qualification: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn test_cli_mixed_text_and_zip_files() {
     let output = Command::new("cargo")
         .args([
