@@ -837,25 +837,25 @@ impl<'a> SemanticTokensBuilder<'a> {
 }
 
 /// Internal token type. Its `as u32` discriminant is the index the encoder
-/// emits, and [`Self::ALL`] lists every variant in that same order, so the
+/// emits, and `Self::ALL` lists every variant in that same order, so the
 /// advertised legend (built from `ALL`) and the emitted indices share one
 /// source of truth — pinned by `legend_indices_match_token_type_discriminants`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
-#[allow(dead_code)]
 enum TokenType {
     Keyword = 0,
     Variable = 1,
     Parameter = 2,
-    Property = 3,
-    Function = 4,
-    Operator = 5,
-    Set = 6,
-    Namespace = 7,
-    Label = 8,
-    Comment = 9,
-    String = 10,
-    Constant = 11,
+    Function = 3,
+    /// Reserved: operators are coloured by the generated TextMate grammar, so no
+    /// token is emitted with this type. The slot is kept in the legend in case a
+    /// future pass moves operator colouring into the semantic layer.
+    Operator = 4,
+    Set = 5,
+    Namespace = 6,
+    Label = 7,
+    Comment = 8,
+    Constant = 9,
 }
 
 impl TokenType {
@@ -864,14 +864,12 @@ impl TokenType {
         TokenType::Keyword,
         TokenType::Variable,
         TokenType::Parameter,
-        TokenType::Property,
         TokenType::Function,
         TokenType::Operator,
         TokenType::Set,
         TokenType::Namespace,
         TokenType::Label,
         TokenType::Comment,
-        TokenType::String,
         TokenType::Constant,
     ];
 
@@ -881,45 +879,36 @@ impl TokenType {
             TokenType::Keyword => SemanticTokenType::KEYWORD,
             TokenType::Variable => SemanticTokenType::VARIABLE,
             TokenType::Parameter => SemanticTokenType::PARAMETER,
-            TokenType::Property => SemanticTokenType::PROPERTY,
             TokenType::Function => SemanticTokenType::FUNCTION,
             TokenType::Operator => SemanticTokenType::OPERATOR,
             TokenType::Set => SemanticTokenType::TYPE,
             TokenType::Namespace => SemanticTokenType::NAMESPACE,
             TokenType::Label => SemanticTokenType::MACRO,
             TokenType::Comment => SemanticTokenType::COMMENT,
-            TokenType::String => SemanticTokenType::STRING,
             TokenType::Constant => SemanticTokenType::NUMBER,
         }
     }
 }
 
 /// Internal token modifier. Its `as u32` discriminant is the bit position the
-/// encoder sets, and [`Self::ALL`] lists every variant in that same order, so
-/// the advertised legend and the emitted bitset share one source of truth.
+/// encoder sets, and `Self::ALL` lists every variant in that same order, so the
+/// advertised legend and the emitted bitset share one source of truth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
-#[allow(dead_code)]
 enum TokenModifier {
     Declaration = 0,
     Readonly = 1,
-    Definition = 2,
 }
 
 impl TokenModifier {
     /// Every token modifier, in legend (and bit-position) order.
-    const ALL: &'static [TokenModifier] = &[
-        TokenModifier::Declaration,
-        TokenModifier::Readonly,
-        TokenModifier::Definition,
-    ];
+    const ALL: &'static [TokenModifier] = &[TokenModifier::Declaration, TokenModifier::Readonly];
 
     /// The LSP semantic token modifier this maps to.
     fn lsp(self) -> SemanticTokenModifier {
         match self {
             TokenModifier::Declaration => SemanticTokenModifier::DECLARATION,
             TokenModifier::Readonly => SemanticTokenModifier::READONLY,
-            TokenModifier::Definition => SemanticTokenModifier::DEFINITION,
         }
     }
 }
