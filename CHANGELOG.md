@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3](https://github.com/eventb-rossi/rossi/compare/v0.1.1...v0.1.3) - 2026-06-26
+
+### Added
+- *(validate)* Check each project of a multi-project archive on its own
+- *(import)* Split a multi-project archive into per-project subdirectories
+- *(export)* Export a directory of subprojects as a multi-project archive
+- *(build)* Support multi-project Rodin archives
+- *(rossi)* Add multi-project Rodin zip/dir writers
+
 ## [0.1.2](https://github.com/eventb-rossi/rossi/compare/v0.1.1...v0.1.2) - 2026-06-26
 
 ### Added
