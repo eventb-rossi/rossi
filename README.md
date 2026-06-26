@@ -134,6 +134,7 @@ the `rossi-build` static checker, and the language server:
 | `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
 | `lsp`      | Run the Rossi language server over stdio (equivalent to the `eventb-language-server` binary). |
+| `completions` | Print a shell completion script to stdout (run `rossi completions --help` for the supported shells). |
 
 ### Validate
 
@@ -255,6 +256,21 @@ rossi build project.zip --output project-checked.zip
 
 # Or emit loose files into a directory
 rossi build project.zip --output ./out
+```
+
+### Shell completions
+
+`rossi completions <shell>` prints a completion script to stdout, generated
+from the CLI's own command tree so it always matches the installed version:
+
+```bash
+# zsh — a directory on your $fpath
+rossi completions zsh > ~/.zsh/completions/_rossi
+
+# bash (system-wide), fish, or load it for this session only
+rossi completions bash | sudo tee /etc/bash_completion.d/rossi >/dev/null
+rossi completions fish > ~/.config/fish/completions/rossi.fish
+eval "$(rossi completions bash)"
 ```
 
 ## Language Server & IDE Support

@@ -58,6 +58,7 @@ sudo dnf install rossi
 | `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
 | `lsp`      | Run the Rossi language server over stdio (equivalent to the `eventb-language-server` binary). |
+| `completions` | Print a shell completion script to stdout (run `rossi completions --help` for the supported shells). |
 
 ```bash
 rossi validate model.eventb
@@ -68,6 +69,25 @@ rossi build project.zip
 Run `rossi --help` (or `rossi <subcommand> --help`) for the full set of
 options. See the [project README](https://github.com/eventb-rossi/rossi) for
 the complete toolchain and editor integrations.
+
+## Shell completions
+
+`rossi completions <shell>` writes a completion script to stdout, generated
+from the same command tree the CLI is parsed with — so it always matches the
+installed version. Redirect it where your shell looks for completions:
+
+```bash
+# bash — system-wide
+rossi completions bash | sudo tee /etc/bash_completion.d/rossi >/dev/null
+
+# zsh — a directory on your $fpath
+rossi completions zsh > ~/.zsh/completions/_rossi
+
+# fish
+rossi completions fish > ~/.config/fish/completions/rossi.fish
+```
+
+Or load it for the current session only with `eval "$(rossi completions bash)"`.
 
 ## License
 
