@@ -1,9 +1,10 @@
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod commands {
     pub mod build;
+    pub mod completions;
     pub mod eventb_io;
     pub mod export;
     pub mod fmt;
@@ -44,6 +45,9 @@ enum Command {
     /// Run the Rossi language server over stdio.
     #[command(about = "Run the Rossi language server over stdio")]
     Lsp,
+    /// Generate a shell completion script (bash, zsh, fish, …).
+    #[command(about = "Generate a shell completion script")]
+    Completions(commands::completions::CompletionsArgs),
 }
 
 fn main() -> ExitCode {
@@ -62,5 +66,8 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        // Derive the completion script from the same clap command tree the CLI
+        // parses with, so it can never drift from the real interface.
+        Command::Completions(args) => commands::completions::run(args, &mut Cli::command()),
     }
 }

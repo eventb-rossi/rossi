@@ -1874,3 +1874,25 @@ fn validate_stdin_at_limit_negation_chain_succeeds() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn test_completions_emits_script() {
+    // Smoke test: the subcommand is wired up (enum variant + dispatch) and
+    // renders a non-empty completion script for the `rossi` binary. The script
+    // body is clap_complete's to produce, so we only check it ran and named the
+    // right binary — `_rossi` (the function) plus the `complete` builtin prove
+    // a real bash script was emitted for `rossi`.
+    let output = Command::new("cargo")
+        .args(["run", "-p", "rossi-cli", "--", "completions", "bash"])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "completions bash should exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("_rossi"), "bash output: {stdout}");
+    assert!(stdout.contains("complete"), "bash output: {stdout}");
+}
