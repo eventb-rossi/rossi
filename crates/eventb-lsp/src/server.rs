@@ -62,11 +62,14 @@ impl Analyzer {
     }
 
     /// Publish `uri`'s diagnostics from the already-read parse `doc`, or clear
-    /// them when diagnostics are disabled. The publish is tagged with the
-    /// document's current `version` so the version always identifies the text the
-    /// diagnostics were computed from. Error spans are mapped against that
-    /// parse's own text, so a concurrent edit cannot make a span index past the
-    /// text it is rendered into.
+    /// them when diagnostics are disabled. The diagnostics
+    /// ([`crate::diagnostics::document_diagnostics`]) are the parse errors plus,
+    /// on a clean parse, the cheap single-component lints (duplicate / shadowed
+    /// names, EB021-023). The publish is tagged with the document's current
+    /// `version` so the version always identifies the text the diagnostics were
+    /// computed from. Spans are mapped against that parse's own text, so a
+    /// concurrent edit cannot make a span index past the text it is rendered
+    /// into.
     async fn publish_diagnostics(
         &self,
         uri: Url,
@@ -79,13 +82,7 @@ impl Analyzer {
         }
 
         let diagnostics = doc
-            .map(|doc| {
-                doc.parse
-                    .errors
-                    .iter()
-                    .map(|e| crate::diagnostics::parse_error_to_diagnostic(e, &doc.text))
-                    .collect()
-            })
+            .map(crate::diagnostics::document_diagnostics)
             .unwrap_or_default();
         self.client
             .publish_diagnostics(uri, diagnostics, version)

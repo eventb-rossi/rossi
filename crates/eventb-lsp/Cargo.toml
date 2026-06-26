@@ -42,6 +42,13 @@ tracing-subscriber.workspace = true
 # (`rossi::operators::OperatorRow`) the `rossi/operatorTable` request returns.
 rossi = { workspace = true, features = ["serde"] }
 
+# Advisory lints. Only the single-component `lint::run_component` pass is used
+# (duplicate-name / shadowed-name checks, EB021-023); it needs no project,
+# cross-reference resolution, or type inference, so it is cheap enough to run on
+# every keystroke. Keeping it here reuses the validate lint as the one source of
+# truth rather than re-implementing the scans in the server.
+rossi-build.workspace = true
+
 # File system operations
 walkdir.workspace = true
 

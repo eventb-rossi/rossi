@@ -5,7 +5,50 @@
 //! byte-span → UTF-16 range mapping goes through [`crate::position`], so the
 //! column convention can't drift from the rest of the server.
 
-use crate::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+use crate::document::ParsedDocument;
+use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+
+/// Assemble an LSP [`Diagnostic`] from the parts that vary, filling the fields
+/// every diagnostic this server emits shares: the `"rossi"` source and the
+/// unused optional fields. The single place those defaults live, so the parse
+/// and lint converters can't drift apart.
+fn lsp_diagnostic(
+    range: Range,
+    severity: DiagnosticSeverity,
+    code: Option<NumberOrString>,
+    message: String,
+) -> Diagnostic {
+    Diagnostic {
+        range,
+        severity: Some(severity),
+        code,
+        source: Some("rossi".to_string()),
+        message,
+        related_information: None,
+        tags: None,
+        code_description: None,
+        data: None,
+    }
+}
+
+/// Diagnostics for a parsed document: the parse errors, plus the cheap
+/// single-component lints (EB021-023) — but the lints only when the parse is
+/// clean. `rossi validate` lints solely a fully-successful parse; the LSP
+/// matches that, both for consistency and because running the lints over a
+/// recovered (error-bearing) AST would double-report a duplicated clause as
+/// both a parse error and a duplicate-name lint.
+pub(crate) fn document_diagnostics(doc: &ParsedDocument) -> Vec<Diagnostic> {
+    let mut diagnostics: Vec<Diagnostic> = doc
+        .parse
+        .errors
+        .iter()
+        .map(|e| parse_error_to_diagnostic(e, &doc.text))
+        .collect();
+    if doc.parse.errors.is_empty() {
+        diagnostics.extend(lint_diagnostics(doc.components(), &doc.text));
+    }
+    diagnostics
+}
 
 /// End byte offset of the token at byte offset `start`, for sizing a diagnostic
 /// range when pest reports only a point: the end of the contiguous non-whitespace
@@ -48,17 +91,12 @@ pub(crate) fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -
         _ => error.to_string(),
     };
 
-    Diagnostic {
-        range: parse_error_range(error, text),
-        severity: Some(DiagnosticSeverity::ERROR),
-        code: None,
-        source: Some("rossi".to_string()),
+    lsp_diagnostic(
+        parse_error_range(error, text),
+        DiagnosticSeverity::ERROR,
+        None,
         message,
-        related_information: None,
-        tags: None,
-        code_description: None,
-        data: None,
-    }
+    )
 }
 
 /// LSP range for a parse-error diagnostic, rendered through the single UTF-16
@@ -90,10 +128,64 @@ fn parse_error_range(error: &rossi::ParseError, text: &str) -> Range {
     crate::position::span_to_range(&rossi::ast::Span { start, end }, text)
 }
 
+/// Run the cheap, single-component lint passes over each parsed `component` and
+/// convert the findings to LSP diagnostics.
+///
+/// These are exactly the lints that need no project, no cross-component
+/// resolution, and no type inference — duplicate identifiers (EB021), duplicate
+/// labels (EB022) and shadowed names (EB023) — so they are safe to recompute on
+/// every keystroke alongside the parse errors. The logic lives in
+/// `rossi_build::lint::run_component` (the same pass `rossi validate` runs on
+/// loose `.eventb` text); this only maps its output into the protocol's shape.
+/// `text` is the source the components were parsed from, so the diagnostic spans
+/// index into it. The result is lazy so the sole caller can extend its
+/// diagnostics vector directly, without a throwaway intermediate `Vec`.
+pub(crate) fn lint_diagnostics<'a>(
+    components: &'a [rossi::Component],
+    text: &'a str,
+) -> impl Iterator<Item = Diagnostic> + 'a {
+    components
+        .iter()
+        .flat_map(rossi_build::lint::run_component)
+        .map(move |d| build_diagnostic_to_lsp(&d, text))
+}
+
+/// Convert a `rossi-build` lint/build diagnostic to an LSP diagnostic.
+///
+/// The byte span maps to a UTF-16 range through [`crate::position`], the shared
+/// converter the parse-error path uses. A span-less finding falls back to
+/// [`crate::analysis::default_range`], the server-wide span-less default (the
+/// single-component lints always carry a span when their component was parsed
+/// from text, so this is only a defensive default). The stable `EBnnn` rule id
+/// becomes the diagnostic `code`, matching what `rossi validate` reports.
+fn build_diagnostic_to_lsp(d: &rossi_build::Diagnostic, text: &str) -> Diagnostic {
+    let range = match d.span {
+        Some(span) => crate::position::span_to_range(&span, text),
+        None => crate::analysis::default_range(),
+    };
+    lsp_diagnostic(
+        range,
+        build_severity_to_lsp(d.severity),
+        d.rule_id
+            .map(|r| NumberOrString::String(r.code().to_string())),
+        d.message.clone(),
+    )
+}
+
+/// Map a `rossi-build` severity onto the LSP severity scale.
+fn build_severity_to_lsp(severity: rossi_build::Severity) -> DiagnosticSeverity {
+    match severity {
+        rossi_build::Severity::Error => DiagnosticSeverity::ERROR,
+        rossi_build::Severity::Warning => DiagnosticSeverity::WARNING,
+        rossi_build::Severity::Info => DiagnosticSeverity::INFORMATION,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_error_to_diagnostic;
-    use crate::lsp_types::Position;
+    use super::{document_diagnostics, lint_diagnostics, parse_error_to_diagnostic};
+    use crate::document::ParsedDocument;
+    use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
 
     #[test]
     fn duplicate_clause_diagnostic_stays_on_one_line() {
@@ -223,5 +315,110 @@ mod tests {
         // The diagnostic stays on the @EntitiesPartition line (0-indexed 5),
         // never reaching @RolesPartition on line 6.
         assert!(diagnostics[0].range.end.line < 6);
+    }
+
+    // --- single-component lints (EB021-023) ---------------------------------
+    //
+    // These exercise the run_component pass surfaced through the LSP. The
+    // snippets parse cleanly (strict `rossi::parse`), so every diagnostic comes
+    // from the lint, not from a parse error.
+
+    fn lint_for(text: &str) -> Vec<Diagnostic> {
+        let component = rossi::parse(text).expect("snippet parses cleanly");
+        lint_diagnostics(std::slice::from_ref(&component), text).collect()
+    }
+
+    fn doc_of(text: &str) -> ParsedDocument {
+        ParsedDocument {
+            text: text.to_string(),
+            parse: rossi::parse_components_with_recovery(text),
+        }
+    }
+
+    fn code_of(d: &Diagnostic) -> Option<&str> {
+        match &d.code {
+            Some(NumberOrString::String(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn duplicate_variable_is_eb021_error() {
+        // `x` declared twice — a duplicate identifier (EB021), not a parse error.
+        let text = "MACHINE m\nVARIABLES\n    x\n    x\nINVARIANTS\n    @inv1 x = x\nEND\n";
+        let diags = lint_for(text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let d = &diags[0];
+        assert_eq!(code_of(d), Some("EB021"));
+        assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(d.source.as_deref(), Some("rossi"));
+        // The span underlines a single `x` (one char at the 4-space indent),
+        // not the whole VARIABLES block.
+        assert_eq!(d.range.start.character, 4);
+        assert_eq!(d.range.end.character, 5);
+        assert_eq!(d.range.start.line, d.range.end.line);
+    }
+
+    #[test]
+    fn duplicate_label_is_eb022_error() {
+        // Two invariants share the label `@inv1` — a duplicate label (EB022).
+        let text =
+            "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x = x\n    @inv1 x = x\nEND\n";
+        let diags = lint_for(text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB022"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn shadowed_name_is_eb023_warning() {
+        // `NAT` is a valid identifier (not a reserved word, so it parses) but
+        // re-lexes as ℕ — a shadowed name (EB023), reported as a Warning.
+        let text = "CONTEXT c\nCONSTANTS\n    NAT\nAXIOMS\n    @axm1 1 = 1\nEND\n";
+        let diags = lint_for(text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB023"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+    }
+
+    #[test]
+    fn clean_component_has_no_lints() {
+        let text = "CONTEXT c\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k = 1\nEND\n";
+        assert!(lint_for(text).is_empty());
+    }
+
+    #[test]
+    fn document_diagnostics_emits_lint_on_clean_parse() {
+        // A clean parse with a duplicate variable: the lint rides alongside the
+        // (empty) parse errors.
+        let text = "MACHINE m\nVARIABLES\n    x\n    x\nINVARIANTS\n    @inv1 x = x\nEND\n";
+        let doc = doc_of(text);
+        assert!(doc.parse.errors.is_empty(), "snippet must parse cleanly");
+        let diags = document_diagnostics(&doc);
+        assert!(
+            diags.iter().any(|d| code_of(d) == Some("EB021")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn document_diagnostics_gates_lints_on_a_broken_parse() {
+        // A duplicated SETS clause is a parse error; recovery still leaves the
+        // repeated name in the component, but the lints are gated on a clean
+        // parse, so only the parse error surfaces — no duplicate-name lint
+        // piggybacks on it (no double squiggle; matches `rossi validate`).
+        let text = "CONTEXT c\nSETS\n    S\nSETS\n    S\nEND\n";
+        let doc = doc_of(text);
+        assert!(
+            !doc.parse.errors.is_empty(),
+            "duplicate SETS must be a parse error"
+        );
+        let diags = document_diagnostics(&doc);
+        assert!(!diags.is_empty(), "the parse error must still be reported");
+        // Parse errors carry no rule code; a leaked lint would carry EB0xx.
+        assert!(
+            diags.iter().all(|d| d.code.is_none()),
+            "no lint may piggyback on a broken parse, got {diags:?}"
+        );
     }
 }

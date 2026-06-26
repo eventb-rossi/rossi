@@ -303,7 +303,7 @@ fn name_range_or(name_span: Option<&Span>, fallback: Range, source: &str) -> Ran
 
 /// Create a default range (0,0)-(0,0)
 /// Used as fallback when span information is not available
-fn default_range() -> Range {
+pub(crate) fn default_range() -> Range {
     Range {
         start: crate::lsp_types::Position::new(0, 0),
         end: crate::lsp_types::Position::new(0, 0),

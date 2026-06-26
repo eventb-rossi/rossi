@@ -459,6 +459,7 @@ dependencies = [
  "parking_lot",
  "ropey",
  "rossi",
+ "rossi-build",
  "serde",
  "serde_json",
  "tokio",
