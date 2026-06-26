@@ -4,7 +4,7 @@ use eventb_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
 use eventb_lsp::semantic_tokens::SemanticTokensProvider;
 
 mod common;
-use common::{decode_tokens, slice_range};
+use common::{decode_tokens, decode_tokens_with_modifiers, slice_range};
 
 #[test]
 fn test_semantic_tokens_simple_machine() {
@@ -144,14 +144,21 @@ fn test_theorems_header_is_highlighted() {
 // lose comment highlighting after a colon).
 // ============================================================================
 
+/// Position of `name` in a legend name list (token types or modifiers),
+/// panicking if absent. Backs both `token_type_index` and `modifier_bit` so the
+/// "find the legend slot by name" lookup lives in one place.
+fn legend_index<'a>(names: impl IntoIterator<Item = &'a str>, name: &str) -> usize {
+    names
+        .into_iter()
+        .position(|n| n == name)
+        .unwrap_or_else(|| panic!("{name} not in legend"))
+}
+
 /// Index of `name` in the legend's token types — derived, so reordering the
 /// legend cannot silently re-point these tests at the wrong token type.
 fn token_type_index(name: &str) -> u32 {
-    SemanticTokensProvider::legend()
-        .token_types
-        .iter()
-        .position(|t| t.as_str() == name)
-        .unwrap_or_else(|| panic!("token type {name} not in legend")) as u32
+    let legend = SemanticTokensProvider::legend();
+    legend_index(legend.token_types.iter().map(|t| t.as_str()), name) as u32
 }
 
 /// Slice the token at `(line, col, len)` out of `text` (0-indexed,
@@ -544,6 +551,80 @@ fn all_any_parameters_coloured_when_guard_parse_fails() {
         assert!(
             param_decl_at(line, name),
             "ANY parameter `{name}` (line {line}) must get a PARAMETER token despite the failed guard: {tokens:?}"
+        );
+    }
+}
+
+/// Bit mask for modifier `name` in the legend (`1 << its index`); like
+/// [`token_type_index`], derived so a legend reorder cannot mis-point the test.
+fn modifier_bit(name: &str) -> u32 {
+    let legend = SemanticTokensProvider::legend();
+    1 << legend_index(legend.token_modifiers.iter().map(|m| m.as_str()), name)
+}
+
+#[test]
+fn constants_are_read_only_variables_not_numbers() {
+    // A constant is an immutable binding: a VARIABLE carrying the read-only
+    // modifier — distinct from a number literal (its former colour) and from a
+    // mutable variable (which has no read-only modifier).
+    let types: Vec<String> = SemanticTokensProvider::legend()
+        .token_types
+        .iter()
+        .map(|t| t.as_str().to_string())
+        .collect();
+    assert!(
+        !types.contains(&"number".to_string()),
+        "constants no longer map to the number token type: {types:?}"
+    );
+
+    let variable = token_type_index("variable");
+    let type_ = token_type_index("type");
+    let readonly = modifier_bit("readonly");
+
+    // Context: a set `S` (read-only TYPE) and a constant `k` (read-only VARIABLE),
+    // each declared then used in the axiom. A context has no mutable variables,
+    // so every variable/type token here must carry the read-only modifier.
+    let ctx = "CONTEXT c\nSETS S\nCONSTANTS k\nAXIOMS\n@axm1 k ∈ S\nEND\n";
+    assert!(rossi::parse(ctx).is_ok(), "fixture must be strictly valid");
+    let ctx_tokens = decode_tokens_with_modifiers(ctx);
+    assert!(
+        ctx_tokens.iter().any(|&(_, _, _, t, _)| t == variable),
+        "constant `k` should produce a VARIABLE token: {ctx_tokens:?}"
+    );
+    // The read-only loop below is vacuous unless a TYPE token actually exists, so
+    // pin its presence too (otherwise a SETS-colouring regression would pass).
+    assert!(
+        ctx_tokens.iter().any(|&(_, _, _, t, _)| t == type_),
+        "set `S` should produce a TYPE token: {ctx_tokens:?}"
+    );
+    for &(_, _, _, t, mods) in &ctx_tokens {
+        if t == variable || t == type_ {
+            assert_ne!(
+                mods & readonly,
+                0,
+                "set/constant token must be read-only: {ctx_tokens:?}"
+            );
+        }
+    }
+
+    // Machine: a VARIABLE `v` is mutable, so neither its declaration nor its use
+    // may carry the read-only modifier.
+    let mch = "MACHINE m\nVARIABLES\nv\nINVARIANTS\n@inv1 v ∈ ℕ\nEND\n";
+    assert!(rossi::parse(mch).is_ok(), "fixture must be strictly valid");
+    let mch_tokens = decode_tokens_with_modifiers(mch);
+    let variables: Vec<_> = mch_tokens
+        .iter()
+        .filter(|&&(_, _, _, t, _)| t == variable)
+        .collect();
+    assert!(
+        !variables.is_empty(),
+        "variable `v` should produce VARIABLE tokens: {mch_tokens:?}"
+    );
+    for &&(_, _, _, _, mods) in &variables {
+        assert_eq!(
+            mods & readonly,
+            0,
+            "mutable variable token must not be read-only: {mch_tokens:?}"
         );
     }
 }
