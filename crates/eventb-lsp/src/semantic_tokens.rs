@@ -35,28 +35,15 @@ impl SemanticTokensProvider {
         Self
     }
 
-    /// Get semantic tokens legend (token types and modifiers)
+    /// Get semantic tokens legend (token types and modifiers).
+    ///
+    /// Both lists are derived from `TokenType::ALL` / `TokenModifier::ALL`, so
+    /// the legend the client receives and the indices the encoder emits
+    /// (`token_type as u32`) come from one source and cannot drift apart.
     pub fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {
-            token_types: vec![
-                SemanticTokenType::KEYWORD,
-                SemanticTokenType::VARIABLE,
-                SemanticTokenType::PARAMETER,
-                SemanticTokenType::PROPERTY,
-                SemanticTokenType::FUNCTION,
-                SemanticTokenType::OPERATOR,
-                SemanticTokenType::TYPE,
-                SemanticTokenType::NAMESPACE,
-                SemanticTokenType::MACRO, // Used for labels
-                SemanticTokenType::COMMENT,
-                SemanticTokenType::STRING,
-                SemanticTokenType::NUMBER,
-            ],
-            token_modifiers: vec![
-                SemanticTokenModifier::DECLARATION,
-                SemanticTokenModifier::READONLY,
-                SemanticTokenModifier::DEFINITION,
-            ],
+            token_types: TokenType::ALL.iter().map(|t| t.lsp()).collect(),
+            token_modifiers: TokenModifier::ALL.iter().map(|m| m.lsp()).collect(),
         }
     }
 
@@ -849,8 +836,11 @@ impl<'a> SemanticTokensBuilder<'a> {
     }
 }
 
-/// Token type indices (must match the legend order)
-#[derive(Clone, Copy)]
+/// Internal token type. Its `as u32` discriminant is the index the encoder
+/// emits, and [`Self::ALL`] lists every variant in that same order, so the
+/// advertised legend (built from `ALL`) and the emitted indices share one
+/// source of truth — pinned by `legend_indices_match_token_type_discriminants`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 #[allow(dead_code)]
 enum TokenType {
@@ -860,19 +850,110 @@ enum TokenType {
     Property = 3,
     Function = 4,
     Operator = 5,
-    Set = 6, // Using TYPE semantic token
+    Set = 6,
     Namespace = 7,
-    Label = 8, // Using MACRO semantic token
+    Label = 8,
     Comment = 9,
     String = 10,
-    Constant = 11, // Using NUMBER semantic token
+    Constant = 11,
 }
 
-/// Token modifier bit indices
+impl TokenType {
+    /// Every token type, in legend (and discriminant) order.
+    const ALL: &'static [TokenType] = &[
+        TokenType::Keyword,
+        TokenType::Variable,
+        TokenType::Parameter,
+        TokenType::Property,
+        TokenType::Function,
+        TokenType::Operator,
+        TokenType::Set,
+        TokenType::Namespace,
+        TokenType::Label,
+        TokenType::Comment,
+        TokenType::String,
+        TokenType::Constant,
+    ];
+
+    /// The LSP semantic token type this maps to.
+    fn lsp(self) -> SemanticTokenType {
+        match self {
+            TokenType::Keyword => SemanticTokenType::KEYWORD,
+            TokenType::Variable => SemanticTokenType::VARIABLE,
+            TokenType::Parameter => SemanticTokenType::PARAMETER,
+            TokenType::Property => SemanticTokenType::PROPERTY,
+            TokenType::Function => SemanticTokenType::FUNCTION,
+            TokenType::Operator => SemanticTokenType::OPERATOR,
+            TokenType::Set => SemanticTokenType::TYPE,
+            TokenType::Namespace => SemanticTokenType::NAMESPACE,
+            TokenType::Label => SemanticTokenType::MACRO,
+            TokenType::Comment => SemanticTokenType::COMMENT,
+            TokenType::String => SemanticTokenType::STRING,
+            TokenType::Constant => SemanticTokenType::NUMBER,
+        }
+    }
+}
+
+/// Internal token modifier. Its `as u32` discriminant is the bit position the
+/// encoder sets, and [`Self::ALL`] lists every variant in that same order, so
+/// the advertised legend and the emitted bitset share one source of truth.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 #[allow(dead_code)]
 enum TokenModifier {
     Declaration = 0,
     Readonly = 1,
     Definition = 2,
+}
+
+impl TokenModifier {
+    /// Every token modifier, in legend (and bit-position) order.
+    const ALL: &'static [TokenModifier] = &[
+        TokenModifier::Declaration,
+        TokenModifier::Readonly,
+        TokenModifier::Definition,
+    ];
+
+    /// The LSP semantic token modifier this maps to.
+    fn lsp(self) -> SemanticTokenModifier {
+        match self {
+            TokenModifier::Declaration => SemanticTokenModifier::DECLARATION,
+            TokenModifier::Readonly => SemanticTokenModifier::READONLY,
+            TokenModifier::Definition => SemanticTokenModifier::DEFINITION,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The encoder emits `token_type as u32` as the index into the legend, and
+    /// the legend is built from `TokenType::ALL`. This pins the two together:
+    /// each variant's discriminant equals its position in `ALL`, and the legend
+    /// entry at that position is the variant's LSP type. Reorder one without the
+    /// other and this fails rather than silently miscolouring every document.
+    #[test]
+    fn legend_indices_match_token_type_discriminants() {
+        let legend = SemanticTokensProvider::legend();
+        assert_eq!(legend.token_types.len(), TokenType::ALL.len());
+        for (i, &t) in TokenType::ALL.iter().enumerate() {
+            assert_eq!(
+                t as u32, i as u32,
+                "{t:?} discriminant must equal its index"
+            );
+            assert_eq!(legend.token_types[i], t.lsp(), "legend[{i}] must be {t:?}");
+        }
+    }
+
+    /// The modifier counterpart of the type guard above (bit position == index).
+    #[test]
+    fn legend_bits_match_token_modifier_discriminants() {
+        let legend = SemanticTokensProvider::legend();
+        assert_eq!(legend.token_modifiers.len(), TokenModifier::ALL.len());
+        for (i, &m) in TokenModifier::ALL.iter().enumerate() {
+            assert_eq!(m as u32, i as u32, "{m:?} discriminant must equal its bit");
+            assert_eq!(legend.token_modifiers[i], m.lsp(), "modifier[{i}] is {m:?}");
+        }
+    }
 }
