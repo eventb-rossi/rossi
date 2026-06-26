@@ -288,31 +288,20 @@ impl<'a> SemanticTokensBuilder<'a> {
         });
     }
 
-    /// Add an identifier token
-    fn add_identifier(
-        &mut self,
-        identifier: &str,
-        offset: usize,
-        token_type: TokenType,
-        is_declaration: bool,
-    ) {
+    /// Add an identifier token. `style` carries the token type and its modifiers
+    /// (declaration / read-only), resolved once via [`TokenType::for_symbol`] so
+    /// the modifiers travel with the classification rather than being re-derived
+    /// from the token type here.
+    fn add_identifier(&mut self, identifier: &str, offset: usize, style: TokenStyle) {
         let (line, start) = self.position_from_offset(offset);
-        let mut modifiers = 0;
-        if is_declaration {
-            modifiers |= 1 << TokenModifier::Declaration as u32;
-        }
-        if matches!(token_type, TokenType::Constant | TokenType::Set) {
-            modifiers |= 1 << TokenModifier::Readonly as u32;
-        }
-
         self.tokens.push(SemanticTokenData {
             line,
             start,
             // UTF-16 code units: identifiers are ASCII, but labels accept any
             // non-whitespace char.
             length: crate::position::utf16_len(identifier),
-            token_type: token_type as u32,
-            token_modifiers: modifiers,
+            token_type: style.token_type as u32,
+            token_modifiers: style.modifiers(),
         });
     }
 
@@ -320,15 +309,10 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// comes from the parser rather than a text re-search. Used for the
     /// declaration names the parser already records (`name_span`,
     /// `NamedElement.span`).
-    fn add_identifier_span(&mut self, span: Span, token_type: TokenType, is_declaration: bool) {
+    fn add_identifier_span(&mut self, span: Span, style: TokenStyle) {
         // Copy the `&str` out so the slice borrows the local, not `self`.
         let text = self.text;
-        self.add_identifier(
-            &text[span.start..span.end],
-            span.start,
-            token_type,
-            is_declaration,
-        );
+        self.add_identifier(&text[span.start..span.end], span.start, style);
     }
 
     /// Colour every identifier occurrence inside the component's formula bodies
@@ -338,17 +322,15 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// and names that don't resolve (built-ins, free predicate calls) are left
     /// for the TextMate grammar.
     fn visit_formula_identifiers(&mut self, component: &Component) {
-        let mut kinds: HashMap<String, TokenType> = HashMap::new();
+        // Name -> (token type, read-only) for the component's declared symbols,
+        // classified once through the shared [`TokenType::for_symbol`] so a use
+        // is coloured exactly like its declaration. Parameters and events return
+        // `None` (coloured via their binding / not formula identifiers).
+        let mut kinds: HashMap<String, (TokenType, bool)> = HashMap::new();
         for symbol in enumerate_symbols(component) {
-            let token_type = match symbol.kind {
-                SymbolKind::Set => TokenType::Set,
-                SymbolKind::Constant => TokenType::Constant,
-                SymbolKind::Variable => TokenType::Variable,
-                // Parameters are coloured via their binding; events are not
-                // formula identifiers.
-                SymbolKind::Parameter | SymbolKind::Event => continue,
-            };
-            kinds.entry(symbol.name).or_insert(token_type);
+            if let Some(classified) = TokenType::for_symbol(symbol.kind) {
+                kinds.entry(symbol.name).or_insert(classified);
+            }
         }
 
         for occ in formula_walk::collect_all_occurrences(component) {
@@ -362,17 +344,29 @@ impl<'a> SemanticTokensBuilder<'a> {
             if !formula_walk::span_matches(self.text, occ.span, base) {
                 continue;
             }
-            let token_type = if occ.bound || occ.role == IdentRole::Binder {
-                TokenType::Parameter
+            let (token_type, readonly) = if occ.bound || occ.role == IdentRole::Binder {
+                (TokenType::Parameter, false)
             } else if occ.role == IdentRole::PredicateCall {
-                kinds.get(base).copied().unwrap_or(TokenType::Function)
+                kinds
+                    .get(base)
+                    .copied()
+                    .unwrap_or((TokenType::Function, false))
             } else {
                 match kinds.get(base) {
-                    Some(token_type) => *token_type,
+                    Some(&classified) => classified,
                     None => continue,
                 }
             };
-            self.add_identifier_span(occ.span, token_type, occ.role == IdentRole::Binder);
+            // A binder occurrence (`∀x·`, `λx·`, comprehension) is the local's
+            // declaration site; every other occurrence is a use.
+            self.add_identifier_span(
+                occ.span,
+                TokenStyle {
+                    token_type,
+                    is_declaration: occ.role == IdentRole::Binder,
+                    readonly,
+                },
+            );
         }
     }
 
@@ -405,7 +399,15 @@ impl<'a> SemanticTokensBuilder<'a> {
         cur = off;
         for name in names {
             if let Some((offset, _)) = self.find_identifier_within(name, cur, bound) {
-                self.add_identifier(name, offset, TokenType::Namespace, false);
+                self.add_identifier(
+                    name,
+                    offset,
+                    TokenStyle {
+                        token_type: TokenType::Namespace,
+                        is_declaration: false,
+                        readonly: false,
+                    },
+                );
                 cur = offset + name.len();
             }
         }
@@ -428,8 +430,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             ctx.name_span,
             cur,
             bound,
-            TokenType::Namespace,
-            true,
+            TokenStyle::declaration(TokenType::Namespace, false),
         );
 
         // EXTENDS clause
@@ -438,30 +439,25 @@ impl<'a> SemanticTokensBuilder<'a> {
         // SETS clause
         if !ctx.sets.is_empty()
             && let Some(off) = self.mark_keyword(KeywordId::Sets, cur, bound)
+            && let Some(style) = TokenStyle::for_symbol_declaration(SymbolKind::Set)
         {
             cur = off;
             for set in &ctx.sets {
                 // Sets carry no per-name span (only a whole-declaration one), so
                 // mark_name's bounded search locates the name — same shape as the
                 // other declaration lists.
-                cur = self.mark_name(set.name(), None, cur, bound, TokenType::Set, true);
+                cur = self.mark_name(set.name(), None, cur, bound, style);
             }
         }
 
         // CONSTANTS clause
         if !ctx.constants.is_empty()
             && let Some(off) = self.mark_keyword(KeywordId::Constants, cur, bound)
+            && let Some(style) = TokenStyle::for_symbol_declaration(SymbolKind::Constant)
         {
             cur = off;
             for constant in &ctx.constants {
-                cur = self.mark_name(
-                    &constant.name,
-                    constant.span,
-                    cur,
-                    bound,
-                    TokenType::Constant,
-                    true,
-                );
+                cur = self.mark_name(&constant.name, constant.span, cur, bound, style);
             }
         }
 
@@ -512,14 +508,13 @@ impl<'a> SemanticTokensBuilder<'a> {
         span: Option<Span>,
         from: usize,
         bound: usize,
-        token_type: TokenType,
-        is_declaration: bool,
+        style: TokenStyle,
     ) -> usize {
         if let Some(span) = span {
-            self.add_identifier_span(span, token_type, is_declaration);
+            self.add_identifier_span(span, style);
             span.end
         } else if let Some((offset, _)) = self.find_identifier_within(name, from, bound) {
-            self.add_identifier(name, offset, token_type, is_declaration);
+            self.add_identifier(name, offset, style);
             offset + name.len()
         } else {
             from
@@ -541,8 +536,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             mch.name_span,
             cur,
             bound,
-            TokenType::Namespace,
-            true,
+            TokenStyle::declaration(TokenType::Namespace, false),
         );
 
         // REFINES clause (a single namespace target)
@@ -561,17 +555,11 @@ impl<'a> SemanticTokensBuilder<'a> {
         // VARIABLES clause
         if !mch.variables.is_empty()
             && let Some(off) = self.mark_keyword(KeywordId::Variables, cur, bound)
+            && let Some(style) = TokenStyle::for_symbol_declaration(SymbolKind::Variable)
         {
             cur = off;
             for variable in &mch.variables {
-                cur = self.mark_name(
-                    &variable.name,
-                    variable.span,
-                    cur,
-                    bound,
-                    TokenType::Variable,
-                    true,
-                );
+                cur = self.mark_name(&variable.name, variable.span, cur, bound, style);
             }
         }
 
@@ -665,8 +653,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             event.name_span,
             cur,
             bound,
-            TokenType::Function,
-            true,
+            TokenStyle::declaration(TokenType::Function, false),
         );
 
         // Status value (convergent, anticipated)
@@ -690,14 +677,8 @@ impl<'a> SemanticTokensBuilder<'a> {
         if let Some(off) = self.mark_keyword(KeywordId::Any, cur, bound) {
             cur = off;
             for param in &event.parameters {
-                cur = self.mark_name(
-                    &param.name,
-                    param.span,
-                    cur,
-                    bound,
-                    TokenType::Parameter,
-                    true,
-                );
+                let style = TokenStyle::declaration(TokenType::Parameter, false);
+                cur = self.mark_name(&param.name, param.span, cur, bound, style);
             }
         }
 
@@ -887,6 +868,64 @@ impl TokenType {
             TokenType::Comment => SemanticTokenType::COMMENT,
             TokenType::Constant => SemanticTokenType::NUMBER,
         }
+    }
+
+    /// Colour a declared symbol by its kind: the token type plus whether it is
+    /// read-only (immutable). This is the single source of truth shared by a
+    /// symbol's declaration name and its uses inside formulas, so the two can
+    /// never disagree. `None` for kinds coloured elsewhere — parameters via
+    /// their binding, events are not formula identifiers.
+    fn for_symbol(kind: SymbolKind) -> Option<(TokenType, bool)> {
+        match kind {
+            SymbolKind::Set => Some((TokenType::Set, true)),
+            SymbolKind::Constant => Some((TokenType::Constant, true)),
+            SymbolKind::Variable => Some((TokenType::Variable, false)),
+            SymbolKind::Parameter | SymbolKind::Event => None,
+        }
+    }
+}
+
+/// How to colour one name occurrence: its token type plus the modifiers that
+/// travel with it (whether this is the declaration site, and whether the symbol
+/// is read-only). Bundling them keeps the emit helpers to a sane arity and ties
+/// the modifier choice to the classification rather than re-deriving it.
+#[derive(Clone, Copy)]
+struct TokenStyle {
+    token_type: TokenType,
+    is_declaration: bool,
+    readonly: bool,
+}
+
+impl TokenStyle {
+    /// A declaration site of `token_type`, read-only iff `readonly`.
+    fn declaration(token_type: TokenType, readonly: bool) -> Self {
+        Self {
+            token_type,
+            is_declaration: true,
+            readonly,
+        }
+    }
+
+    /// The declaration style for a symbol of `kind`, classified through
+    /// [`TokenType::for_symbol`]. `None` for kinds coloured elsewhere
+    /// (parameters via their binding, events not as formula identifiers).
+    fn for_symbol_declaration(kind: SymbolKind) -> Option<Self> {
+        TokenType::for_symbol(kind)
+            .map(|(token_type, readonly)| Self::declaration(token_type, readonly))
+    }
+
+    /// The LSP modifier bitset this style carries (declaration and read-only).
+    /// Derived here rather than at the emit site so the modifiers stay tied to
+    /// the classification.
+    fn modifiers(self) -> u32 {
+        let mut bits = 0;
+        if self.is_declaration {
+            bits |= 1 << TokenModifier::Declaration as u32;
+        }
+        if self.readonly {
+            bits |= 1 << TokenModifier::Readonly as u32;
+        }
+        bits
     }
 }
 
