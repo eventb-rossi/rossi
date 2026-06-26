@@ -20,6 +20,7 @@ pub mod component_util;
 pub mod config;
 pub mod cross_references;
 pub mod definition;
+pub mod diagnostics;
 pub mod document;
 pub mod document_links;
 pub mod folding;
