@@ -37,9 +37,9 @@ impl SemanticTokensProvider {
 
     /// Get semantic tokens legend (token types and modifiers).
     ///
-    /// Both lists are derived from `TokenType::ALL` / `TokenModifier::ALL`, so
-    /// the legend the client receives and the indices the encoder emits
-    /// (`token_type as u32`) come from one source and cannot drift apart.
+    /// Both lists are derived from `TokenType::ALL` / `TokenModifier::ALL`, the
+    /// same lists `index()` resolves emitted indices against, so the legend the
+    /// client receives and the indices the encoder emits cannot drift apart.
     pub fn legend() -> SemanticTokensLegend {
         SemanticTokensLegend {
             token_types: TokenType::ALL.iter().map(|t| t.lsp()).collect(),
@@ -283,7 +283,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             // ASCII, so this matches their byte length, but routing through the
             // single source of truth keeps the convention from drifting.
             length: crate::position::utf16_len(keyword),
-            token_type: TokenType::Keyword as u32,
+            token_type: TokenType::Keyword.index(),
             token_modifiers: 0,
         });
     }
@@ -300,7 +300,7 @@ impl<'a> SemanticTokensBuilder<'a> {
             // UTF-16 code units: identifiers are ASCII, but labels accept any
             // non-whitespace char.
             length: crate::position::utf16_len(identifier),
-            token_type: style.token_type as u32,
+            token_type: style.token_type.index(),
             token_modifiers: style.modifiers(),
         });
     }
@@ -741,7 +741,7 @@ impl<'a> SemanticTokensBuilder<'a> {
                         line,
                         start: col,
                         length: crate::position::utf16_len(segment),
-                        token_type: TokenType::Comment as u32,
+                        token_type: TokenType::Comment.index(),
                         token_modifiers: 0,
                     });
                 }
@@ -774,7 +774,7 @@ impl<'a> SemanticTokensBuilder<'a> {
                 line,
                 start: col,
                 length,
-                token_type: TokenType::Label as u32,
+                token_type: TokenType::Label.index(),
                 token_modifiers: 0,
             });
         }
@@ -817,29 +817,29 @@ impl<'a> SemanticTokensBuilder<'a> {
     }
 }
 
-/// Internal token type. Its `as u32` discriminant is the index the encoder
-/// emits, and `Self::ALL` lists every variant in that same order, so the
-/// advertised legend (built from `ALL`) and the emitted indices share one
-/// source of truth — pinned by `legend_indices_match_token_type_discriminants`.
+/// Internal token type. `Self::ALL` is the single ordered list of token types:
+/// it builds the advertised legend *and*, via [`Self::index`], the index the
+/// encoder emits — so the two cannot drift. A variant added to this enum but
+/// forgotten in `ALL` makes `index()` panic on emit rather than emitting an
+/// out-of-range index the client can't resolve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u32)]
 enum TokenType {
-    Keyword = 0,
-    Variable = 1,
-    Parameter = 2,
-    Function = 3,
+    Keyword,
+    Variable,
+    Parameter,
+    Function,
     /// Reserved: operators are coloured by the generated TextMate grammar, so no
     /// token is emitted with this type. The slot is kept in the legend in case a
     /// future pass moves operator colouring into the semantic layer.
-    Operator = 4,
-    Set = 5,
-    Namespace = 6,
-    Label = 7,
-    Comment = 8,
+    Operator,
+    Set,
+    Namespace,
+    Label,
+    Comment,
 }
 
 impl TokenType {
-    /// Every token type, in legend (and discriminant) order.
+    /// Every token type, in legend (and emitted-index) order.
     const ALL: &'static [TokenType] = &[
         TokenType::Keyword,
         TokenType::Variable,
@@ -851,6 +851,17 @@ impl TokenType {
         TokenType::Label,
         TokenType::Comment,
     ];
+
+    /// The legend index the encoder emits for this token type: its position in
+    /// `ALL`, the same list `legend()` is built from. Panics if `self` is not in
+    /// `ALL` (a variant added to the enum but not to `ALL`), turning silent
+    /// index corruption into a loud failure.
+    fn index(self) -> u32 {
+        Self::ALL
+            .iter()
+            .position(|&t| t == self)
+            .expect("every TokenType must be listed in TokenType::ALL") as u32
+    }
 
     /// The LSP semantic token type this maps to.
     fn lsp(self) -> SemanticTokenType {
@@ -920,28 +931,38 @@ impl TokenStyle {
     fn modifiers(self) -> u32 {
         let mut bits = 0;
         if self.is_declaration {
-            bits |= 1 << TokenModifier::Declaration as u32;
+            bits |= 1 << TokenModifier::Declaration.index();
         }
         if self.readonly {
-            bits |= 1 << TokenModifier::Readonly as u32;
+            bits |= 1 << TokenModifier::Readonly.index();
         }
         bits
     }
 }
 
-/// Internal token modifier. Its `as u32` discriminant is the bit position the
-/// encoder sets, and `Self::ALL` lists every variant in that same order, so the
-/// advertised legend and the emitted bitset share one source of truth.
+/// Internal token modifier. `Self::ALL` is the single ordered list: it builds
+/// the advertised legend *and*, via [`Self::index`], the bit position the
+/// encoder sets — so the two cannot drift. A variant added but forgotten in
+/// `ALL` makes `index()` panic rather than setting an unadvertised bit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u32)]
 enum TokenModifier {
-    Declaration = 0,
-    Readonly = 1,
+    Declaration,
+    Readonly,
 }
 
 impl TokenModifier {
     /// Every token modifier, in legend (and bit-position) order.
     const ALL: &'static [TokenModifier] = &[TokenModifier::Declaration, TokenModifier::Readonly];
+
+    /// The bit position the encoder sets for this modifier: its position in
+    /// `ALL`, the same list `legend()` is built from. Panics if `self` is not in
+    /// `ALL` (see [`TokenType::index`]).
+    fn index(self) -> u32 {
+        Self::ALL
+            .iter()
+            .position(|&m| m == self)
+            .expect("every TokenModifier must be listed in TokenModifier::ALL") as u32
+    }
 
     /// The LSP semantic token modifier this maps to.
     fn lsp(self) -> SemanticTokenModifier {
@@ -956,32 +977,42 @@ impl TokenModifier {
 mod tests {
     use super::*;
 
-    /// The encoder emits `token_type as u32` as the index into the legend, and
-    /// the legend is built from `TokenType::ALL`. This pins the two together:
-    /// each variant's discriminant equals its position in `ALL`, and the legend
-    /// entry at that position is the variant's LSP type. Reorder one without the
-    /// other and this fails rather than silently miscolouring every document.
+    /// `ALL` is the single source for both the advertised legend and the index
+    /// the encoder emits (`index()`). This pins them: every entry's `index()` is
+    /// its own position, the legend entry there is its `lsp()`, and `ALL` has no
+    /// duplicate (which would alias two indices onto one legend slot). A variant
+    /// missing from `ALL` is caught by `index()` panicking on emit, not here.
     #[test]
-    fn legend_indices_match_token_type_discriminants() {
+    fn token_type_index_matches_legend_position() {
         let legend = SemanticTokensProvider::legend();
         assert_eq!(legend.token_types.len(), TokenType::ALL.len());
         for (i, &t) in TokenType::ALL.iter().enumerate() {
             assert_eq!(
-                t as u32, i as u32,
-                "{t:?} discriminant must equal its index"
+                t.index() as usize,
+                i,
+                "{t:?} index must be its ALL position"
             );
             assert_eq!(legend.token_types[i], t.lsp(), "legend[{i}] must be {t:?}");
+            assert!(
+                !TokenType::ALL[..i].contains(&t),
+                "{t:?} is listed twice in TokenType::ALL"
+            );
         }
     }
 
-    /// The modifier counterpart of the type guard above (bit position == index).
+    /// The modifier counterpart of the type guard above (bit position == `ALL`
+    /// position == legend index).
     #[test]
-    fn legend_bits_match_token_modifier_discriminants() {
+    fn token_modifier_bit_matches_legend_position() {
         let legend = SemanticTokensProvider::legend();
         assert_eq!(legend.token_modifiers.len(), TokenModifier::ALL.len());
         for (i, &m) in TokenModifier::ALL.iter().enumerate() {
-            assert_eq!(m as u32, i as u32, "{m:?} discriminant must equal its bit");
+            assert_eq!(m.index() as usize, i, "{m:?} bit must be its ALL position");
             assert_eq!(legend.token_modifiers[i], m.lsp(), "modifier[{i}] is {m:?}");
+            assert!(
+                !TokenModifier::ALL[..i].contains(&m),
+                "{m:?} is listed twice in TokenModifier::ALL"
+            );
         }
     }
 }
