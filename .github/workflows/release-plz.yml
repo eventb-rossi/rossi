@@ -23,8 +23,13 @@ jobs:
   # Open/update the "Release vX.Y.Z" PR (version bump + changelog). The PR is just a
   # preview, so refresh it on the daily schedule / manual dispatch rather than on
   # every merge to main (each refresh is a runner job; this skips it per-merge).
-  # Runs under the VERSION_BUMP_TOKEN PAT so the PR's own CI checks fire (the default
-  # GITHUB_TOKEN cannot trigger workflows on the PR it opens).
+  #
+  # The release-pr push below uses the default GITHUB_TOKEN *on purpose*: GitHub does
+  # not let pushes made with that token start workflows, so opening/updating the PR
+  # does NOT fire ci.yml. The VS Code manifest-sync step that follows pushes under the
+  # VERSION_BUMP_TOKEN PAT, and that push is what triggers the PR's CI — once, on the
+  # combined release + manifest state. Firing CI only on the final state avoids the
+  # wasted run that the manifest-sync push would otherwise cancel mid-flight.
   release-plz-pr:
     name: Release PR
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -46,7 +51,8 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
+          # Default token on purpose — its push must NOT start ci.yml (see job comment).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # release-plz bumps the shared [workspace.package].version but cannot touch
       # the VS Code extension's package.json — it is an npm package, not a cargo
@@ -58,6 +64,12 @@ jobs:
       # run, so the sync self-heals if release-plz ever rewrites the branch. (The
       # publish step in vscode-release.yml still pins the version from the tag, so
       # this only keeps the in-repo manifest honest.) No-op when already in sync.
+      #
+      # The push at the end runs under the VERSION_BUMP_TOKEN PAT, so — unlike the
+      # default-token release-pr push above — it triggers the PR's CI. This is the
+      # single ci.yml run for the release PR. When already in sync nothing is pushed
+      # and the PR carries no new CI run, which is fine: a real version bump always
+      # leaves package.json behind, so on every release this step pushes and CI runs.
       - name: Find the open release PR
         id: release_pr
         env:
