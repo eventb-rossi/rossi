@@ -22,6 +22,15 @@ pub fn slice_range(text: &str, range: Range) -> String {
 /// Decode delta-encoded semantic tokens for `text` into
 /// `(line, col, len, token_type)`, all 0-indexed.
 pub fn decode_tokens(text: &str) -> Vec<(u32, u32, u32, u32)> {
+    decode_tokens_with_modifiers(text)
+        .into_iter()
+        .map(|(line, col, len, token_type, _)| (line, col, len, token_type))
+        .collect()
+}
+
+/// Like [`decode_tokens`] but also returns each token's modifier bitset, as
+/// `(line, col, len, token_type, token_modifiers)`.
+pub fn decode_tokens_with_modifiers(text: &str) -> Vec<(u32, u32, u32, u32, u32)> {
     let provider = SemanticTokensProvider::new();
     let params = SemanticTokensParams {
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -46,7 +55,13 @@ pub fn decode_tokens(text: &str) -> Vec<(u32, u32, u32, u32)> {
         } else {
             token.delta_start
         };
-        decoded.push((line, col, token.length, token.token_type));
+        decoded.push((
+            line,
+            col,
+            token.length,
+            token.token_type,
+            token.token_modifiers_bitset,
+        ));
     }
     decoded
 }

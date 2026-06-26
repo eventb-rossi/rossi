@@ -836,7 +836,6 @@ enum TokenType {
     Namespace = 6,
     Label = 7,
     Comment = 8,
-    Constant = 9,
 }
 
 impl TokenType {
@@ -851,7 +850,6 @@ impl TokenType {
         TokenType::Namespace,
         TokenType::Label,
         TokenType::Comment,
-        TokenType::Constant,
     ];
 
     /// The LSP semantic token type this maps to.
@@ -866,7 +864,6 @@ impl TokenType {
             TokenType::Namespace => SemanticTokenType::NAMESPACE,
             TokenType::Label => SemanticTokenType::MACRO,
             TokenType::Comment => SemanticTokenType::COMMENT,
-            TokenType::Constant => SemanticTokenType::NUMBER,
         }
     }
 
@@ -878,7 +875,10 @@ impl TokenType {
     fn for_symbol(kind: SymbolKind) -> Option<(TokenType, bool)> {
         match kind {
             SymbolKind::Set => Some((TokenType::Set, true)),
-            SymbolKind::Constant => Some((TokenType::Constant, true)),
+            // A constant is an immutable binding: a read-only variable. (The LSP
+            // semantic-token vocabulary has no dedicated `constant` type; the
+            // read-only modifier is the standard way to mark one.)
+            SymbolKind::Constant => Some((TokenType::Variable, true)),
             SymbolKind::Variable => Some((TokenType::Variable, false)),
             SymbolKind::Parameter | SymbolKind::Event => None,
         }
