@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/eventb-rossi/rossi/compare/v0.1.2...v0.1.3) - 2026-06-27
+
+### Added
+- *(cli)* Add completions subcommand for shell completion scripts
+
+### Documentation
+- *(cli)* Document shell completion generation
+
 ## [0.1.2](https://github.com/eventb-rossi/rossi/compare/v0.1.1...v0.1.2) - 2026-06-26
 
 ### Added
