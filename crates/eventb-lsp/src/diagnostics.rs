@@ -7,6 +7,9 @@
 
 use crate::document::ParsedDocument;
 use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+use rossi::deps::{Cycle, EdgeKind, kind_and_name};
+use rossi::keywords::{self, KeywordId};
+use rossi_build::RuleId;
 
 /// Assemble an LSP [`Diagnostic`] from the parts that vary, filling the fields
 /// every diagnostic this server emits shares: the `"rossi"` source and the
@@ -181,11 +184,84 @@ fn build_severity_to_lsp(severity: rossi_build::Severity) -> DiagnosticSeverity 
     }
 }
 
+/// LSP range anchoring a cross-component diagnostic on a component's `keyword`
+/// clause (SEES / EXTENDS / REFINES). Per-name spans aren't recorded in the AST,
+/// so the diagnostic underlines the clause keyword and names the offending
+/// target in its message. Falls back to the component name, then the file start.
+fn clause_keyword_range(component: &rossi::Component, keyword: KeywordId, text: &str) -> Range {
+    component
+        .clauses()
+        .iter()
+        .find(|c| c.keyword == keyword)
+        .map(|c| crate::position::span_to_range(&c.span, text))
+        .or_else(|| {
+            component
+                .name_span()
+                .map(|s| crate::position::span_to_range(&s, text))
+        })
+        .unwrap_or_else(crate::analysis::default_range)
+}
+
+/// Render a cycle as `a → b → a` (normalized order, implicitly closed).
+fn cycle_chain(cycle: &Cycle) -> String {
+    let mut names: Vec<&str> = cycle.components.iter().map(String::as_str).collect();
+    if let Some(first) = cycle.components.first() {
+        names.push(first);
+    }
+    names.join(" → ")
+}
+
+/// Circular EXTENDS / REFINES diagnostics (EB007 / EB008) for the open
+/// document's components.
+///
+/// A detected cycle is always real (the dependency graph holds the edges that
+/// close it), so this is never gated on the workspace — and a self-loop (a
+/// component that EXTENDS / REFINES itself) is just a length-1 cycle, caught here
+/// too, even in single-file mode. SEES cannot cycle (machine → context is
+/// one-way), so those edges are skipped. The diagnostic lands on the offending
+/// component's own clause keyword.
+pub(crate) fn cycle_diagnostics(
+    components: &[rossi::Component],
+    cycles: &[Cycle],
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        let (kind, name) = kind_and_name(component);
+        for cycle in cycles {
+            let (keyword, rule) = match cycle.kind {
+                EdgeKind::Extends => (KeywordId::Extends, RuleId::CircularExtends),
+                EdgeKind::Refines => (KeywordId::Refines, RuleId::CircularRefines),
+                EdgeKind::Sees => continue,
+            };
+            // Flag this component only if it is a member of the cycle, of the
+            // edge's source kind (names are project-unique, but stay kind-exact).
+            if cycle.kind.source_kind() != kind || !cycle.components.iter().any(|n| n == &name) {
+                continue;
+            }
+            out.push(lsp_diagnostic(
+                clause_keyword_range(component, keyword, text),
+                DiagnosticSeverity::ERROR,
+                Some(NumberOrString::String(rule.code().to_string())),
+                format!(
+                    "circular {} dependency: {}",
+                    keywords::spell(keyword),
+                    cycle_chain(cycle)
+                ),
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{document_diagnostics, lint_diagnostics, parse_error_to_diagnostic};
+    use super::{
+        cycle_diagnostics, document_diagnostics, lint_diagnostics, parse_error_to_diagnostic,
+    };
     use crate::document::ParsedDocument;
     use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
+    use rossi::deps::{Cycle, EdgeKind};
 
     #[test]
     fn duplicate_clause_diagnostic_stays_on_one_line() {
@@ -420,5 +496,60 @@ mod tests {
             diags.iter().all(|d| d.code.is_none()),
             "no lint may piggyback on a broken parse, got {diags:?}"
         );
+    }
+
+    // --- cross-component: circular EXTENDS / REFINES (EB007/008) ------------
+
+    fn parse_one(text: &str) -> Vec<rossi::Component> {
+        vec![rossi::parse(text).expect("snippet parses cleanly")]
+    }
+
+    #[test]
+    fn self_extends_is_eb007() {
+        // A context that EXTENDS itself — a length-1 cycle (self-reference).
+        let text = "CONTEXT c\nEXTENDS c\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["c".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB007"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(diags[0].message.contains("c → c"), "{}", diags[0].message);
+    }
+
+    #[test]
+    fn two_node_extends_cycle_is_eb007() {
+        let text = "CONTEXT a\nEXTENDS b\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["a".to_string(), "b".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB007"));
+    }
+
+    #[test]
+    fn self_refines_is_eb008() {
+        let text = "MACHINE m\nREFINES m\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Refines,
+            components: vec!["m".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB008"));
+    }
+
+    #[test]
+    fn cycle_not_touching_open_doc_is_ignored() {
+        let text = "CONTEXT c\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["x".to_string(), "y".to_string()],
+        }];
+        assert!(cycle_diagnostics(&parse_one(text), &cycles, text).is_empty());
     }
 }
