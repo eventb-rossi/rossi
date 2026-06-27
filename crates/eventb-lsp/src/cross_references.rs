@@ -12,8 +12,9 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::deps::{DependencyGraph, kind_and_name};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, warn};
 
 use crate::lsp_types::Url;
@@ -70,6 +71,12 @@ pub struct CrossReferenceManager {
 
     /// Workspace root path (if available)
     workspace_root: RwLock<Option<PathBuf>>,
+
+    /// Set once [`Self::scan_workspace`] has walked the workspace and indexed
+    /// its on-disk `.eventb` files. Distinct from `workspace_root.is_some()`,
+    /// which becomes true at `initialize` — before the scan runs — so gating on
+    /// it would let cross-reference checks fire against an empty graph.
+    scanned: AtomicBool,
 }
 
 impl Default for CrossReferenceManager {
@@ -86,6 +93,7 @@ impl CrossReferenceManager {
             uri_to_component: DashMap::new(),
             name_to_uri: DashMap::new(),
             workspace_root: RwLock::new(None),
+            scanned: AtomicBool::new(false),
         }
     }
 
@@ -296,6 +304,7 @@ impl CrossReferenceManager {
         }
 
         debug!("Scanned {} Event-B files in workspace", count);
+        self.scanned.store(true, Ordering::Release);
         Ok(count)
     }
 
@@ -316,6 +325,58 @@ impl CrossReferenceManager {
         self.uri_to_component
             .iter()
             .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    // --- Queries backing cross-component diagnostics ---
+
+    /// Whether [`Self::scan_workspace`] has run — i.e. the on-disk `.eventb`
+    /// files have been indexed. Diagnostics that would false-positive without a
+    /// full workspace view (unresolved references, duplicate component names)
+    /// gate on this: in single-file mode no siblings are indexed, so every
+    /// cross-component reference would look missing. Gating on the actual scan
+    /// (not merely a set workspace root) avoids that flood in the window before
+    /// the scan completes, or when it fails.
+    pub fn is_scanned(&self) -> bool {
+        self.scanned.load(Ordering::Acquire)
+    }
+
+    /// Whether a component of `kind` named `name` is indexed in the workspace.
+    /// Kind-aware (a context and a machine may share a name), so a SEES / EXTENDS
+    /// / REFINES target can be resolved against its expected [`ComponentKind`].
+    pub fn contains(&self, kind: ComponentKind, name: &str) -> bool {
+        self.graph.read().contains(kind, name)
+    }
+
+    /// The distinct files that define a component named `name`, as display
+    /// basenames (sorted). The name → URI index keeps a single entry per name,
+    /// so the URI → components map is scanned instead. Files are deduplicated by
+    /// their resolved filesystem path, so the same file indexed under two URI
+    /// spellings (the workspace scan's `file://` URI vs. the client's didOpen
+    /// URI — they can differ in percent-encoding or case) counts once and does
+    /// not look like a cross-file duplicate. Queried per open-document name, so
+    /// no whole-workspace map is built per publish.
+    pub fn component_definition_files(&self, name: &str) -> Vec<String> {
+        let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
+        for entry in self.uri_to_component.iter() {
+            if entry.value().iter().any(|loc| loc.name == name) {
+                let uri = entry.key();
+                // Dedupe by filesystem path; fall back to the raw URI for
+                // non-file URIs.
+                let key = Url::parse(uri)
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok())
+                    .unwrap_or_else(|| PathBuf::from(uri));
+                paths.insert(key);
+            }
+        }
+        paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            })
             .collect()
     }
 
@@ -745,6 +806,75 @@ END
         assert!(manager.workspace_root().is_none());
         manager.set_workspace_root(PathBuf::from("/tmp/test"));
         assert_eq!(manager.workspace_root(), Some(PathBuf::from("/tmp/test")));
+    }
+
+    #[test]
+    fn is_scanned_set_only_after_scan() {
+        let root = std::env::temp_dir().join(format!(
+            "eventb-lsp-scanned-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("c.eventb"), "CONTEXT c\nEND\n").unwrap();
+
+        let manager = CrossReferenceManager::new();
+        // A set workspace root alone is not yet a completed scan.
+        manager.set_workspace_root(root.clone());
+        assert!(!manager.is_scanned());
+
+        manager.scan_workspace(&root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(manager.is_scanned());
+    }
+
+    #[test]
+    fn contains_is_kind_aware() {
+        let manager = CrossReferenceManager::new();
+        register_context(&manager, "C", &[]);
+        register_machine(&manager, "M", &[], &[]);
+        assert!(manager.contains(ComponentKind::Context, "C"));
+        assert!(manager.contains(ComponentKind::Machine, "M"));
+        // Right name, wrong kind — a context is not a machine.
+        assert!(!manager.contains(ComponentKind::Machine, "C"));
+        assert!(!manager.contains(ComponentKind::Context, "absent"));
+    }
+
+    #[test]
+    fn component_definition_files_finds_cross_file_dups() {
+        let manager = CrossReferenceManager::new();
+        let src = "CONTEXT c\nEND\n";
+        manager.update_component("file:///a.eventb".to_string(), src);
+        manager.update_component("file:///b.eventb".to_string(), src);
+        let files = manager.component_definition_files("c");
+        assert_eq!(files.len(), 2, "{files:?}");
+    }
+
+    #[test]
+    fn component_definition_files_dedupes_same_file_by_path() {
+        // The scan and the edit path can key the same physical file under URI
+        // spellings that differ but resolve to one path (here, a `.` segment).
+        // It must count once, not look like a cross-file duplicate.
+        let manager = CrossReferenceManager::new();
+        let src = "CONTEXT c\nEND\n";
+        manager.update_component("file:///dir/x.eventb".to_string(), src);
+        manager.update_component("file:///dir/./x.eventb".to_string(), src);
+        let files = manager.component_definition_files("c");
+        assert_eq!(
+            files.len(),
+            1,
+            "same physical file must count once: {files:?}"
+        );
+    }
+
+    #[test]
+    fn component_definition_files_single_when_unique() {
+        let manager = CrossReferenceManager::new();
+        manager.update_component("file:///a.eventb".to_string(), "CONTEXT a\nEND\n");
+        assert_eq!(manager.component_definition_files("a").len(), 1);
     }
 
     #[test]

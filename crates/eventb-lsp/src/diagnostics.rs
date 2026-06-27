@@ -7,6 +7,9 @@
 
 use crate::document::ParsedDocument;
 use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+use rossi::deps::{ComponentKind, Cycle, EdgeKind, kind_and_name};
+use rossi::keywords::{self, KeywordId};
+use rossi_build::RuleId;
 
 /// Assemble an LSP [`Diagnostic`] from the parts that vary, filling the fields
 /// every diagnostic this server emits shares: the `"rossi"` source and the
@@ -181,11 +184,211 @@ fn build_severity_to_lsp(severity: rossi_build::Severity) -> DiagnosticSeverity 
     }
 }
 
+/// LSP range over a component's name — the anchor for a component-level
+/// diagnostic, and the span-less fallback for clause-level ones. Falls back to
+/// the file start when the name span is unavailable (a recovered parse).
+fn name_range(component: &rossi::Component, text: &str) -> Range {
+    component
+        .name_span()
+        .map(|s| crate::position::span_to_range(&s, text))
+        .unwrap_or_else(crate::analysis::default_range)
+}
+
+/// LSP range anchoring a cross-component diagnostic on a component's `keyword`
+/// clause (SEES / EXTENDS / REFINES). Per-name spans aren't recorded in the AST,
+/// so the diagnostic underlines the clause keyword and names the offending
+/// target in its message. Falls back to the component name.
+fn clause_keyword_range(component: &rossi::Component, keyword: KeywordId, text: &str) -> Range {
+    component
+        .clauses()
+        .iter()
+        .find(|c| c.keyword == keyword)
+        .map(|c| crate::position::span_to_range(&c.span, text))
+        .unwrap_or_else(|| name_range(component, text))
+}
+
+/// The clause keyword that introduces a cross-component edge.
+fn edge_keyword(edge: EdgeKind) -> KeywordId {
+    match edge {
+        EdgeKind::Extends => KeywordId::Extends,
+        EdgeKind::Sees => KeywordId::Sees,
+        EdgeKind::Refines => KeywordId::Refines,
+    }
+}
+
+/// The LSP severity a rule carries, sourced from rossi-build's per-rule default
+/// ([`RuleId::default_severity`]) so the editor and `rossi validate` can't
+/// disagree on whether a finding is an error or a warning.
+fn rule_severity(rule: RuleId) -> DiagnosticSeverity {
+    build_severity_to_lsp(rule.default_severity())
+}
+
+/// Render a cycle as `a → b → a` (normalized order, implicitly closed).
+fn cycle_chain(cycle: &Cycle) -> String {
+    let mut names: Vec<&str> = cycle.components.iter().map(String::as_str).collect();
+    if let Some(first) = cycle.components.first() {
+        names.push(first);
+    }
+    names.join(" → ")
+}
+
+/// Circular EXTENDS / REFINES diagnostics (EB007 / EB008) for the open
+/// document's components.
+///
+/// A detected cycle is always real (the dependency graph holds the edges that
+/// close it), so this is never gated on the workspace — and a self-loop (a
+/// component that EXTENDS / REFINES itself) is just a length-1 cycle, caught here
+/// too, even in single-file mode. SEES cannot cycle (machine → context is
+/// one-way), so those edges are skipped. The diagnostic lands on the offending
+/// component's own clause keyword.
+pub(crate) fn cycle_diagnostics(
+    components: &[rossi::Component],
+    cycles: &[Cycle],
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        let (kind, name) = kind_and_name(component);
+        for cycle in cycles {
+            let (keyword, rule) = match cycle.kind {
+                EdgeKind::Extends => (KeywordId::Extends, RuleId::CircularExtends),
+                EdgeKind::Refines => (KeywordId::Refines, RuleId::CircularRefines),
+                EdgeKind::Sees => continue,
+            };
+            // Flag this component only if it is a member of the cycle, of the
+            // edge's source kind (names are project-unique, but stay kind-exact).
+            if cycle.kind.source_kind() != kind || !cycle.components.iter().any(|n| n == &name) {
+                continue;
+            }
+            out.push(lsp_diagnostic(
+                clause_keyword_range(component, keyword, text),
+                rule_severity(rule),
+                Some(NumberOrString::String(rule.code().to_string())),
+                format!(
+                    "circular {}: {}",
+                    keywords::spell(keyword),
+                    cycle_chain(cycle)
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// The cross-reference edges a component declares, as `(edge kind, target
+/// name)`: a machine's REFINES parent and SEES contexts, or a context's EXTENDS
+/// parents. The target [`ComponentKind`] is derived from the edge via
+/// [`EdgeKind::target_kind`], the shared SSOT, rather than re-stated here.
+fn component_references(component: &rossi::Component) -> Vec<(EdgeKind, &str)> {
+    match component {
+        rossi::Component::Machine(m) => m
+            .refines
+            .iter()
+            .map(|r| (EdgeKind::Refines, r.as_str()))
+            .chain(m.sees.iter().map(|s| (EdgeKind::Sees, s.as_str())))
+            .collect(),
+        rossi::Component::Context(c) => c
+            .extends
+            .iter()
+            .map(|e| (EdgeKind::Extends, e.as_str()))
+            .collect(),
+    }
+}
+
+/// The lowercase word for a component kind, for diagnostic messages.
+fn component_kind_word(kind: ComponentKind) -> &'static str {
+    match kind {
+        ComponentKind::Context => "context",
+        ComponentKind::Machine => "machine",
+    }
+}
+
+/// Unknown-cross-reference diagnostics (EB009): a SEES / EXTENDS / REFINES clause
+/// naming a component absent from the workspace.
+///
+/// `exists(kind, name)` resolves a target against the workspace, kind-aware
+/// (SEES/EXTENDS point at contexts, REFINES at a machine). The caller gates this
+/// on a scanned workspace — in single-file mode no siblings are indexed, so every
+/// target would look missing. Even with a workspace, Rodin-XML components
+/// (`.buc`/`.bcc`, …) aren't `.eventb` and so aren't indexed, so a reference to
+/// one can be a false positive; the diagnostic is an Error to match `rossi
+/// validate`, accepting that residual risk. Anchored on the clause keyword
+/// (per-name spans aren't recorded), with the missing target named in the message.
+pub(crate) fn cross_reference_diagnostics(
+    components: &[rossi::Component],
+    exists: impl Fn(ComponentKind, &str) -> bool,
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        for (edge, target) in component_references(component) {
+            let kind = edge.target_kind();
+            if exists(kind, target) {
+                continue;
+            }
+            out.push(lsp_diagnostic(
+                clause_keyword_range(component, edge_keyword(edge), text),
+                rule_severity(RuleId::CrossReferenceNotFound),
+                Some(NumberOrString::String(
+                    RuleId::CrossReferenceNotFound.code().to_string(),
+                )),
+                format!(
+                    "{} references unknown {} `{}`",
+                    keywords::spell(edge_keyword(edge)),
+                    component_kind_word(kind),
+                    target
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// Duplicate-component diagnostics (EB019): a component name defined in more
+/// than one file. `defining_files(name)` returns the distinct files that define
+/// `name` (deduped by path); a component is flagged when that is more than one.
+/// Queried per open-document component, so no whole-workspace map is built per
+/// publish. The caller gates on a scanned workspace, since cross-file duplicates
+/// aren't observable from a single file. Anchored on the component name; a
+/// Warning, matching `rossi validate`. Only cross-file duplicates are caught:
+/// two same-named components in one (e.g. merged) file collapse to a single
+/// indexed entry, so that within-file case is left to `rossi validate`.
+pub(crate) fn duplicate_component_diagnostics(
+    components: &[rossi::Component],
+    defining_files: impl Fn(&str) -> Vec<String>,
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        let name = component.name();
+        let files = defining_files(name);
+        if files.len() < 2 {
+            continue;
+        }
+        out.push(lsp_diagnostic(
+            name_range(component, text),
+            rule_severity(RuleId::DuplicateComponent),
+            Some(NumberOrString::String(
+                RuleId::DuplicateComponent.code().to_string(),
+            )),
+            format!(
+                "component `{name}` is defined in multiple files: {}",
+                files.join(", ")
+            ),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{document_diagnostics, lint_diagnostics, parse_error_to_diagnostic};
+    use super::{
+        cross_reference_diagnostics, cycle_diagnostics, document_diagnostics,
+        duplicate_component_diagnostics, lint_diagnostics, parse_error_to_diagnostic,
+    };
     use crate::document::ParsedDocument;
     use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
+    use rossi::deps::{ComponentKind, Cycle, EdgeKind};
 
     #[test]
     fn duplicate_clause_diagnostic_stays_on_one_line() {
@@ -420,5 +623,133 @@ mod tests {
             diags.iter().all(|d| d.code.is_none()),
             "no lint may piggyback on a broken parse, got {diags:?}"
         );
+    }
+
+    // --- cross-component: circular EXTENDS / REFINES (EB007/008) ------------
+
+    fn parse_one(text: &str) -> Vec<rossi::Component> {
+        vec![rossi::parse(text).expect("snippet parses cleanly")]
+    }
+
+    #[test]
+    fn self_extends_is_eb007() {
+        // A context that EXTENDS itself — a length-1 cycle (self-reference).
+        let text = "CONTEXT c\nEXTENDS c\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["c".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB007"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(diags[0].message.contains("c → c"), "{}", diags[0].message);
+    }
+
+    #[test]
+    fn two_node_extends_cycle_is_eb007() {
+        let text = "CONTEXT a\nEXTENDS b\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["a".to_string(), "b".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB007"));
+    }
+
+    #[test]
+    fn self_refines_is_eb008() {
+        let text = "MACHINE m\nREFINES m\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Refines,
+            components: vec!["m".to_string()],
+        }];
+        let diags = cycle_diagnostics(&parse_one(text), &cycles, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB008"));
+    }
+
+    #[test]
+    fn cycle_not_touching_open_doc_is_ignored() {
+        let text = "CONTEXT c\nEND\n";
+        let cycles = [Cycle {
+            kind: EdgeKind::Extends,
+            components: vec!["x".to_string(), "y".to_string()],
+        }];
+        assert!(cycle_diagnostics(&parse_one(text), &cycles, text).is_empty());
+    }
+
+    // --- cross-component: unknown SEES/EXTENDS/REFINES target (EB009) -------
+
+    #[test]
+    fn unknown_sees_target_is_eb009() {
+        let text = "MACHINE m\nSEES C\nEND\n";
+        let diags = cross_reference_diagnostics(&parse_one(text), |_k, _n| false, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB009"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            diags[0].message.contains("context `C`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn known_targets_produce_no_eb009() {
+        let text = "MACHINE m\nSEES C\nEND\n";
+        let diags = cross_reference_diagnostics(&parse_one(text), |_k, _n| true, text);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn unknown_refines_target_is_eb009_and_kind_aware() {
+        // A machine named `abs` would satisfy REFINES; the closure reports only
+        // contexts as existing, so the machine target stays unresolved.
+        let text = "MACHINE m\nREFINES abs\nEND\n";
+        let diags = cross_reference_diagnostics(
+            &parse_one(text),
+            |kind, _n| kind == ComponentKind::Context,
+            text,
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB009"));
+        assert!(
+            diags[0].message.contains("machine `abs`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    // --- cross-component: duplicate component name (EB019) ------------------
+
+    #[test]
+    fn duplicate_component_is_eb019_warning() {
+        let text = "CONTEXT c\nEND\n";
+        let files = |n: &str| {
+            if n == "c" {
+                vec!["a.eventb".to_string(), "b.eventb".to_string()]
+            } else {
+                vec![]
+            }
+        };
+        let diags = duplicate_component_diagnostics(&parse_one(text), files, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB019"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert!(
+            diags[0].message.contains("a.eventb") && diags[0].message.contains("b.eventb"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn unique_component_has_no_eb019() {
+        let text = "CONTEXT c\nEND\n";
+        // Defined in exactly one file — not a cross-file duplicate.
+        let files = |_n: &str| vec!["c.eventb".to_string()];
+        assert!(duplicate_component_diagnostics(&parse_one(text), files, text).is_empty());
     }
 }

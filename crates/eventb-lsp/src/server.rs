@@ -81,12 +81,52 @@ impl Analyzer {
             return;
         }
 
-        let diagnostics = doc
-            .map(crate::diagnostics::document_diagnostics)
-            .unwrap_or_default();
+        let diagnostics = doc.map(|doc| self.diagnostics_for(doc)).unwrap_or_default();
         self.client
             .publish_diagnostics(uri, diagnostics, version)
             .await;
+    }
+
+    /// All diagnostics for a parsed document: the parse errors and
+    /// single-component lints from [`crate::diagnostics::document_diagnostics`],
+    /// plus the cross-component checks (cycles, unresolved references, duplicate
+    /// component names) read from the shared workspace graph.
+    ///
+    /// The cross-component checks see the recovered AST, so — like the
+    /// single-component lints — they run only on a clean parse, lest a transient
+    /// mid-edit syntax error flash a spurious cycle / duplicate / unknown
+    /// reference. The graph is refreshed for the edited document only, so a
+    /// dependent open file isn't re-published until it is itself touched:
+    /// cross-file diagnostics are eventually consistent, not instantly so.
+    fn diagnostics_for(&self, doc: &ParsedDocument) -> Vec<Diagnostic> {
+        let xrefs = &self.cross_reference_manager;
+        let mut diags = crate::diagnostics::document_diagnostics(doc);
+        if !doc.parse.errors.is_empty() {
+            return diags;
+        }
+        // Circular EXTENDS/REFINES need no workspace gating: a detected cycle is
+        // always real (a self-loop is length-1).
+        diags.extend(crate::diagnostics::cycle_diagnostics(
+            doc.components(),
+            &xrefs.detect_cycles(None),
+            &doc.text,
+        ));
+        // Unresolved references / duplicate names would false-positive without a
+        // workspace view (single-file mode indexes no siblings), so emit them
+        // only once it is scanned.
+        if xrefs.is_scanned() {
+            diags.extend(crate::diagnostics::cross_reference_diagnostics(
+                doc.components(),
+                |kind, name| xrefs.contains(kind, name),
+                &doc.text,
+            ));
+            diags.extend(crate::diagnostics::duplicate_component_diagnostics(
+                doc.components(),
+                |name| xrefs.component_definition_files(name),
+                &doc.text,
+            ));
+        }
+        diags
     }
 }
 
