@@ -83,14 +83,25 @@ impl Analyzer {
 
         let diagnostics = doc
             .map(|doc| {
+                let xrefs = &self.cross_reference_manager;
                 let mut diags = crate::diagnostics::document_diagnostics(doc);
                 // Circular EXTENDS/REFINES need no workspace gating — a detected
                 // cycle is always real (and a self-loop is a length-1 cycle).
                 diags.extend(crate::diagnostics::cycle_diagnostics(
                     doc.components(),
-                    &self.cross_reference_manager.detect_cycles(None),
+                    &xrefs.detect_cycles(None),
                     &doc.text,
                 ));
+                // Unresolved SEES/EXTENDS/REFINES targets would false-positive
+                // without a workspace view (single-file mode indexes no
+                // siblings), so emit them only once the workspace was scanned.
+                if xrefs.is_scanned() {
+                    diags.extend(crate::diagnostics::cross_reference_diagnostics(
+                        doc.components(),
+                        |kind, name| xrefs.contains(kind, name),
+                        &doc.text,
+                    ));
+                }
                 diags
             })
             .unwrap_or_default();
