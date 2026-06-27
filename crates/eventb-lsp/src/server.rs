@@ -82,7 +82,17 @@ impl Analyzer {
         }
 
         let diagnostics = doc
-            .map(crate::diagnostics::document_diagnostics)
+            .map(|doc| {
+                let mut diags = crate::diagnostics::document_diagnostics(doc);
+                // Circular EXTENDS/REFINES need no workspace gating — a detected
+                // cycle is always real (and a self-loop is a length-1 cycle).
+                diags.extend(crate::diagnostics::cycle_diagnostics(
+                    doc.components(),
+                    &self.cross_reference_manager.detect_cycles(None),
+                    &doc.text,
+                ));
+                diags
+            })
             .unwrap_or_default();
         self.client
             .publish_diagnostics(uri, diagnostics, version)
