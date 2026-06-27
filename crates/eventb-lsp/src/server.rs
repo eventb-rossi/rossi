@@ -85,29 +85,38 @@ impl Analyzer {
             .map(|doc| {
                 let xrefs = &self.cross_reference_manager;
                 let mut diags = crate::diagnostics::document_diagnostics(doc);
-                // Circular EXTENDS/REFINES need no workspace gating — a detected
-                // cycle is always real (and a self-loop is a length-1 cycle).
-                diags.extend(crate::diagnostics::cycle_diagnostics(
-                    doc.components(),
-                    &xrefs.detect_cycles(None),
-                    &doc.text,
-                ));
-                // Unresolved SEES/EXTENDS/REFINES targets would false-positive
-                // without a workspace view (single-file mode indexes no
-                // siblings), so emit them only once the workspace was scanned.
-                if xrefs.is_scanned() {
-                    diags.extend(crate::diagnostics::cross_reference_diagnostics(
+                // These read the shared workspace graph, which is refreshed for
+                // the edited document only — a dependent open file is not
+                // re-published until it is itself touched, so cross-file
+                // diagnostics are eventually consistent, not instantly so.
+                //
+                // The cross-component checks read the recovered AST, so — like
+                // the single-component lints in document_diagnostics — run them
+                // only on a clean parse, lest a transient mid-edit syntax error
+                // flash a spurious cycle / duplicate / unknown-reference.
+                if doc.parse.errors.is_empty() {
+                    // Circular EXTENDS/REFINES need no workspace gating: a
+                    // detected cycle is always real (a self-loop is length-1).
+                    diags.extend(crate::diagnostics::cycle_diagnostics(
                         doc.components(),
-                        |kind, name| xrefs.contains(kind, name),
+                        &xrefs.detect_cycles(None),
                         &doc.text,
                     ));
-                    // Cross-file duplicate component names — only observable
-                    // across a scanned workspace.
-                    diags.extend(crate::diagnostics::duplicate_component_diagnostics(
-                        doc.components(),
-                        &xrefs.duplicate_component_names(),
-                        &doc.text,
-                    ));
+                    // Unresolved references / duplicate names would
+                    // false-positive without a workspace view (single-file mode
+                    // indexes no siblings), so emit them only once it is scanned.
+                    if xrefs.is_scanned() {
+                        diags.extend(crate::diagnostics::cross_reference_diagnostics(
+                            doc.components(),
+                            |kind, name| xrefs.contains(kind, name),
+                            &doc.text,
+                        ));
+                        diags.extend(crate::diagnostics::duplicate_component_diagnostics(
+                            doc.components(),
+                            |name| xrefs.component_definition_files(name),
+                            &doc.text,
+                        ));
+                    }
                 }
                 diags
             })
