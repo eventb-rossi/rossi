@@ -325,11 +325,43 @@ pub(crate) fn cross_reference_diagnostics(
     out
 }
 
+/// Duplicate-component diagnostics (EB019): a component name defined in more
+/// than one file. `duplicates` is the workspace's name → defining-URIs list
+/// (only names in ≥2 files); the caller gates on a scanned workspace, since
+/// cross-file duplicates aren't observable from a single file. Anchored on the
+/// component name. A Warning, matching `rossi validate`.
+pub(crate) fn duplicate_component_diagnostics(
+    components: &[rossi::Component],
+    duplicates: &[(String, Vec<String>)],
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        let name = component.name();
+        let Some((_, uris)) = duplicates.iter().find(|(n, _)| n == name) else {
+            continue;
+        };
+        let range = component
+            .name_span()
+            .map(|s| crate::position::span_to_range(&s, text))
+            .unwrap_or_else(crate::analysis::default_range);
+        out.push(lsp_diagnostic(
+            range,
+            DiagnosticSeverity::WARNING,
+            Some(NumberOrString::String(
+                RuleId::DuplicateComponent.code().to_string(),
+            )),
+            format!("component `{name}` is defined in {} files", uris.len()),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cross_reference_diagnostics, cycle_diagnostics, document_diagnostics, lint_diagnostics,
-        parse_error_to_diagnostic,
+        cross_reference_diagnostics, cycle_diagnostics, document_diagnostics,
+        duplicate_component_diagnostics, lint_diagnostics, parse_error_to_diagnostic,
     };
     use crate::document::ParsedDocument;
     use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
@@ -665,5 +697,36 @@ mod tests {
             "{}",
             diags[0].message
         );
+    }
+
+    // --- cross-component: duplicate component name (EB019) ------------------
+
+    #[test]
+    fn duplicate_component_is_eb019_warning() {
+        let text = "CONTEXT c\nEND\n";
+        let dups = [(
+            "c".to_string(),
+            vec![
+                "file:///a.eventb".to_string(),
+                "file:///b.eventb".to_string(),
+            ],
+        )];
+        let diags = duplicate_component_diagnostics(&parse_one(text), &dups, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB019"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+    }
+
+    #[test]
+    fn unique_component_has_no_eb019() {
+        let text = "CONTEXT c\nEND\n";
+        let dups = [(
+            "other".to_string(),
+            vec![
+                "file:///x.eventb".to_string(),
+                "file:///y.eventb".to_string(),
+            ],
+        )];
+        assert!(duplicate_component_diagnostics(&parse_one(text), &dups, text).is_empty());
     }
 }

@@ -101,6 +101,13 @@ impl Analyzer {
                         |kind, name| xrefs.contains(kind, name),
                         &doc.text,
                     ));
+                    // Cross-file duplicate component names — only observable
+                    // across a scanned workspace.
+                    diags.extend(crate::diagnostics::duplicate_component_diagnostics(
+                        doc.components(),
+                        &xrefs.duplicate_component_names(),
+                        &doc.text,
+                    ));
                 }
                 diags
             })
