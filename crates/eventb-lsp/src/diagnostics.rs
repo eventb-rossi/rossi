@@ -184,22 +184,43 @@ fn build_severity_to_lsp(severity: rossi_build::Severity) -> DiagnosticSeverity 
     }
 }
 
+/// LSP range over a component's name — the anchor for a component-level
+/// diagnostic, and the span-less fallback for clause-level ones. Falls back to
+/// the file start when the name span is unavailable (a recovered parse).
+fn name_range(component: &rossi::Component, text: &str) -> Range {
+    component
+        .name_span()
+        .map(|s| crate::position::span_to_range(&s, text))
+        .unwrap_or_else(crate::analysis::default_range)
+}
+
 /// LSP range anchoring a cross-component diagnostic on a component's `keyword`
 /// clause (SEES / EXTENDS / REFINES). Per-name spans aren't recorded in the AST,
 /// so the diagnostic underlines the clause keyword and names the offending
-/// target in its message. Falls back to the component name, then the file start.
+/// target in its message. Falls back to the component name.
 fn clause_keyword_range(component: &rossi::Component, keyword: KeywordId, text: &str) -> Range {
     component
         .clauses()
         .iter()
         .find(|c| c.keyword == keyword)
         .map(|c| crate::position::span_to_range(&c.span, text))
-        .or_else(|| {
-            component
-                .name_span()
-                .map(|s| crate::position::span_to_range(&s, text))
-        })
-        .unwrap_or_else(crate::analysis::default_range)
+        .unwrap_or_else(|| name_range(component, text))
+}
+
+/// The clause keyword that introduces a cross-component edge.
+fn edge_keyword(edge: EdgeKind) -> KeywordId {
+    match edge {
+        EdgeKind::Extends => KeywordId::Extends,
+        EdgeKind::Sees => KeywordId::Sees,
+        EdgeKind::Refines => KeywordId::Refines,
+    }
+}
+
+/// The LSP severity a rule carries, sourced from rossi-build's per-rule default
+/// ([`RuleId::default_severity`]) so the editor and `rossi validate` can't
+/// disagree on whether a finding is an error or a warning.
+fn rule_severity(rule: RuleId) -> DiagnosticSeverity {
+    build_severity_to_lsp(rule.default_severity())
 }
 
 /// Render a cycle as `a → b → a` (normalized order, implicitly closed).
@@ -241,10 +262,10 @@ pub(crate) fn cycle_diagnostics(
             }
             out.push(lsp_diagnostic(
                 clause_keyword_range(component, keyword, text),
-                DiagnosticSeverity::ERROR,
+                rule_severity(rule),
                 Some(NumberOrString::String(rule.code().to_string())),
                 format!(
-                    "circular {} dependency: {}",
+                    "circular {}: {}",
                     keywords::spell(keyword),
                     cycle_chain(cycle)
                 ),
@@ -254,25 +275,22 @@ pub(crate) fn cycle_diagnostics(
     out
 }
 
-/// The cross-references a component declares, as `(clause keyword, target kind,
-/// target name)`: a machine's REFINES parent and SEES contexts, or a context's
-/// EXTENDS parents.
-fn component_references(component: &rossi::Component) -> Vec<(KeywordId, ComponentKind, &str)> {
+/// The cross-reference edges a component declares, as `(edge kind, target
+/// name)`: a machine's REFINES parent and SEES contexts, or a context's EXTENDS
+/// parents. The target [`ComponentKind`] is derived from the edge via
+/// [`EdgeKind::target_kind`], the shared SSOT, rather than re-stated here.
+fn component_references(component: &rossi::Component) -> Vec<(EdgeKind, &str)> {
     match component {
         rossi::Component::Machine(m) => m
             .refines
             .iter()
-            .map(|r| (KeywordId::Refines, ComponentKind::Machine, r.as_str()))
-            .chain(
-                m.sees
-                    .iter()
-                    .map(|s| (KeywordId::Sees, ComponentKind::Context, s.as_str())),
-            )
+            .map(|r| (EdgeKind::Refines, r.as_str()))
+            .chain(m.sees.iter().map(|s| (EdgeKind::Sees, s.as_str())))
             .collect(),
         rossi::Component::Context(c) => c
             .extends
             .iter()
-            .map(|e| (KeywordId::Extends, ComponentKind::Context, e.as_str()))
+            .map(|e| (EdgeKind::Extends, e.as_str()))
             .collect(),
     }
 }
@@ -303,19 +321,20 @@ pub(crate) fn cross_reference_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for component in components {
-        for (keyword, kind, target) in component_references(component) {
+        for (edge, target) in component_references(component) {
+            let kind = edge.target_kind();
             if exists(kind, target) {
                 continue;
             }
             out.push(lsp_diagnostic(
-                clause_keyword_range(component, keyword, text),
-                DiagnosticSeverity::ERROR,
+                clause_keyword_range(component, edge_keyword(edge), text),
+                rule_severity(RuleId::CrossReferenceNotFound),
                 Some(NumberOrString::String(
                     RuleId::CrossReferenceNotFound.code().to_string(),
                 )),
                 format!(
                     "{} references unknown {} `{}`",
-                    keywords::spell(keyword),
+                    keywords::spell(edge_keyword(edge)),
                     component_kind_word(kind),
                     target
                 ),
@@ -326,32 +345,36 @@ pub(crate) fn cross_reference_diagnostics(
 }
 
 /// Duplicate-component diagnostics (EB019): a component name defined in more
-/// than one file. `duplicates` is the workspace's name → defining-URIs list
-/// (only names in ≥2 files); the caller gates on a scanned workspace, since
-/// cross-file duplicates aren't observable from a single file. Anchored on the
-/// component name. A Warning, matching `rossi validate`.
+/// than one file. `defining_files(name)` returns the distinct files that define
+/// `name` (deduped by path); a component is flagged when that is more than one.
+/// Queried per open-document component, so no whole-workspace map is built per
+/// publish. The caller gates on a scanned workspace, since cross-file duplicates
+/// aren't observable from a single file. Anchored on the component name; a
+/// Warning, matching `rossi validate`. Only cross-file duplicates are caught:
+/// two same-named components in one (e.g. merged) file collapse to a single
+/// indexed entry, so that within-file case is left to `rossi validate`.
 pub(crate) fn duplicate_component_diagnostics(
     components: &[rossi::Component],
-    duplicates: &[(String, Vec<String>)],
+    defining_files: impl Fn(&str) -> Vec<String>,
     text: &str,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for component in components {
         let name = component.name();
-        let Some((_, uris)) = duplicates.iter().find(|(n, _)| n == name) else {
+        let files = defining_files(name);
+        if files.len() < 2 {
             continue;
-        };
-        let range = component
-            .name_span()
-            .map(|s| crate::position::span_to_range(&s, text))
-            .unwrap_or_else(crate::analysis::default_range);
+        }
         out.push(lsp_diagnostic(
-            range,
-            DiagnosticSeverity::WARNING,
+            name_range(component, text),
+            rule_severity(RuleId::DuplicateComponent),
             Some(NumberOrString::String(
                 RuleId::DuplicateComponent.code().to_string(),
             )),
-            format!("component `{name}` is defined in {} files", uris.len()),
+            format!(
+                "component `{name}` is defined in multiple files: {}",
+                files.join(", ")
+            ),
         ));
     }
     out
@@ -704,29 +727,29 @@ mod tests {
     #[test]
     fn duplicate_component_is_eb019_warning() {
         let text = "CONTEXT c\nEND\n";
-        let dups = [(
-            "c".to_string(),
-            vec![
-                "file:///a.eventb".to_string(),
-                "file:///b.eventb".to_string(),
-            ],
-        )];
-        let diags = duplicate_component_diagnostics(&parse_one(text), &dups, text);
+        let files = |n: &str| {
+            if n == "c" {
+                vec!["a.eventb".to_string(), "b.eventb".to_string()]
+            } else {
+                vec![]
+            }
+        };
+        let diags = duplicate_component_diagnostics(&parse_one(text), files, text);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(code_of(&diags[0]), Some("EB019"));
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert!(
+            diags[0].message.contains("a.eventb") && diags[0].message.contains("b.eventb"),
+            "{}",
+            diags[0].message
+        );
     }
 
     #[test]
     fn unique_component_has_no_eb019() {
         let text = "CONTEXT c\nEND\n";
-        let dups = [(
-            "other".to_string(),
-            vec![
-                "file:///x.eventb".to_string(),
-                "file:///y.eventb".to_string(),
-            ],
-        )];
-        assert!(duplicate_component_diagnostics(&parse_one(text), &dups, text).is_empty());
+        // Defined in exactly one file — not a cross-file duplicate.
+        let files = |_n: &str| vec!["c.eventb".to_string()];
+        assert!(duplicate_component_diagnostics(&parse_one(text), files, text).is_empty());
     }
 }
