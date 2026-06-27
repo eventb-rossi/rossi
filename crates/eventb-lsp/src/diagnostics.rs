@@ -7,7 +7,7 @@
 
 use crate::document::ParsedDocument;
 use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
-use rossi::deps::{Cycle, EdgeKind, kind_and_name};
+use rossi::deps::{ComponentKind, Cycle, EdgeKind, kind_and_name};
 use rossi::keywords::{self, KeywordId};
 use rossi_build::RuleId;
 
@@ -254,14 +254,86 @@ pub(crate) fn cycle_diagnostics(
     out
 }
 
+/// The cross-references a component declares, as `(clause keyword, target kind,
+/// target name)`: a machine's REFINES parent and SEES contexts, or a context's
+/// EXTENDS parents.
+fn component_references(component: &rossi::Component) -> Vec<(KeywordId, ComponentKind, &str)> {
+    match component {
+        rossi::Component::Machine(m) => m
+            .refines
+            .iter()
+            .map(|r| (KeywordId::Refines, ComponentKind::Machine, r.as_str()))
+            .chain(
+                m.sees
+                    .iter()
+                    .map(|s| (KeywordId::Sees, ComponentKind::Context, s.as_str())),
+            )
+            .collect(),
+        rossi::Component::Context(c) => c
+            .extends
+            .iter()
+            .map(|e| (KeywordId::Extends, ComponentKind::Context, e.as_str()))
+            .collect(),
+    }
+}
+
+/// The lowercase word for a component kind, for diagnostic messages.
+fn component_kind_word(kind: ComponentKind) -> &'static str {
+    match kind {
+        ComponentKind::Context => "context",
+        ComponentKind::Machine => "machine",
+    }
+}
+
+/// Unknown-cross-reference diagnostics (EB009): a SEES / EXTENDS / REFINES clause
+/// naming a component absent from the workspace.
+///
+/// `exists(kind, name)` resolves a target against the workspace, kind-aware
+/// (SEES/EXTENDS point at contexts, REFINES at a machine). The caller gates this
+/// on a scanned workspace — in single-file mode no siblings are indexed, so every
+/// target would look missing. Even with a workspace, Rodin-XML components
+/// (`.buc`/`.bcc`, …) aren't `.eventb` and so aren't indexed, so a reference to
+/// one can be a false positive; the diagnostic is an Error to match `rossi
+/// validate`, accepting that residual risk. Anchored on the clause keyword
+/// (per-name spans aren't recorded), with the missing target named in the message.
+pub(crate) fn cross_reference_diagnostics(
+    components: &[rossi::Component],
+    exists: impl Fn(ComponentKind, &str) -> bool,
+    text: &str,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for component in components {
+        for (keyword, kind, target) in component_references(component) {
+            if exists(kind, target) {
+                continue;
+            }
+            out.push(lsp_diagnostic(
+                clause_keyword_range(component, keyword, text),
+                DiagnosticSeverity::ERROR,
+                Some(NumberOrString::String(
+                    RuleId::CrossReferenceNotFound.code().to_string(),
+                )),
+                format!(
+                    "{} references unknown {} `{}`",
+                    keywords::spell(keyword),
+                    component_kind_word(kind),
+                    target
+                ),
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cycle_diagnostics, document_diagnostics, lint_diagnostics, parse_error_to_diagnostic,
+        cross_reference_diagnostics, cycle_diagnostics, document_diagnostics, lint_diagnostics,
+        parse_error_to_diagnostic,
     };
     use crate::document::ParsedDocument;
     use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
-    use rossi::deps::{Cycle, EdgeKind};
+    use rossi::deps::{ComponentKind, Cycle, EdgeKind};
 
     #[test]
     fn duplicate_clause_diagnostic_stays_on_one_line() {
@@ -551,5 +623,47 @@ mod tests {
             components: vec!["x".to_string(), "y".to_string()],
         }];
         assert!(cycle_diagnostics(&parse_one(text), &cycles, text).is_empty());
+    }
+
+    // --- cross-component: unknown SEES/EXTENDS/REFINES target (EB009) -------
+
+    #[test]
+    fn unknown_sees_target_is_eb009() {
+        let text = "MACHINE m\nSEES C\nEND\n";
+        let diags = cross_reference_diagnostics(&parse_one(text), |_k, _n| false, text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB009"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            diags[0].message.contains("context `C`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn known_targets_produce_no_eb009() {
+        let text = "MACHINE m\nSEES C\nEND\n";
+        let diags = cross_reference_diagnostics(&parse_one(text), |_k, _n| true, text);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn unknown_refines_target_is_eb009_and_kind_aware() {
+        // A machine named `abs` would satisfy REFINES; the closure reports only
+        // contexts as existing, so the machine target stays unresolved.
+        let text = "MACHINE m\nREFINES abs\nEND\n";
+        let diags = cross_reference_diagnostics(
+            &parse_one(text),
+            |kind, _n| kind == ComponentKind::Context,
+            text,
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB009"));
+        assert!(
+            diags[0].message.contains("machine `abs`"),
+            "{}",
+            diags[0].message
+        );
     }
 }
