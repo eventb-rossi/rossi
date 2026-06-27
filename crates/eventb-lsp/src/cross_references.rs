@@ -12,8 +12,9 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::deps::{DependencyGraph, kind_and_name};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, warn};
 
 use crate::lsp_types::Url;
@@ -70,6 +71,12 @@ pub struct CrossReferenceManager {
 
     /// Workspace root path (if available)
     workspace_root: RwLock<Option<PathBuf>>,
+
+    /// Set once [`Self::scan_workspace`] has walked the workspace and indexed
+    /// its on-disk `.eventb` files. Distinct from `workspace_root.is_some()`,
+    /// which becomes true at `initialize` — before the scan runs — so gating on
+    /// it would let cross-reference checks fire against an empty graph.
+    scanned: AtomicBool,
 }
 
 impl Default for CrossReferenceManager {
@@ -86,6 +93,7 @@ impl CrossReferenceManager {
             uri_to_component: DashMap::new(),
             name_to_uri: DashMap::new(),
             workspace_root: RwLock::new(None),
+            scanned: AtomicBool::new(false),
         }
     }
 
@@ -296,6 +304,7 @@ impl CrossReferenceManager {
         }
 
         debug!("Scanned {} Event-B files in workspace", count);
+        self.scanned.store(true, Ordering::Release);
         Ok(count)
     }
 
@@ -321,13 +330,15 @@ impl CrossReferenceManager {
 
     // --- Queries backing cross-component diagnostics ---
 
-    /// Whether a workspace root has been set — i.e. [`Self::scan_workspace`] has
-    /// indexed the on-disk `.eventb` files. Diagnostics that would false-positive
-    /// without a full workspace view (unresolved references, duplicate component
-    /// names) gate on this: in single-file mode no siblings are indexed, so every
-    /// cross-component reference would look missing.
+    /// Whether [`Self::scan_workspace`] has run — i.e. the on-disk `.eventb`
+    /// files have been indexed. Diagnostics that would false-positive without a
+    /// full workspace view (unresolved references, duplicate component names)
+    /// gate on this: in single-file mode no siblings are indexed, so every
+    /// cross-component reference would look missing. Gating on the actual scan
+    /// (not merely a set workspace root) avoids that flood in the window before
+    /// the scan completes, or when it fails.
     pub fn is_scanned(&self) -> bool {
-        self.workspace_root.read().is_some()
+        self.scanned.load(Ordering::Acquire)
     }
 
     /// Whether a component of `kind` named `name` is indexed in the workspace.
@@ -337,24 +348,35 @@ impl CrossReferenceManager {
         self.graph.read().contains(kind, name)
     }
 
-    /// Component names defined in more than one file, each paired with the
-    /// defining URIs (sorted). The name → URI index keeps a single entry per
-    /// name, so cross-file duplicates are found by scanning the URI → components
-    /// map instead.
-    pub fn duplicate_component_names(&self) -> Vec<(String, Vec<String>)> {
-        let mut by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    /// The distinct files that define a component named `name`, as display
+    /// basenames (sorted). The name → URI index keeps a single entry per name,
+    /// so the URI → components map is scanned instead. Files are deduplicated by
+    /// their resolved filesystem path, so the same file indexed under two URI
+    /// spellings (the workspace scan's `file://` URI vs. the client's didOpen
+    /// URI — they can differ in percent-encoding or case) counts once and does
+    /// not look like a cross-file duplicate. Queried per open-document name, so
+    /// no whole-workspace map is built per publish.
+    pub fn component_definition_files(&self, name: &str) -> Vec<String> {
+        let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
         for entry in self.uri_to_component.iter() {
-            for loc in entry.value() {
-                by_name
-                    .entry(loc.name.clone())
-                    .or_default()
-                    .insert(entry.key().clone());
+            if entry.value().iter().any(|loc| loc.name == name) {
+                let uri = entry.key();
+                // Dedupe by filesystem path; fall back to the raw URI for
+                // non-file URIs.
+                let key = Url::parse(uri)
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok())
+                    .unwrap_or_else(|| PathBuf::from(uri));
+                paths.insert(key);
             }
         }
-        by_name
-            .into_iter()
-            .filter(|(_, uris)| uris.len() > 1)
-            .map(|(name, uris)| (name, uris.into_iter().collect()))
+        paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            })
             .collect()
     }
 
@@ -787,10 +809,25 @@ END
     }
 
     #[test]
-    fn is_scanned_reflects_workspace_root() {
+    fn is_scanned_set_only_after_scan() {
+        let root = std::env::temp_dir().join(format!(
+            "eventb-lsp-scanned-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("c.eventb"), "CONTEXT c\nEND\n").unwrap();
+
         let manager = CrossReferenceManager::new();
+        // A set workspace root alone is not yet a completed scan.
+        manager.set_workspace_root(root.clone());
         assert!(!manager.is_scanned());
-        manager.set_workspace_root(PathBuf::from("/tmp/ws"));
+
+        manager.scan_workspace(&root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
         assert!(manager.is_scanned());
     }
 
@@ -807,23 +844,37 @@ END
     }
 
     #[test]
-    fn duplicate_component_names_finds_cross_file_dups() {
+    fn component_definition_files_finds_cross_file_dups() {
         let manager = CrossReferenceManager::new();
         let src = "CONTEXT c\nEND\n";
         manager.update_component("file:///a.eventb".to_string(), src);
         manager.update_component("file:///b.eventb".to_string(), src);
-        let dups = manager.duplicate_component_names();
-        assert_eq!(dups.len(), 1, "{dups:?}");
-        assert_eq!(dups[0].0, "c");
-        assert_eq!(dups[0].1.len(), 2);
+        let files = manager.component_definition_files("c");
+        assert_eq!(files.len(), 2, "{files:?}");
     }
 
     #[test]
-    fn duplicate_component_names_empty_when_unique() {
+    fn component_definition_files_dedupes_same_file_by_path() {
+        // The scan and the edit path can key the same physical file under URI
+        // spellings that differ but resolve to one path (here, a `.` segment).
+        // It must count once, not look like a cross-file duplicate.
+        let manager = CrossReferenceManager::new();
+        let src = "CONTEXT c\nEND\n";
+        manager.update_component("file:///dir/x.eventb".to_string(), src);
+        manager.update_component("file:///dir/./x.eventb".to_string(), src);
+        let files = manager.component_definition_files("c");
+        assert_eq!(
+            files.len(),
+            1,
+            "same physical file must count once: {files:?}"
+        );
+    }
+
+    #[test]
+    fn component_definition_files_single_when_unique() {
         let manager = CrossReferenceManager::new();
         manager.update_component("file:///a.eventb".to_string(), "CONTEXT a\nEND\n");
-        manager.update_component("file:///b.eventb".to_string(), "CONTEXT b\nEND\n");
-        assert!(manager.duplicate_component_names().is_empty());
+        assert_eq!(manager.component_definition_files("a").len(), 1);
     }
 
     #[test]
