@@ -12,7 +12,7 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rossi::deps::{DependencyGraph, kind_and_name};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
@@ -316,6 +316,45 @@ impl CrossReferenceManager {
         self.uri_to_component
             .iter()
             .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    // --- Queries backing cross-component diagnostics ---
+
+    /// Whether a workspace root has been set — i.e. [`Self::scan_workspace`] has
+    /// indexed the on-disk `.eventb` files. Diagnostics that would false-positive
+    /// without a full workspace view (unresolved references, duplicate component
+    /// names) gate on this: in single-file mode no siblings are indexed, so every
+    /// cross-component reference would look missing.
+    pub fn is_scanned(&self) -> bool {
+        self.workspace_root.read().is_some()
+    }
+
+    /// Whether a component of `kind` named `name` is indexed in the workspace.
+    /// Kind-aware (a context and a machine may share a name), so a SEES / EXTENDS
+    /// / REFINES target can be resolved against its expected [`ComponentKind`].
+    pub fn contains(&self, kind: ComponentKind, name: &str) -> bool {
+        self.graph.read().contains(kind, name)
+    }
+
+    /// Component names defined in more than one file, each paired with the
+    /// defining URIs (sorted). The name → URI index keeps a single entry per
+    /// name, so cross-file duplicates are found by scanning the URI → components
+    /// map instead.
+    pub fn duplicate_component_names(&self) -> Vec<(String, Vec<String>)> {
+        let mut by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for entry in self.uri_to_component.iter() {
+            for loc in entry.value() {
+                by_name
+                    .entry(loc.name.clone())
+                    .or_default()
+                    .insert(entry.key().clone());
+            }
+        }
+        by_name
+            .into_iter()
+            .filter(|(_, uris)| uris.len() > 1)
+            .map(|(name, uris)| (name, uris.into_iter().collect()))
             .collect()
     }
 
@@ -745,6 +784,46 @@ END
         assert!(manager.workspace_root().is_none());
         manager.set_workspace_root(PathBuf::from("/tmp/test"));
         assert_eq!(manager.workspace_root(), Some(PathBuf::from("/tmp/test")));
+    }
+
+    #[test]
+    fn is_scanned_reflects_workspace_root() {
+        let manager = CrossReferenceManager::new();
+        assert!(!manager.is_scanned());
+        manager.set_workspace_root(PathBuf::from("/tmp/ws"));
+        assert!(manager.is_scanned());
+    }
+
+    #[test]
+    fn contains_is_kind_aware() {
+        let manager = CrossReferenceManager::new();
+        register_context(&manager, "C", &[]);
+        register_machine(&manager, "M", &[], &[]);
+        assert!(manager.contains(ComponentKind::Context, "C"));
+        assert!(manager.contains(ComponentKind::Machine, "M"));
+        // Right name, wrong kind — a context is not a machine.
+        assert!(!manager.contains(ComponentKind::Machine, "C"));
+        assert!(!manager.contains(ComponentKind::Context, "absent"));
+    }
+
+    #[test]
+    fn duplicate_component_names_finds_cross_file_dups() {
+        let manager = CrossReferenceManager::new();
+        let src = "CONTEXT c\nEND\n";
+        manager.update_component("file:///a.eventb".to_string(), src);
+        manager.update_component("file:///b.eventb".to_string(), src);
+        let dups = manager.duplicate_component_names();
+        assert_eq!(dups.len(), 1, "{dups:?}");
+        assert_eq!(dups[0].0, "c");
+        assert_eq!(dups[0].1.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_component_names_empty_when_unique() {
+        let manager = CrossReferenceManager::new();
+        manager.update_component("file:///a.eventb".to_string(), "CONTEXT a\nEND\n");
+        manager.update_component("file:///b.eventb".to_string(), "CONTEXT b\nEND\n");
+        assert!(manager.duplicate_component_names().is_empty());
     }
 
     #[test]
