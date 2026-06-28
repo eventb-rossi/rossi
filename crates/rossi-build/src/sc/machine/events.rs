@@ -654,6 +654,12 @@ struct EventBuckets {
     actions: Vec<ActionDecl>,
 }
 
+/// `machine.event.clause` origin for a per-clause diagnostic, falling back to
+/// `fallback` (e.g. `"grd"` / `"act"`) when the clause carries no label.
+fn clause_origin(machine: &str, event: &str, clause_label: Option<&str>, fallback: &str) -> String {
+    format!("{machine}.{event}.{}", clause_label.unwrap_or(fallback))
+}
+
 /// Build the three per-event decl buckets (guards, parameters, actions),
 /// running per-clause checks (abstract-only references, well-typedness,
 /// LHS-declared) and dropping any clause that fails. The returned `bool` is
@@ -673,10 +679,12 @@ fn build_event_buckets(
 
     let mut guards: Vec<GuardDecl> = Vec::with_capacity(kind.guards().len());
     for (i, g) in kind.guards().iter().enumerate() {
-        // Abstract-only-reference drop: guard reads a variable that
-        // vanished in this refinement (inherited from parent but not
-        // redeclared, no witness). Rodin drops the guard and marks
-        // the event `accurate=false` — see `ITERATION.bcm`'s
+        // Disappeared-variable reference: the guard reads a variable that
+        // vanished in this refinement (inherited from the parent but not
+        // redeclared, no witness). Reading a disappeared variable in a guard is
+        // an error (EB025) — except in a *theorem* guard, where it is permitted
+        // and reported only as the softer warning. Either way the guard is
+        // dropped and the event marked `accurate=false` — see `ITERATION.bcm`'s
         // `stepone`/`steptwo` referencing `n`, `t` (Group R).
         if !abstract_only.is_empty()
             && let Some(bad) = crate::sc::identifier_walker::first_forbidden_identifier_in_predicate(
@@ -684,16 +692,27 @@ fn build_event_buckets(
                 abstract_only,
             )
         {
+            let (severity, message, rule) = if g.is_theorem {
+                (
+                    Severity::Warning,
+                    format!("theorem guard references abstract-only variable '{bad}' — dropped"),
+                    crate::RuleId::UndeclaredIdentifier,
+                )
+            } else {
+                (
+                    Severity::Error,
+                    format!(
+                        "guard references variable '{bad}', which has disappeared in this \
+                         refinement (declared in an abstract machine but not kept here)"
+                    ),
+                    crate::RuleId::DisappearedVariable,
+                )
+            };
             diags.push(Diagnostic {
-                severity: Severity::Warning,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    g.label.as_deref().unwrap_or("grd"),
-                ),
-                message: format!("guard references abstract-only variable '{bad}' — dropped"),
-                rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+                severity,
+                origin: clause_origin(machine_name, label, g.label.as_deref(), "grd"),
+                message,
+                rule_id: Some(rule),
                 span: g.span,
             });
             accurate = false;
@@ -706,12 +725,7 @@ fn build_event_buckets(
         if !crate::wellformed::is_well_typed_predicate(scope, &g.predicate) {
             diags.push(Diagnostic {
                 severity: Severity::Error,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    g.label.as_deref().unwrap_or("grd"),
-                ),
+                origin: clause_origin(machine_name, label, g.label.as_deref(), "grd"),
                 message: "guard predicate is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
                 span: g.span,
@@ -752,12 +766,7 @@ fn build_event_buckets(
         if let Some(bad) = bad_lhs {
             diags.push(Diagnostic {
                 severity: Severity::Error,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    act.label.as_deref().unwrap_or("act"),
-                ),
+                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
                 message: format!("LHS variable '{bad}' is not declared"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
                 span: act.span,
@@ -765,55 +774,38 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        // Disappeared-variable assignment: the action writes to a variable the
+        // Disappeared-variable reference: the action touches a variable the
         // abstract machine declared but this refinement dropped (data-refined
-        // away). The variable no longer exists in the concrete state, so the
-        // write is rejected (EB025). Rodin drops the action and marks the event
-        // `accurate=false` (Group R); we mirror that and report an error.
-        if !abstract_only.is_empty()
-            && let Some(bad) = lhs_variables(&act.action)
+        // away) — either by *assigning* it (its LHS) or by *reading* it in its
+        // RHS / generalised-assignment predicate. The variable no longer exists
+        // in the concrete state, so either way it is rejected (EB025). Rodin
+        // drops the action and marks the event `accurate=false` (Group R); we
+        // mirror that and report an error. The LHS is checked first so an
+        // illegal write is described as such.
+        let disappeared = if abstract_only.is_empty() {
+            None
+        } else {
+            lhs_variables(&act.action)
                 .into_iter()
                 .find(|v| abstract_only.contains(*v))
-        {
+                .map(|v| (v.to_string(), "assigns"))
+                .or_else(|| {
+                    crate::sc::identifier_walker::first_forbidden_identifier_in_action_rhs(
+                        &act.action,
+                        abstract_only,
+                    )
+                    .map(|v| (v, "references"))
+                })
+        };
+        if let Some((bad, verb)) = disappeared {
             diags.push(Diagnostic {
                 severity: Severity::Error,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    act.label.as_deref().unwrap_or("act"),
-                ),
+                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
                 message: format!(
-                    "action assigns variable '{bad}', which has disappeared in this \
+                    "action {verb} variable '{bad}', which has disappeared in this \
                      refinement (declared in an abstract machine but not kept here)"
                 ),
                 rule_id: Some(crate::RuleId::DisappearedVariable),
-                span: act.span,
-            });
-            accurate = false;
-            continue;
-        }
-        // Abstract-only-reference drop: the action only *reads* a vanished
-        // variable in its RHS / generalised-assignment predicate. Rodin drops
-        // the action and marks the event `accurate=false` (Group R); as a read
-        // (not an illegal write) we report it as a warning.
-        if !abstract_only.is_empty()
-            && let Some(bad) =
-                crate::sc::identifier_walker::first_forbidden_identifier_in_action_rhs(
-                    &act.action,
-                    abstract_only,
-                )
-        {
-            diags.push(Diagnostic {
-                severity: Severity::Warning,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    act.label.as_deref().unwrap_or("act"),
-                ),
-                message: format!("action references abstract-only variable '{bad}' — dropped"),
-                rule_id: Some(crate::RuleId::UndeclaredIdentifier),
                 span: act.span,
             });
             accurate = false;
@@ -826,12 +818,7 @@ fn build_event_buckets(
         if !crate::wellformed::is_well_typed_action(scope, &act.action) {
             diags.push(Diagnostic {
                 severity: Severity::Error,
-                origin: format!(
-                    "{}.{}.{}",
-                    machine_name,
-                    label,
-                    act.label.as_deref().unwrap_or("act"),
-                ),
+                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
                 message: "action is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
                 span: act.span,
