@@ -9,10 +9,10 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB023"`); gaps
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB024"`); gaps
 /// correspond to rules not yet implemented in rossi (e.g. EB010 well-
-/// definedness, EB015–17 proof status, EB020 unknown type). EB023 is a
-/// rossi-only extension.
+/// definedness, EB015–17 proof status, EB020 unknown type). EB023 and EB024
+/// are rossi-only extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -54,6 +54,9 @@ pub enum RuleId {
     /// EB023 — Declared name collides with rossi's textual operator
     /// vocabulary and can be silently re-lexed as a token. (rossi-only.)
     ShadowedName,
+    /// EB024 — A new event (one that does not REFINE an abstract event)
+    /// assigns a variable inherited from an abstract machine. (rossi-only.)
+    NewEventAssignsInheritedVariable,
 }
 
 impl RuleId {
@@ -79,6 +82,7 @@ impl RuleId {
             RuleId::DuplicateIdentifier => "EB021",
             RuleId::DuplicateLabel => "EB022",
             RuleId::ShadowedName => "EB023",
+            RuleId::NewEventAssignsInheritedVariable => "EB024",
         }
     }
 
@@ -104,6 +108,7 @@ impl RuleId {
             RuleId::DuplicateIdentifier => "Duplicate identifier",
             RuleId::DuplicateLabel => "Duplicate label",
             RuleId::ShadowedName => "Shadowed identifier",
+            RuleId::NewEventAssignsInheritedVariable => "New event assigns inherited variable",
         }
     }
 
@@ -161,6 +166,9 @@ impl RuleId {
             RuleId::ShadowedName => {
                 "A declared identifier collides with rossi's textual operator vocabulary (an ASCII operator spelling like `POW`/`or`, or a case variant of a literal token like `Nat`); uses of it can silently parse as the built-in token instead of the identifier."
             }
+            RuleId::NewEventAssignsInheritedVariable => {
+                "A new event (one that does not REFINE an abstract event) assigns a variable inherited from an abstract machine and kept in this refinement. A new event implicitly refines `skip`, so it must not modify inherited state; doing so leaves the event's refinement proof obligation unprovable. Either REFINES the abstract event that changes the variable, or data-refine the variable."
+            }
         }
     }
 
@@ -180,7 +188,8 @@ impl RuleId {
             | RuleId::CrossReferenceNotFound
             | RuleId::UndeclaredIdentifier
             | RuleId::DuplicateIdentifier
-            | RuleId::DuplicateLabel => Severity::Error,
+            | RuleId::DuplicateLabel
+            | RuleId::NewEventAssignsInheritedVariable => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
@@ -213,6 +222,7 @@ impl RuleId {
             RuleId::DuplicateIdentifier,
             RuleId::DuplicateLabel,
             RuleId::ShadowedName,
+            RuleId::NewEventAssignsInheritedVariable,
         ]
     }
 }
@@ -253,6 +263,8 @@ mod tests {
         assert_eq!(RuleId::DuplicateComponent.code(), "EB019");
         assert_eq!(RuleId::DuplicateIdentifier.code(), "EB021");
         assert_eq!(RuleId::DuplicateLabel.code(), "EB022");
+        assert_eq!(RuleId::ShadowedName.code(), "EB023");
+        assert_eq!(RuleId::NewEventAssignsInheritedVariable.code(), "EB024");
     }
 
     #[test]
