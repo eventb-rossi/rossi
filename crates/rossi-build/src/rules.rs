@@ -9,10 +9,11 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB024"`); gaps
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB025"`); gaps
 /// correspond to rules not yet implemented in rossi (e.g. EB010 well-
 /// definedness, EB015–17 proof status, EB020 unknown type). EB023 and EB024
-/// are rossi-only extensions.
+/// are rossi-only extensions; EB025 is a refinement static-check emitted by
+/// `crate::build`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -57,6 +58,10 @@ pub enum RuleId {
     /// EB024 — A new event (one that does not REFINE an abstract event)
     /// assigns a variable inherited from an abstract machine. (rossi-only.)
     NewEventAssignsInheritedVariable,
+    /// EB025 — An event assigns a variable that an abstract machine declares
+    /// but this refinement dropped (data-refined away), so it no longer exists
+    /// in the concrete state and cannot be assigned.
+    DisappearedVariable,
 }
 
 impl RuleId {
@@ -83,6 +88,7 @@ impl RuleId {
             RuleId::DuplicateLabel => "EB022",
             RuleId::ShadowedName => "EB023",
             RuleId::NewEventAssignsInheritedVariable => "EB024",
+            RuleId::DisappearedVariable => "EB025",
         }
     }
 
@@ -109,6 +115,7 @@ impl RuleId {
             RuleId::DuplicateLabel => "Duplicate label",
             RuleId::ShadowedName => "Shadowed identifier",
             RuleId::NewEventAssignsInheritedVariable => "New event assigns inherited variable",
+            RuleId::DisappearedVariable => "Disappeared variable assigned",
         }
     }
 
@@ -169,6 +176,9 @@ impl RuleId {
             RuleId::NewEventAssignsInheritedVariable => {
                 "A new event (one that does not REFINE an abstract event) assigns a variable inherited from an abstract machine and kept in this refinement. A new event implicitly refines `skip`, so it must not modify inherited state; doing so leaves the event's refinement proof obligation unprovable. Either REFINES the abstract event that changes the variable, or data-refine the variable."
             }
+            RuleId::DisappearedVariable => {
+                "An event assigns a variable that an abstract machine declares but this refinement does not keep (it was data-refined away). A disappeared variable no longer exists in the concrete state, so it cannot be assigned; either redeclare it in this machine's VARIABLES, or remove the assignment."
+            }
         }
     }
 
@@ -189,7 +199,8 @@ impl RuleId {
             | RuleId::UndeclaredIdentifier
             | RuleId::DuplicateIdentifier
             | RuleId::DuplicateLabel
-            | RuleId::NewEventAssignsInheritedVariable => Severity::Error,
+            | RuleId::NewEventAssignsInheritedVariable
+            | RuleId::DisappearedVariable => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
@@ -223,6 +234,7 @@ impl RuleId {
             RuleId::DuplicateLabel,
             RuleId::ShadowedName,
             RuleId::NewEventAssignsInheritedVariable,
+            RuleId::DisappearedVariable,
         ]
     }
 }
@@ -265,6 +277,7 @@ mod tests {
         assert_eq!(RuleId::DuplicateLabel.code(), "EB022");
         assert_eq!(RuleId::ShadowedName.code(), "EB023");
         assert_eq!(RuleId::NewEventAssignsInheritedVariable.code(), "EB024");
+        assert_eq!(RuleId::DisappearedVariable.code(), "EB025");
     }
 
     #[test]
