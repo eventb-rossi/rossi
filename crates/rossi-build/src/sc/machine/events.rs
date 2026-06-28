@@ -765,12 +765,44 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        // Abstract-only-reference drop: action writes to a vanished
-        // variable, or reads one in its RHS / generalised-assignment
-        // predicate. Rodin drops the action and marks the event
-        // `accurate=false` (Group R).
+        // Disappeared-variable assignment: the action writes to a variable the
+        // abstract machine declared but this refinement dropped (data-refined
+        // away). The variable no longer exists in the concrete state, so the
+        // write is rejected (EB025). Rodin drops the action and marks the event
+        // `accurate=false` (Group R); we mirror that and report an error.
         if !abstract_only.is_empty()
-            && let Some(bad) = first_abstract_only_in_action(&act.action, abstract_only)
+            && let Some(bad) = lhs_variables(&act.action)
+                .into_iter()
+                .find(|v| abstract_only.contains(*v))
+        {
+            diags.push(Diagnostic {
+                severity: Severity::Error,
+                origin: format!(
+                    "{}.{}.{}",
+                    machine_name,
+                    label,
+                    act.label.as_deref().unwrap_or("act"),
+                ),
+                message: format!(
+                    "action assigns variable '{bad}', which has disappeared in this \
+                     refinement (declared in an abstract machine but not kept here)"
+                ),
+                rule_id: Some(crate::RuleId::DisappearedVariable),
+                span: act.span,
+            });
+            accurate = false;
+            continue;
+        }
+        // Abstract-only-reference drop: the action only *reads* a vanished
+        // variable in its RHS / generalised-assignment predicate. Rodin drops
+        // the action and marks the event `accurate=false` (Group R); as a read
+        // (not an illegal write) we report it as a warning.
+        if !abstract_only.is_empty()
+            && let Some(bad) =
+                crate::sc::identifier_walker::first_forbidden_identifier_in_action_rhs(
+                    &act.action,
+                    abstract_only,
+                )
         {
             diags.push(Diagnostic {
                 severity: Severity::Warning,
@@ -1005,23 +1037,6 @@ fn file_root_project(file_root: &HandleUri) -> &str {
     let s = file_root.as_str();
     let rest = s.strip_prefix('/').unwrap_or(s);
     rest.split('/').next().unwrap_or("proj")
-}
-
-/// First name in `action` that hits a variable in `forbidden`, checked
-/// across both the LHS targets and the RHS / generalised-assignment
-/// predicate. Returns `None` if the action is clean. Drives the
-/// abstract-only-reference cascade drop in [`build_event_decl`].
-fn first_abstract_only_in_action(
-    action: &rossi::Action,
-    forbidden: &BTreeSet<String>,
-) -> Option<String> {
-    if let Some(v) = lhs_variables(action)
-        .into_iter()
-        .find(|v| forbidden.contains(*v))
-    {
-        return Some(v.to_string());
-    }
-    crate::sc::identifier_walker::first_forbidden_identifier_in_action_rhs(action, forbidden)
 }
 
 pub(super) use crate::ast_util::lhs_variables;
