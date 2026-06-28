@@ -1,9 +1,11 @@
 //! EB025: a refined machine that *drops* an abstract variable (data-refines it
-//! away by not redeclaring it) must not assign that variable in any event. The
-//! build/SC pipeline rejects the assignment as an error and drops the action,
-//! marking the event `accurate=false` (Group R). A mere *read* of the vanished
-//! variable in an action's RHS stays a warning — it is a dangling reference,
-//! not an illegal write.
+//! away by not redeclaring it) must not reference that variable in any event.
+//! The build/SC pipeline rejects an assignment to it, a read of it in an
+//! action's RHS, and a read of it in a (non-theorem) guard — each an error that
+//! drops the clause and marks the event `accurate=false` (Group R). A *theorem*
+//! guard may read a disappeared variable, so that case stays a warning.
+//! Gluing invariants legitimately reference disappeared variables and are never
+//! flagged.
 
 use rossi_build::{Project, ProjectComponent, RuleId, Severity, build};
 
@@ -56,20 +58,50 @@ fn assigning_disappeared_variable_is_an_error() {
 }
 
 #[test]
-fn reading_disappeared_variable_in_rhs_stays_a_warning() {
-    // `peek` only reads `v` in its RHS — a dangling reference, dropped as the
-    // existing EB018 warning, NOT the EB025 error.
+fn reading_disappeared_variable_in_rhs_is_an_error() {
+    // `peek` reads `v` in its action RHS — also illegal, since `v` no longer
+    // exists in the concrete state. EB025 error on the action.
     let r = build_refinement("EVENT peek\n    THEN\n        @a2 w := v + 1\n    END\n\n");
+    let found = disappeared(&r);
+    assert_eq!(found.len(), 1, "{:#?}", r.diagnostics);
+    assert_eq!(found[0].severity, Severity::Error);
+    assert_eq!(found[0].origin, "M2.peek.a2");
+    assert!(
+        found[0].message.contains("references"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn reading_disappeared_variable_in_guard_is_an_error() {
+    // `chk` reads `v` in a (non-theorem) guard — EB025 error on the guard.
+    let r = build_refinement(
+        "EVENT chk\n    WHERE\n        @g1 v > 0\n    THEN\n        @a2 w := w + 1\n    END\n\n",
+    );
+    let found = disappeared(&r);
+    assert_eq!(found.len(), 1, "{:#?}", r.diagnostics);
+    assert_eq!(found[0].severity, Severity::Error);
+    assert_eq!(found[0].origin, "M2.chk.g1");
+}
+
+#[test]
+fn theorem_guard_reading_disappeared_variable_stays_a_warning() {
+    // A *theorem* guard may read a disappeared variable — Rodin permits it, so
+    // it is reported only as the softer EB018 warning, not the EB025 error.
+    let r = build_refinement(
+        "EVENT thm\n    WHERE\n        theorem @g1 v > 0\n    THEN\n        @a2 w := w + 1\n    END\n\n",
+    );
     assert!(
         disappeared(&r).is_empty(),
-        "a read is not EB025: {:#?}",
+        "a theorem guard read must not be EB025: {:#?}",
         r.diagnostics
     );
     assert!(
         r.diagnostics.iter().any(|d| {
             d.rule_id == Some(RuleId::UndeclaredIdentifier) && d.severity == Severity::Warning
         }),
-        "expected the abstract-only read warning: {:#?}",
+        "expected the theorem-guard abstract-only warning: {:#?}",
         r.diagnostics
     );
 }
