@@ -16,6 +16,8 @@
 //! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
 //! - **EB022** duplicate label   — invariant/event/guard/action/axiom/witness used twice
 //! - **EB023** shadowed name     — declared name re-lexes as a textual token
+//! - **EB024** new event assigns inherited variable — a non-refining event
+//!   modifies state inherited from an abstract machine
 //!
 //! EB010 (well-definedness) and EB015–17 (proof status) are deliberately
 //! out of scope here; they need their own modules.
@@ -48,6 +50,12 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
                 diags.extend(lint_dead_variable(m, &referenced));
                 diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
                 diags.extend(lint_incomplete_init(m));
+                // EB024 can only fire on a machine that has events; skip the
+                // ancestor-chain walk otherwise.
+                if !m.events.is_empty() {
+                    let inherited = index.inherited_vars_for_machine(m.name.as_str());
+                    diags.extend(lint_new_event_assigns_inherited(m, &inherited));
+                }
             }
             Component::Context(c) => {
                 let referenced = index.effective_refs_for_context(c.name.as_str());
@@ -173,6 +181,67 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
             span: v.span,
         })
         .collect()
+}
+
+/// EB024: a *new* event — one that neither REFINES nor EXTENDS an abstract
+/// event — must not assign a variable inherited from an abstract machine and
+/// *retained* in this refinement. A new event is implicitly a refinement of
+/// `skip`, which changes no state, so modifying inherited state leaves the
+/// refinement proof obligation unprovable. `inherited` is the set of variable
+/// names visible from this machine's REFINES chain; it is empty for root
+/// machines, so this pass never fires there.
+///
+/// The check is restricted to variables this machine still declares (`inherited
+/// ∩ own`). An inherited variable the refinement *dropped* (data-refined away)
+/// is the build-time [`RuleId::DisappearedVariable`] (EB025) error's domain;
+/// flagging it here too would double-report it with contradictory advice.
+/// INITIALISATION is excluded by construction — rossi stores it apart from
+/// `m.events`, and it legitimately assigns inherited variables.
+fn lint_new_event_assigns_inherited(m: &Machine, inherited: &BTreeSet<&str>) -> Vec<Diagnostic> {
+    if inherited.is_empty() {
+        return Vec::new();
+    }
+    // Variables inherited *and* kept here: assigning a dropped one is EB025.
+    let retained: BTreeSet<&str> = m
+        .variables
+        .iter()
+        .map(|v| v.name.as_str())
+        .filter(|n| inherited.contains(n))
+        .collect();
+    if retained.is_empty() {
+        return Vec::new();
+    }
+    let mut diags = Vec::new();
+    for e in &m.events {
+        // A refining or extending event legitimately refines an abstract
+        // event that may change the variable; only genuinely new events are
+        // constrained to leave inherited state untouched.
+        if e.refines.is_some() || e.extended {
+            continue;
+        }
+        // Report each inherited variable at most once per event, anchored on
+        // the first action that assigns it.
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for la in &e.actions {
+            for v in lhs_variables(&la.action) {
+                if retained.contains(&v) && seen.insert(v) {
+                    diags.push(Diagnostic {
+                        severity: Severity::Error,
+                        origin: format!("{}.{}", m.name, e.name),
+                        message: format!(
+                            "new event `{}` assigns inherited variable `{v}`; a new event \
+                             refines skip and must not modify inherited state — REFINES the \
+                             abstract event that changes `{v}`, or data-refine it",
+                            e.name
+                        ),
+                        rule_id: Some(RuleId::NewEventAssignsInheritedVariable),
+                        span: la.span,
+                    });
+                }
+            }
+        }
+    }
+    diags
 }
 
 fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
@@ -559,6 +628,11 @@ struct ProjectIndex<'a> {
     mach_refs: BTreeMap<&'a str, BTreeSet<String>>,
     /// Per-machine, the set of variable names assigned by INIT or events.
     mach_assigned: BTreeMap<&'a str, BTreeSet<String>>,
+    /// Per-machine, the names of variables declared in that machine itself
+    /// (its own VARIABLES, excluding the inherited chain).
+    mach_vars: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    /// `machine → immediate REFINES parent` (a machine refines at most one).
+    mach_parent: BTreeMap<&'a str, &'a str>,
     /// `ctx → {ctx names that EXTEND it transitively, excluding self}`.
     ctx_extends_descendants: BTreeMap<&'a str, BTreeSet<&'a str>>,
     /// `machine → {machine names that REFINE it transitively, excluding self}`.
@@ -578,6 +652,7 @@ impl<'a> ProjectIndex<'a> {
         let mut ctx_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        let mut mach_vars: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
 
         for pc in &project.components {
             match &pc.component {
@@ -595,6 +670,10 @@ impl<'a> ProjectIndex<'a> {
                     mach_sees.insert(m.name.as_str(), m.sees.iter().map(String::as_str).collect());
                     mach_refs.insert(m.name.as_str(), referenced_in_machine(m));
                     mach_assigned.insert(m.name.as_str(), assigned_in_machine(m));
+                    mach_vars.insert(
+                        m.name.as_str(),
+                        m.variables.iter().map(|v| v.name.as_str()).collect(),
+                    );
                 }
             }
         }
@@ -644,10 +723,34 @@ impl<'a> ProjectIndex<'a> {
             ctx_refs,
             mach_refs,
             mach_assigned,
+            mach_vars,
+            mach_parent,
             ctx_extends_descendants,
             mach_refines_descendants,
             ctx_consumer_machines,
         }
+    }
+
+    /// Variable names inherited by machine `name`: the union of the own
+    /// variables of every ancestor reachable by walking the REFINES chain
+    /// upward (the machine's own variables are excluded). Empty for a root
+    /// machine. The `visited` guard keeps a malformed circular REFINES chain
+    /// (separately reported as EB008) from looping forever.
+    fn inherited_vars_for_machine(&self, name: &str) -> BTreeSet<&'a str> {
+        let mut out = BTreeSet::new();
+        let mut visited: BTreeSet<&str> = BTreeSet::new();
+        visited.insert(name);
+        let mut cur = self.mach_parent.get(name).copied();
+        while let Some(ancestor) = cur {
+            if !visited.insert(ancestor) {
+                break;
+            }
+            if let Some(vars) = self.mach_vars.get(ancestor) {
+                out.extend(vars.iter().copied());
+            }
+            cur = self.mach_parent.get(ancestor).copied();
+        }
+        out
     }
 
     fn effective_refs_for_machine(&self, name: &str) -> BTreeSet<String> {
@@ -1727,5 +1830,202 @@ mod tests {
                 .any(|d| d.rule_id == Some(RuleId::DeadVariable) && d.message.contains('x')),
             "expected EB011 for shadowed variable: {diags:#?}"
         );
+    }
+
+    // ---------- EB024: new event assigns inherited variable -----------------
+
+    /// A machine declaring `var` and initialising it (a plausible abstract
+    /// machine to refine).
+    fn abstract_machine(name: &str, var: &str) -> Machine {
+        let mut m = Machine::new(name.into());
+        m.variables = vec![nv(var)];
+        m.initialisation = Some(InitialisationEvent {
+            actions: vec![la(Action::assignment(
+                var,
+                ExpressionKind::Integer(0).into(),
+            ))],
+            comment: None,
+            extended: false,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+            name_span: None,
+        });
+        m
+    }
+
+    /// A new (non-refining) event named `name` whose sole action assigns `var`.
+    fn assigning_event(name: &str, var: &str) -> Event {
+        let mut e = Event::new(name.into());
+        e.actions = vec![la(Action::assignment(
+            var,
+            ExpressionKind::Integer(1).into(),
+        ))];
+        e
+    }
+
+    fn eb024(diags: &[Diagnostic]) -> Vec<&Diagnostic> {
+        diags
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::NewEventAssignsInheritedVariable))
+            .collect()
+    }
+
+    #[test]
+    fn new_event_assigning_inherited_variable_is_flagged() {
+        // M2 refines M1; M1 owns `v` and M2 keeps it. A *new* event `step` in
+        // M2 assigns the retained inherited `v` — an unprovable skip-refinement.
+        // EB024 fires.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        m2.events = vec![assigning_event("step", "v")];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        let found = eb024(&diags);
+        assert_eq!(found.len(), 1, "{diags:#?}");
+        assert_eq!(found[0].origin, "M2.step");
+        assert_eq!(found[0].severity, Severity::Error);
+        assert!(found[0].message.contains("`v`"), "{}", found[0].message);
+    }
+
+    #[test]
+    fn new_event_assigning_own_variable_is_not_flagged() {
+        // `w` is introduced at M2's level, so a new event may assign it.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("w")];
+        m2.events = vec![assigning_event("step", "w")];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn refining_event_assigning_inherited_is_not_flagged() {
+        // A refining event legitimately refines an abstract event that may
+        // change `v` — not a new event, so EB024 must stay silent.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        let mut e = assigning_event("step", "v");
+        e.refines = Some("abstract_step".into());
+        m2.events = vec![e];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn extended_event_assigning_inherited_is_not_flagged() {
+        // An extended event copies and extends its abstract counterpart; it is
+        // not a new event.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        let mut e = assigning_event("step", "v");
+        e.extended = true;
+        m2.events = vec![e];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn initialisation_assigning_inherited_is_not_flagged() {
+        // INITIALISATION must assign inherited variables; it is stored apart
+        // from `events`, so the pass never sees it. No EB024.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        m2.initialisation = Some(InitialisationEvent {
+            actions: vec![la(Action::assignment(
+                "v",
+                ExpressionKind::Integer(0).into(),
+            ))],
+            comment: None,
+            extended: false,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+            name_span: None,
+        });
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn root_machine_new_event_is_not_flagged() {
+        // A root machine has no inherited variables, so every variable a new
+        // event assigns is introduced at its own level.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.events = vec![assigning_event("step", "x")];
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn new_event_assigning_grandparent_variable_is_flagged() {
+        // M3 refines M2 refines M1; `v` is owned by the grandparent M1 and kept
+        // down the chain. The ancestor walk must still recognise `v` as a
+        // retained inherited variable in M3.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        let mut m3 = Machine::new("M3".into());
+        m3.refines = Some("M2".into());
+        m3.variables = vec![nv("v")];
+        m3.events = vec![assigning_event("step", "v")];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+            pc("M3.bum", Component::Machine(m3)),
+        ]));
+        let found = eb024(&diags);
+        assert_eq!(found.len(), 1, "{diags:#?}");
+        assert_eq!(found[0].origin, "M3.step");
+    }
+
+    #[test]
+    fn new_event_assigning_dropped_variable_is_not_flagged() {
+        // M2 refines M1 (owns `v`) but does NOT redeclare `v` — it is data-
+        // refined away. A new event assigning the dropped `v` is the EB025
+        // (disappeared-variable) build error's domain, NOT EB024; the lint must
+        // not double-report it here.
+        let m1 = abstract_machine("M1", "v");
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.events = vec![assigning_event("step", "v")];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(eb024(&diags).is_empty(), "{diags:#?}");
     }
 }
