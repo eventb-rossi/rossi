@@ -1,5 +1,6 @@
 import {
     CancellationToken,
+    CancellationTokenSource,
     Diagnostic,
     DiagnosticCollection,
     DiagnosticSeverity,
@@ -8,6 +9,7 @@ import {
     Position,
     ProgressLocation,
     Range,
+    TextDocument,
     Uri,
     window,
     workspace,
@@ -66,11 +68,22 @@ type InputKind =
     | 'rodinXmlFile'
     | 'rodinXmlDirectory';
 
+// `rossi validate` invocation shared by the on-demand and on-save paths: emit
+// machine-readable JSON and keep going past the first failing file so every
+// input is reported.
+const VALIDATE_JSON_ARGS = ['validate', '--format', 'json', '--continue-on-error'];
+
+// Quiet window after a save before the on-save validation fires, so a burst of
+// saves coalesces into one project re-check instead of one CLI run per file.
+const ON_SAVE_DEBOUNCE_MS = 300;
+
 export class RossiCommandController {
     private readonly diagnostics: DiagnosticCollection;
     private readonly output: OutputChannel;
     private readonly cliPath: string;
     private readonly waitForLanguageServer?: () => Promise<void>;
+    /** Cancellation handle for the in-flight validate-on-save run, if any. */
+    private onSaveRun?: CancellationTokenSource;
 
     constructor(
         diagnostics: DiagnosticCollection,
@@ -270,7 +283,7 @@ export class RossiCommandController {
         let result: RossiRunResult;
         try {
             result = await this.runRossi(
-                ['validate', '--format', 'json', '--continue-on-error', ...inputs],
+                [...VALIDATE_JSON_ARGS, ...inputs],
                 {
                     title: 'Validating Event-B model',
                     cwd,
@@ -289,6 +302,58 @@ export class RossiCommandController {
             window.showInformationMessage('Rossi validation completed.');
         } else {
             window.showWarningMessage('Rossi validation found issues. See Problems and Rossi output.');
+        }
+    }
+
+    // Validate the project a just-saved .eventb file belongs to and refresh the
+    // diagnostics. Unlike `validateWorkspace`, this runs quietly: it spawns the
+    // CLI directly (no progress notification) and shows no completion popups, so
+    // an automatic pass never interrupts editing.
+    //
+    // The saved file's *directory* is handed to `rossi validate` as a single
+    // argument so the CLI loads it as one project and runs the full static
+    // checker across the components — that is what adds the type/dead-code
+    // diagnostics (EB006/EB018/EB011-014) the live language server does not
+    // compute. (A bare file argument, or a list of files, only gets the
+    // component-local lints the server already provides.) Scoping to the file's
+    // directory keeps unrelated projects from cross-contaminating the result and
+    // avoids re-checking the whole tree on every save. This assumes a project's
+    // components are colocated in one directory (as `rossi import`/New Project
+    // produce); a component split into a sibling subdirectory would not see its
+    // cross-referenced siblings here.
+    async validateWorkspaceOnSave(document: TextDocument): Promise<void> {
+        if (document.uri.scheme !== 'file' || !isEventBTextFile(document.uri.fsPath)) {
+            return;
+        }
+        const projectDir = path.dirname(document.uri.fsPath);
+
+        // A newer save supersedes any in-flight run; the latest save wins.
+        this.onSaveRun?.cancel();
+        const source = new CancellationTokenSource();
+        this.onSaveRun = source;
+
+        try {
+            const toolPath = this.resolveToolPath();
+            const args = [...VALIDATE_JSON_ARGS, projectDir];
+            this.output.appendLine(`> ${formatCommand(toolPath, args)}`);
+            const result = await this.spawnCommand(toolPath, args, projectDir, true, source.token);
+            if (source.token.isCancellationRequested) {
+                return;
+            }
+            this.applyValidationDiagnostics(result.stdout, projectDir, { quiet: true, scopeDir: projectDir });
+        } catch (error) {
+            // Superseded by a newer save: drop the stale run silently.
+            if (source.token.isCancellationRequested) {
+                return;
+            }
+            // A background on-save pass must never raise an error dialog; log only.
+            const message = error instanceof Error ? error.message : String(error);
+            this.output.appendLine(`Validate on save failed: ${message}`);
+        } finally {
+            if (this.onSaveRun === source) {
+                this.onSaveRun = undefined;
+            }
+            source.dispose();
         }
     }
 
@@ -320,11 +385,22 @@ export class RossiCommandController {
         }
     }
 
-    private applyValidationDiagnostics(stdout: string, cwd: string): void {
+    private applyValidationDiagnostics(
+        stdout: string,
+        cwd: string,
+        opts?: { quiet?: boolean; scopeDir?: string }
+    ): void {
         let rows: ValidationResult[];
         try {
             rows = JSON.parse(stdout) as ValidationResult[];
         } catch (error) {
+            if (opts?.quiet) {
+                // A background pass must not pop a dialog or yank the output
+                // channel into focus (e.g. when `rossi` crashes and writes no
+                // JSON): record it quietly and leave existing diagnostics alone.
+                this.output.appendLine(`Validate on save: could not parse rossi JSON output: ${error}`);
+                return;
+            }
             this.output.show(true);
             window.showErrorMessage(`Failed to parse rossi validation JSON: ${error}`);
             return;
@@ -359,7 +435,22 @@ export class RossiCommandController {
             byUri.set(key, existing);
         }
 
-        this.diagnostics.clear();
+        const scopeDir = opts?.scopeDir;
+        if (scopeDir) {
+            // Scoped refresh: drop only this project's previous diagnostics so a
+            // save in one project never erases another project's results.
+            const stale: Uri[] = [];
+            this.diagnostics.forEach((uri) => {
+                if (isPathInside(uri.fsPath, scopeDir)) {
+                    stale.push(uri);
+                }
+            });
+            for (const uri of stale) {
+                this.diagnostics.delete(uri);
+            }
+        } else {
+            this.diagnostics.clear();
+        }
         for (const [uri, diagnostics] of byUri.entries()) {
             this.diagnostics.set(Uri.parse(uri), diagnostics);
         }
@@ -784,6 +875,36 @@ export function registerRossiCommands(
         vscodeCommands.registerCommand('rossi.checkToolchain', () => controller.runCommand(() => controller.checkToolchain())),
         vscodeCommands.registerCommand('rossi.newProject', () => controller.runCommand(() => controller.newProject()))
     );
+
+    // On by default (`rossi.validate.onSave`): re-run the full project
+    // validation when an .eventb file is saved. The setting is read at save time
+    // so toggling it takes effect without a window reload. Saves are debounced so
+    // a burst — Save All, format-on-save, or the extension's own programmatic
+    // saves — coalesces into a single validate of the last-saved file's project
+    // instead of spawning (and then cancelling) one CLI run per file.
+    let saveDebounce: ReturnType<typeof setTimeout> | undefined;
+    const onSave = workspace.onDidSaveTextDocument((document) => {
+        if (!workspace.getConfiguration('rossi').get<boolean>('validate.onSave', true)) {
+            return;
+        }
+        if (document.uri.scheme !== 'file' || !isEventBTextFile(document.uri.fsPath)) {
+            return;
+        }
+        if (saveDebounce) {
+            clearTimeout(saveDebounce);
+        }
+        saveDebounce = setTimeout(() => {
+            saveDebounce = undefined;
+            void controller.validateWorkspaceOnSave(document);
+        }, ON_SAVE_DEBOUNCE_MS);
+    });
+    context.subscriptions.push(onSave, {
+        dispose: () => {
+            if (saveDebounce) {
+                clearTimeout(saveDebounce);
+            }
+        },
+    });
 }
 
 // The starter project keeps one component per .eventb file, matching the
@@ -841,8 +962,10 @@ An Event-B project edited with the Event-B (Rossi) extension.
 1. Open \`${name}.eventb\` (the machine) and \`${name}_ctx.eventb\` (the
    context it sees) — one component per file, as in Rodin. Type \`context\`,
    \`machine\`, \`event\`, … and accept the snippet to scaffold a block.
-2. Errors are reported live as you type by the Rossi language server.
-3. Run **Rossi: Validate Current File** to validate on demand.
+2. Errors are reported live as you type by the Rossi language server, and on
+   every save the whole project is validated for the type and dead-code checks
+   the live server does not compute (turn off with \`rossi.validate.onSave\`).
+3. Run **Rossi: Validate Current File** to validate on demand at any time.
 4. Switch operator style with **Rossi: Convert Current File to Unicode** /
    **… to ASCII**.
 5. Export with **Rossi: Export Current File to Rodin ZIP**, or

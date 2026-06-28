@@ -301,6 +301,11 @@
           "default": 500,
           "description": "Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing."
         },
+        "rossi.validate.onSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "When an .eventb file is saved, run `rossi validate` over its project directory, surfacing the full static checks (type errors, undeclared identifiers, dead-variable lints) that the live language server does not compute. Disable to validate only on demand."
+        },
         "rossi.completion.enabled": {
           "type": "boolean",
           "default": true,
