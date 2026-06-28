@@ -497,6 +497,77 @@ fn validate_json_includes_rule_id_for_lint() {
 }
 
 #[test]
+fn validate_directory_flags_new_event_assigning_inherited_variable() {
+    // M2 refines M1, which owns `v`, and keeps `v`. M2's *new* event `newstep`
+    // (no REFINES clause) assigns the retained inherited `v` — an unprovable
+    // skip-refinement. EB024 (Error) must fire and flip the exit code. M2's
+    // INITIALISATION also assigns `v`, which is legitimate and must NOT be
+    // flagged. EB024 needs the cross-component lint::run path, so this exercises
+    // a directory project rather than a single loose file.
+    let tmp = tempdir_unique("rossi-cli-validate-eb024");
+    let m1 = "MACHINE M1\n\
+        VARIABLES\n    v\n\
+        INVARIANTS\n    @inv1 v >= 0\n\
+        EVENTS\n\
+        EVENT INITIALISATION\n    THEN\n        @act1 v := 0\n    END\n\n\
+        EVENT tick\n    THEN\n        @act1 v := v + 1\n    END\n\
+        END\n";
+    let m2 = "MACHINE M2\n\
+        REFINES M1\n\
+        VARIABLES\n    v\n\
+        INVARIANTS\n    @inv1 v >= 0\n\
+        EVENTS\n\
+        EVENT INITIALISATION\n    THEN\n        @act1 v := 0\n    END\n\n\
+        EVENT newstep\n    THEN\n        @act1 v := v + 1\n    END\n\
+        END\n";
+    std::fs::write(tmp.join("M1.eventb"), m1).unwrap();
+    std::fs::write(tmp.join("M2.eventb"), m2).unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            tmp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("validate JSON output should parse");
+    let eb024: Vec<&serde_json::Value> = rows.iter().filter(|r| r["rule_id"] == "EB024").collect();
+    assert_eq!(
+        eb024.len(),
+        1,
+        "exactly one EB024, on the new event only (not INITIALISATION): {stdout}"
+    );
+    let row = eb024[0];
+    assert_eq!(row["severity"], "error", "EB024 is Error severity: {row}");
+    assert_eq!(
+        row["origin"], "M2.newstep",
+        "EB024 must be attributed to the new event: {row}"
+    );
+    assert!(
+        row["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("inherited variable")),
+        "EB024 message should name the inherited variable: {row}"
+    );
+    assert!(
+        !output.status.success(),
+        "an Error-severity lint must flip the exit code; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_sarif_output_is_valid() {
     let output = Command::new("cargo")
         .args([
