@@ -419,7 +419,7 @@
     "@typescript-eslint/parser": "^8.61.1",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
-    "eslint": "^10.5.0",
+    "eslint": "^10.6.0",
     "ovsx": "^0.10.5",
     "typescript": "^6.0.3"
   },
