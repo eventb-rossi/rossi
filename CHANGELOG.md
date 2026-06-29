@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.1.3](https://github.com/eventb-rossi/rossi/compare/v0.1.2...v0.1.3) - 2026-06-29
+
+### Added
+- *(cli)* Add completions subcommand for shell completion scripts
+- *(build)* Reject reading a disappeared variable in guards/actions (EB025)
+- *(build)* Reject assigning a disappeared variable (EB025)
+- *(build)* Register EB025 disappeared-variable rule
+- *(validate)* Flag new events assigning inherited variables
+- *(validate)* Register EB024 rule
+- *(lsp)* Flag duplicate component names across files
+- *(lsp)* Flag unknown SEES/EXTENDS/REFINES targets
+- *(lsp)* Flag circular EXTENDS/REFINES as you type
+- *(lsp)* Add workspace queries for cross-component diagnostics
+- *(lsp)* Colour constants as read-only variables, not numbers
+- *(lsp)* Surface duplicate-name and shadowed-name lints as you type
+
+### Changed
+- *(lsp)* Extract diagnostics_for from publish_diagnostics
+- *(lsp)* Emit semantic-token indices from ALL, not the discriminant
+- *(lsp)* Classify declared symbols through one source of truth
+- *(lsp)* Drop never-emitted semantic-token legend entries
+- *(lsp)* Derive semantic-token legend from a single source
+- *(lsp)* Extract diagnostic conversion into a diagnostics module
+
+### Fixed
+- *(lsp)* Improve cross-component diagnostics
+
+### Documentation
+- *(cli)* Document shell completion generation
+
 ## [0.1.2](https://github.com/eventb-rossi/rossi/compare/v0.1.1...v0.1.2) - 2026-06-26
 
 ### Added
