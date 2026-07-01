@@ -3718,6 +3718,22 @@ fn dedup_recovered_errors(errors: &mut Vec<ParseError>) {
     // Whether a recovered predicate's span encloses the strict error's position.
     let contains_strict = |s: &Span| s.start <= strict.start && strict.end <= s.end;
 
+    // A misplaced-assignment recovery error (EB026) is the precise, actionable
+    // report for a `:=`-in-predicate: the strict parser instead trips a little
+    // further along (it reads `:` as ASCII membership, then rejects the `=`), so
+    // its position is misleading. Whenever the EB026 operator span covers the
+    // strict error, drop the strict error and keep the EB026.
+    let eb026_covers_strict = errors.iter().skip(1).any(|e| {
+        matches!(
+            e,
+            ParseError::AssignmentInPredicate { span: Some(s), .. } if contains_strict(s)
+        )
+    });
+    if eb026_covers_strict {
+        errors.remove(0);
+        return;
+    }
+
     let recovered_spans: Vec<Span> = errors
         .iter()
         .skip(1)
@@ -4307,17 +4323,22 @@ mod tests {
     }
 
     /// EB026 flows through recovery too: an invariant clause whose predicate is a
-    /// misplaced assignment yields a top-level `AssignmentInPredicate` (with an
-    /// absolute span), not a wrapped `RecoverableError`.
+    /// misplaced assignment yields a single top-level `AssignmentInPredicate`
+    /// (with an absolute operator span), not a wrapped `RecoverableError` — and
+    /// the misleading strict error (which trips at `=`, reading `:` as ASCII
+    /// membership) is deduped away.
     #[test]
     fn recovery_reports_assignment_in_invariant() {
         let src = "machine M\ninvariants\n  @inv1 x := 5\nend\n";
         let result = parse_components_with_recovery(src);
-        let eb026 = result
-            .errors
-            .iter()
-            .find(|e| matches!(e, ParseError::AssignmentInPredicate { .. }))
-            .expect("recovery should report EB026 for an assignment in an invariant");
+        assert_eq!(
+            result.errors.len(),
+            1,
+            "exactly one error, the EB026: {:?}",
+            result.errors
+        );
+        let eb026 = &result.errors[0];
+        assert!(matches!(eb026, ParseError::AssignmentInPredicate { .. }));
         let span = eb026.span().expect("EB026 carries an operator span");
         assert_eq!(&src[span.start..span.end], ":=");
     }
