@@ -67,6 +67,24 @@ pub enum ParseError {
         span: Option<Span>,
     },
 
+    /// A predicate context (invariant, guard, witness, axiom) used an assignment
+    /// operator (`:=`/`≔`, `:∈`/`::`, or `:|`/`:∣`) where a predicate is
+    /// required — the intended operator is almost always `=`. Rodin rejects this
+    /// (an assignment cannot stand where a predicate is expected). Detected by
+    /// dual-parse: the formula fails as a predicate but parses as an action
+    /// (rule EB026). `operator` is the offending glyph as written; `line` and
+    /// `column` are 1-indexed; `span` is the byte range of the operator
+    /// (additive and unreferenced by `Display`, oracle-safe).
+    #[error(
+        "assignment operator `{operator}` used where a predicate is required — did you mean `=` for equality?"
+    )]
+    AssignmentInPredicate {
+        operator: String,
+        line: usize,
+        column: usize,
+        span: Option<Span>,
+    },
+
     #[error("Empty expression")]
     EmptyExpression,
 
@@ -227,6 +245,7 @@ impl ParseError {
             | ParseError::NestingTooDeep { line, column, .. }
             | ParseError::ReservedWord { line, column, .. }
             | ParseError::IncompatibleOperators { line, column, .. }
+            | ParseError::AssignmentInPredicate { line, column, .. }
             | ParseError::ClauseError { line, column, .. }
             | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
             ParseError::FileContext { source, .. } => source.position(),
@@ -248,6 +267,7 @@ impl ParseError {
             ParseError::PestError { span, .. }
             | ParseError::ReservedWord { span, .. }
             | ParseError::IncompatibleOperators { span, .. }
+            | ParseError::AssignmentInPredicate { span, .. }
             | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),
@@ -361,6 +381,22 @@ mod tests {
         };
         assert_eq!(err.position(), Some((4, 7)));
         assert_eq!(err.span(), Some(Span { start: 10, end: 13 }));
+    }
+
+    #[test]
+    fn assignment_in_predicate_message_and_accessors() {
+        let err = ParseError::AssignmentInPredicate {
+            operator: "≔".to_string(),
+            line: 3,
+            column: 8,
+            span: Some(Span { start: 20, end: 23 }),
+        };
+        assert_eq!(
+            err.to_string(),
+            "assignment operator `≔` used where a predicate is required — did you mean `=` for equality?"
+        );
+        assert_eq!(err.position(), Some((3, 8)));
+        assert_eq!(err.span(), Some(Span { start: 20, end: 23 }));
     }
 
     #[test]
