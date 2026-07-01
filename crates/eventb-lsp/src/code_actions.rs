@@ -34,6 +34,15 @@ fn has_keyword_line(text: &str, id: KeywordId) -> bool {
     text.lines().any(|line| line_keyword_is(line, id))
 }
 
+/// Whether an LSP diagnostic carries the string rule `code` (e.g. `"EB026"`),
+/// so a quick fix can attach itself to exactly that diagnostic.
+fn diagnostic_code_is(diagnostic: &crate::lsp_types::Diagnostic, code: &str) -> bool {
+    matches!(
+        &diagnostic.code,
+        Some(crate::lsp_types::NumberOrString::String(s)) if s == code
+    )
+}
+
 /// Provides code actions and refactorings
 pub struct CodeActionProvider;
 
@@ -367,7 +376,71 @@ impl CodeActionProvider {
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
 
+        // Fix a misplaced assignment operator (EB026): swap `:=`/`≔` → `=` or
+        // `:∈`/`::` → `∈`. Keyed on the rule code the diagnostics provider
+        // attaches, so it never fires on an unrelated syntax error.
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, "EB026"))
+        {
+            if let Some(action) = self.create_fix_assignment_in_predicate_action(
+                &params.text_document.uri,
+                diagnostic,
+                text,
+            ) {
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+        }
+
         actions
+    }
+
+    /// Quick fix for EB026 (assignment operator in a predicate). The diagnostic
+    /// range underlines just the becomes operator; replace it with the predicate
+    /// operator it was most likely meant to be — `:=`/`≔` → `=` (equality),
+    /// `:∈`/`::` → `∈` (membership). `:|`/`:∣` (becomes-such-that) has a
+    /// predicate right-hand side that cannot be rewritten by a single-token swap,
+    /// so no fix is offered for it (the diagnostic still stands).
+    fn create_fix_assignment_in_predicate_action(
+        &self,
+        uri: &Url,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+    ) -> Option<CodeAction> {
+        let start = crate::position::position_to_offset(text, diagnostic.range.start)?;
+        let end = crate::position::position_to_offset(text, diagnostic.range.end)?;
+        let operator = text.get(start..end)?;
+        let replacement = match operator {
+            ":=" | "≔" => "=",
+            ":∈" | "::" => "∈",
+            _ => return None,
+        };
+
+        let mut changes = HashMap::new();
+        changes.insert(
+            uri.clone(),
+            vec![TextEdit {
+                range: diagnostic.range,
+                new_text: replacement.to_string(),
+            }],
+        );
+
+        Some(CodeAction {
+            title: format!("Replace `{operator}` with `{replacement}`"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            edit: Some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        })
     }
 
     /// Create action to add missing END keyword

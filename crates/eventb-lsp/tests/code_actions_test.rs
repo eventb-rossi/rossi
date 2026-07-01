@@ -594,6 +594,96 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
     );
 }
 
+/// Build a CodeActionParams carrying a single EB026 diagnostic whose range is
+/// `op_range` (the becomes operator), the shape the diagnostics provider emits.
+fn eb026_params(uri: &str, op_range: Range) -> CodeActionParams {
+    use eventb_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString};
+    let mut params = create_test_params(uri, op_range);
+    params.context.diagnostics = vec![Diagnostic {
+        range: op_range,
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String("EB026".to_string())),
+        message: "assignment operator `:=` used where a predicate is required".to_string(),
+        ..Default::default()
+    }];
+    params
+}
+
+#[test]
+fn eb026_offers_equality_swap_for_becomes_equal() {
+    // `@inv1 x := 5` → offer replacing `:=` with `=`, attached to the diagnostic.
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x := 5\nEND\n";
+    let op = Range {
+        start: Position::new(4, 12),
+        end: Position::new(4, 14),
+    };
+    let params = eb026_params("file:///m.eventb", op);
+    let actions = provider
+        .provide_code_actions(&params, text)
+        .unwrap_or_default();
+
+    let fix = actions.iter().find_map(|a| match a {
+        CodeActionOrCommand::CodeAction(action) if action.title.contains("Replace") => Some(action),
+        _ => None,
+    });
+    let fix = fix.expect("a Replace quick fix must be offered for EB026");
+    assert_eq!(fix.title, "Replace `:=` with `=`");
+    assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
+    assert!(fix.diagnostics.is_some(), "fix attaches to the diagnostic");
+    let edit = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///m.eventb").unwrap()][0];
+    assert_eq!(edit.new_text, "=");
+    assert_eq!(edit.range, op, "edit replaces exactly the operator");
+}
+
+#[test]
+fn eb026_offers_membership_swap_for_becomes_in() {
+    // `@inv1 x :∈ ℕ` → offer replacing `:∈` with `∈`.
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x :∈ ℕ\nEND\n";
+    let op = Range {
+        start: Position::new(4, 12),
+        end: Position::new(4, 14),
+    };
+    let params = eb026_params("file:///m.eventb", op);
+    let actions = provider
+        .provide_code_actions(&params, text)
+        .unwrap_or_default();
+
+    assert!(
+        actions.iter().any(|a| matches!(
+            a,
+            CodeActionOrCommand::CodeAction(action) if action.title == "Replace `:∈` with `∈`"
+        )),
+        "the `:∈` → `∈` quick fix must be offered, got {actions:?}"
+    );
+}
+
+#[test]
+fn eb026_offers_no_swap_for_becomes_such_that() {
+    // `@inv1 x :| x' > 0` (becomes-such-that) has a predicate RHS with no
+    // single-token fix, so no quick fix is offered — the diagnostic still stands.
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x :| x' > 0\nEND\n";
+    let op = Range {
+        start: Position::new(4, 12),
+        end: Position::new(4, 14),
+    };
+    let params = eb026_params("file:///m.eventb", op);
+    let actions = provider
+        .provide_code_actions(&params, text)
+        .unwrap_or_default();
+
+    assert!(
+        !actions.iter().any(|a| matches!(
+            a,
+            CodeActionOrCommand::CodeAction(action) if action.title.starts_with("Replace")
+        )),
+        "no Replace quick fix for `:|`, got {actions:?}"
+    );
+}
+
 #[test]
 fn test_add_missing_end_not_offered_when_terminated() {
     // A complete MACHINE … END whose only problem is a typo deep inside a

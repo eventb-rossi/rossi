@@ -85,19 +85,27 @@ pub(crate) fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -
     use rossi::ParseError;
 
     // pest's multi-line dump is collapsed to a single line; located variants
-    // keep their own message; everything else uses the Display rendering.
-    let message = match error {
-        ParseError::PestError { message, .. } => concise_pest_message(message),
+    // keep their own message; everything else uses the Display rendering. A
+    // misplaced assignment carries the EB026 code so the quick-fix provider can
+    // recognise it (other parse errors have no rule code).
+    let (code, message) = match error {
+        ParseError::PestError { message, .. } => (None, concise_pest_message(message)),
         ParseError::RecoverableError { message, .. } | ParseError::ClauseError { message, .. } => {
-            message.clone()
+            (None, message.clone())
         }
-        _ => error.to_string(),
+        ParseError::AssignmentInPredicate { .. } => (
+            Some(NumberOrString::String(
+                RuleId::AssignmentInPredicate.code().to_string(),
+            )),
+            error.to_string(),
+        ),
+        _ => (None, error.to_string()),
     };
 
     lsp_diagnostic(
         parse_error_range(error, text),
         DiagnosticSeverity::ERROR,
-        None,
+        code,
         message,
     )
 }
@@ -518,6 +526,37 @@ mod tests {
         // The diagnostic stays on the @EntitiesPartition line (0-indexed 5),
         // never reaching @RolesPartition on line 6.
         assert!(diagnostics[0].range.end.line < 6);
+    }
+
+    #[test]
+    fn assignment_in_invariant_is_eb026_error() {
+        // `@inv1 x := 5` is an assignment where a predicate is required. Through
+        // the recovery path the LSP reports it as an EB026 error underlining just
+        // the `:=` operator, so the quick-fix provider can match on the code.
+        let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x := 5\nEND\n";
+        let result = rossi::parse_components_with_recovery(text);
+        let diagnostics: Vec<_> = result
+            .errors
+            .iter()
+            .map(|e| parse_error_to_diagnostic(e, text))
+            .collect();
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "one EB026 diagnostic: {diagnostics:?}"
+        );
+        let d = &diagnostics[0];
+        assert_eq!(code_of(d), Some("EB026"));
+        assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            d.message.contains("assignment operator"),
+            "message names the operator: {}",
+            d.message
+        );
+        // The range underlines just `:=` on the invariant line (0-indexed 4).
+        assert_eq!(d.range.start.line, 4);
+        assert_eq!(d.range.start.character, 12);
+        assert_eq!(d.range.end.character, 14);
     }
 
     // --- single-component lints (EB021-023) ---------------------------------
