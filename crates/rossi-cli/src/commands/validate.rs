@@ -1,5 +1,8 @@
 use clap::{Args, ValueEnum};
-use rossi::{Component, ParseError, parse_components, parse_zip_with_recovery};
+use rossi::{
+    Component, ParseError, parse_components, parse_components_with_recovery,
+    parse_zip_with_recovery,
+};
 use rossi_build::project::discover_projects;
 use rossi_build::{Diagnostic, Project, RuleId, Severity, error::ProjectError};
 use serde::{Serialize, Serializer};
@@ -232,16 +235,43 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             }
             results
         }
-        // Loose `.eventb` text → Camille parse failure (EB004).
+        // Loose `.eventb` text → Camille parse failure (EB004). A misplaced
+        // assignment in a predicate (EB026) is one such failure; recover
+        // per-clause to report it precisely (with the offending operator) rather
+        // than as a whole-file EB004.
         Err(e) => {
-            let mut result = error_result(
-                display,
-                None,
-                format!("{e}"),
-                Some(RuleId::CamilleParseError),
-            );
-            result.region = parse_error_region(&e, source);
-            vec![result]
+            let recovered = parse_components_with_recovery(source);
+            let mut results: Vec<ValidationResult> = recovered
+                .errors
+                .iter()
+                .filter(|err| matches!(err, ParseError::AssignmentInPredicate { .. }))
+                .map(|err| {
+                    let mut result = error_result(
+                        display,
+                        None,
+                        format!("{err}"),
+                        Some(rule_for_parse_error(err)),
+                    );
+                    result.region = parse_error_region(err, source);
+                    result
+                })
+                .collect();
+            // Keep the whole-file EB004 unless the misplaced assignment(s) are
+            // the *only* thing recovery found: that way a co-occurring genuine
+            // parse error is never silently dropped, while a lone `:=` still
+            // reports as one precise EB026 row and not a redundant EB004.
+            let only_assignments = !results.is_empty() && results.len() == recovered.errors.len();
+            if !only_assignments {
+                let mut fallback = error_result(
+                    display,
+                    None,
+                    format!("{e}"),
+                    Some(RuleId::CamilleParseError),
+                );
+                fallback.region = parse_error_region(&e, source);
+                results.push(fallback);
+            }
+            results
         }
     }
 }
@@ -540,6 +570,9 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
         // Incompatible-operator rejection is a formula syntax error: the Rodin
         // formula parser folds it into the same diagnostic class.
         ParseError::IncompatibleOperators { .. } => RuleId::FormulaParseError,
+        // A predicate written as an assignment gets its own rule (EB026) rather
+        // than the generic formula error.
+        ParseError::AssignmentInPredicate { .. } => RuleId::AssignmentInPredicate,
         _ => RuleId::XmlParseError,
     }
 }
@@ -749,6 +782,79 @@ mod tests {
         let region = result.region.expect("region resolved from the lint span");
         assert_eq!((region.start_line, region.start_column), (3, 5));
         assert_eq!((region.end_line, region.end_column), (3, 10));
+    }
+
+    #[test]
+    fn loose_text_flags_assignment_in_invariant() {
+        // A `:=` in an invariant is a misplaced assignment: loose-text validate
+        // reports it as EB026 (positioned on the operator), not a whole-file
+        // EB004 Camille error.
+        let source = "MACHINE M\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x := 5\nEND\n";
+        let cli = ValidateArgs {
+            files: vec![],
+            format: OutputFormat::Text,
+            quiet: false,
+            continue_on_error: false,
+            no_semantic: false,
+            no_lints: false,
+            stdin_filename: None,
+        };
+        let results = validate_text_source(Path::new("m.eventb"), source, &cli);
+        let failures: Vec<_> = results.iter().filter(|r| !r.success).collect();
+        assert_eq!(failures.len(), 1, "exactly one failure row: {results:?}");
+        assert_eq!(failures[0].rule_id, Some(RuleId::AssignmentInPredicate));
+        let region = failures[0].region.expect("EB026 carries a region");
+        assert_eq!(region.start_line, 5, "operator is on the invariant line");
+        assert!(
+            failures[0]
+                .error
+                .as_deref()
+                .is_some_and(|m| m.contains("assignment operator")),
+            "message names the assignment operator: {:?}",
+            failures[0].error
+        );
+    }
+
+    #[test]
+    fn loose_text_keeps_fallback_alongside_assignment_when_other_errors_exist() {
+        // A file with BOTH a genuinely broken clause (`@inv1 y ∈` dangling) and a
+        // misplaced assignment (`@inv2 x := 5`): the precise EB026 must surface,
+        // but the co-occurring failure must not be silently dropped — the
+        // whole-file EB004 fallback is retained so the user still sees it.
+        let source = "MACHINE M\nVARIABLES\n    x\n    y\nINVARIANTS\n    @inv1 y ∈\n    @inv2 x := 5\nEND\n";
+        let cli = ValidateArgs {
+            files: vec![],
+            format: OutputFormat::Text,
+            quiet: false,
+            continue_on_error: false,
+            no_semantic: false,
+            no_lints: false,
+            stdin_filename: None,
+        };
+        let results = validate_text_source(Path::new("m.eventb"), source, &cli);
+        assert!(
+            results
+                .iter()
+                .any(|r| r.rule_id == Some(RuleId::AssignmentInPredicate)),
+            "the misplaced assignment is reported as EB026: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r.rule_id == Some(RuleId::CamilleParseError)),
+            "the co-occurring parse error is not swallowed (EB004 fallback kept): {results:?}"
+        );
+    }
+
+    #[test]
+    fn rule_for_parse_error_maps_assignment_in_predicate() {
+        let err = ParseError::AssignmentInPredicate {
+            operator: ":=".to_string(),
+            line: 1,
+            column: 3,
+            span: None,
+        };
+        assert_eq!(rule_for_parse_error(&err), RuleId::AssignmentInPredicate);
     }
 
     #[test]

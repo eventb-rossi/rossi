@@ -568,6 +568,59 @@ fn validate_directory_flags_new_event_assigning_inherited_variable() {
 }
 
 #[test]
+fn validate_flags_assignment_operator_in_invariant() {
+    // `@inv1 x := 5` writes an assignment where a predicate is required. Rodin
+    // rejects it; rossi reports EB026 (Error) with a precise message instead of
+    // a generic whole-file parse error, and the exit code flips.
+    let tmp = tempdir_unique("rossi-cli-validate-eb026");
+    let m = "MACHINE M\n\
+        VARIABLES\n    x\n\
+        INVARIANTS\n    @inv1 x := 5\n\
+        EVENTS\n\
+        EVENT INITIALISATION\n    THEN\n        @act1 x := 0\n    END\n\
+        END\n";
+    let file = tmp.join("M.eventb");
+    std::fs::write(&file, m).unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("validate JSON output should parse");
+    let eb026: Vec<&serde_json::Value> = rows.iter().filter(|r| r["rule_id"] == "EB026").collect();
+    assert_eq!(eb026.len(), 1, "exactly one EB026 row: {stdout}");
+    assert_eq!(
+        eb026[0]["severity"], "error",
+        "EB026 is Error severity: {stdout}"
+    );
+    assert!(
+        eb026[0]["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("assignment operator")),
+        "EB026 message should name the assignment operator: {stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "an Error-severity diagnostic must flip the exit code; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_sarif_output_is_valid() {
     let output = Command::new("cargo")
         .args([
