@@ -62,6 +62,10 @@ pub enum RuleId {
     /// but this refinement dropped (data-refined away), so it no longer exists
     /// in the concrete state and cannot be assigned.
     DisappearedVariable,
+    /// EB026 — A predicate context (invariant, guard, witness, or axiom) uses an
+    /// assignment operator (`:=`/`≔`, `:∈`/`::`, `:|`/`:∣`) where a predicate is
+    /// required; the intended operator is almost always `=`.
+    AssignmentInPredicate,
 }
 
 impl RuleId {
@@ -89,6 +93,7 @@ impl RuleId {
             RuleId::ShadowedName => "EB023",
             RuleId::NewEventAssignsInheritedVariable => "EB024",
             RuleId::DisappearedVariable => "EB025",
+            RuleId::AssignmentInPredicate => "EB026",
         }
     }
 
@@ -116,6 +121,7 @@ impl RuleId {
             RuleId::ShadowedName => "Shadowed identifier",
             RuleId::NewEventAssignsInheritedVariable => "New event assigns inherited variable",
             RuleId::DisappearedVariable => "Disappeared variable assigned",
+            RuleId::AssignmentInPredicate => "Assignment operator in predicate",
         }
     }
 
@@ -179,6 +185,9 @@ impl RuleId {
             RuleId::DisappearedVariable => {
                 "An event assigns a variable that an abstract machine declares but this refinement does not keep (it was data-refined away). A disappeared variable no longer exists in the concrete state, so it cannot be assigned; either redeclare it in this machine's VARIABLES, or remove the assignment."
             }
+            RuleId::AssignmentInPredicate => {
+                "An invariant, guard, witness, or axiom uses an assignment operator (`:=`/`≔`, `:∈`/`::`, or `:|`/`:∣`) where a predicate is required. An assignment cannot stand in a predicate position; the intended operator is most likely `=` for equality."
+            }
         }
     }
 
@@ -200,7 +209,8 @@ impl RuleId {
             | RuleId::DuplicateIdentifier
             | RuleId::DuplicateLabel
             | RuleId::NewEventAssignsInheritedVariable
-            | RuleId::DisappearedVariable => Severity::Error,
+            | RuleId::DisappearedVariable
+            | RuleId::AssignmentInPredicate => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
@@ -235,6 +245,7 @@ impl RuleId {
             RuleId::ShadowedName,
             RuleId::NewEventAssignsInheritedVariable,
             RuleId::DisappearedVariable,
+            RuleId::AssignmentInPredicate,
         ]
     }
 }
@@ -278,6 +289,7 @@ mod tests {
         assert_eq!(RuleId::ShadowedName.code(), "EB023");
         assert_eq!(RuleId::NewEventAssignsInheritedVariable.code(), "EB024");
         assert_eq!(RuleId::DisappearedVariable.code(), "EB025");
+        assert_eq!(RuleId::AssignmentInPredicate.code(), "EB026");
     }
 
     #[test]
