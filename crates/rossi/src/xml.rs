@@ -209,13 +209,16 @@ fn wrap_attr_error(
     value: &str,
     err: ParseError,
 ) -> ParseError {
-    // A nesting rejection or an operator-incompatibility rejection is a
-    // property of the formula, not of the XML envelope — keep the variant
-    // intact so consumers classify it as a formula error (EB005) and surface
-    // its precise message instead of a malformed-attribute wrapper.
+    // A nesting rejection, an operator-incompatibility rejection, or a
+    // misplaced-assignment rejection (EB026) is a property of the formula, not
+    // of the XML envelope — keep the variant intact so consumers classify it by
+    // its own rule and surface its precise message instead of a
+    // malformed-attribute wrapper.
     if matches!(
         err,
-        ParseError::NestingTooDeep { .. } | ParseError::IncompatibleOperators { .. }
+        ParseError::NestingTooDeep { .. }
+            | ParseError::IncompatibleOperators { .. }
+            | ParseError::AssignmentInPredicate { .. }
     ) {
         return err;
     }
@@ -1930,6 +1933,29 @@ mod tests {
                 ParseError::EmptyPredicate
             ),
             ParseError::MalformedAttribute { .. }
+        ));
+    }
+
+    #[test]
+    fn wrap_attr_error_preserves_assignment_in_predicate() {
+        // A misplaced-assignment rejection (EB026) must survive attribute
+        // wrapping so the validate CLI classifies it as EB026, not EB005.
+        let eb026 = ParseError::AssignmentInPredicate {
+            operator: ":=".to_string(),
+            line: 1,
+            column: 3,
+            span: Some(crate::ast::Span { start: 2, end: 4 }),
+        };
+        assert!(matches!(
+            wrap_attr_error(
+                "m.bum",
+                "invariant",
+                Some("inv1"),
+                "predicate",
+                "x := 5",
+                eb026
+            ),
+            ParseError::AssignmentInPredicate { .. }
         ));
     }
 

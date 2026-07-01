@@ -2402,13 +2402,17 @@ fn parse_predicate_inner(
 /// Uses `predicate_complete` (with SOI/EOI) to ensure the entire input is consumed.
 pub fn parse_predicate_str(input: &str) -> Result<Predicate, ParseError> {
     let depth = nesting::check_nesting(input)?;
-    with_parser_stack(depth, || {
+    let result = with_parser_stack(depth, || {
         let pairs = RossiParser::parse(Rule::predicate_complete, input)
             .map_err(|e| ParseError::from(Box::new(e)))?;
 
         let predicate_pair = pairs.into_iter().next().ok_or(ParseError::EmptyPredicate)?;
         parse_predicate(predicate_pair)
-    })
+    });
+    // A predicate that fails to parse but is really an assignment gets the
+    // precise EB026 message instead of a generic formula error (the re-parse
+    // runs its own stack guard, so it stays outside `with_parser_stack` above).
+    result.map_err(|e| assignment_in_predicate_error(input).unwrap_or(e))
 }
 
 /// Parse an expression from a string (used by XML parser)
@@ -2443,6 +2447,95 @@ pub fn parse_action_str(input: &str) -> Result<Action, ParseError> {
 
         let action_pair = pairs.into_iter().next().ok_or(ParseError::MissingAction)?;
         parse_action(action_pair)
+    })
+}
+
+/// The six "becomes" (assignment) operator spellings — both the Unicode and
+/// ASCII form of each of the three assignment operators — taken from the
+/// operator table so this can't drift from the grammar (SSOT). No spelling is a
+/// prefix of another, so scan order does not matter for correctness.
+fn becomes_operators() -> [&'static str; 6] {
+    use crate::operators::{OperatorId, spelling};
+    let assign = spelling(OperatorId::Assignment); // ≔ / :=
+    let in_ = spelling(OperatorId::BecomesIn); // :∈ / ::
+    let such = spelling(OperatorId::BecomesSuchThat); // :∣ / :|
+    [
+        assign.unicode,
+        assign.ascii,
+        in_.unicode,
+        in_.ascii,
+        such.unicode,
+        such.ascii,
+    ]
+}
+
+/// Locate the first "becomes" operator (`≔`/`:=`, `:∈`/`::`, `:∣`/`:|`) in
+/// `input`, returning it and its byte offset. Used to point EB026 at the
+/// offending operator. Callers pass comment-free formula text (XML attribute
+/// values, or comment-masked recovery segments), so no masking is needed here.
+fn find_becomes_operator(input: &str) -> Option<(&'static str, usize)> {
+    let operators = becomes_operators();
+    input.char_indices().find_map(|(i, _)| {
+        operators
+            .into_iter()
+            .find(|op| input[i..].starts_with(*op))
+            .map(|op| (op, i))
+    })
+}
+
+/// The EB026 discrimination: a formula that fails to parse as a predicate but
+/// succeeds as an *action* is a misplaced assignment. Returns the offending
+/// "becomes" operator and its byte offset in `input`, or `None` for a genuine
+/// predicate error and for `skip` (an action carrying no operator).
+///
+/// The caller must already know the predicate parse failed — this only runs the
+/// action re-parse and the operator scan.
+fn becomes_operator_of_assignment(input: &str) -> Option<(&'static str, usize)> {
+    if parse_action_str(input).is_err() {
+        return None;
+    }
+    find_becomes_operator(input)
+}
+
+/// Strip an optional `@label` and/or leading `theorem` keyword from a recovered
+/// predicate segment (any order: `@grd1 P`, `theorem @grd1 P`, `@grd1 theorem
+/// P`, bare `P`), returning the body's byte offset within `content` and the body
+/// text. Used to hand the bare formula to the EB026 assignment discrimination.
+fn predicate_body_after_prefix(content: &str) -> (usize, &str) {
+    let mut body = content.trim_start();
+    loop {
+        let before = body.len();
+        if let Some(rest) = body.strip_prefix('@') {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            if end > 0 {
+                body = rest[end..].trim_start();
+            }
+        }
+        if starts_with_keyword(body, "theorem") {
+            body = body["theorem".len()..].trim_start();
+        }
+        if body.len() == before {
+            break;
+        }
+    }
+    (subslice_offset(content, body), body)
+}
+
+/// Build a [`ParseError::AssignmentInPredicate`] (EB026) for a formula string
+/// whose predicate parse failed, when it is really a misplaced assignment. The
+/// `line`/`column`/`span` are relative to `input`. `None` when `input` is not an
+/// assignment, so callers can fall back to the original error.
+fn assignment_in_predicate_error(input: &str) -> Option<ParseError> {
+    let (operator, offset) = becomes_operator_of_assignment(input)?;
+    let (line, column) = offset_to_line_col(input, offset);
+    Some(ParseError::AssignmentInPredicate {
+        operator: operator.to_string(),
+        line,
+        column,
+        span: Some(Span {
+            start: offset,
+            end: offset + operator.len(),
+        }),
     })
 }
 
@@ -2806,6 +2899,26 @@ fn push_recovery_error(
     label: &str,
     source: ParseError,
 ) {
+    // A predicate clause (invariant/guard/witness/axiom — never an action) that
+    // is really a misplaced assignment gets the precise EB026 error instead of a
+    // generic recovery error, matching the strict `parse_predicate_str` path.
+    if label != "action" {
+        let (body_offset, body) = predicate_body_after_prefix(content);
+        if let Some((operator, rel)) = becomes_operator_of_assignment(body) {
+            let op_start = abs_start + body_offset + rel;
+            let (line, column) = offset_to_line_col(text.original, op_start);
+            errors.push(ParseError::AssignmentInPredicate {
+                operator: operator.to_string(),
+                line,
+                column,
+                span: Some(Span {
+                    start: op_start,
+                    end: op_start + operator.len(),
+                }),
+            });
+            return;
+        }
+    }
     let abs_end = abs_start + content.len();
     let (err_line, err_col) = offset_to_line_col(text.original, abs_start);
     let subject = leading_label(content)
@@ -3367,6 +3480,19 @@ fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
             word,
             line: line + line_delta,
             column,
+            span: None,
+        },
+        ParseError::AssignmentInPredicate {
+            operator,
+            line,
+            column,
+            span: _,
+        } => ParseError::AssignmentInPredicate {
+            operator,
+            line: line + line_delta,
+            column,
+            // Byte span is relative to the region slice; drop it like the
+            // other span-bearing variants and fall back to the shifted line.
             span: None,
         },
         ParseError::ClauseError {
@@ -4137,6 +4263,109 @@ fn recover_actions_in_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EB026: a predicate string that is really an assignment is reported as
+    /// [`ParseError::AssignmentInPredicate`], carrying the offending operator,
+    /// not a generic pest error.
+    #[test]
+    fn parse_predicate_str_flags_misplaced_assignments() {
+        for (src, op) in [
+            ("x := 5", ":="),
+            ("x ≔ 5", "≔"),
+            ("x :∈ ℕ", ":∈"),
+            ("x :| x' > 0", ":|"),
+        ] {
+            match parse_predicate_str(src) {
+                Err(ParseError::AssignmentInPredicate { operator, .. }) => {
+                    assert_eq!(operator, op, "wrong operator reported for {src:?}");
+                }
+                other => panic!("expected AssignmentInPredicate for {src:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// A valid predicate parses; a formula that is neither a valid predicate nor
+    /// a valid assignment keeps its generic error; `skip` (an action with no
+    /// becomes operator) is not misreported as EB026.
+    #[test]
+    fn parse_predicate_str_does_not_overreach() {
+        assert!(parse_predicate_str("x = 5").is_ok());
+        assert!(!matches!(
+            parse_predicate_str("x ==== y"),
+            Err(ParseError::AssignmentInPredicate { .. })
+        ));
+        assert!(!matches!(
+            parse_predicate_str("skip"),
+            Err(ParseError::AssignmentInPredicate { .. })
+        ));
+    }
+
+    #[test]
+    fn find_becomes_operator_locates_first_operator() {
+        assert_eq!(find_becomes_operator("x := 5"), Some((":=", 2)));
+        assert_eq!(find_becomes_operator("x = 5"), None);
+    }
+
+    /// EB026 flows through recovery too: an invariant clause whose predicate is a
+    /// misplaced assignment yields a top-level `AssignmentInPredicate` (with an
+    /// absolute span), not a wrapped `RecoverableError`.
+    #[test]
+    fn recovery_reports_assignment_in_invariant() {
+        let src = "machine M\ninvariants\n  @inv1 x := 5\nend\n";
+        let result = parse_components_with_recovery(src);
+        let eb026 = result
+            .errors
+            .iter()
+            .find(|e| matches!(e, ParseError::AssignmentInPredicate { .. }))
+            .expect("recovery should report EB026 for an assignment in an invariant");
+        let span = eb026.span().expect("EB026 carries an operator span");
+        assert_eq!(&src[span.start..span.end], ":=");
+    }
+
+    /// EB026 in a component *after the first* in a multi-component file must be
+    /// line-shifted to absolute coordinates (the multi-component recovery path
+    /// parses each component in its own slice, then offsets the errors).
+    #[test]
+    fn recovery_shifts_assignment_in_later_component() {
+        let src = concat!(
+            "CONTEXT C\n",        // 1
+            "CONSTANTS\n",        // 2
+            "    k\n",            // 3
+            "AXIOMS\n",           // 4
+            "    @axm1 k = 5\n",  // 5
+            "END\n",              // 6
+            "MACHINE M\n",        // 7
+            "VARIABLES\n",        // 8
+            "    x\n",            // 9
+            "INVARIANTS\n",       // 10
+            "    @inv1 x := 5\n", // 11 — the `:=` is here
+            "END\n",              // 12
+        );
+        let result = parse_components_with_recovery(src);
+        let eb026 = result
+            .errors
+            .iter()
+            .find(|e| matches!(e, ParseError::AssignmentInPredicate { .. }))
+            .expect("EB026 is reported for the machine's invariant");
+        // Absolute position: line 11, column 13 (the `:=`), not slice-relative.
+        assert_eq!(eb026.position(), Some((11, 13)));
+    }
+
+    /// An action clause (THEN) legitimately uses becomes operators — recovery of
+    /// a broken action must never be reclassified as EB026.
+    #[test]
+    fn recovery_does_not_flag_actions_as_eb026() {
+        // A genuinely broken action (dangling `+`) recovers as a plain error.
+        let src = "machine M\nevents\n  event evt\n  then\n    @act1 x := y +\n  end\nend\n";
+        let result = parse_components_with_recovery(src);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ParseError::AssignmentInPredicate { .. })),
+            "an action must never be reported as EB026"
+        );
+    }
 
     /// The displayable glyph [`friendly_rule_name`] must return for every rule
     /// it handles. This pins the observable behaviour and is the authoritative
