@@ -419,10 +419,56 @@ fn test_cli_mixed_text_and_zip_files() {
     assert!(stdout.contains("Passed: 6 ✓"));
 }
 
+/// A minimal machine whose variable `dead` is declared but never referenced,
+/// so EB011 fires at its declaring level — independent of any refinement-chain
+/// lint semantics (the bundled example zips' kept-variable warnings depend on
+/// what inherited clauses count as references). `dead` is deliberately never
+/// assigned either: an assigned-but-untyped variable cascades into an Error
+/// and would flip the exit code, whereas this machine stays warnings-only
+/// (EB006 untyped + EB011 dead + EB014 not initialised). It SEES
+/// [`LINT_FIXTURE_BUC`] so the fixture also exercises context loading and
+/// cross-file SEES resolution.
+const LINT_FIXTURE_BUM: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.seesContext name="_s1" org.eventb.core.target="Ctx"/>
+<org.eventb.core.variable name="_v1" org.eventb.core.identifier="x"/>
+<org.eventb.core.variable name="_v2" org.eventb.core.identifier="dead"/>
+<org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="x ∈ ℤ" org.eventb.core.theorem="false"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_a1" org.eventb.core.assignment="x ≔ lo" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>
+"#;
+
+/// The context [`LINT_FIXTURE_BUM`] sees. Its constant is referenced by its
+/// own axiom (and the machine's INIT), so the context itself is warning-free.
+const LINT_FIXTURE_BUC: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.constant name="_c1" org.eventb.core.identifier="lo"/>
+<org.eventb.core.axiom name="_a1" org.eventb.core.label="axm1" org.eventb.core.predicate="lo ∈ ℤ" org.eventb.core.theorem="false"/>
+</org.eventb.core.contextFile>
+"#;
+
+/// Write the lint fixture (machine + seen context) as a zip in a fresh temp
+/// dir; returns `(tempdir, zip_path)` — remove the tempdir when done.
+fn lint_fixture_zip(prefix: &str) -> (PathBuf, PathBuf) {
+    let tmp = tempdir_unique(prefix);
+    let zip_path = tmp.join("lint-fixture.zip");
+    write_zip(
+        &zip_path,
+        &[
+            ("Ctx.buc", LINT_FIXTURE_BUC.as_bytes()),
+            ("Lint.bum", LINT_FIXTURE_BUM.as_bytes()),
+        ],
+    );
+    (tmp, zip_path)
+}
+
 #[test]
 fn validate_zip_lint_warning_exits_zero() {
-    // binary-search.zip leaves variable `r` unreferenced after refinement,
-    // so EB011 fires. Warnings must not flip the exit code.
+    // The fixture machine leaves `dead` unreferenced, so EB011 fires.
+    // Warnings must not flip the exit code.
+    let (tmp, zip_path) = lint_fixture_zip("rossi-cli-lint-warn-zip");
     let output = Command::new("cargo")
         .args([
             "run",
@@ -430,7 +476,7 @@ fn validate_zip_lint_warning_exits_zero() {
             "rossi-cli",
             "--",
             "validate",
-            "../rossi/examples/binary-search.zip",
+            zip_path.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -441,12 +487,15 @@ fn validate_zip_lint_warning_exits_zero() {
         stdout.contains("[EB011]"),
         "expected EB011 in stdout: {stdout}"
     );
+
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn validate_no_lints_drops_lint_rows() {
     // Same model, but --no-lints disables the advisory passes. No EB011
-    // rows should remain.
+    // rows should remain (the EB006 build warning is not a lint and stays).
+    let (tmp, zip_path) = lint_fixture_zip("rossi-cli-no-lints");
     let output = Command::new("cargo")
         .args([
             "run",
@@ -455,7 +504,7 @@ fn validate_no_lints_drops_lint_rows() {
             "--",
             "validate",
             "--no-lints",
-            "../rossi/examples/binary-search.zip",
+            zip_path.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -466,10 +515,13 @@ fn validate_no_lints_drops_lint_rows() {
         !stdout.contains("EB011"),
         "EB011 should be suppressed under --no-lints: {stdout}"
     );
+
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
 fn validate_json_includes_rule_id_for_lint() {
+    let (tmp, zip_path) = lint_fixture_zip("rossi-cli-json-rule-id");
     let output = Command::new("cargo")
         .args([
             "run",
@@ -479,7 +531,7 @@ fn validate_json_includes_rule_id_for_lint() {
             "validate",
             "--format",
             "json",
-            "../rossi/examples/binary-search.zip",
+            zip_path.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -494,6 +546,8 @@ fn validate_json_includes_rule_id_for_lint() {
         stdout.contains("\"severity\": \"warning\""),
         "expected severity field in JSON: {stdout}"
     );
+
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -622,6 +676,7 @@ fn validate_flags_assignment_operator_in_invariant() {
 
 #[test]
 fn validate_sarif_output_is_valid() {
+    let (tmp, zip_path) = lint_fixture_zip("rossi-cli-sarif");
     let output = Command::new("cargo")
         .args([
             "run",
@@ -631,7 +686,7 @@ fn validate_sarif_output_is_valid() {
             "validate",
             "--format",
             "sarif",
-            "../rossi/examples/binary-search.zip",
+            zip_path.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -666,6 +721,8 @@ fn validate_sarif_output_is_valid() {
             "result ruleId {rid} not in tool.rules"
         );
     }
+
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[test]
@@ -701,13 +758,13 @@ fn validate_sarif_includes_parse_error_region_issue_42() {
 
 #[test]
 fn validate_directory_input() {
-    // Extract binary-search.zip into a temp dir and validate the directory.
-    // The archive nests its files under a `binary-search/` folder, so we
-    // pass that to validate (matching the layout Rodin uses on disk).
-    let zip_path = PathBuf::from("../rossi/examples/binary-search.zip");
+    // Validate a project given as a directory of Rodin files (the layout
+    // Rodin uses on disk) — a context and a machine that SEES it, so the
+    // directory path is checked for .buc loading and cross-file SEES
+    // resolution, not just single-machine parsing.
     let tmp = tempdir_unique("rossi-cli-validate-dir");
-    extract_zip_to(&zip_path, &tmp);
-    let project_dir = first_subdir_with_rodin_files(&tmp);
+    std::fs::write(tmp.join("Ctx.buc"), LINT_FIXTURE_BUC).unwrap();
+    std::fs::write(tmp.join("Lint.bum"), LINT_FIXTURE_BUM).unwrap();
 
     let output = Command::new("cargo")
         .args([
@@ -716,7 +773,7 @@ fn validate_directory_input() {
             "rossi-cli",
             "--",
             "validate",
-            project_dir.to_str().unwrap(),
+            tmp.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute command");
@@ -727,8 +784,8 @@ fn validate_directory_input() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Valid Context 'C0'"));
-    assert!(stdout.contains("Valid Machine 'M0'"));
+    assert!(stdout.contains("Valid Context 'Ctx'"));
+    assert!(stdout.contains("Valid Machine 'Lint'"));
     // Lint warnings still surface from the directory path.
     assert!(stdout.contains("[EB011]"));
 
@@ -1801,36 +1858,6 @@ fn extract_zip_to(zip_path: &PathBuf, dest: &std::path::Path) {
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).unwrap();
         std::fs::write(out, buf).unwrap();
-    }
-}
-
-/// Walk down from `root` until we hit a directory that directly contains
-/// at least one `.buc` or `.bum`. Mirrors what Rodin projects look like
-/// once unzipped (the archive usually has a single top-level folder).
-fn first_subdir_with_rodin_files(root: &std::path::Path) -> PathBuf {
-    let mut cur = root.to_path_buf();
-    loop {
-        let entries: Vec<_> = std::fs::read_dir(&cur)
-            .unwrap()
-            .filter_map(Result::ok)
-            .collect();
-        let has_rodin = entries.iter().any(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|x| x == "buc" || x == "bum")
-        });
-        if has_rodin {
-            return cur;
-        }
-        let only_dir = entries
-            .iter()
-            .filter(|e| e.path().is_dir())
-            .collect::<Vec<_>>();
-        if only_dir.len() == 1 {
-            cur = only_dir[0].path();
-        } else {
-            return cur;
-        }
     }
 }
 
