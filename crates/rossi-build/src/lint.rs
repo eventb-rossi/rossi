@@ -49,7 +49,10 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
                 let assigned = index.effective_assigned_for_machine(m.name.as_str());
                 diags.extend(lint_dead_variable(m, &referenced));
                 diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
-                diags.extend(lint_incomplete_init(m));
+                diags.extend(lint_incomplete_init(
+                    m,
+                    index.init_inherited_assigned.get(m.name.as_str()),
+                ));
                 // EB024 can only fire on a machine that has events; skip the
                 // ancestor-chain walk otherwise.
                 if !m.events.is_empty() {
@@ -140,7 +143,7 @@ fn lint_dead_constant(c: &Context, referenced: &BTreeSet<String>) -> Vec<Diagnos
         .collect()
 }
 
-fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
+fn lint_incomplete_init(m: &Machine, inherited_init: Option<&BTreeSet<String>>) -> Vec<Diagnostic> {
     let Some(init) = &m.initialisation else {
         // No INITIALISATION at all: report once per declared variable.
         return m
@@ -159,9 +162,11 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
             .collect();
     };
 
-    // An `extended` INIT inherits the parent's assignments — assume completeness
-    // until we have access to the refinement chain in this pass.
-    if init.extended {
+    // An `extended` INIT inherits the ancestor chain's assignments; its map
+    // entry exists only when that chain fully resolved. Without one there
+    // is no set to judge completeness against — stay silent; EB008/EB009
+    // report the broken chain itself.
+    if init.extended && inherited_init.is_none() {
         return Vec::new();
     }
 
@@ -173,6 +178,7 @@ fn lint_incomplete_init(m: &Machine) -> Vec<Diagnostic> {
     m.variables
         .iter()
         .filter(|v| !lhs.contains(v.name.as_str()))
+        .filter(|v| !inherited_init.is_some_and(|s| s.contains(&v.name)))
         .map(|v| Diagnostic {
             severity: Severity::Warning,
             origin: format!("{}.INITIALISATION", m.name),
@@ -630,28 +636,38 @@ fn assigned_in_machine(m: &Machine) -> BTreeSet<String> {
 // count as the machine's own references/assignments even though they are
 // absent from its literal text.
 
+/// How a REFINES ancestor walk ended: at a true root machine, or truncated
+/// by a parent missing from the project or a circular chain (EB009's and
+/// EB008's domains — reported elsewhere).
+#[derive(Clone, Copy, PartialEq)]
+enum ChainEnd {
+    Root,
+    Truncated,
+}
+
 /// REFINES ancestors of `m` that are present in the project, nearest-first,
-/// cycle-guarded (a circular chain is EB008's domain; a parent missing from
-/// the project — an unknown REFINES target, EB009's — stops the walk).
+/// cycle-guarded, together with how the walk ended.
 fn ancestor_machines<'a>(
     m: &'a Machine,
     machines: &BTreeMap<&'a str, &'a Machine>,
-) -> Vec<&'a Machine> {
+) -> (Vec<&'a Machine>, ChainEnd) {
     let mut out = Vec::new();
     let mut visited: BTreeSet<&str> = BTreeSet::new();
     visited.insert(m.name.as_str());
     let mut cur = m;
-    while let Some(parent) = cur.refines.as_deref() {
+    loop {
+        let Some(parent) = cur.refines.as_deref() else {
+            return (out, ChainEnd::Root);
+        };
         if !visited.insert(parent) {
-            break;
+            return (out, ChainEnd::Truncated);
         }
         let Some(&next) = machines.get(parent) else {
-            break;
+            return (out, ChainEnd::Truncated);
         };
         out.push(next);
         cur = next;
     }
-    out
 }
 
 /// The ancestor-event chain an extended event materialises, root-first.
@@ -725,44 +741,76 @@ struct InitChain {
     refs: BTreeSet<String>,
     /// Assigned by inherited INIT actions (left-hand sides).
     assigned: BTreeSet<String>,
+    /// Whether every extended link found an ancestor INIT to inherit from.
+    /// `false` means the chain is abnormal — the parent machine is missing
+    /// from the project, the REFINES chain is circular, or an ancestor has
+    /// no INITIALISATION at all — so `assigned` may be incomplete: still
+    /// sound as extra references/assignments for EB011/EB012, but EB014
+    /// must not judge completeness against it (EB008/EB009 report a broken
+    /// chain; a missing ancestor INIT already gets its own per-variable
+    /// EB014 on the ancestor, and re-flagging every kept variable on the
+    /// child would only duplicate that noise).
+    fully_resolved: bool,
 }
 
 /// Walk the INIT chain an extended INITIALISATION materialises: the
 /// ancestor's INIT actions, continuing up while that INIT is itself
 /// extended. A non-extended ancestor INIT is self-contained and closes the
-/// chain, as does an ancestor without any INIT (the SC inherits nothing in
-/// that case).
-fn inherited_init_chain(ancestors: &[&Machine]) -> InitChain {
+/// chain resolved; a chain still extended when the ancestors run out is
+/// resolved only if the walk genuinely reached a root machine.
+fn inherited_init_chain(ancestors: &[&Machine], chain_end: ChainEnd) -> InitChain {
     let mut refs = BTreeSet::new();
     let mut assigned = BTreeSet::new();
     for anc in ancestors {
         let Some(init) = &anc.initialisation else {
-            break;
+            return InitChain {
+                refs,
+                assigned,
+                fully_resolved: false,
+            };
         };
         for la in &init.actions {
             collect_referenced_in_action_rhs(&la.action, &mut refs);
             assigned.extend(lhs_variables(&la.action).into_iter().map(String::from));
         }
         if !init.extended {
-            break;
+            return InitChain {
+                refs,
+                assigned,
+                fully_resolved: true,
+            };
         }
     }
-    InitChain { refs, assigned }
+    InitChain {
+        refs,
+        assigned,
+        fully_resolved: chain_end == ChainEnd::Root,
+    }
 }
 
 /// Everything machine `m`'s emitted `.bcm` inherits from its REFINES
 /// ancestors: the extended events' chain clauses and the extended-INIT
-/// chain.
-fn inherited_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributions {
+/// chain. The second value is the inherited INIT assignment set when the
+/// chain fully resolved — EB014's completeness input; `None` means an
+/// extended INIT whose chain can't be judged.
+fn inherited_contributions(
+    m: &Machine,
+    ancestors: &[&Machine],
+    chain_end: ChainEnd,
+) -> (UpwardContributions, Option<BTreeSet<String>>) {
     let mut up = upward_contributions(m, ancestors);
 
+    let mut init_assigned = None;
     if m.initialisation.as_ref().is_some_and(|i| i.extended) {
-        let chain = inherited_init_chain(ancestors);
+        let chain = inherited_init_chain(ancestors, chain_end);
         up.refs.extend(chain.refs);
-        up.assigned.extend(chain.assigned);
+        up.assigned.extend(chain.assigned.iter().cloned());
+        if chain.fully_resolved {
+            init_assigned = Some(chain.assigned);
+        }
     }
 
-    up
+    (up, init_assigned)
 }
 
 struct ProjectIndex<'a> {
@@ -796,6 +844,11 @@ struct ProjectIndex<'a> {
     ///         SEE any of its extends-descendants, and the refines-descendants
     ///         of any such machine}`.
     ctx_consumer_machines: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    /// Per-machine, the INIT-action LHS names an extended INITIALISATION
+    /// inherits from its ancestor chain. Present only when every extended
+    /// link resolved (see [`InitChain::fully_resolved`]); consulted by
+    /// EB014.
+    init_inherited_assigned: BTreeMap<&'a str, BTreeSet<String>>,
 }
 
 impl<'a> ProjectIndex<'a> {
@@ -836,14 +889,18 @@ impl<'a> ProjectIndex<'a> {
         let mut mach_inherited_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_inherited_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_ancestors: BTreeMap<&str, Vec<&Machine>> = BTreeMap::new();
+        let mut init_inherited_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         for (&name, &m) in &machines {
-            let ancestors = ancestor_machines(m, &machines);
-            let up = inherited_contributions(m, &ancestors);
+            let (ancestors, chain_end) = ancestor_machines(m, &machines);
+            let (up, init_assigned) = inherited_contributions(m, &ancestors, chain_end);
             if !up.refs.is_empty() {
                 mach_inherited_refs.insert(name, up.refs);
             }
             if !up.assigned.is_empty() {
                 mach_inherited_assigned.insert(name, up.assigned);
+            }
+            if let Some(set) = init_assigned {
+                init_inherited_assigned.insert(name, set);
             }
             mach_ancestors.insert(name, ancestors);
         }
@@ -899,6 +956,7 @@ impl<'a> ProjectIndex<'a> {
             ctx_extends_descendants,
             mach_refines_descendants,
             ctx_consumer_machines,
+            init_inherited_assigned,
         }
     }
 
@@ -2073,6 +2131,114 @@ mod tests {
         assert!(
             diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
             "v is assigned by the inherited INIT action: {diags:#?}"
+        );
+    }
+
+    fn eb014_on<'d>(diags: &'d [Diagnostic], machine: &str) -> Vec<&'d Diagnostic> {
+        diags_on(
+            diags,
+            RuleId::IncompleteInitialisation,
+            &format!("{machine}.INITIALISATION"),
+        )
+    }
+
+    #[test]
+    fn extended_init_inheriting_all_assignments_is_complete() {
+        // A two-level extended-INIT chain: M0 assigns v, M1 (extended) adds
+        // w, M2 (extended) adds u. Every variable of every machine is
+        // covered once the chain is folded in — no EB014 anywhere.
+        let m0 = abstract_machine("M0", "v");
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v"), nv("w")];
+        m1.initialisation = Some(init_event(&["w"], true));
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v"), nv("w"), nv("u")];
+        m2.initialisation = Some(init_event(&["u"], true));
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(
+            eb014_on(&diags, "M1").is_empty() && eb014_on(&diags, "M2").is_empty(),
+            "the extended-INIT chain covers every variable: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn extended_init_missing_new_variable_is_flagged() {
+        // M1's extended INIT inherits the assignment of the kept `v` but
+        // forgets its own new variable `w` — EB014 fires for `w` only.
+        // (The old blanket bail on extended INITs missed this entirely.)
+        let m0 = abstract_machine("M0", "v");
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v"), nv("w")];
+        m1.initialisation = Some(init_event(&[], true));
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        let eb014 = eb014_on(&diags, "M1");
+        assert_eq!(
+            eb014.len(),
+            1,
+            "exactly one EB014, for the new variable: {diags:#?}"
+        );
+        assert!(
+            eb014[0].message.contains("`w`"),
+            "the unassigned variable is w: {:?}",
+            eb014[0]
+        );
+    }
+
+    #[test]
+    fn extended_init_with_missing_parent_stays_silent() {
+        // The extended INIT names a parent that isn't in the project — the
+        // chain is unresolvable, so EB014 keeps the old bail-out behaviour
+        // (EB009 reports the unknown REFINES target).
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("Absent".into());
+        m1.variables = vec![nv("v")];
+        m1.initialisation = Some(init_event(&[], true));
+
+        let diags = run(&proj(vec![pc("M1.bum", Component::Machine(m1))]));
+        assert!(
+            eb014_on(&diags, "M1").is_empty(),
+            "an unresolvable chain must not produce EB014 noise: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn extended_init_with_uninitialised_parent_stays_silent() {
+        // The parent has no INITIALISATION at all — it already gets one
+        // EB014 per variable ('no INITIALISATION event'). Judging the
+        // child's extended INIT against the empty inherited set would only
+        // duplicate that noise onto every kept variable, so the chain
+        // counts as unresolvable and the child stays silent.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v"), nv("w")];
+        m1.initialisation = Some(init_event(&[], true));
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb014_on(&diags, "M1").is_empty(),
+            "the missing INIT is M0's problem, already reported there: {diags:#?}"
+        );
+        assert_eq!(
+            eb014_on(&diags, "M0").len(),
+            1,
+            "M0 still gets its own no-INITIALISATION report: {diags:#?}"
         );
     }
 
