@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
-use rossi::{Component, Context, LabeledAction, LabeledPredicate, Machine};
+use rossi::{Component, Context, Event, LabeledAction, LabeledPredicate, Machine};
 
 use crate::ast_util::lhs_variables;
 use crate::project::Project;
@@ -620,19 +620,173 @@ fn assigned_in_machine(m: &Machine) -> BTreeSet<String> {
 // in machine M1 read only by `M2 refines M1`. `ProjectIndex` builds, once
 // per `lint::run` call, the inverted indexes needed to union references and
 // assignments across the refinement/extension chain.
+//
+// The chain contributes in both directions. Downward, a descendant's own
+// references keep an ancestor's declaration alive (`effective_*`). Upward,
+// a machine's emitted `.bcm` materialises clauses it inherits from its
+// REFINES ancestors — extended events splice in the abstract event's
+// parameters/guards/actions, and an extended INITIALISATION splices in the
+// abstract INIT actions (see `sc::machine_record::render_event`) — so those
+// count as the machine's own references/assignments even though they are
+// absent from its literal text.
+
+/// REFINES ancestors of `m` that are present in the project, nearest-first,
+/// cycle-guarded (a circular chain is EB008's domain; a parent missing from
+/// the project — an unknown REFINES target, EB009's — stops the walk).
+fn ancestor_machines<'a>(
+    m: &'a Machine,
+    machines: &BTreeMap<&'a str, &'a Machine>,
+) -> Vec<&'a Machine> {
+    let mut out = Vec::new();
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    visited.insert(m.name.as_str());
+    let mut cur = m;
+    while let Some(parent) = cur.refines.as_deref() {
+        if !visited.insert(parent) {
+            break;
+        }
+        let Some(&next) = machines.get(parent) else {
+            break;
+        };
+        out.push(next);
+        cur = next;
+    }
+    out
+}
+
+/// The ancestor-event chain an extended event materialises, root-first.
+///
+/// The refinement target at each level is the explicit `refines` name or,
+/// when absent, the event's own name — mirroring
+/// `sc::machine::events::resolve_effective_refines` (Rodin XML leaves
+/// `refines` unset on a self-closing extended event). Only `extended` links
+/// are followed: a plain-refines ancestor's body is self-contained, so it
+/// terminates the chain and contributes its own clauses. Lookup takes the
+/// first name match; the SC's `events_by_label` map is last-wins, but the
+/// two diverge only on duplicate event labels (EB022).
+fn extends_chain_root_first<'a>(e: &'a Event, ancestors: &[&'a Machine]) -> Vec<&'a Event> {
+    let mut chain = Vec::new();
+    let mut cur = e;
+    for anc in ancestors {
+        let target = cur.refines.as_deref().unwrap_or(cur.name.as_str());
+        let Some(ev) = anc.events.iter().find(|ae| ae.name == target) else {
+            break;
+        };
+        chain.push(ev);
+        if !ev.extended {
+            break;
+        }
+        cur = ev;
+    }
+    chain.reverse();
+    chain
+}
+
+/// Names a machine's emitted `.bcm` inherits from its REFINES ancestors.
+struct UpwardContributions {
+    /// Referenced in inherited guards and action right-hand sides.
+    refs: BTreeSet<String>,
+    /// Assigned by inherited actions (left-hand sides).
+    assigned: BTreeSet<String>,
+}
+
+/// Collect what machine `m`'s extended events inherit from above: the
+/// ancestor chain's guards and action right-hand sides (references) and
+/// action left-hand sides (assignments).
+///
+/// Parameters accumulate down the chain, so each level's clauses are walked
+/// with the locals of every level at or above it — an inherited parameter
+/// must not leak into the machine-level sets. Ancestor `with`/`witnesses`
+/// are NOT inherited by the SC and are not collected.
+fn upward_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributions {
+    let mut refs = BTreeSet::new();
+    let mut assigned = BTreeSet::new();
+
+    for e in m.events.iter().filter(|e| e.extended) {
+        let mut locals: Vec<&str> = Vec::new();
+        for ev in extends_chain_root_first(e, ancestors) {
+            locals.extend(ev.parameters.iter().map(|p| p.name.as_str()));
+            for g in &ev.guards {
+                collect_referenced_in_predicate_with_locals(&g.predicate, &locals, &mut refs);
+            }
+            for la in &ev.actions {
+                collect_referenced_in_action_rhs_with_locals(&la.action, &locals, &mut refs);
+                assigned.extend(lhs_variables(&la.action).into_iter().map(String::from));
+            }
+        }
+    }
+
+    UpwardContributions { refs, assigned }
+}
+
+/// The INIT-action chain an extended INITIALISATION inherits.
+struct InitChain {
+    /// Referenced by inherited INIT-action right-hand sides.
+    refs: BTreeSet<String>,
+    /// Assigned by inherited INIT actions (left-hand sides).
+    assigned: BTreeSet<String>,
+}
+
+/// Walk the INIT chain an extended INITIALISATION materialises: the
+/// ancestor's INIT actions, continuing up while that INIT is itself
+/// extended. A non-extended ancestor INIT is self-contained and closes the
+/// chain, as does an ancestor without any INIT (the SC inherits nothing in
+/// that case).
+fn inherited_init_chain(ancestors: &[&Machine]) -> InitChain {
+    let mut refs = BTreeSet::new();
+    let mut assigned = BTreeSet::new();
+    for anc in ancestors {
+        let Some(init) = &anc.initialisation else {
+            break;
+        };
+        for la in &init.actions {
+            collect_referenced_in_action_rhs(&la.action, &mut refs);
+            assigned.extend(lhs_variables(&la.action).into_iter().map(String::from));
+        }
+        if !init.extended {
+            break;
+        }
+    }
+    InitChain { refs, assigned }
+}
+
+/// Everything machine `m`'s emitted `.bcm` inherits from its REFINES
+/// ancestors: the extended events' chain clauses and the extended-INIT
+/// chain.
+fn inherited_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributions {
+    let mut up = upward_contributions(m, ancestors);
+
+    if m.initialisation.as_ref().is_some_and(|i| i.extended) {
+        let chain = inherited_init_chain(ancestors);
+        up.refs.extend(chain.refs);
+        up.assigned.extend(chain.assigned);
+    }
+
+    up
+}
 
 struct ProjectIndex<'a> {
     /// Per-context, the references appearing in its own axioms.
     ctx_refs: BTreeMap<&'a str, BTreeSet<String>>,
-    /// Per-machine, references appearing in its invariants/variant/events.
+    /// Per-machine, references appearing in its OWN text (invariants/
+    /// variant/events). Inherited names live in [`Self::mach_inherited_refs`]
+    /// and are unioned in only by [`Self::effective_refs_for_machine`]:
+    /// letting them leak into the context-consumer union would suppress
+    /// EB013 on a constant whose name collides with an ancestor identifier.
     mach_refs: BTreeMap<&'a str, BTreeSet<String>>,
-    /// Per-machine, the set of variable names assigned by INIT or events.
+    /// Per-machine, the set of variable names assigned by its OWN INIT or
+    /// events (inherited assignments: [`Self::mach_inherited_assigned`]).
     mach_assigned: BTreeMap<&'a str, BTreeSet<String>>,
-    /// Per-machine, the names of variables declared in that machine itself
-    /// (its own VARIABLES, excluding the inherited chain).
-    mach_vars: BTreeMap<&'a str, BTreeSet<&'a str>>,
-    /// `machine → immediate REFINES parent` (a machine refines at most one).
-    mach_parent: BTreeMap<&'a str, &'a str>,
+    /// Per-machine, names its emitted `.bcm` additionally references via
+    /// inheritance: extended events' ancestor guards/action-RHS and the
+    /// extended-INIT chain.
+    mach_inherited_refs: BTreeMap<&'a str, BTreeSet<String>>,
+    /// Per-machine, names assigned by inherited actions (extended events'
+    /// ancestor actions and the extended-INIT chain).
+    mach_inherited_assigned: BTreeMap<&'a str, BTreeSet<String>>,
+    /// Per-machine, its REFINES ancestors present in the project,
+    /// nearest-first (the single cycle-guarded walk, computed once).
+    mach_ancestors: BTreeMap<&'a str, Vec<&'a Machine>>,
     /// `ctx → {ctx names that EXTEND it transitively, excluding self}`.
     ctx_extends_descendants: BTreeMap<&'a str, BTreeSet<&'a str>>,
     /// `machine → {machine names that REFINE it transitively, excluding self}`.
@@ -652,7 +806,7 @@ impl<'a> ProjectIndex<'a> {
         let mut ctx_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
-        let mut mach_vars: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        let mut machines: BTreeMap<&str, &Machine> = BTreeMap::new();
 
         for pc in &project.components {
             match &pc.component {
@@ -670,12 +824,28 @@ impl<'a> ProjectIndex<'a> {
                     mach_sees.insert(m.name.as_str(), m.sees.iter().map(String::as_str).collect());
                     mach_refs.insert(m.name.as_str(), referenced_in_machine(m));
                     mach_assigned.insert(m.name.as_str(), assigned_in_machine(m));
-                    mach_vars.insert(
-                        m.name.as_str(),
-                        m.variables.iter().map(|v| v.name.as_str()).collect(),
-                    );
+                    machines.insert(m.name.as_str(), m);
                 }
             }
+        }
+
+        // Upward pass: what each machine's emitted `.bcm` inherits from its
+        // REFINES ancestors, kept in separate maps so EB011/EB012 judge the
+        // materialised machine while the context-consumer union (EB013)
+        // keeps seeing own-text references only.
+        let mut mach_inherited_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        let mut mach_inherited_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        let mut mach_ancestors: BTreeMap<&str, Vec<&Machine>> = BTreeMap::new();
+        for (&name, &m) in &machines {
+            let ancestors = ancestor_machines(m, &machines);
+            let up = inherited_contributions(m, &ancestors);
+            if !up.refs.is_empty() {
+                mach_inherited_refs.insert(name, up.refs);
+            }
+            if !up.assigned.is_empty() {
+                mach_inherited_assigned.insert(name, up.assigned);
+            }
+            mach_ancestors.insert(name, ancestors);
         }
 
         // Invert parent maps to child maps.
@@ -723,8 +893,9 @@ impl<'a> ProjectIndex<'a> {
             ctx_refs,
             mach_refs,
             mach_assigned,
-            mach_vars,
-            mach_parent,
+            mach_inherited_refs,
+            mach_inherited_assigned,
+            mach_ancestors,
             ctx_extends_descendants,
             mach_refines_descendants,
             ctx_consumer_machines,
@@ -732,25 +903,17 @@ impl<'a> ProjectIndex<'a> {
     }
 
     /// Variable names inherited by machine `name`: the union of the own
-    /// variables of every ancestor reachable by walking the REFINES chain
-    /// upward (the machine's own variables are excluded). Empty for a root
-    /// machine. The `visited` guard keeps a malformed circular REFINES chain
-    /// (separately reported as EB008) from looping forever.
+    /// variables of every REFINES ancestor (the machine's own variables are
+    /// excluded). Empty for a root machine. Derived from the ancestor lists
+    /// [`ancestor_machines`] computed once during `build`, so this and the
+    /// upward reference/assignment pass can't drift apart.
     fn inherited_vars_for_machine(&self, name: &str) -> BTreeSet<&'a str> {
-        let mut out = BTreeSet::new();
-        let mut visited: BTreeSet<&str> = BTreeSet::new();
-        visited.insert(name);
-        let mut cur = self.mach_parent.get(name).copied();
-        while let Some(ancestor) = cur {
-            if !visited.insert(ancestor) {
-                break;
-            }
-            if let Some(vars) = self.mach_vars.get(ancestor) {
-                out.extend(vars.iter().copied());
-            }
-            cur = self.mach_parent.get(ancestor).copied();
-        }
-        out
+        self.mach_ancestors
+            .get(name)
+            .into_iter()
+            .flatten()
+            .flat_map(|m| m.variables.iter().map(|v| v.name.as_str()))
+            .collect()
     }
 
     fn effective_refs_for_machine(&self, name: &str) -> BTreeSet<String> {
@@ -761,6 +924,9 @@ impl<'a> ProjectIndex<'a> {
             self.mach_refines_descendants.get(name),
             &mut out,
         );
+        if let Some(inherited) = self.mach_inherited_refs.get(name) {
+            out.extend(inherited.iter().cloned());
+        }
         out
     }
 
@@ -772,6 +938,9 @@ impl<'a> ProjectIndex<'a> {
             self.mach_refines_descendants.get(name),
             &mut out,
         );
+        if let Some(inherited) = self.mach_inherited_assigned.get(name) {
+            out.extend(inherited.iter().cloned());
+        }
         out
     }
 
@@ -1640,6 +1809,273 @@ mod tests {
         );
     }
 
+    // ---------- extends-chain inheritance (upward) --------------------------
+    //
+    // Extended events materialise their abstract event's parameters/guards/
+    // actions into the machine's `.bcm`; the reference/assignment sets must
+    // see those inherited clauses or EB011/EB012 false-positive on kept
+    // variables (the `extends` idiom leaves event bodies empty).
+
+    /// An extended event named `name` refining `target` (`None` = implicit
+    /// same-name match, the form Rodin-XML import produces).
+    fn extends_event(name: &str, target: Option<&str>) -> Event {
+        let mut e = Event::new(name.into());
+        e.extended = true;
+        e.refines = target.map(Into::into);
+        e
+    }
+
+    /// An event named `name` whose sole guard is `var = 0`.
+    fn guarded_event(name: &str, var: &str) -> Event {
+        let mut e = Event::new(name.into());
+        e.guards = vec![lp(
+            "grd1",
+            eq_pred(ident(var), ExpressionKind::Integer(0).into()),
+        )];
+        e
+    }
+
+    /// An INITIALISATION assigning `0` to each of `assigns`.
+    fn init_event(assigns: &[&str], extended: bool) -> InitialisationEvent {
+        InitialisationEvent {
+            actions: assigns
+                .iter()
+                .map(|v| la(Action::assignment(*v, ExpressionKind::Integer(0).into())))
+                .collect(),
+            comment: None,
+            extended,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+            name_span: None,
+        }
+    }
+
+    /// The diagnostics for `rule` attributed to exactly `origin`.
+    fn diags_on<'d>(diags: &'d [Diagnostic], rule: RuleId, origin: &str) -> Vec<&'d Diagnostic> {
+        diags
+            .iter()
+            .filter(|d| d.rule_id == Some(rule) && d.origin == origin)
+            .collect()
+    }
+
+    fn eb011_on<'d>(diags: &'d [Diagnostic], origin: &str) -> Vec<&'d Diagnostic> {
+        diags_on(diags, RuleId::DeadVariable, origin)
+    }
+
+    #[test]
+    fn extended_event_inherited_guard_keeps_variable_alive() {
+        // M0's event guards on `v`; M1 keeps `v` and extends the event with
+        // an empty body. The inherited guard is a reference — no EB011.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![guarded_event("e", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        m1.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced by the inherited guard: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn extended_event_inherited_action_keeps_variable_assigned() {
+        // M1 references `v` in its own invariant; the only assignment is the
+        // abstract event's action, inherited via `extends` — no EB012.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![assigning_event("e", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        m1.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
+        m1.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
+            "v is assigned by the inherited action: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn renamed_extends_chain_resolves_refines_target() {
+        // `EVENT bar extends foo` — the chain follows the refines target,
+        // not the concrete event's own name.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![guarded_event("foo", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        m1.events = vec![extends_event("bar", Some("foo"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced via the renamed chain: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn implicit_extends_matches_same_name_event() {
+        // Rodin-XML import leaves `refines` unset on a self-closing extended
+        // event; the target is implicitly the same-name abstract event.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![guarded_event("e", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        m1.events = vec![extends_event("e", None)];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced via the implicit same-name chain: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn multi_level_extends_chain_walks_to_root() {
+        // Only the root machine's event references `v`; two extended levels
+        // above it inherit that guard transitively.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![guarded_event("e", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        m1.events = vec![extends_event("e", Some("e"))];
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        m2.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M2.v").is_empty() && eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced via the two-level chain: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn plain_refines_event_does_not_inherit_clauses() {
+        // A non-extended refining event replaces the abstract body; the
+        // abstract guard is NOT inherited, so `v` stays dead in M1.
+        let mut m0 = Machine::new("M0".into());
+        m0.variables = vec![nv("v")];
+        m0.events = vec![guarded_event("foo", "v")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+        let mut bar = Event::new("bar".into());
+        bar.refines = Some("foo".into());
+        m1.events = vec![bar];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert_eq!(
+            eb011_on(&diags, "M1.v").len(),
+            1,
+            "plain refines inherits nothing — v is dead in M1: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn extends_chain_cycle_terminates() {
+        // A circular REFINES chain (EB008's domain) with mutually extended
+        // events must not hang the upward walk.
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M2".into());
+        m1.variables = vec![nv("v")];
+        m1.events = vec![extends_event("e", Some("e"))];
+        let mut m2 = Machine::new("M2".into());
+        m2.refines = Some("M1".into());
+        m2.variables = vec![nv("v")];
+        m2.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M1.bum", Component::Machine(m1)),
+            pc("M2.bum", Component::Machine(m2)),
+        ]));
+        assert!(!diags.is_empty(), "run() terminated on a cyclic chain");
+    }
+
+    #[test]
+    fn inherited_parameter_shadows_variable_in_chain() {
+        // The abstract guard references the abstract event's own parameter
+        // `p`; M1's variable of the same name must not be kept alive by it.
+        let mut m0 = Machine::new("M0".into());
+        let mut e = Event::new("e".into());
+        e.parameters = vec![nv("p")];
+        e.guards = vec![lp(
+            "grd1",
+            eq_pred(ident("p"), ExpressionKind::Integer(0).into()),
+        )];
+        m0.events = vec![e];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("p")];
+        m1.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert_eq!(
+            eb011_on(&diags, "M1.p").len(),
+            1,
+            "the inherited guard binds the parameter, not the variable: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn extended_init_chain_marks_inherited_assignments() {
+        // M1's INIT is extended and only assigns the new `w`; `v` is
+        // initialised by the inherited abstract INIT action — no EB012.
+        let m0 = abstract_machine("M0", "v");
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v"), nv("w")];
+        m1.invariants = vec![lp("inv1", eq_pred(ident("v"), ident("w")))];
+        m1.initialisation = Some(init_event(&["w"], true));
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
+            "v is assigned by the inherited INIT action: {diags:#?}"
+        );
+    }
+
     #[test]
     fn becomes_in_lhs_marks_variable_as_assigned() {
         // `x :∈ S` — x is assigned via BecomesIn, so EB012 must not fire.
@@ -1839,18 +2275,7 @@ mod tests {
     fn abstract_machine(name: &str, var: &str) -> Machine {
         let mut m = Machine::new(name.into());
         m.variables = vec![nv(var)];
-        m.initialisation = Some(InitialisationEvent {
-            actions: vec![la(Action::assignment(
-                var,
-                ExpressionKind::Integer(0).into(),
-            ))],
-            comment: None,
-            extended: false,
-            with: Vec::new(),
-            witnesses: Vec::new(),
-            span: None,
-            name_span: None,
-        });
+        m.initialisation = Some(init_event(&[var], false));
         m
     }
 
