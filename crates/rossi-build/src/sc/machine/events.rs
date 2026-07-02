@@ -563,6 +563,10 @@ fn build_repair_action(
 /// INIT events implicitly refine the parent's INITIALISATION when one
 /// exists; ordinary events prefer the explicit `refines` annotation but
 /// fall back to an implicit same-label match when extended.
+///
+/// `lint::extends_chain_root_first` mirrors the Ordinary half of this rule
+/// on the raw AST, and `lint::inherited_init_chain` mirrors the Init half —
+/// keep them in sync when changing the resolution.
 fn resolve_effective_refines<'a, 'b>(
     kind: EventKind<'a>,
     parent: Option<&'b CheckedMachine>,
