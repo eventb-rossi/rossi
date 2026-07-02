@@ -558,41 +558,51 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
 // passed as initial bound names so a guard mentioning a parameter doesn't
 // leak that name into the machine-level reference set.
 
-fn referenced_in_machine(m: &Machine) -> BTreeSet<String> {
+/// References appearing in `m`'s own invariants. Kept separate from
+/// [`machine_body_refs`] because descendants inherit exactly this set (the
+/// SC splices ancestor invariants into every concrete `.bcm`), so the
+/// upward pass reuses the per-machine result instead of re-walking
+/// ancestor ASTs once per descendant.
+fn invariant_refs(m: &Machine) -> BTreeSet<String> {
     let mut acc = BTreeSet::new();
     for inv in &m.invariants {
         collect_referenced_in_predicate(&inv.predicate, &mut acc);
     }
+    acc
+}
+
+/// References appearing in `m`'s variant, INITIALISATION, and events —
+/// everything [`invariant_refs`] doesn't cover.
+fn machine_body_refs(m: &Machine, acc: &mut BTreeSet<String>) {
     if let Some(v) = &m.variant {
-        collect_referenced_in_expression(v, &mut acc);
+        collect_referenced_in_expression(v, acc);
     }
     if let Some(init) = &m.initialisation {
         for la in &init.actions {
-            collect_referenced_in_action_rhs(&la.action, &mut acc);
+            collect_referenced_in_action_rhs(&la.action, acc);
         }
         for w in &init.with {
-            collect_referenced_in_predicate(&w.predicate, &mut acc);
+            collect_referenced_in_predicate(&w.predicate, acc);
         }
         for w in &init.witnesses {
-            collect_referenced_in_predicate(&w.predicate, &mut acc);
+            collect_referenced_in_predicate(&w.predicate, acc);
         }
     }
     for e in &m.events {
         let params: Vec<&str> = e.parameters.iter().map(|p| p.name.as_str()).collect();
         for g in &e.guards {
-            collect_referenced_in_predicate_with_locals(&g.predicate, &params, &mut acc);
+            collect_referenced_in_predicate_with_locals(&g.predicate, &params, acc);
         }
         for w in &e.with {
-            collect_referenced_in_predicate_with_locals(&w.predicate, &params, &mut acc);
+            collect_referenced_in_predicate_with_locals(&w.predicate, &params, acc);
         }
         for w in &e.witnesses {
-            collect_referenced_in_predicate_with_locals(&w.predicate, &params, &mut acc);
+            collect_referenced_in_predicate_with_locals(&w.predicate, &params, acc);
         }
         for la in &e.actions {
-            collect_referenced_in_action_rhs_with_locals(&la.action, &params, &mut acc);
+            collect_referenced_in_action_rhs_with_locals(&la.action, &params, acc);
         }
     }
-    acc
 }
 
 fn referenced_in_context(c: &Context) -> BTreeSet<String> {
@@ -713,7 +723,10 @@ struct UpwardContributions {
 /// Parameters accumulate down the chain, so each level's clauses are walked
 /// with the locals of every level at or above it — an inherited parameter
 /// must not leak into the machine-level sets. Ancestor `with`/`witnesses`
-/// are NOT inherited by the SC and are not collected.
+/// are NOT inherited by the SC and are not collected. Unlike ancestor
+/// invariants (memoized per machine because every descendant inherits
+/// them), each descendant re-walks its event chains directly — an accepted
+/// cost, since chains are short and only extended events pay it.
 fn upward_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributions {
     let mut refs = BTreeSet::new();
     let mut assigned = BTreeSet::new();
@@ -789,16 +802,29 @@ fn inherited_init_chain(ancestors: &[&Machine], chain_end: ChainEnd) -> InitChai
 }
 
 /// Everything machine `m`'s emitted `.bcm` inherits from its REFINES
-/// ancestors: the extended events' chain clauses and the extended-INIT
-/// chain. The second value is the inherited INIT assignment set when the
-/// chain fully resolved — EB014's completeness input; `None` means an
-/// extended INIT whose chain can't be judged.
+/// ancestors: the extended events' chain clauses, every ancestor invariant,
+/// and the extended-INIT chain. The second value is the inherited INIT
+/// assignment set when that chain fully resolved — EB014's completeness
+/// input; `None` means an extended INIT whose chain can't be judged.
 fn inherited_contributions(
     m: &Machine,
     ancestors: &[&Machine],
     chain_end: ChainEnd,
+    mach_inv_refs: &BTreeMap<&str, BTreeSet<String>>,
 ) -> (UpwardContributions, Option<BTreeSet<String>>) {
     let mut up = upward_contributions(m, ancestors);
+
+    // Abstract invariants are inherited unconditionally — the SC splices
+    // every ancestor's invariants into the concrete `.bcm` (see
+    // `render_machine_root`) — so a kept variable referenced only by an
+    // abstract invariant is referenced here too. (Such a variable can't
+    // even be dropped: its inherited events would trip EB025.) Variants
+    // are per-machine and not inherited.
+    for anc in ancestors {
+        if let Some(inv_refs) = mach_inv_refs.get(anc.name.as_str()) {
+            up.refs.extend(inv_refs.iter().cloned());
+        }
+    }
 
     let mut init_assigned = None;
     if m.initialisation.as_ref().is_some_and(|i| i.extended) {
@@ -826,8 +852,8 @@ struct ProjectIndex<'a> {
     /// events (inherited assignments: [`Self::mach_inherited_assigned`]).
     mach_assigned: BTreeMap<&'a str, BTreeSet<String>>,
     /// Per-machine, names its emitted `.bcm` additionally references via
-    /// inheritance: extended events' ancestor guards/action-RHS and the
-    /// extended-INIT chain.
+    /// inheritance: extended events' ancestor guards/action-RHS, the
+    /// extended-INIT chain, and every ancestor invariant.
     mach_inherited_refs: BTreeMap<&'a str, BTreeSet<String>>,
     /// Per-machine, names assigned by inherited actions (extended events'
     /// ancestor actions and the extended-INIT chain).
@@ -858,6 +884,7 @@ impl<'a> ProjectIndex<'a> {
         let mut mach_sees: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut ctx_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        let mut mach_inv_refs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut mach_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut machines: BTreeMap<&str, &Machine> = BTreeMap::new();
 
@@ -875,7 +902,11 @@ impl<'a> ProjectIndex<'a> {
                         mach_parent.insert(m.name.as_str(), p.as_str());
                     }
                     mach_sees.insert(m.name.as_str(), m.sees.iter().map(String::as_str).collect());
-                    mach_refs.insert(m.name.as_str(), referenced_in_machine(m));
+                    let inv_refs = invariant_refs(m);
+                    let mut refs = inv_refs.clone();
+                    machine_body_refs(m, &mut refs);
+                    mach_refs.insert(m.name.as_str(), refs);
+                    mach_inv_refs.insert(m.name.as_str(), inv_refs);
                     mach_assigned.insert(m.name.as_str(), assigned_in_machine(m));
                     machines.insert(m.name.as_str(), m);
                 }
@@ -892,7 +923,8 @@ impl<'a> ProjectIndex<'a> {
         let mut init_inherited_assigned: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         for (&name, &m) in &machines {
             let (ancestors, chain_end) = ancestor_machines(m, &machines);
-            let (up, init_assigned) = inherited_contributions(m, &ancestors, chain_end);
+            let (up, init_assigned) =
+                inherited_contributions(m, &ancestors, chain_end, &mach_inv_refs);
             if !up.refs.is_empty() {
                 mach_inherited_refs.insert(name, up.refs);
             }
@@ -2239,6 +2271,89 @@ mod tests {
             eb014_on(&diags, "M0").len(),
             1,
             "M0 still gets its own no-INITIALISATION report: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn inherited_invariant_keeps_variable_alive() {
+        // A kept variable whose only reference is an abstract invariant
+        // (binary-search's `r ∈ dom(f)` shape). The invariant is spliced
+        // into M1's .bcm, so `v` is not dead there — and it couldn't be
+        // dropped anyway (its INIT assignment would trip EB025).
+        let mut m0 = abstract_machine("M0", "v");
+        m0.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
+        let mut m1 = abstract_machine("M1", "v");
+        m1.refines = Some("M0".into());
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced by the inherited invariant: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn inherited_invariant_reference_without_assignment_is_unmodified() {
+        // Pins the intended reclassification: a kept variable referenced
+        // only via an inherited invariant and assigned nowhere is no longer
+        // dead (EB011) but *is* unmodified (EB012).
+        let mut m0 = abstract_machine("M0", "v");
+        m0.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("v")];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            eb011_on(&diags, "M1.v").is_empty(),
+            "v is referenced by the inherited invariant: {diags:#?}"
+        );
+        assert!(
+            !diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
+            "v is never assigned at M1's level or below: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn inherited_names_do_not_suppress_dead_constant() {
+        // C1's constant `k` is referenced by nothing; M1 sees C1 and
+        // refines M0, whose invariant mentions M0's own variable also
+        // named `k`. The inherited reference must stay out of the
+        // context-consumer union, or the name collision would silently
+        // suppress EB013 for the genuinely dead constant.
+        let mut c1 = Context::new("C1".into());
+        c1.constants = vec![nv("k")];
+        let mut m0 = abstract_machine("M0", "k");
+        m0.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
+        )];
+        let mut m1 = abstract_machine("M1", "k");
+        m1.refines = Some("M0".into());
+        m1.sees = vec!["C1".into()];
+
+        let diags = run(&proj(vec![
+            pc("C1.buc", Component::Context(c1)),
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.rule_id == Some(RuleId::DeadConstant) && d.origin == "C1.k"),
+            "the dead constant must still be reported: {diags:#?}"
         );
     }
 
