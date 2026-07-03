@@ -51,10 +51,13 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
                 let CompId::Mach(id) = *comp_id else {
                     unreachable!("component_ids is parallel to project.components");
                 };
-                let referenced = index.effective_refs_for_machine(id);
-                let assigned = index.effective_assigned_for_machine(id);
-                diags.extend(lint_dead_variable(m, &referenced));
-                diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
+                // `None` when the REFINES walk didn't reach a root — see
+                // `effective_refs_for_machine`.
+                if let Some(referenced) = index.effective_refs_for_machine(id) {
+                    let assigned = index.effective_assigned_for_machine(id);
+                    diags.extend(lint_dead_variable(m, &referenced));
+                    diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
+                }
                 diags.extend(lint_incomplete_init(
                     m,
                     index.init_inherited_assigned[id].as_ref(),
@@ -100,10 +103,10 @@ pub fn run_component(component: &Component) -> Vec<Diagnostic> {
 
 // ---------- individual lint passes -----------------------------------------
 
-fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<String>) -> Vec<Diagnostic> {
+fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<&str>) -> Vec<Diagnostic> {
     m.variables
         .iter()
-        .filter(|v| !referenced.contains(&v.name))
+        .filter(|v| !referenced.contains(v.name.as_str()))
         .map(|v| Diagnostic {
             severity: RuleId::DeadVariable.default_severity(),
             origin: format!("{}.{}", m.name, v.name),
@@ -116,12 +119,12 @@ fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<String>) -> Vec<Diagnos
 
 fn lint_unmodified_variable(
     m: &Machine,
-    referenced: &BTreeSet<String>,
+    referenced: &BTreeSet<&str>,
     assigned: &BTreeSet<String>,
 ) -> Vec<Diagnostic> {
     m.variables
         .iter()
-        .filter(|v| referenced.contains(&v.name) && !assigned.contains(&v.name))
+        .filter(|v| referenced.contains(v.name.as_str()) && !assigned.contains(&v.name))
         .map(|v| Diagnostic {
             severity: Severity::Warning,
             origin: format!("{}.{}", m.name, v.name),
@@ -665,7 +668,10 @@ fn assigned_in_machine(m: &Machine) -> BTreeSet<String> {
 // same-name candidate — over-approximating is conservative. The upward walk
 // becomes part of the judged machine's own materialised text, where guessing
 // a duplicate could fabricate or mask warnings — so an ambiguous parent
-// truncates the chain exactly like a missing one.
+// truncates the chain exactly like a missing one, and a machine whose walk
+// truncated is exempt from the variable reference lints altogether (see
+// [`run`]): its materialised sets are unknowable, and the broken link is
+// already an Error (EB009 missing, EB007/EB008 circular, EB019 duplicated).
 
 /// How a REFINES ancestor walk ended: at a true root machine, or truncated
 /// by a parent name resolving to zero or several machines or by a circular
@@ -778,14 +784,16 @@ struct InitChain {
     /// Assigned by inherited INIT actions (left-hand sides).
     assigned: BTreeSet<String>,
     /// Whether every extended link found an ancestor INIT to inherit from.
-    /// `false` means the chain is abnormal — the parent machine is missing
-    /// from the project, the REFINES chain is circular, or an ancestor has
-    /// no INITIALISATION at all — so `assigned` may be incomplete: still
-    /// sound as extra references/assignments for EB011/EB012, but EB014
-    /// must not judge completeness against it (EB008/EB009 report a broken
-    /// chain; a missing ancestor INIT already gets its own per-variable
-    /// EB014 on the ancestor, and re-flagging every kept variable on the
-    /// child would only duplicate that noise).
+    /// `false` means the chain is abnormal — the parent name resolves to
+    /// zero or several machines, the REFINES chain is circular, or an
+    /// ancestor has no INITIALISATION at all — so `assigned` may be
+    /// incomplete, and EB014 must not judge completeness against it (a
+    /// broken walk is EB008/EB009/EB019's report; a missing ancestor INIT
+    /// already gets its own per-variable EB014 on the ancestor, and
+    /// re-flagging every kept variable on the child would only duplicate
+    /// that noise). The collected refs/assigns feed EB011/EB012 only in the
+    /// missing-ancestor-INIT case — when the walk itself truncated, those
+    /// lints don't run at all (see [`run`]).
     fully_resolved: bool,
 }
 
@@ -920,6 +928,10 @@ struct ProjectIndex<'a> {
     /// Per-machine, its uniquely-resolved REFINES ancestors, nearest-first
     /// (the single cycle-guarded walk, computed once).
     mach_ancestors: Vec<Vec<MachId>>,
+    /// Per-machine, how that ancestor walk ended. A truncated walk stores
+    /// the resolved prefix in [`Self::mach_ancestors`], so truncation can't
+    /// be inferred from an empty list — this flag is the source of truth.
+    mach_chain_end: Vec<ChainEnd>,
     /// `ctx → {contexts that EXTEND it transitively, excluding self}`.
     ctx_extends_descendants: BTreeMap<CtxId, BTreeSet<CtxId>>,
     /// `machine → {machines that REFINE it transitively, excluding self}`.
@@ -987,6 +999,7 @@ impl<'a> ProjectIndex<'a> {
         let mut mach_inherited_refs = Vec::with_capacity(machs.len());
         let mut mach_inherited_assigned = Vec::with_capacity(machs.len());
         let mut mach_ancestors = Vec::with_capacity(machs.len());
+        let mut mach_chain_end = Vec::with_capacity(machs.len());
         let mut init_inherited_assigned = Vec::with_capacity(machs.len());
         for (id, &m) in machs.iter().enumerate() {
             let (ancestors, chain_end) = ancestor_machines(id, &machs, &mach_ids_by_name);
@@ -996,6 +1009,7 @@ impl<'a> ProjectIndex<'a> {
             mach_inherited_assigned.push(up.assigned);
             init_inherited_assigned.push(init_assigned);
             mach_ancestors.push(ancestors);
+            mach_chain_end.push(chain_end);
         }
 
         // Downward edges. A parent name attaches the child to EVERY
@@ -1063,6 +1077,7 @@ impl<'a> ProjectIndex<'a> {
             mach_inherited_refs,
             mach_inherited_assigned,
             mach_ancestors,
+            mach_chain_end,
             ctx_extends_descendants,
             mach_refines_descendants,
             ctx_consumer_machines,
@@ -1082,16 +1097,23 @@ impl<'a> ProjectIndex<'a> {
             .collect()
     }
 
-    fn effective_refs_for_machine(&self, id: MachId) -> BTreeSet<String> {
-        let mut out = BTreeSet::new();
-        union_self_and_descendants(
-            id,
-            &self.mach_refs,
-            self.mach_refines_descendants.get(&id),
-            &mut out,
-        );
-        out.extend(self.mach_inherited_refs[id].iter().cloned());
-        out
+    /// The materialised machine's full reference set — own text, REFINES
+    /// descendants, and inherited names — or `None` when the ancestor walk
+    /// didn't reach a root (missing, duplicated, or circular parent — each
+    /// an Error in its own right): the set would be speculation, and EB011
+    /// must stay silent rather than judge against it.
+    fn effective_refs_for_machine(&self, id: MachId) -> Option<BTreeSet<&str>> {
+        if self.mach_chain_end[id] != ChainEnd::Root {
+            return None;
+        }
+        let mut out: BTreeSet<&str> = self.mach_refs[id].iter().map(String::as_str).collect();
+        if let Some(descs) = self.mach_refines_descendants.get(&id) {
+            for &d in descs {
+                out.extend(self.mach_refs[d].iter().map(String::as_str));
+            }
+        }
+        out.extend(self.mach_inherited_refs[id].iter().map(String::as_str));
+        Some(out)
     }
 
     fn effective_assigned_for_machine(&self, id: MachId) -> BTreeSet<String> {
@@ -2993,26 +3015,68 @@ mod tests {
     }
 
     #[test]
-    fn child_of_duplicated_parent_is_judged_deterministically() {
-        // Only one `X` carries the invariant referencing C's kept `w`.
-        // The chain is unresolvable, so the inherited invariant refs are
-        // unavailable and EB011 fires on `C.w` in BOTH orders — the same
-        // deterministic noise a missing parent produces (EB019 names the
-        // real problem) — where the name-keyed index silently suppressed
-        // it in one order and fired in the other.
+    fn child_of_duplicated_parent_is_not_reference_linted() {
+        // Only one `X` carries the invariant referencing C's kept `w`, so
+        // C's materialised reference set is unknowable. EB011/EB012 stay
+        // silent in both orders; the EB019 Error owns the report.
         let x1 = self_contained_machine("X", "w");
         let x2 = Machine::new("X".into());
-        let mut c = Machine::new("C".into());
+        let mut c = abstract_machine("C", "w");
         c.refines = Some("X".into());
-        c.variables = vec![nv("w")];
-        c.initialisation = Some(init_event(&["w"], false));
 
         for diags in run_both_orders(vec![
             pc("a/X.bum", Component::Machine(x1)),
             pc("b/X.bum", Component::Machine(x2)),
             pc("C.bum", Component::Machine(c)),
         ]) {
-            assert_eq!(eb011_on(&diags, "C.w").len(), 1, "{diags:#?}");
+            assert!(eb011_on(&diags, "C.w").is_empty(), "{diags:#?}");
+            assert_eq!(
+                diags_on(&diags, RuleId::DuplicateComponent, "X").len(),
+                1,
+                "{diags:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn machine_with_missing_parent_is_not_reference_linted() {
+        // M refines an absent machine, so its materialised reference set is
+        // unknowable (EB009's domain): neither the unreferenced `d` (EB011)
+        // nor the referenced-but-never-assigned `u` (EB012) is judged. The
+        // ancestry-independent EB014 still fires — the machine is not
+        // exempt from linting wholesale.
+        let mut m = Machine::new("M".into());
+        m.refines = Some("Absent".into());
+        m.variables = vec![nv("d"), nv("u")];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("u"), ExpressionKind::Integer(0).into()),
+        )];
+        m.initialisation = Some(init_event(&[], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.d").is_empty(), "{diags:#?}");
+        assert!(
+            diags_on(&diags, RuleId::UnmodifiedVariable, "M.u").is_empty(),
+            "{diags:#?}"
+        );
+        assert_eq!(eb014_on(&diags, "M").len(), 2, "{diags:#?}");
+    }
+
+    #[test]
+    fn machines_in_a_refines_cycle_are_not_reference_linted() {
+        // A refines B refines A: the walk truncates (EB007/EB008's domain),
+        // so A's unreferenced `v` is not judged.
+        let mut a = abstract_machine("A", "v");
+        a.refines = Some("B".into());
+        let mut b = Machine::new("B".into());
+        b.refines = Some("A".into());
+
+        for diags in run_both_orders(vec![
+            pc("A.bum", Component::Machine(a)),
+            pc("B.bum", Component::Machine(b)),
+        ]) {
+            assert!(eb011_on(&diags, "A.v").is_empty(), "{diags:#?}");
         }
     }
 
