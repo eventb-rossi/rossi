@@ -210,12 +210,12 @@ impl RuleId {
             | RuleId::DuplicateLabel
             | RuleId::NewEventAssignsInheritedVariable
             | RuleId::DisappearedVariable
-            | RuleId::AssignmentInPredicate => Severity::Error,
+            | RuleId::AssignmentInPredicate
+            | RuleId::DuplicateComponent => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::DeadConstant
             | RuleId::IncompleteInitialisation
-            | RuleId::DuplicateComponent
             | RuleId::ShadowedName => Severity::Warning,
         }
     }

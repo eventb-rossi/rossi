@@ -105,7 +105,7 @@ fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<String>) -> Vec<Diagnos
         .iter()
         .filter(|v| !referenced.contains(&v.name))
         .map(|v| Diagnostic {
-            severity: Severity::Warning,
+            severity: RuleId::DeadVariable.default_severity(),
             origin: format!("{}.{}", m.name, v.name),
             message: format!("variable `{}` is declared but never referenced", v.name),
             rule_id: Some(RuleId::DeadVariable),
@@ -159,7 +159,7 @@ fn lint_incomplete_init(m: &Machine, inherited_init: Option<&BTreeSet<String>>) 
             .variables
             .iter()
             .map(|v| Diagnostic {
-                severity: Severity::Warning,
+                severity: RuleId::IncompleteInitialisation.default_severity(),
                 origin: format!("{}.INITIALISATION", m.name),
                 message: format!(
                     "variable `{}` is not assigned by INITIALISATION (no INITIALISATION event)",
@@ -189,7 +189,7 @@ fn lint_incomplete_init(m: &Machine, inherited_init: Option<&BTreeSet<String>>) 
         .filter(|v| !lhs.contains(v.name.as_str()))
         .filter(|v| !inherited_init.is_some_and(|s| s.contains(&v.name)))
         .map(|v| Diagnostic {
-            severity: Severity::Warning,
+            severity: RuleId::IncompleteInitialisation.default_severity(),
             origin: format!("{}.INITIALISATION", m.name),
             message: format!("variable `{}` is not assigned by INITIALISATION", v.name),
             rule_id: Some(RuleId::IncompleteInitialisation),
@@ -241,7 +241,7 @@ fn lint_new_event_assigns_inherited(m: &Machine, inherited: &BTreeSet<&str>) -> 
             for v in lhs_variables(&la.action) {
                 if retained.contains(&v) && seen.insert(v) {
                     diags.push(Diagnostic {
-                        severity: Severity::Error,
+                        severity: RuleId::NewEventAssignsInheritedVariable.default_severity(),
                         origin: format!("{}.{}", m.name, e.name),
                         message: format!(
                             "new event `{}` assigns inherited variable `{v}`; a new event \
@@ -259,6 +259,10 @@ fn lint_new_event_assigns_inherited(m: &Machine, inherited: &BTreeSet<&str>) -> 
     diags
 }
 
+/// EB019: duplicate component names are an Error, not advice — Rodin cannot
+/// even represent the state (a component's name is its file identity, and
+/// the per-name proof files are shared across kinds), so every reference to
+/// the duplicated name in the project is ambiguous.
 fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
     let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for pc in &project.components {
@@ -269,7 +273,7 @@ fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
         .into_iter()
         .filter(|(_, files)| files.len() > 1)
         .map(|(name, files)| Diagnostic {
-            severity: Severity::Warning,
+            severity: RuleId::DuplicateComponent.default_severity(),
             origin: name.to_string(),
             message: format!(
                 "component `{name}` is defined in multiple files: {}",
@@ -300,7 +304,7 @@ fn shadowed_name_diag(
         return None;
     }
     Some(Diagnostic {
-        severity: Severity::Warning,
+        severity: RuleId::ShadowedName.default_severity(),
         origin: format!("{component}.{name}"),
         message: format!(
             "{kind} `{name}` collides with rossi's textual operator vocabulary; \
@@ -418,7 +422,7 @@ fn duplicate_diags<'a>(
         .into_iter()
         .filter(|(_, (count, _))| *count > 1)
         .map(|(name, (count, span))| Diagnostic {
-            severity: Severity::Error,
+            severity: rule.default_severity(),
             origin: format!("{origin_prefix}.{name}"),
             message: format!("duplicate {kind} `{name}` in {scope} ({verb} {count} times)"),
             rule_id: Some(rule),
