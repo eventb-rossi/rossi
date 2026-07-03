@@ -357,8 +357,8 @@ pub(crate) fn cross_reference_diagnostics(
 /// `name` (deduped by path); a component is flagged when that is more than one.
 /// Queried per open-document component, so no whole-workspace map is built per
 /// publish. The caller gates on a scanned workspace, since cross-file duplicates
-/// aren't observable from a single file. Anchored on the component name; a
-/// Warning, matching `rossi validate`. Only cross-file duplicates are caught:
+/// aren't observable from a single file. Anchored on the component name; an
+/// Error, matching `rossi validate`. Only cross-file duplicates are caught:
 /// two same-named components in one (e.g. merged) file collapse to a single
 /// indexed entry, so that within-file case is left to `rossi validate`.
 pub(crate) fn duplicate_component_diagnostics(
@@ -764,7 +764,7 @@ mod tests {
     // --- cross-component: duplicate component name (EB019) ------------------
 
     #[test]
-    fn duplicate_component_is_eb019_warning() {
+    fn duplicate_component_is_eb019_error() {
         let text = "CONTEXT c\nEND\n";
         let files = |n: &str| {
             if n == "c" {
@@ -776,7 +776,7 @@ mod tests {
         let diags = duplicate_component_diagnostics(&parse_one(text), files, text);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(code_of(&diags[0]), Some("EB019"));
-        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         assert!(
             diags[0].message.contains("a.eventb") && diags[0].message.contains("b.eventb"),
             "{}",

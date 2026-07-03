@@ -793,6 +793,38 @@ fn validate_directory_input() {
 }
 
 #[test]
+fn validate_duplicate_component_names_fail_with_eb019() {
+    // Two `.eventb` files declaring the same machine name — a state Rodin
+    // cannot represent (a component's name is its file identity), so EB019
+    // is an Error and validation must fail.
+    let tmp = tempdir_unique("rossi-cli-validate-dup-names");
+    std::fs::write(tmp.join("a.eventb"), "MACHINE M\nEND\n").unwrap();
+    std::fs::write(tmp.join("b.eventb"), "MACHINE M\nEND\n").unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            tmp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "duplicate component names must fail validation; stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[EB019]"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_directory_with_no_semantic_is_rejected() {
     let tmp = tempdir_unique("rossi-cli-validate-dir-nosem");
     std::fs::create_dir_all(&tmp).unwrap();
