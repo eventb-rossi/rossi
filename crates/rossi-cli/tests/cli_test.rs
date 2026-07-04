@@ -825,6 +825,46 @@ fn validate_duplicate_component_names_fail_with_eb019() {
 }
 
 #[test]
+fn build_duplicate_component_names_fail_with_eb019() {
+    // `rossi build` must fail the same project `validate` fails: the EB019
+    // diagnostic, exit 1, and no output written — not a zip-writer IO error
+    // about colliding entry names.
+    let tmp = tempdir_unique("rossi-cli-build-dup-names");
+    std::fs::write(tmp.join("a.eventb"), "MACHINE M\nEND\n").unwrap();
+    std::fs::write(tmp.join("b.eventb"), "MACHINE M\nEND\n").unwrap();
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            tmp.to_str().unwrap(),
+            "--output",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "duplicate component names must fail the build; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[EB019]"), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("Duplicate filename"),
+        "the zip-writer error must be unreachable: {stderr}"
+    );
+    assert!(!out_zip.exists(), "no output may be written");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_directory_with_no_semantic_is_rejected() {
     let tmp = tempdir_unique("rossi-cli-validate-dir-nosem");
     std::fs::create_dir_all(&tmp).unwrap();

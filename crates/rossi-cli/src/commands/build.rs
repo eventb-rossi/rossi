@@ -11,7 +11,8 @@ use clap::Args;
 
 use rossi_build::project::discover_projects;
 use rossi_build::repack::repackage_zip_bytes_multi;
-use rossi_build::{BuildResult, Project, Severity, build};
+use rossi_build::rodin_ids::RodinIds;
+use rossi_build::{BuildResult, Project, ProjectComponent, Severity, build};
 
 use rossi::{NamedComponent, to_zip};
 
@@ -42,6 +43,20 @@ pub fn run_build_command(args: BuildArgs) -> ExitCode {
 
 fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let outcome = build_one(input)?;
+
+    // A project that produced no checked files while reporting errors failed
+    // outright — duplicate component names (EB019) or a dependency cycle
+    // (EB007/EB008). There is nothing meaningful to write, and exiting zero
+    // would let a broken project slide through CI.
+    if outcome
+        .results
+        .iter()
+        .any(|(_, r)| r.files.is_empty() && !r.is_ok())
+    {
+        report_diagnostics(&outcome);
+        return Err("a project produced no checked output; see the diagnostics above".into());
+    }
+
     let default_out;
     let out_path = match output {
         Some(p) => p,
@@ -147,6 +162,32 @@ fn build_from_components(
 ) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
     if components.is_empty() {
         return Err("no Event-B components to build".into());
+    }
+    // Duplicate component names cannot be serialised into a Rodin source
+    // archive (a component's name is its entry filename), and the project
+    // is invalid regardless. Assemble the project directly so the failure
+    // surfaces as the SC's EB019 diagnostic instead of a zip-writer error.
+    let mut seen = std::collections::BTreeSet::new();
+    let has_duplicate = components
+        .iter()
+        .any(|nc| !seen.insert(nc.component.name().to_string()));
+    if has_duplicate {
+        let project = Project::new(
+            name,
+            components
+                .into_iter()
+                .map(|nc| ProjectComponent {
+                    filename: nc.filename,
+                    component: nc.component,
+                    rodin_ids: RodinIds::default(),
+                    source: None,
+                })
+                .collect(),
+        );
+        return Ok(BuildOutcome {
+            results: vec![(String::new(), build(&project))],
+            archive_bytes: None,
+        });
     }
     let bytes = to_zip(&components)?;
     build_zip_bytes(name, bytes)

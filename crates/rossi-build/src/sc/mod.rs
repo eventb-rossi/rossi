@@ -4,7 +4,7 @@
 //! a [`BuildResult`]. Individual checkers live in submodules (`context`,
 //! later `machine`, `events`, …).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use rossi::deps::{DependencyGraph, EdgeKind};
@@ -165,10 +165,50 @@ pub struct ScModel {
     pub machines: HashMap<String, CheckedMachine>,
 }
 
+/// EB019: every component name must be unique within a project — a duplicate
+/// makes every SEES/EXTENDS/REFINES reference to the name ambiguous, and the
+/// emitted `.bcc`/`.bcm` file identities collide. Rodin cannot even represent
+/// the state: a component's name is its file identity, and the per-name proof
+/// files are shared across kinds, so a machine and a context may not share a
+/// name either.
+fn duplicate_component_diagnostics(project: &Project) -> Vec<crate::Diagnostic> {
+    let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for pc in &project.components {
+        by_name
+            .entry(pc.component.name())
+            .or_default()
+            .push(pc.filename.as_str());
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|(name, files)| crate::Diagnostic {
+            severity: crate::RuleId::DuplicateComponent.default_severity(),
+            origin: name.to_string(),
+            message: format!(
+                "component `{name}` is defined in multiple files: {}",
+                files.join(", ")
+            ),
+            rule_id: Some(crate::RuleId::DuplicateComponent),
+            // A duplicate-component finding is about file paths, not a single
+            // source location — no span to attach.
+            span: None,
+        })
+        .collect()
+}
+
 /// Entry point called from [`crate::build`] / [`crate::build_with_model`].
 pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
     let mut result = BuildResult::default();
     let mut checked: HashMap<String, CheckedContext> = HashMap::new();
+
+    // Duplicate component names are a project-integrity failure (EB019):
+    // no output the build could emit would be well-defined. Like a
+    // dependency cycle: report and stop.
+    result.diagnostics = duplicate_component_diagnostics(project);
+    if !result.diagnostics.is_empty() {
+        return (result, ScModel::default());
+    }
 
     // The shared dependency graph is the single source of truth for the
     // EXTENDS / REFINES / SEES visibility semantics (see `rossi::deps`).
