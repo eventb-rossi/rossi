@@ -354,6 +354,27 @@ pub(super) fn build_event_decl(
     let label = kind.label();
     let source = crate::sc::file_child_source(ids, file_root, Kind::Event, in_tag::EVENT, label);
 
+    // Filter duplicate parameters / labels per the SC drop semantics
+    // documented in `crate::duplicates` (parameters drop every occurrence;
+    // guard/action + witness labels keep the first). Witnesses are
+    // enumerated in resolve_witnesses' keep order (`witnesses` before
+    // `with`) so the duplicate name-set matches the occurrence the checker
+    // retains.
+    let event_dups = crate::duplicates::event_duplicates(
+        machine_name,
+        label,
+        kind.parameters().iter().map(|p| (p.name.as_str(), p.span)),
+        crate::duplicates::pred_labels(kind.guards())
+            .chain(crate::duplicates::action_labels(kind.actions())),
+        crate::duplicates::pred_labels(kind.witnesses_primary())
+            .chain(crate::duplicates::pred_labels(kind.witnesses_with())),
+    );
+    // A duplicated witness label always drops at least one witness (the
+    // keep-loop in `resolve_witnesses` honours only the first per required
+    // name — a witness's label is its required name), so the event is no
+    // longer a lossless reflection of the source.
+    let witness_dup_accurate = event_dups.witness_labels.names.is_empty();
+
     let (effective_refines, parent_event_decl) = resolve_effective_refines(kind, parent);
 
     // Explicit refines target missing from parent — drop to match Rodin's
@@ -381,6 +402,7 @@ pub(super) fn build_event_decl(
         base_env,
         inherited_chain.as_deref(),
         kind,
+        &event_dups,
         diags,
         machine_name,
         label,
@@ -392,6 +414,7 @@ pub(super) fn build_event_decl(
         kind,
         &scope,
         abstract_only,
+        &event_dups,
         diags,
         machine_name,
         label,
@@ -470,7 +493,8 @@ pub(super) fn build_event_decl(
         && buckets_accurate
         && inherited_accurate
         && convergence_accurate
-        && witness_accurate;
+        && witness_accurate
+        && witness_dup_accurate;
 
     // INITIALISATION repair: in Event-B every concrete variable must be
     // initialised, so any concrete, typed variable that no action (inherited
@@ -604,6 +628,7 @@ fn build_event_scope(
     base_env: &TypeEnv,
     inherited_chain: Option<&EventDecl>,
     kind: EventKind<'_>,
+    dups: &crate::duplicates::EventDuplicates,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
     label: &str,
@@ -630,10 +655,24 @@ fn build_event_scope(
             axioms.push(p.clone());
         }
     }
+    // 2nd+ occurrences of a duplicated guard label are dropped from the
+    // event (see `build_event_buckets`), so they must not contribute typing
+    // either; the kept first occurrence still types its parameters.
+    let mut typing_kept = crate::duplicates::FirstKept::new(&dups.guard_action_labels.names);
     for g in kind.guards() {
+        if typing_kept.drops(g.label.as_deref()) {
+            continue;
+        }
         axioms.push(g.predicate.clone());
     }
-    let param_names: Vec<String> = kind.parameters().iter().map(|p| p.name.clone()).collect();
+    // Duplicated parameters are dropped entirely, so they are not typed —
+    // they are EB021 errors, not EB006 inference failures.
+    let param_names: Vec<String> = kind
+        .parameters()
+        .iter()
+        .filter(|p| !dups.parameters.names.contains(&p.name))
+        .map(|p| p.name.clone())
+        .collect();
     let unresolved = infer_constants(&mut scope, &param_names, &axioms);
     let mut accurate = true;
     for name in &unresolved {
@@ -675,14 +714,27 @@ fn build_event_buckets(
     kind: EventKind<'_>,
     scope: &TypeEnv,
     abstract_only: &BTreeSet<String>,
+    dups: &crate::duplicates::EventDuplicates,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
     label: &str,
 ) -> (EventBuckets, bool) {
     let mut accurate = true;
 
+    // Guards and actions share one label namespace, so the first-kept rule
+    // for duplicated labels (EB022) tracks occurrences across both loops:
+    // a guard `lbl` followed by an action `lbl` keeps the guard.
+    let mut label_kept = crate::duplicates::FirstKept::new(&dups.guard_action_labels.names);
+
     let mut guards: Vec<GuardDecl> = Vec::with_capacity(kind.guards().len());
     for (i, g) in kind.guards().iter().enumerate() {
+        // 2nd+ use of a duplicated guard/action label: Rodin keeps the first
+        // occurrence, drops the rest, and marks the event inaccurate (the
+        // EB022 error is already reported).
+        if label_kept.drops(g.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         // Disappeared-variable reference: the guard reads a variable that
         // vanished in this refinement (inherited from the parent but not
         // redeclared, no witness). Reading a disappeared variable in a guard is
@@ -746,10 +798,14 @@ fn build_event_buckets(
         }
     }
 
+    // Duplicated parameters are dropped entirely (every occurrence), like
+    // Rodin's identifier-conflict rule. The scope filter alone is not
+    // enough: an outer-scope name (e.g. a seen constant) could make
+    // `scope.contains` true for a dropped parameter.
     let mut params_sorted: Vec<&NamedElement> = kind
         .parameters()
         .iter()
-        .filter(|p| scope.contains(&p.name))
+        .filter(|p| scope.contains(&p.name) && !dups.parameters.names.contains(&p.name))
         .collect();
     params_sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let mut parameters: Vec<ParameterDecl> = Vec::with_capacity(params_sorted.len());
@@ -763,6 +819,12 @@ fn build_event_buckets(
     // We mirror that.
     let mut actions: Vec<ActionDecl> = Vec::with_capacity(kind.actions().len());
     for (i, act) in kind.actions().iter().enumerate() {
+        // Same first-kept rule as the guards loop, over the shared
+        // guard+action label namespace.
+        if label_kept.drops(act.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         let bad_lhs = lhs_variables(&act.action)
             .iter()
             .find(|v| !scope.contains(v))

@@ -217,11 +217,27 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
     let mut result = BuildResult::default();
     let mut checked: HashMap<String, CheckedContext> = HashMap::new();
 
+    // Component-local duplicate identifiers / labels (EB021/EB022) are
+    // reported once, up front, for every component. The per-component checks
+    // that follow consume only the duplicated name-sets — for filtering the
+    // conflicting elements out of the output — and emit no diagnostics of
+    // their own. Reporting here (rather than inside each check) means a
+    // structural failure that stops the build early, or a dropped element,
+    // can never hide a duplicate the user needs to see.
+    for pc in &project.components {
+        result
+            .diagnostics
+            .extend(crate::duplicates::component_duplicate_diagnostics(
+                &pc.component,
+            ));
+    }
+
     // Duplicate component names are a project-integrity failure (EB019):
     // no output the build could emit would be well-defined. Like a
     // dependency cycle: report and stop.
-    result.diagnostics = duplicate_component_diagnostics(project);
-    if !result.diagnostics.is_empty() {
+    let dup_components = duplicate_component_diagnostics(project);
+    if !dup_components.is_empty() {
+        result.diagnostics.extend(dup_components);
         return (result, ScModel::default());
     }
 

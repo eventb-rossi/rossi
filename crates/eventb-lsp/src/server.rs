@@ -64,8 +64,8 @@ impl Analyzer {
     /// Publish `uri`'s diagnostics from the already-read parse `doc`, or clear
     /// them when diagnostics are disabled. The diagnostics
     /// ([`crate::diagnostics::document_diagnostics`]) are the parse errors plus,
-    /// on a clean parse, the cheap single-component lints (duplicate / shadowed
-    /// names, EB021-023). The publish is tagged with the document's current
+    /// on a clean parse, the cheap single-component checks (duplicate /
+    /// shadowed names, EB021-023). The publish is tagged with the document's current
     /// `version` so the version always identifies the text the diagnostics were
     /// computed from. Spans are mapped against that parse's own text, so a
     /// concurrent edit cannot make a span index past the text it is rendered

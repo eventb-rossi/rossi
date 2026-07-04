@@ -69,12 +69,39 @@ pub fn check_context(
             }
         }
     }
+    // Filter duplicate identifiers / axiom labels per the SC drop semantics
+    // documented in `crate::duplicates` (identifiers drop every occurrence;
+    // axiom labels keep the first). Enumerated set *elements* have no SC
+    // declaration of their own, so for them only the up-front diagnostic
+    // applies.
+    let dups = crate::duplicates::context_duplicates(ctx);
+    let dup_ids = dups.identifiers.names;
+    let dup_axiom_labels = dups.axiom_labels.names;
+
     for set in &ctx.sets {
+        if dup_ids.contains(set.name()) {
+            continue;
+        }
         env.add_carrier_set(set.name());
     }
 
-    let axiom_preds: Vec<_> = ctx.axioms.iter().map(|a| a.predicate.clone()).collect();
-    let constant_names: Vec<String> = ctx.constants.iter().map(|c| c.name.clone()).collect();
+    // Dropped 2nd+ occurrences of a duplicated axiom label must not
+    // contribute typing either; the kept first occurrence still types.
+    let mut typing_kept = crate::duplicates::FirstKept::new(&dup_axiom_labels);
+    let axiom_preds: Vec<_> = ctx
+        .axioms
+        .iter()
+        .filter(|ax| !typing_kept.drops(ax.label.as_deref()))
+        .map(|a| a.predicate.clone())
+        .collect();
+    // Duplicated constants are dropped, not typed — they are EB021 errors,
+    // not EB006 inference failures.
+    let constant_names: Vec<String> = ctx
+        .constants
+        .iter()
+        .filter(|c| !dup_ids.contains(&c.name))
+        .map(|c| c.name.clone())
+        .collect();
     let unresolved = infer_constants(&mut env, &constant_names, &axiom_preds);
     for name in &unresolved {
         diags.push(Diagnostic {
@@ -100,7 +127,15 @@ pub fn check_context(
     let extends = build_extends_decls(&pc.rodin_ids, &file_root, project, ctx, checked);
 
     let mut axioms: Vec<AxiomDecl> = Vec::with_capacity(ctx.axioms.len());
+    let mut emit_kept = crate::duplicates::FirstKept::new(&dup_axiom_labels);
     for (i, ax) in ctx.axioms.iter().enumerate() {
+        // 2nd+ use of a duplicated axiom label: Rodin keeps the first
+        // occurrence, drops the rest, and marks the context inaccurate (the
+        // EB022 error is already reported).
+        if emit_kept.drops(ax.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         match build_axiom_decl(&pc.rodin_ids, &file_root, i, ax, &env, &ctx.name) {
             Ok(decl) => axioms.push(decl),
             Err(diag) => {
@@ -113,14 +148,18 @@ pub fn check_context(
     let mut carrier_sets: Vec<CarrierSetDecl> = ctx
         .sets
         .iter()
+        .filter(|s| !dup_ids.contains(s.name()))
         .map(|s| build_carrier_set_decl(&pc.rodin_ids, &file_root, s))
         .collect();
     carrier_sets.sort_by(|a, b| a.name.cmp(&b.name));
 
+    // The explicit duplicate filter matters even though `env.contains` is
+    // also checked: an EXTENDS parent exporting the same name would leave
+    // it in `env`, and both local duplicates would emit.
     let mut constants: Vec<ConstantDecl> = ctx
         .constants
         .iter()
-        .filter(|c| env.contains(&c.name))
+        .filter(|c| !dup_ids.contains(&c.name) && env.contains(&c.name))
         .map(|c| build_constant_decl(&pc.rodin_ids, &file_root, c, &env))
         .collect();
     constants.sort_by(|a, b| a.name.cmp(&b.name));

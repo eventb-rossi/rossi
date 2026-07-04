@@ -13,17 +13,17 @@
 //! - **EB012** unmodified var    — never assigned outside INITIALISATION;
 //!   a constant in disguise
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
-//! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
-//! - **EB022** duplicate label   — invariant/event/guard/action/axiom/witness used twice
 //! - **EB023** shadowed name     — declared name re-lexes as a textual token
 //! - **EB024** new event assigns inherited variable — a non-refining event
 //!   modifies state inherited from an abstract machine
 //!
-//! EB019 (duplicate component names) is a project-integrity failure, not
-//! advice: it is checked by the SC build itself (`crate::sc::build_project`),
-//! so `rossi build` fails on it too. EB010 (well-definedness) and EB015–17
-//! (proof status) are deliberately out of scope here; they need their own
-//! modules.
+//! EB019 (duplicate component names) and EB021/EB022 (duplicate
+//! identifiers / labels) are project- and component-integrity failures,
+//! not advice: they are checked by the SC build itself
+//! (`crate::sc::build_project`, via [`crate::duplicates`] for EB021/22),
+//! so `rossi build` fails on them too. EB010 (well-definedness) and
+//! EB015–17 (proof status) are deliberately out of scope here; they need
+//! their own modules.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -90,19 +90,22 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
 /// EXTENDS parents are usually absent, so the reference-based lints would
 /// false-positive); these local passes are safe to run anywhere.
 ///
-/// EB021/EB022 (duplicate identifiers / labels) come from the shared
-/// [`crate::duplicates`] core.
+/// Today that is EB023 (shadowed names) alone: EB021/EB022 (duplicate
+/// identifiers / labels) are semantic errors checked by the SC build via
+/// [`crate::duplicates`], not advisories.
+///
+/// The two component-local check categories — advisory lints (this
+/// function) and semantic duplicate-name errors
+/// ([`crate::duplicates::component_duplicate_diagnostics`]) — are composed
+/// per-input by both `rossi validate`'s loose-text path (gated on
+/// `--no-lints` / `--no-semantic` respectively) and the LSP (merged,
+/// ungated). A new component-local check must be wired into both callers.
 #[must_use]
 pub fn run_component(component: &Component) -> Vec<Diagnostic> {
-    let shadowed = match component {
+    match component {
         Component::Machine(m) => lint_shadowed_names_machine(m),
         Component::Context(c) => lint_shadowed_names_context(c),
-    };
-    [
-        shadowed,
-        crate::duplicates::component_duplicate_diagnostics(component),
-    ]
-    .concat()
+    }
 }
 
 // ---------- individual lint passes -----------------------------------------

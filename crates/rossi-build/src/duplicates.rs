@@ -9,79 +9,104 @@
 //! This is the shared core behind every consumer: the static checker
 //! (`crate::sc`), `rossi validate`'s loose-text path, and the LSP's
 //! as-you-type diagnostics all call into it, so their reports can never
-//! drift apart. Each namespace comes back as a [`NamespaceDuplicates`] —
-//! the diagnostics plus the duplicated names themselves, which the SC uses
-//! to filter the conflicting elements out of its output.
+//! drift apart. Only [`component_duplicate_diagnostics`] is public — the
+//! sole cross-crate entry point (validate + the LSP). The SC reports those
+//! same diagnostics once, up front in `crate::sc::build_project`, and then
+//! its per-component checks consume only the `.names` sets to filter the
+//! conflicting elements out of the output. Everything else here is a
+//! crate-internal detail of those two views.
+//!
+//! # SC drop semantics (Rodin parity)
+//!
+//! When the SC filters a duplicate out of its output, the rule depends on
+//! the namespace, and the per-component checks in `crate::sc` all follow it:
+//!
+//! - **identifiers** (variables, constants, carrier sets, parameters) and
+//!   **event labels** — drop *every* occurrence. The drop does not flip the
+//!   container's accuracy directly; a clause that referenced the dropped
+//!   name (a typing invariant/axiom, a referencing guard/action) fails its
+//!   own check and cascades, and Rodin flips accuracy only on those formula
+//!   drops.
+//! - **formula labels** (invariants, axioms, guards, actions, witnesses) —
+//!   keep the *first* occurrence and drop the rest (via `FirstKept`),
+//!   marking the container (file, context, or event) inaccurate.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
-use rossi::{Component, Context, LabeledAction, LabeledPredicate, Machine};
+use rossi::{
+    Component, Context, Event, InitialisationEvent, LabeledAction, LabeledPredicate, Machine,
+};
 
 use crate::{Diagnostic, RuleId};
 
 /// The duplicated names of one uniqueness scope, plus the diagnostics
-/// reporting them.
-pub struct NamespaceDuplicates {
+/// reporting them. The reporting view ([`component_duplicate_diagnostics`])
+/// takes `.diagnostics`; the SC filter view takes `.names`.
+pub(crate) struct NamespaceDuplicates {
     /// Names that occur more than once (blank names are never counted).
-    pub names: BTreeSet<String>,
+    pub(crate) names: BTreeSet<String>,
     /// One `Error` diagnostic per duplicated name, sorted by name.
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-impl NamespaceDuplicates {
-    /// Whether `name` is duplicated in this namespace.
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.names.contains(name)
-    }
-
-    /// Whether the namespace is duplicate-free.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
+    pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
 /// The machine-file namespaces: variables, invariant labels, event labels.
 /// Per-event namespaces are separate — see [`event_duplicates`].
-pub struct MachineFileDuplicates {
+pub(crate) struct MachineFileDuplicates {
     /// EB021 — variable identifiers.
-    pub variables: NamespaceDuplicates,
+    pub(crate) variables: NamespaceDuplicates,
     /// EB022 — invariant labels.
-    pub invariant_labels: NamespaceDuplicates,
+    pub(crate) invariant_labels: NamespaceDuplicates,
     /// EB022 — event labels (INITIALISATION included).
-    pub event_labels: NamespaceDuplicates,
+    pub(crate) event_labels: NamespaceDuplicates,
 }
 
 /// The per-event namespaces: parameters, the shared guard+action label
 /// space, and the shared witness label space.
-pub struct EventDuplicates {
+pub(crate) struct EventDuplicates {
     /// EB021 — parameter identifiers.
-    pub parameters: NamespaceDuplicates,
+    pub(crate) parameters: NamespaceDuplicates,
     /// EB022 — guard and action labels (one shared namespace in Event-B).
-    pub guard_action_labels: NamespaceDuplicates,
+    pub(crate) guard_action_labels: NamespaceDuplicates,
     /// EB022 — witness labels (`with` + `witnesses` share one namespace).
-    pub witness_labels: NamespaceDuplicates,
+    pub(crate) witness_labels: NamespaceDuplicates,
 }
 
-impl EventDuplicates {
-    /// Whether every per-event namespace is duplicate-free.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.parameters.is_empty()
-            && self.guard_action_labels.is_empty()
-            && self.witness_labels.is_empty()
+/// First-kept tracker for one duplicated-label namespace: Rodin keeps the
+/// first occurrence of a duplicated label and drops the rest. Each pass
+/// over the clauses (typing, emission) runs its own tracker so the kept
+/// subsets cannot drift apart.
+pub(crate) struct FirstKept<'a> {
+    names: &'a BTreeSet<String>,
+    seen: BTreeSet<&'a str>,
+}
+
+impl<'a> FirstKept<'a> {
+    pub(crate) fn new(names: &'a BTreeSet<String>) -> Self {
+        Self {
+            names,
+            seen: BTreeSet::new(),
+        }
+    }
+
+    /// Whether this occurrence of `label` is dropped: true for the 2nd+
+    /// use of a duplicated label, false for kept and unique labels
+    /// (unlabelled clauses are never duplicates).
+    pub(crate) fn drops(&mut self, label: Option<&'a str>) -> bool {
+        match label {
+            Some(l) if self.names.contains(l) => !self.seen.insert(l),
+            _ => false,
+        }
     }
 }
 
 /// The context namespaces: one shared identifier namespace (carrier sets,
 /// their enumerated elements, constants) and axiom labels.
-pub struct ContextDuplicates {
+pub(crate) struct ContextDuplicates {
     /// EB021 — carrier set / set element / constant identifiers.
-    pub identifiers: NamespaceDuplicates,
+    pub(crate) identifiers: NamespaceDuplicates,
     /// EB022 — axiom labels.
-    pub axiom_labels: NamespaceDuplicates,
+    pub(crate) axiom_labels: NamespaceDuplicates,
 }
 
 /// `(label, span)` for each labelled predicate (invariant / guard / witness /
@@ -170,7 +195,7 @@ fn namespace_duplicates<'a>(
 /// event labels, with INITIALISATION chained in — rossi stores it apart from
 /// `events`, but Event-B treats it as an event sharing the label namespace).
 #[must_use]
-pub fn machine_file_duplicates(m: &Machine) -> MachineFileDuplicates {
+pub(crate) fn machine_file_duplicates(m: &Machine) -> MachineFileDuplicates {
     let scope = format!("machine `{}`", m.name);
     MachineFileDuplicates {
         variables: namespace_duplicates(
@@ -204,7 +229,7 @@ pub fn machine_file_duplicates(m: &Machine) -> MachineFileDuplicates {
 /// Check the three per-event namespaces (parameters; the shared guard+action
 /// label space; the shared witness label space) for duplicates.
 #[must_use]
-pub fn event_duplicates<'a>(
+pub(crate) fn event_duplicates<'a>(
     machine: &str,
     event: &str,
     parameters: impl IntoIterator<Item = (&'a str, Option<Span>)>,
@@ -244,7 +269,7 @@ pub fn event_duplicates<'a>(
 /// are constants.) Enumerated elements have no per-element span, so they
 /// anchor on the set declaration.
 #[must_use]
-pub fn context_duplicates(c: &Context) -> ContextDuplicates {
+pub(crate) fn context_duplicates(c: &Context) -> ContextDuplicates {
     let scope = format!("context `{}`", c.name);
     let mut ids: Vec<(&str, Option<Span>)> = Vec::new();
     for set in &c.sets {
@@ -279,43 +304,63 @@ pub fn component_duplicate_diagnostics(component: &Component) -> Vec<Diagnostic>
     match component {
         Component::Machine(m) => {
             let file = machine_file_duplicates(m);
-            let mut diags = [
+            let mut diags: Vec<Diagnostic> = [
                 file.variables.diagnostics,
                 file.invariant_labels.diagnostics,
                 file.event_labels.diagnostics,
             ]
-            .concat();
+            .into_iter()
+            .flatten()
+            .collect();
             for e in &m.events {
-                diags.extend(event_diags(event_duplicates(
-                    &m.name,
-                    &e.name,
-                    e.parameters.iter().map(|p| (p.name.as_str(), p.span)),
-                    // Event-B shares one label namespace across guards and
-                    // actions.
-                    pred_labels(&e.guards).chain(action_labels(&e.actions)),
-                    // rossi splits witnesses into `with` (abstract vars) +
-                    // `witnesses` (abstract params); Event-B treats them as
-                    // one witness namespace.
-                    pred_labels(&e.with).chain(pred_labels(&e.witnesses)),
-                )));
+                diags.extend(event_duplicate_diagnostics(&m.name, e));
             }
-            // INITIALISATION as an event: no parameters, no guards.
             if let Some(init) = &m.initialisation {
-                diags.extend(event_diags(event_duplicates(
-                    &m.name,
-                    crate::sc::initialisation_label(),
-                    std::iter::empty(),
-                    action_labels(&init.actions),
-                    pred_labels(&init.with).chain(pred_labels(&init.witnesses)),
-                )));
+                diags.extend(initialisation_duplicate_diagnostics(&m.name, init));
             }
             diags
         }
         Component::Context(c) => {
             let dups = context_duplicates(c);
-            [dups.identifiers.diagnostics, dups.axiom_labels.diagnostics].concat()
+            [dups.identifiers.diagnostics, dups.axiom_labels.diagnostics]
+                .into_iter()
+                .flatten()
+                .collect()
         }
     }
+}
+
+/// Duplicate-name diagnostics for one ordinary event, in reporting order
+/// (parameters, guard/action labels, witness labels).
+fn event_duplicate_diagnostics(machine: &str, e: &Event) -> Vec<Diagnostic> {
+    event_diags(event_duplicates(
+        machine,
+        &e.name,
+        e.parameters.iter().map(|p| (p.name.as_str(), p.span)),
+        // Event-B shares one label namespace across guards and actions.
+        pred_labels(&e.guards).chain(action_labels(&e.actions)),
+        // rossi splits witnesses into `witnesses` (abstract params) + `with`
+        // (abstract vars); Event-B treats them as one namespace. Enumerate
+        // them in the checker's keep order (`witnesses` before `with`, see
+        // `resolve_witnesses`) so a duplicate label's span anchors on the
+        // occurrence the SC retains, not the one it drops.
+        pred_labels(&e.witnesses).chain(pred_labels(&e.with)),
+    ))
+}
+
+/// Duplicate-name diagnostics for INITIALISATION as an event: no
+/// parameters, no guards.
+fn initialisation_duplicate_diagnostics(
+    machine: &str,
+    init: &InitialisationEvent,
+) -> Vec<Diagnostic> {
+    event_diags(event_duplicates(
+        machine,
+        crate::sc::initialisation_label(),
+        std::iter::empty(),
+        action_labels(&init.actions),
+        pred_labels(&init.witnesses).chain(pred_labels(&init.with)),
+    ))
 }
 
 /// Flatten one event's namespaces into the reporting order used by
@@ -326,7 +371,9 @@ fn event_diags(dups: EventDuplicates) -> Vec<Diagnostic> {
         dups.guard_action_labels.diagnostics,
         dups.witness_labels.diagnostics,
     ]
-    .concat()
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 #[cfg(test)]
