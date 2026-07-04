@@ -49,7 +49,7 @@ fn project_with_missing_target() -> Project {
 #[test]
 fn missing_refines_target_drops_event() {
     let r = build(&project_with_missing_target());
-    assert!(r.is_ok(), "diagnostics: {:?}", r.diagnostics);
+    assert!(!r.is_ok(), "EB009 is an error: {:?}", r.diagnostics);
     let bcm = r.file("M1.bcm").expect("M1.bcm");
     assert!(
         bcm.accurate,
@@ -67,19 +67,22 @@ fn missing_refines_target_drops_event() {
 }
 
 #[test]
-fn missing_refines_target_emits_warning() {
+fn missing_refines_target_emits_error() {
+    // Rodin reports AbstractEventNotFoundError (an error marker) and drops
+    // the whole concrete event; the drop + file-accuracy shape above is
+    // unaffected by the severity.
     let r = build(&project_with_missing_target());
-    let warnings: Vec<_> = r
+    let errors: Vec<_> = r
         .diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Warning)
+        .filter(|d| d.severity == Severity::Error)
         .filter(|d| d.message.contains("refines target") && d.message.contains("xyz"))
         .collect();
     assert_eq!(
-        warnings.len(),
+        errors.len(),
         1,
-        "expected exactly one refines-target warning; diagnostics: {:?}",
+        "expected exactly one refines-target error; diagnostics: {:?}",
         r.diagnostics
     );
-    assert_eq!(warnings[0].origin, "M1.c");
+    assert_eq!(errors[0].origin, "M1.c");
 }

@@ -377,13 +377,15 @@ pub(super) fn build_event_decl(
 
     let (effective_refines, parent_event_decl) = resolve_effective_refines(kind, parent);
 
-    // Explicit refines target missing from parent — drop to match Rodin's
-    // silent-drop behaviour. (Implicit and INIT are already gated upstream.)
+    // Explicit refines target missing from parent — an error in Rodin
+    // (AbstractEventNotFoundError + EventRefinementError, both Error
+    // markers), and the whole concrete event is dropped from the output.
+    // (Implicit and INIT are already gated upstream.)
     if let Some(refines) = kind.explicit_refines()
         && parent_event_decl.is_none()
     {
         diags.push(Diagnostic {
-            severity: Severity::Warning,
+            severity: Severity::Error,
             origin: format!("{machine_name}.{label}"),
             message: format!("refines target '{refines}' not found in parent — event dropped"),
             rule_id: Some(crate::RuleId::CrossReferenceNotFound),
@@ -739,9 +741,13 @@ fn build_event_buckets(
         // vanished in this refinement (inherited from the parent but not
         // redeclared, no witness). Reading a disappeared variable in a guard is
         // an error (EB025) — except in a *theorem* guard, where it is permitted
-        // and reported only as the softer warning. Either way the guard is
-        // dropped and the event marked `accurate=false` — see `ITERATION.bcm`'s
-        // `stepone`/`steptwo` referencing `n`, `t` (Group R).
+        // and reported only as the softer warning. Rodin allows the theorem
+        // case with no problem marker at all (MachineEventGuardFreeIdentsModule
+        // gates VariableHasDisappearedError on `!isTheorem`), so the Warning
+        // is deliberately stricter than Rodin and must not be "aligned" to an
+        // Error. Either way the guard is dropped and the event marked
+        // `accurate=false` — see `ITERATION.bcm`'s `stepone`/`steptwo`
+        // referencing `n`, `t` (Group R).
         if !abstract_only.is_empty()
             && let Some(bad) = crate::sc::identifier_walker::first_forbidden_identifier_in_predicate(
                 &g.predicate,

@@ -55,19 +55,22 @@ fn file_stays_accurate_when_only_variable_typing_fails() {
 }
 
 #[test]
-fn untyped_variable_emits_warning_not_error() {
+fn untyped_variable_emits_error() {
+    // Rodin's UntypedVariableError is an error marker (the variable is
+    // dropped from the output); the file-accuracy behaviour above is
+    // unaffected by the severity.
     let r = build(&project());
-    let warnings: Vec<_> = r
+    let errors: Vec<_> = r
         .diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Warning)
+        .filter(|d| d.severity == Severity::Error)
         .filter(|d| d.message.contains("could not infer variable type"))
         .collect();
     assert_eq!(
-        warnings.len(),
+        errors.len(),
         1,
-        "expected exactly one untyped-variable warning; diagnostics: {:?}",
+        "expected exactly one untyped-variable error; diagnostics: {:?}",
         r.diagnostics
     );
-    assert_eq!(warnings[0].origin, "M.x");
+    assert_eq!(errors[0].origin, "M.x");
 }
