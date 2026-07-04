@@ -35,11 +35,11 @@ fn lsp_diagnostic(
 }
 
 /// Diagnostics for a parsed document: the parse errors, plus the cheap
-/// single-component lints (EB021-023) — but the lints only when the parse is
-/// clean. `rossi validate` lints solely a fully-successful parse; the LSP
-/// matches that, both for consistency and because running the lints over a
-/// recovered (error-bearing) AST would double-report a duplicated clause as
-/// both a parse error and a duplicate-name lint.
+/// single-component checks (EB021-023) — but the checks only when the parse
+/// is clean. `rossi validate` checks solely a fully-successful parse; the
+/// LSP matches that, both for consistency and because running the checks
+/// over a recovered (error-bearing) AST would double-report a duplicated
+/// clause as both a parse error and a duplicate-name error.
 pub(crate) fn document_diagnostics(doc: &ParsedDocument) -> Vec<Diagnostic> {
     let mut diagnostics: Vec<Diagnostic> = doc
         .parse
@@ -139,25 +139,31 @@ fn parse_error_range(error: &rossi::ParseError, text: &str) -> Range {
     crate::position::span_to_range(&rossi::ast::Span { start, end }, text)
 }
 
-/// Run the cheap, single-component lint passes over each parsed `component` and
+/// Run the cheap, single-component checks over each parsed `component` and
 /// convert the findings to LSP diagnostics.
 ///
-/// These are exactly the lints that need no project, no cross-component
-/// resolution, and no type inference — duplicate identifiers (EB021), duplicate
-/// labels (EB022) and shadowed names (EB023) — so they are safe to recompute on
-/// every keystroke alongside the parse errors. The logic lives in
-/// `rossi_build::lint::run_component` (the same pass `rossi validate` runs on
-/// loose `.eventb` text); this only maps its output into the protocol's shape.
-/// `text` is the source the components were parsed from, so the diagnostic spans
-/// index into it. The result is lazy so the sole caller can extend its
-/// diagnostics vector directly, without a throwaway intermediate `Vec`.
+/// These are exactly the checks that need no project, no cross-component
+/// resolution, and no type inference — duplicate identifiers (EB021) and
+/// labels (EB022) from the shared `rossi_build::duplicates` core (the same
+/// detection the SC build enforces), plus the shadowed-name lint (EB023)
+/// from `rossi_build::lint::run_component` — so they are safe to recompute
+/// on every keystroke alongside the parse errors. `rossi validate` runs the
+/// same two passes on loose `.eventb` text; this only maps their output into
+/// the protocol's shape. `text` is the source the components were parsed
+/// from, so the diagnostic spans index into it. The result is lazy so the
+/// sole caller can extend its diagnostics vector directly, without a
+/// throwaway intermediate `Vec`.
 pub(crate) fn lint_diagnostics<'a>(
     components: &'a [rossi::Component],
     text: &'a str,
 ) -> impl Iterator<Item = Diagnostic> + 'a {
     components
         .iter()
-        .flat_map(rossi_build::lint::run_component)
+        .flat_map(|c| {
+            rossi_build::duplicates::component_duplicate_diagnostics(c)
+                .into_iter()
+                .chain(rossi_build::lint::run_component(c))
+        })
         .map(move |d| build_diagnostic_to_lsp(&d, text))
 }
 

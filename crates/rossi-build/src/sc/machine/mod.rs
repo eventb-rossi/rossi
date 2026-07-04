@@ -161,12 +161,31 @@ pub fn check_machine(
     }
 
     // -----------------------------------------------------------------
+    // Filter duplicate variables / invariant / event labels per the SC drop
+    // semantics documented in `crate::duplicates` (variables and event
+    // labels drop every occurrence; invariant labels keep the first).
+    // -----------------------------------------------------------------
+    let file_dups = crate::duplicates::machine_file_duplicates(machine);
+    let dup_vars = file_dups.variables.names;
+    let dup_inv_labels = file_dups.invariant_labels.names;
+    let dup_event_labels = file_dups.event_labels.names;
+
+    // -----------------------------------------------------------------
     // Type-infer variables from invariants.
     // -----------------------------------------------------------------
-    let variable_names: Vec<String> = machine.variables.iter().map(|v| v.name.clone()).collect();
+    let variable_names: Vec<String> = machine
+        .variables
+        .iter()
+        .filter(|v| !dup_vars.contains(&v.name))
+        .map(|v| v.name.clone())
+        .collect();
+    // Dropped 2nd+ occurrences of a duplicated invariant label must not
+    // contribute typing either; the kept first occurrence still types.
+    let mut typing_kept = crate::duplicates::FirstKept::new(&dup_inv_labels);
     let invariant_preds: Vec<_> = machine
         .invariants
         .iter()
+        .filter(|inv| !typing_kept.drops(inv.label.as_deref()))
         .map(|i| i.predicate.clone())
         .collect();
     let unresolved = infer_constants(&mut env, &variable_names, &invariant_preds);
@@ -210,7 +229,15 @@ pub fn check_machine(
     );
 
     let mut invariant_decls: Vec<InvariantDecl> = Vec::with_capacity(machine.invariants.len());
+    let mut emit_kept = crate::duplicates::FirstKept::new(&dup_inv_labels);
     for (i, inv) in machine.invariants.iter().enumerate() {
+        // 2nd+ use of a duplicated invariant label: Rodin keeps the first
+        // occurrence, drops the rest, and marks the file inaccurate (the
+        // EB022 error is already reported).
+        if emit_kept.drops(inv.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         match build_invariant_decl(&pc.rodin_ids, &file_root, i, inv, &env, &machine.name) {
             Ok(d) => invariant_decls.push(d),
             Err(diag) => {
@@ -221,7 +248,7 @@ pub fn check_machine(
     }
 
     let (variable_decls, all_var_names, own_var_names) =
-        build_variable_decls(machine, &env, parent, &pc.rodin_ids, &file_root);
+        build_variable_decls(machine, &dup_vars, &env, parent, &pc.rodin_ids, &file_root);
 
     // Variables inherited from the parent but not redeclared in this
     // machine vanish to abstract-only. Concrete events that reference such
@@ -279,7 +306,14 @@ pub fn check_machine(
     // corpus tutorial model). An event whose
     // explicit refines target is absent from the parent is silently
     // dropped (Rodin parity), not a file-inaccuracy signal.
+    // A duplicated event label drops every conflicting event — Rodin's
+    // event-label-conflict rule (both symbols error out, no scEvent is
+    // committed for either; the machine root stays accurate). A descendant
+    // refining a dropped event hits the dropped-target path in `events.rs`.
+    // The dropped event's own EB021/EB022 diagnostics were already reported
+    // up front, so skipping the build here loses nothing.
     if let Some(init) = &machine.initialisation
+        && !dup_event_labels.contains(crate::sc::initialisation_label())
         && !should_omit_initialisation(init, parent, &abstract_only_var_names)
         && let Some((decl, _ok)) = build_event_decl(
             &pc.rodin_ids,
@@ -302,6 +336,9 @@ pub fn check_machine(
         event_decls.push(rc);
     }
     for event in &machine.events {
+        if dup_event_labels.contains(&event.name) {
+            continue;
+        }
         if let Some((decl, _ok)) = build_event_decl(
             &pc.rodin_ids,
             &file_root,
@@ -508,13 +545,22 @@ fn build_invariant_decl(
 /// here avoids recomputing.
 fn build_variable_decls(
     machine: &Machine,
+    dup_vars: &BTreeSet<String>,
     env: &TypeEnv,
     parent: Option<&CheckedMachine>,
     ids: &RodinIds,
     file_root: &HandleUri,
 ) -> (Vec<VariableDecl>, BTreeSet<String>, BTreeSet<String>) {
-    let own_var_names: BTreeSet<String> =
-        machine.variables.iter().map(|v| v.name.clone()).collect();
+    // A duplicated variable (EB021) is dropped from the machine's own
+    // declarations entirely; if an ancestor also declares the name it
+    // consequently lands in `abstract_only_var_names` and referencing
+    // clauses get the disappeared-variable treatment.
+    let own_var_names: BTreeSet<String> = machine
+        .variables
+        .iter()
+        .filter(|v| !dup_vars.contains(&v.name))
+        .map(|v| v.name.clone())
+        .collect();
     let parent_var_names: BTreeSet<String> = parent
         .map(|p| p.visible_variables.clone())
         .unwrap_or_default();

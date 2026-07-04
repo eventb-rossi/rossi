@@ -35,13 +35,12 @@ pub struct ValidateArgs {
     continue_on_error: bool,
 
     /// Skip rossi-build semantic checks (duplicate component names,
-    /// cycles, cross-refs, type errors).
+    /// duplicate identifiers/labels, cycles, cross-refs, type errors).
     #[arg(long)]
     no_semantic: bool,
 
     /// Skip rossi-build advisory lint passes (dead variable, unmodified
-    /// variable, incomplete INIT, duplicate identifier/label, shadowed
-    /// name).
+    /// variable, incomplete INIT, shadowed name).
     #[arg(long)]
     no_lints: bool,
 
@@ -217,7 +216,9 @@ fn validate_stdin(cli: &ValidateArgs) -> Vec<ValidationResult> {
 
 /// Validate Event-B text from any source, reporting rows under `display`.
 /// Loose text has no project (its SEES/EXTENDS parents are usually absent),
-/// so only the component-local lints run here — the reference-based ones
+/// so the SC build doesn't run here; the component-local checks do — the
+/// duplicate-name errors (EB021/EB022, semantic, from the same shared core
+/// the SC uses) and the component-local lints. The reference-based lints
 /// need the project paths (directories, zip archives).
 fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec<ValidationResult> {
     match parse_components(source) {
@@ -226,10 +227,16 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
                 .iter()
                 .map(|c| success_result(display, None, c))
                 .collect();
-            if !cli.no_lints {
-                for component in &components {
-                    for diag in rossi_build::lint::run_component(component) {
+            for component in &components {
+                if !cli.no_semantic {
+                    for diag in rossi_build::duplicates::component_duplicate_diagnostics(component)
+                    {
                         // Loose text is a single source; every span indexes into it.
+                        results.push(fold_diagnostic(display, diag, None, Some(source)));
+                    }
+                }
+                if !cli.no_lints {
+                    for diag in rossi_build::lint::run_component(component) {
                         results.push(fold_diagnostic(display, diag, None, Some(source)));
                     }
                 }

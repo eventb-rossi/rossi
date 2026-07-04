@@ -962,6 +962,75 @@ fn build_fails_on_circular_refines_with_context_sibling() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+const DUP_VARIABLE_MACHINE: &str = "MACHINE M\nVARIABLES\n    x x\nINVARIANTS\n    @inv1 x >= 0\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        x := 0\n    END\nEND\n";
+
+#[test]
+fn validate_project_reports_duplicate_identifier_exactly_once() {
+    // EB021 comes from the SC build; the lint pass must not repeat it, or
+    // every duplicate would show up twice in a project validation.
+    let tmp = tempdir_unique("rossi-cli-validate-dup-var-once");
+    std::fs::write(tmp.join("M.eventb"), DUP_VARIABLE_MACHINE).unwrap();
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            tmp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(!output.status.success(), "EB021 is an error");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.matches("\"rule_id\": \"EB021\"").count(),
+        1,
+        "EB021 must be reported exactly once: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn build_fails_on_duplicate_identifier() {
+    let tmp = tempdir_unique("rossi-cli-build-dup-var");
+    std::fs::write(tmp.join("M.eventb"), DUP_VARIABLE_MACHINE).unwrap();
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            tmp.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "a duplicate identifier must fail the build; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[EB021]"), "stderr: {stderr}");
+    assert!(
+        out_zip.exists(),
+        "the filtered output is still written despite the error"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 #[test]
 fn validate_directory_with_no_semantic_is_rejected() {
     let tmp = tempdir_unique("rossi-cli-validate-dir-nosem");
