@@ -190,12 +190,15 @@ pub fn check_machine(
         .collect();
     let unresolved = infer_constants(&mut env, &variable_names, &invariant_preds);
     for name in &unresolved {
-        // Untyped variables are an event-level concern, not a file-level
-        // one. The cascade-drop in `events.rs` already marks each event
-        // that references such a variable `accurate=false`. Rodin parity
-        // (confirmed on a corpus tutorial model).
+        // An untyped variable is an error in Rodin (UntypedVariableError,
+        // MachineCommitIdentsModule): the variable is dropped from the
+        // output. The file still stays `accurate="true"` — untyped
+        // variables are an event-level accuracy concern, and the
+        // cascade-drop in `events.rs` already marks each event that
+        // references such a variable `accurate=false` (confirmed on a
+        // corpus tutorial model).
         diags.push(Diagnostic {
-            severity: Severity::Warning,
+            severity: Severity::Error,
             origin: format!("{}.{}", machine.name, name),
             message: "could not infer variable type from invariants".to_string(),
             rule_id: Some(crate::RuleId::TypeError),
@@ -304,8 +307,8 @@ pub fn check_machine(
     // `accurate="true"` and lets each event that references the
     // variable mark itself `accurate="false"` (confirmed on a
     // corpus tutorial model). An event whose
-    // explicit refines target is absent from the parent is silently
-    // dropped (Rodin parity), not a file-inaccuracy signal.
+    // explicit refines target is absent from the parent is dropped with
+    // an error (Rodin parity), not a file-inaccuracy signal.
     // A duplicated event label drops every conflicting event — Rodin's
     // event-label-conflict rule (both symbols error out, no scEvent is
     // committed for either; the machine root stays accurate). A descendant

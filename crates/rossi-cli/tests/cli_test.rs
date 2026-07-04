@@ -419,21 +419,22 @@ fn test_cli_mixed_text_and_zip_files() {
     assert!(stdout.contains("Passed: 6 ✓"));
 }
 
-/// A minimal machine whose variable `dead` is declared but never referenced,
-/// so EB011 fires at its declaring level — independent of any refinement-chain
-/// lint semantics (the bundled example zips' kept-variable warnings depend on
-/// what inherited clauses count as references). `dead` is deliberately never
-/// assigned either: an assigned-but-untyped variable cascades into an Error
-/// and would flip the exit code, whereas this machine stays warnings-only
-/// (EB006 untyped + EB011 dead + EB014 not initialised). It SEES
-/// [`LINT_FIXTURE_BUC`] so the fixture also exercises context loading and
-/// cross-file SEES resolution.
+/// A minimal machine whose variable `dead` is declared but never referenced
+/// outside its typing invariant, so EB011 fires at its declaring level —
+/// independent of any refinement-chain lint semantics (the bundled example
+/// zips' kept-variable warnings depend on what inherited clauses count as
+/// references). `dead` carries a typing invariant (an untyped variable is
+/// an EB006 *Error* and would flip the exit code) but is deliberately never
+/// assigned, so this machine stays warnings-only (EB011 dead + EB014 not
+/// initialised). It SEES [`LINT_FIXTURE_BUC`] so the fixture also exercises
+/// context loading and cross-file SEES resolution.
 const LINT_FIXTURE_BUM: &str = r#"<?xml version="1.0"?>
 <org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
 <org.eventb.core.seesContext name="_s1" org.eventb.core.target="Ctx"/>
 <org.eventb.core.variable name="_v1" org.eventb.core.identifier="x"/>
 <org.eventb.core.variable name="_v2" org.eventb.core.identifier="dead"/>
 <org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="x ∈ ℤ" org.eventb.core.theorem="false"/>
+<org.eventb.core.invariant name="_i2" org.eventb.core.label="inv2" org.eventb.core.predicate="dead ∈ ℤ" org.eventb.core.theorem="false"/>
 <org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
 <org.eventb.core.action name="_a1" org.eventb.core.assignment="x ≔ lo" org.eventb.core.label="act1"/>
 </org.eventb.core.event>
@@ -494,7 +495,7 @@ fn validate_zip_lint_warning_exits_zero() {
 #[test]
 fn validate_no_lints_drops_lint_rows() {
     // Same model, but --no-lints disables the advisory passes. No EB011
-    // rows should remain (the EB006 build warning is not a lint and stays).
+    // rows should remain.
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-no-lints");
     let output = Command::new("cargo")
         .args([
