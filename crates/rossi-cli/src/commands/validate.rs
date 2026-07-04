@@ -34,13 +34,14 @@ pub struct ValidateArgs {
     #[arg(short, long)]
     continue_on_error: bool,
 
-    /// Skip rossi-build semantic checks (cycles, cross-refs, type errors).
+    /// Skip rossi-build semantic checks (duplicate component names,
+    /// cycles, cross-refs, type errors).
     #[arg(long)]
     no_semantic: bool,
 
     /// Skip rossi-build advisory lint passes (dead variable, unmodified
-    /// variable, incomplete INIT, duplicate component, duplicate
-    /// identifier/label, shadowed name).
+    /// variable, incomplete INIT, duplicate identifier/label, shadowed
+    /// name).
     #[arg(long)]
     no_lints: bool,
 
@@ -539,10 +540,16 @@ fn fold_project_diagnostic(
     prefix: &str,
 ) -> ValidationResult {
     let component = diag.origin.split('.').next().unwrap_or(&diag.origin);
-    let pc = project
+    let mut carriers = project
         .components
         .iter()
-        .find(|pc| pc.component.name() == component);
+        .filter(|pc| pc.component.name() == component);
+    let pc = carriers.next();
+    // Under duplicate component names (EB019, an Error) the origin is
+    // ambiguous: anchoring to the first carrier would point the editor at
+    // the wrong file, with a byte span resolved against the wrong source.
+    // Report such diagnostics unanchored instead.
+    let pc = if carriers.next().is_some() { None } else { pc };
     let inner = pc.map(|pc| format!("{prefix}{}", pc.filename));
     let source = pc.and_then(|pc| pc.source.as_deref());
     fold_diagnostic(file, diag, inner, source)

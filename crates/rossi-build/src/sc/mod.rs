@@ -182,17 +182,32 @@ fn duplicate_component_diagnostics(project: &Project) -> Vec<crate::Diagnostic> 
     by_name
         .into_iter()
         .filter(|(_, files)| files.len() > 1)
-        .map(|(name, files)| crate::Diagnostic {
-            severity: crate::RuleId::DuplicateComponent.default_severity(),
-            origin: name.to_string(),
-            message: format!(
-                "component `{name}` is defined in multiple files: {}",
-                files.join(", ")
-            ),
-            rule_id: Some(crate::RuleId::DuplicateComponent),
-            // A duplicate-component finding is about file paths, not a single
-            // source location — no span to attach.
-            span: None,
+        .map(|(name, files)| {
+            // A text file may hold several components, so the duplicates can
+            // all live in ONE file — say so instead of listing it twice.
+            let mut distinct = files.clone();
+            distinct.dedup();
+            let message = if distinct.len() == 1 {
+                format!(
+                    "component `{name}` is defined {} times in {}",
+                    files.len(),
+                    distinct[0]
+                )
+            } else {
+                format!(
+                    "component `{name}` is defined in multiple files: {}",
+                    distinct.join(", ")
+                )
+            };
+            crate::Diagnostic {
+                severity: crate::RuleId::DuplicateComponent.default_severity(),
+                origin: name.to_string(),
+                message,
+                rule_id: Some(crate::RuleId::DuplicateComponent),
+                // A duplicate-component finding is about file paths, not a
+                // single source location — no span to attach.
+                span: None,
+            }
         })
         .collect()
 }

@@ -8,8 +8,10 @@
 //!
 //! Coverage (stable `EBnnn` rule IDs):
 //!
-//! - **EB011** dead variable     — declared, never referenced
-//! - **EB012** unmodified var    — referenced, never assigned by any event
+//! - **EB011** dead variable     — no use outside typing invariants, no
+//!   event writes it
+//! - **EB012** unmodified var    — never assigned outside INITIALISATION;
+//!   a constant in disguise
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
 //! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
 //! - **EB022** duplicate label   — invariant/event/guard/action/axiom/witness used twice
@@ -26,7 +28,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
-use rossi::{Component, Context, Event, LabeledAction, LabeledPredicate, Machine};
+use rossi::ast::predicate::{ComparisonOp, LogicalOp};
+use rossi::{
+    Component, Context, Event, ExpressionKind, InitialisationEvent, LabeledAction,
+    LabeledPredicate, Machine, Predicate, PredicateKind,
+};
 
 use crate::ast_util::lhs_variables;
 use crate::project::Project;
@@ -53,21 +59,27 @@ pub fn run(project: &Project) -> Vec<Diagnostic> {
         let m = index.machs[id];
         // `None` when the REFINES walk didn't reach a root — see
         // `effective_refs_for_machine`.
+        let inherited = index.inherited_vars_for_machine(id);
         if let Some(referenced) = index.effective_refs_for_machine(id) {
-            let assigned = index.effective_assigned_for_machine(id);
-            diags.extend(lint_dead_variable(m, &referenced));
-            diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
+            let event_assigned = index.effective_event_assigned_for_machine(id);
+            diags.extend(lint_dead_variable(
+                m,
+                &referenced,
+                &event_assigned,
+                &inherited,
+            ));
+            diags.extend(lint_unmodified_variable(
+                m,
+                &referenced,
+                &event_assigned,
+                &inherited,
+            ));
         }
         diags.extend(lint_incomplete_init(
             m,
             index.init_inherited_assigned[id].as_ref(),
         ));
-        // EB024 can only fire on a machine that has events; skip the
-        // ancestor-chain walk otherwise.
-        if !m.events.is_empty() {
-            let inherited = index.inherited_vars_for_machine(id);
-            diags.extend(lint_new_event_assigns_inherited(m, &inherited));
-        }
+        diags.extend(lint_new_event_assigns_inherited(m, &inherited));
     }
     diags
 }
@@ -94,38 +106,90 @@ pub fn run_component(component: &Component) -> Vec<Diagnostic> {
 
 // ---------- individual lint passes -----------------------------------------
 
-fn lint_dead_variable(m: &Machine, referenced: &BTreeSet<&str>) -> Vec<Diagnostic> {
+/// EB011: a variable nothing reads (typing invariants aside — every Rodin
+/// variable has one just to be typed) and no event writes serves no
+/// purpose. A variable that IS written but never read is exempt: it is an
+/// output, and deleting it would break the events that assign it. Like
+/// EB012, fired once per variable, at the machine that declares it — a
+/// kept copy down the chain would only repeat the same verdict.
+fn lint_dead_variable(
+    m: &Machine,
+    referenced: &BTreeSet<&str>,
+    event_assigned: &BTreeSet<&str>,
+    inherited: &BTreeSet<&str>,
+) -> Vec<Diagnostic> {
     m.variables
         .iter()
-        .filter(|v| !referenced.contains(v.name.as_str()))
+        .filter(|v| !inherited.contains(v.name.as_str()))
+        .filter(|v| {
+            !referenced.contains(v.name.as_str()) && !event_assigned.contains(v.name.as_str())
+        })
         .map(|v| Diagnostic {
             severity: RuleId::DeadVariable.default_severity(),
             origin: format!("{}.{}", m.name, v.name),
-            message: format!("variable `{}` is declared but never referenced", v.name),
+            message: format!(
+                "variable `{}` is never used — no reference outside typing \
+                 invariants and no event assigns it",
+                v.name
+            ),
             rule_id: Some(RuleId::DeadVariable),
             span: v.span,
         })
         .collect()
 }
 
+/// EB012: a variable assigned by INITIALISATION and never modified by any
+/// event is a constant in disguise — and provably stays one: a new event
+/// refines `skip` and must not modify kept abstract state (EB024's proof
+/// obligation), and a refining event must simulate an abstract event that
+/// does not touch the variable, so no refinement that keeps it can ever
+/// change it either. The rewrite always exists: Rodin rejects INIT actions
+/// whose right-hand side reads a variable, so the initial value is a
+/// constant expression (an axiom, after the move).
+///
+/// Fired once per variable, at the machine that declares it — kept copies
+/// down the chain inherit the verdict. Requires a use beyond typing: a
+/// never-used variable is EB011's dead case instead, so each variable
+/// draws at most one of the two advisories.
 fn lint_unmodified_variable(
     m: &Machine,
     referenced: &BTreeSet<&str>,
-    assigned: &BTreeSet<String>,
+    event_assigned: &BTreeSet<&str>,
+    inherited: &BTreeSet<&str>,
 ) -> Vec<Diagnostic> {
+    let init_lhs = m
+        .initialisation
+        .as_ref()
+        .map(init_lhs_names)
+        .unwrap_or_default();
     m.variables
         .iter()
-        .filter(|v| referenced.contains(v.name.as_str()) && !assigned.contains(&v.name))
+        .filter(|v| !inherited.contains(v.name.as_str()))
+        .filter(|v| init_lhs.contains(v.name.as_str()))
+        .filter(|v| !event_assigned.contains(v.name.as_str()))
+        .filter(|v| referenced.contains(v.name.as_str()))
         .map(|v| Diagnostic {
             severity: RuleId::UnmodifiedVariable.default_severity(),
             origin: format!("{}.{}", m.name, v.name),
             message: format!(
-                "variable `{}` is referenced but never assigned by any event",
+                "variable `{}` is never assigned outside INITIALISATION — no \
+                 event here or in any refinement can change it; consider a \
+                 CONSTANT with the initialisation as an axiom",
                 v.name
             ),
             rule_id: Some(RuleId::UnmodifiedVariable),
             span: v.span,
         })
+        .collect()
+}
+
+/// The variable names an INITIALISATION's own actions assign — the single
+/// definition of "assigned by INIT" that EB012 and EB014 both judge
+/// against.
+fn init_lhs_names(init: &InitialisationEvent) -> BTreeSet<&str> {
+    init.actions
+        .iter()
+        .flat_map(|la| lhs_variables(&la.action))
         .collect()
 }
 
@@ -156,11 +220,7 @@ fn lint_incomplete_init(m: &Machine, inherited_init: Option<&BTreeSet<String>>) 
         return Vec::new();
     }
 
-    let lhs: BTreeSet<&str> = init
-        .actions
-        .iter()
-        .flat_map(|la| lhs_variables(&la.action))
-        .collect();
+    let lhs = init_lhs_names(init);
     m.variables
         .iter()
         .filter(|v| !lhs.contains(v.name.as_str()))
@@ -520,15 +580,65 @@ fn lint_duplicate_names_context(c: &Context) -> Vec<Diagnostic> {
 // passed as initial bound names so a guard mentioning a parameter doesn't
 // leak that name into the machine-level reference set.
 
-/// References appearing in `m`'s own invariants. Kept separate from
-/// [`machine_body_refs`] because descendants inherit exactly this set (the
-/// SC splices ancestor invariants into every concrete `.bcm`), so the
-/// upward pass reuses the per-machine result instead of re-walking
-/// ancestor ASTs once per descendant.
+/// Collect the identifiers `pred` references, except that a top-level
+/// `∧`-conjunct of the typing shape `v ∈ E` / `v ⊆ E` (bare identifier on
+/// the left, `E` free of machine variables) does not count as a reference
+/// of `v` — only `E`'s identifiers are collected. Every Rodin variable
+/// needs such an invariant just to be typed, so counting it as a use would
+/// make a variable that exists only to be typed look alive. The shape
+/// mirrors the bare-ident-LHS predicates the type checker derives types
+/// from (`infer_constant_from_predicate`), deliberately narrowed: strict
+/// subset, negations, and equality constrain the value beyond its type,
+/// and a bound that mentions another VARIABLE (`cur ∈ dom(routes)`, a
+/// gluing invariant's `abs ∈ ran(conc)`) relates dynamic state — those are
+/// real uses, even though the type checker can also read a type out of
+/// them. `vars` is the owning machine's variable set.
+fn collect_non_typing_refs(pred: &Predicate, vars: &BTreeSet<&str>, acc: &mut BTreeSet<String>) {
+    match &pred.kind {
+        PredicateKind::Logical {
+            op: LogicalOp::And,
+            left,
+            right,
+        } => {
+            collect_non_typing_refs(left, vars, acc);
+            collect_non_typing_refs(right, vars, acc);
+        }
+        PredicateKind::Comparison {
+            op: ComparisonOp::In | ComparisonOp::Subset,
+            left,
+            right,
+        } if matches!(&left.kind, ExpressionKind::Identifier(_)) => {
+            let mut bound_refs = BTreeSet::new();
+            collect_referenced_in_expression(right, &mut bound_refs);
+            let bound_is_static = bound_refs.iter().all(|r| !vars.contains(r.as_str()));
+            acc.extend(bound_refs);
+            if !bound_is_static {
+                // The bound reads machine state: a constraint between
+                // variables, not typing — the LHS occurrence counts too.
+                collect_referenced_in_predicate(pred, acc);
+            }
+        }
+        _ => collect_referenced_in_predicate(pred, acc),
+    }
+}
+
+/// References appearing in `m`'s own invariants, typing conjuncts excluded
+/// (see [`collect_non_typing_refs`]). Theorem invariants are collected in
+/// full: a theorem is a derived property, not a typing declaration — even
+/// a membership-shaped one states a fact about the variable, i.e. uses it.
+/// Kept separate from [`machine_body_refs`] because descendants inherit
+/// exactly this set (the SC splices ancestor invariants into every
+/// concrete `.bcm`), so the upward pass reuses the per-machine result
+/// instead of re-walking ancestor ASTs once per descendant.
 fn invariant_refs(m: &Machine) -> BTreeSet<String> {
+    let vars: BTreeSet<&str> = m.variables.iter().map(|v| v.name.as_str()).collect();
     let mut acc = BTreeSet::new();
     for inv in &m.invariants {
-        collect_referenced_in_predicate(&inv.predicate, &mut acc);
+        if inv.is_theorem {
+            collect_referenced_in_predicate(&inv.predicate, &mut acc);
+        } else {
+            collect_non_typing_refs(&inv.predicate, &vars, &mut acc);
+        }
     }
     acc
 }
@@ -567,14 +677,14 @@ fn machine_body_refs(m: &Machine, acc: &mut BTreeSet<String>) {
     }
 }
 
-fn assigned_in_machine(m: &Machine) -> BTreeSet<String> {
+/// Variable names assigned by `m`'s own events. INITIALISATION is
+/// deliberately excluded: giving a variable its initial value is not
+/// *modifying* it, and the split is what lets EB012 recognise a
+/// constant-in-disguise (INIT-assigned, never modified) while EB011 treats
+/// an initialised-but-never-used variable as dead all the same.
+fn event_assigned_in_machine(m: &Machine) -> BTreeSet<String> {
     let mut acc = BTreeSet::new();
-    let labeled_actions = m
-        .initialisation
-        .iter()
-        .flat_map(|init| &init.actions)
-        .chain(m.events.iter().flat_map(|e| &e.actions));
-    for la in labeled_actions {
+    for la in m.events.iter().flat_map(|e| &e.actions) {
         for v in lhs_variables(&la.action) {
             acc.insert(v.to_string());
         }
@@ -675,17 +785,12 @@ fn extends_chain_root_first<'a>(e: &'a Event, ancestors: &[&'a Machine]) -> Vec<
     chain
 }
 
-/// Names a machine's emitted `.bcm` inherits from its REFINES ancestors.
-struct UpwardContributions {
-    /// Referenced in inherited guards and action right-hand sides.
-    refs: BTreeSet<String>,
-    /// Assigned by inherited actions (left-hand sides).
-    assigned: BTreeSet<String>,
-}
-
-/// Collect what machine `m`'s extended events inherit from above: the
-/// ancestor chain's guards and action right-hand sides (references) and
-/// action left-hand sides (assignments).
+/// Collect the names machine `m`'s extended events inherit from above:
+/// the ancestor chain's guards and action right-hand sides. Only the
+/// REFERENCE side matters: inherited action left-hand sides could only
+/// assign ancestor-visible names, and both EB011 and EB012 judge a
+/// variable at its declaring machine, where no ancestor action can touch
+/// it.
 ///
 /// Parameters accumulate down the chain, so each level's clauses are walked
 /// with the locals of every level at or above it — an inherited parameter
@@ -694,9 +799,8 @@ struct UpwardContributions {
 /// invariants (memoized per machine because every descendant inherits
 /// them), each descendant re-walks its event chains directly — an accepted
 /// cost, since chains are short and only extended events pay it.
-fn upward_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributions {
+fn upward_refs(m: &Machine, ancestors: &[&Machine]) -> BTreeSet<String> {
     let mut refs = BTreeSet::new();
-    let mut assigned = BTreeSet::new();
 
     for e in m.events.iter().filter(|e| e.extended) {
         let mut locals: Vec<&str> = Vec::new();
@@ -707,12 +811,11 @@ fn upward_contributions(m: &Machine, ancestors: &[&Machine]) -> UpwardContributi
             }
             for la in &ev.actions {
                 collect_referenced_in_action_rhs_with_locals(&la.action, &locals, &mut refs);
-                assigned.extend(lhs_variables(&la.action).into_iter().map(String::from));
             }
         }
     }
 
-    UpwardContributions { refs, assigned }
+    refs
 }
 
 /// The INIT-action chain an extended INITIALISATION inherits.
@@ -771,19 +874,20 @@ fn inherited_init_chain(ancestors: &[&Machine], chain_end: ChainEnd) -> InitChai
 }
 
 /// Everything machine `m`'s emitted `.bcm` inherits from its REFINES
-/// ancestors: the extended events' chain clauses, every ancestor invariant,
-/// and the extended-INIT chain. The second value is the inherited INIT
-/// assignment set when that chain fully resolved — EB014's completeness
-/// input; `None` means an extended INIT whose chain can't be judged.
+/// ancestors as a reference set: the extended events' chain clauses, every
+/// ancestor invariant, and the extended-INIT chain. The second value is
+/// the inherited INIT assignment set when that chain fully resolved —
+/// EB014's completeness input; `None` means an extended INIT whose chain
+/// can't be judged.
 fn inherited_contributions(
     m: &Machine,
     ancestor_ids: &[MachId],
     machs: &[&Machine],
     chain_end: ChainEnd,
     mach_inv_refs: &[BTreeSet<String>],
-) -> (UpwardContributions, Option<BTreeSet<String>>) {
+) -> (BTreeSet<String>, Option<BTreeSet<String>>) {
     let ancestors: Vec<&Machine> = ancestor_ids.iter().map(|&a| machs[a]).collect();
-    let mut up = upward_contributions(m, &ancestors);
+    let mut refs = upward_refs(m, &ancestors);
 
     // Abstract invariants are inherited unconditionally — the SC splices
     // every ancestor's invariants into the concrete `.bcm` (see
@@ -792,20 +896,21 @@ fn inherited_contributions(
     // even be dropped: its inherited events would trip EB025.) Variants
     // are per-machine and not inherited.
     for &anc in ancestor_ids {
-        up.refs.extend(mach_inv_refs[anc].iter().cloned());
+        refs.extend(mach_inv_refs[anc].iter().cloned());
     }
 
     let mut init_assigned = None;
     if m.initialisation.as_ref().is_some_and(|i| i.extended) {
         let chain = inherited_init_chain(&ancestors, chain_end);
-        up.refs.extend(chain.refs);
-        up.assigned.extend(chain.assigned.iter().cloned());
+        refs.extend(chain.refs);
+        // The chain's assignments are INIT assignments: they feed EB014's
+        // completeness set below, not the event-write set.
         if chain.fully_resolved {
             init_assigned = Some(chain.assigned);
         }
     }
 
-    (up, init_assigned)
+    (refs, init_assigned)
 }
 
 /// A machine's position in [`ProjectIndex::machs`] — the key of every
@@ -842,16 +947,13 @@ struct ProjectIndex<'a> {
     /// machine's inherited names don't echo into its ancestors' entries
     /// through the downward descendant unions.
     mach_refs: Vec<BTreeSet<String>>,
-    /// Per-machine, the set of variable names assigned by its OWN INIT or
-    /// events (inherited assignments: [`Self::mach_inherited_assigned`]).
-    mach_assigned: Vec<BTreeSet<String>>,
+    /// Per-machine, the variable names assigned by its OWN events,
+    /// INITIALISATION excluded (see [`event_assigned_in_machine`]).
+    mach_event_assigned: Vec<BTreeSet<String>>,
     /// Per-machine, names its emitted `.bcm` additionally references via
     /// inheritance: extended events' ancestor guards/action-RHS, the
     /// extended-INIT chain, and every ancestor invariant.
     mach_inherited_refs: Vec<BTreeSet<String>>,
-    /// Per-machine, names assigned by inherited actions (extended events'
-    /// ancestor actions and the extended-INIT chain).
-    mach_inherited_assigned: Vec<BTreeSet<String>>,
     /// Per-machine, its uniquely-resolved REFINES ancestors, nearest-first
     /// (the single cycle-guarded walk, computed once).
     mach_ancestors: Vec<Vec<MachId>>,
@@ -901,22 +1003,24 @@ impl<'a> ProjectIndex<'a> {
                 refs
             })
             .collect();
-        let mach_assigned: Vec<_> = machs.iter().copied().map(assigned_in_machine).collect();
+        let mach_event_assigned: Vec<_> = machs
+            .iter()
+            .copied()
+            .map(event_assigned_in_machine)
+            .collect();
 
         // Upward pass: what each machine's emitted `.bcm` inherits from its
         // REFINES ancestors, kept apart from the own-text sets (see the
         // `mach_refs` field doc).
         let mut mach_inherited_refs = Vec::with_capacity(machs.len());
-        let mut mach_inherited_assigned = Vec::with_capacity(machs.len());
         let mut mach_ancestors = Vec::with_capacity(machs.len());
         let mut mach_chain_end = Vec::with_capacity(machs.len());
         let mut init_inherited_assigned = Vec::with_capacity(machs.len());
         for (id, &m) in machs.iter().enumerate() {
             let (ancestors, chain_end) = ancestor_machines(id, &machs, &mach_ids_by_name);
-            let (up, init_assigned) =
+            let (inherited_refs, init_assigned) =
                 inherited_contributions(m, &ancestors, &machs, chain_end, &mach_inv_refs);
-            mach_inherited_refs.push(up.refs);
-            mach_inherited_assigned.push(up.assigned);
+            mach_inherited_refs.push(inherited_refs);
             init_inherited_assigned.push(init_assigned);
             mach_ancestors.push(ancestors);
             mach_chain_end.push(chain_end);
@@ -942,9 +1046,8 @@ impl<'a> ProjectIndex<'a> {
             machs,
             component_mach_ids,
             mach_refs,
-            mach_assigned,
+            mach_event_assigned,
             mach_inherited_refs,
-            mach_inherited_assigned,
             mach_ancestors,
             mach_chain_end,
             mach_refines_descendants,
@@ -981,12 +1084,18 @@ impl<'a> ProjectIndex<'a> {
         Some(out)
     }
 
-    fn effective_assigned_for_machine(&self, id: MachId) -> BTreeSet<String> {
-        let mut out: BTreeSet<String> = self.mach_assigned[id].clone();
+    /// The machine's event-write set — own events plus REFINES
+    /// descendants' events; INITIALISATION assignments are excluded
+    /// throughout. No inherited component: both consumers judge a variable
+    /// at its declaring machine, which no ancestor action can assign.
+    fn effective_event_assigned_for_machine(&self, id: MachId) -> BTreeSet<&str> {
+        let mut out: BTreeSet<&str> = self.mach_event_assigned[id]
+            .iter()
+            .map(String::as_str)
+            .collect();
         for &d in &self.mach_refines_descendants[id] {
-            out.extend(self.mach_assigned[d].iter().cloned());
+            out.extend(self.mach_event_assigned[d].iter().map(String::as_str));
         }
-        out.extend(self.mach_inherited_assigned[id].iter().cloned());
         out
     }
 }
@@ -1067,14 +1176,17 @@ mod tests {
         ExpressionKind::Identifier(n.into()).into()
     }
 
-    fn eq_pred(lhs: Expression, rhs: Expression) -> Predicate {
-        use rossi::ast::predicate::ComparisonOp;
+    fn cmp_pred(op: ComparisonOp, lhs: Expression, rhs: Expression) -> Predicate {
         PredicateKind::Comparison {
-            op: ComparisonOp::Equal,
+            op,
             left: lhs,
             right: rhs,
         }
         .into()
+    }
+
+    fn eq_pred(lhs: Expression, rhs: Expression) -> Predicate {
+        cmp_pred(ComparisonOp::Equal, lhs, rhs)
     }
 
     fn nv(n: &str) -> NamedElement {
@@ -1118,14 +1230,15 @@ mod tests {
 
     #[test]
     fn unmodified_variable_is_flagged() {
+        // `x` is initialised, read by a real (non-typing) invariant, and no
+        // event ever modifies it — a constant in disguise.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
         m.invariants = vec![lp(
             "inv1",
             eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
         )];
-        // No INITIALISATION, no events → x is referenced but never assigned.
-        // Note: lint_incomplete_init will also fire here; we only assert EB012.
+        m.initialisation = Some(init_event(&["x"], false));
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
         let unmod: Vec<_> = diags
@@ -1133,6 +1246,7 @@ mod tests {
             .filter(|d| d.rule_id == Some(RuleId::UnmodifiedVariable))
             .collect();
         assert_eq!(unmod.len(), 1, "expected one EB012: {diags:#?}");
+        assert!(unmod[0].message.contains("CONSTANT"), "{diags:#?}");
     }
 
     #[test]
@@ -1314,8 +1428,7 @@ mod tests {
     #[test]
     fn bsu_primed_reference_counts_as_use() {
         // INITIALISATION uses `x :| x' = 0` — the predicate references
-        // `x'`, which after prime-stripping is a use of `x`. So `x` is
-        // both assigned (LHS) and referenced (RHS): no EB011, no EB012.
+        // `x'`, which after prime-stripping is a use of `x`: no EB011.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
         m.initialisation = Some(InitialisationEvent {
@@ -1338,12 +1451,6 @@ mod tests {
                 .iter()
                 .any(|d| d.rule_id == Some(RuleId::DeadVariable)),
             "x' should count as a use of x: {diags:#?}"
-        );
-        assert!(
-            !diags
-                .iter()
-                .any(|d| d.rule_id == Some(RuleId::UnmodifiedVariable)),
-            "x is assigned via BSU LHS: {diags:#?}"
         );
     }
 
@@ -1695,16 +1802,17 @@ mod tests {
 
     #[test]
     fn cross_refines_keeps_variable_assigned() {
-        // M1 declares v but never assigns it; M2 refines M1 and assigns v
-        // in an event. M1 references v (so not dead) but is its assignment
-        // covered? It should be — through M2.
+        // M1 initialises and reads v but never modifies it; M2 refines M1
+        // and assigns v in an event. The descendant's write must reach M1's
+        // event-write set (conservative downward union), or M1 would get a
+        // false constant-like verdict.
         let mut m1 = Machine::new("M1".into());
         m1.variables = vec![nv("v")];
         m1.invariants = vec![lp(
             "inv1",
             eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
         )];
-        // Note: deliberately no INIT and no events that assign v.
+        m1.initialisation = Some(init_event(&["v"], false));
         let mut m2 = Machine::new("M2".into());
         m2.refines = Some("M1".into());
         m2.events = vec![Event {
@@ -1795,131 +1903,13 @@ mod tests {
     }
 
     #[test]
-    fn extended_event_inherited_guard_keeps_variable_alive() {
-        // M0's event guards on `v`; M1 keeps `v` and extends the event with
-        // an empty body. The inherited guard is a reference — no EB011.
+    fn kept_variable_is_judged_only_at_declaring_machine() {
+        // `v` is dead everywhere; the verdict fires once, at declaring M0 —
+        // the kept copy at M1 would only repeat it (plain or extended
+        // refinement alike).
         let mut m0 = Machine::new("M0".into());
         m0.variables = vec![nv("v")];
-        m0.events = vec![guarded_event("e", "v")];
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v")];
-        m1.events = vec![extends_event("e", Some("e"))];
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            eb011_on(&diags, "M1.v").is_empty(),
-            "v is referenced by the inherited guard: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn extended_event_inherited_action_keeps_variable_assigned() {
-        // M1 references `v` in its own invariant; the only assignment is the
-        // abstract event's action, inherited via `extends` — no EB012.
-        let mut m0 = Machine::new("M0".into());
-        m0.variables = vec![nv("v")];
-        m0.events = vec![assigning_event("e", "v")];
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v")];
-        m1.invariants = vec![lp(
-            "inv1",
-            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
-        )];
-        m1.events = vec![extends_event("e", Some("e"))];
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
-            "v is assigned by the inherited action: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn renamed_extends_chain_resolves_refines_target() {
-        // `EVENT bar extends foo` — the chain follows the refines target,
-        // not the concrete event's own name.
-        let mut m0 = Machine::new("M0".into());
-        m0.variables = vec![nv("v")];
-        m0.events = vec![guarded_event("foo", "v")];
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v")];
-        m1.events = vec![extends_event("bar", Some("foo"))];
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            eb011_on(&diags, "M1.v").is_empty(),
-            "v is referenced via the renamed chain: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn implicit_extends_matches_same_name_event() {
-        // Rodin-XML import leaves `refines` unset on a self-closing extended
-        // event; the target is implicitly the same-name abstract event.
-        let mut m0 = Machine::new("M0".into());
-        m0.variables = vec![nv("v")];
-        m0.events = vec![guarded_event("e", "v")];
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v")];
-        m1.events = vec![extends_event("e", None)];
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            eb011_on(&diags, "M1.v").is_empty(),
-            "v is referenced via the implicit same-name chain: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn multi_level_extends_chain_walks_to_root() {
-        // Only the root machine's event references `v`; two extended levels
-        // above it inherit that guard transitively.
-        let mut m0 = Machine::new("M0".into());
-        m0.variables = vec![nv("v")];
-        m0.events = vec![guarded_event("e", "v")];
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v")];
-        m1.events = vec![extends_event("e", Some("e"))];
-        let mut m2 = Machine::new("M2".into());
-        m2.refines = Some("M1".into());
-        m2.variables = vec![nv("v")];
-        m2.events = vec![extends_event("e", Some("e"))];
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-            pc("M2.bum", Component::Machine(m2)),
-        ]));
-        assert!(
-            eb011_on(&diags, "M2.v").is_empty() && eb011_on(&diags, "M1.v").is_empty(),
-            "v is referenced via the two-level chain: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn plain_refines_event_does_not_inherit_clauses() {
-        // A non-extended refining event replaces the abstract body; the
-        // abstract guard is NOT inherited, so `v` stays dead in M1.
-        let mut m0 = Machine::new("M0".into());
-        m0.variables = vec![nv("v")];
-        m0.events = vec![guarded_event("foo", "v")];
+        m0.initialisation = Some(init_event(&[], false));
         let mut m1 = Machine::new("M1".into());
         m1.refines = Some("M0".into());
         m1.variables = vec![nv("v")];
@@ -1931,11 +1921,8 @@ mod tests {
             pc("M0.bum", Component::Machine(m0)),
             pc("M1.bum", Component::Machine(m1)),
         ]));
-        assert_eq!(
-            eb011_on(&diags, "M1.v").len(),
-            1,
-            "plain refines inherits nothing — v is dead in M1: {diags:#?}"
-        );
+        assert_eq!(eb011_on(&diags, "M0.v").len(), 1, "{diags:#?}");
+        assert!(eb011_on(&diags, "M1.v").is_empty(), "{diags:#?}");
     }
 
     #[test]
@@ -1983,27 +1970,6 @@ mod tests {
             eb011_on(&diags, "M1.p").len(),
             1,
             "the inherited guard binds the parameter, not the variable: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn extended_init_chain_marks_inherited_assignments() {
-        // M1's INIT is extended and only assigns the new `w`; `v` is
-        // initialised by the inherited abstract INIT action — no EB012.
-        let m0 = abstract_machine("M0", "v");
-        let mut m1 = Machine::new("M1".into());
-        m1.refines = Some("M0".into());
-        m1.variables = vec![nv("v"), nv("w")];
-        m1.invariants = vec![lp("inv1", eq_pred(ident("v"), ident("w")))];
-        m1.initialisation = Some(init_event(&["w"], true));
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
-            "v is assigned by the inherited INIT action: {diags:#?}"
         );
     }
 
@@ -2116,34 +2082,10 @@ mod tests {
     }
 
     #[test]
-    fn inherited_invariant_keeps_variable_alive() {
-        // A kept variable whose only reference is an abstract invariant
-        // (binary-search's `r ∈ dom(f)` shape). The invariant is spliced
-        // into M1's .bcm, so `v` is not dead there — and it couldn't be
-        // dropped anyway (its INIT assignment would trip EB025).
-        let mut m0 = abstract_machine("M0", "v");
-        m0.invariants = vec![lp(
-            "inv1",
-            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
-        )];
-        let mut m1 = abstract_machine("M1", "v");
-        m1.refines = Some("M0".into());
-
-        let diags = run(&proj(vec![
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            eb011_on(&diags, "M1.v").is_empty(),
-            "v is referenced by the inherited invariant: {diags:#?}"
-        );
-    }
-
-    #[test]
     fn inherited_invariant_reference_without_assignment_is_unmodified() {
-        // Pins the intended reclassification: a kept variable referenced
-        // only via an inherited invariant and assigned nowhere is no longer
-        // dead (EB011) but *is* unmodified (EB012).
+        // `v` is read by M0's (non-typing) invariant and assigned only by
+        // M0's INIT: the constant-like verdict fires once, at the declaring
+        // machine — the kept copy at M1 inherits it and stays silent.
         let mut m0 = abstract_machine("M0", "v");
         m0.invariants = vec![lp(
             "inv1",
@@ -2161,21 +2103,28 @@ mod tests {
             eb011_on(&diags, "M1.v").is_empty(),
             "v is referenced by the inherited invariant: {diags:#?}"
         );
+        assert_eq!(
+            diags_on(&diags, RuleId::UnmodifiedVariable, "M0.v").len(),
+            1,
+            "constant-like v reports at its declaring machine: {diags:#?}"
+        );
         assert!(
-            !diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
-            "v is never assigned at M1's level or below: {diags:#?}"
+            diags_on(&diags, RuleId::UnmodifiedVariable, "M1.v").is_empty(),
+            "kept copies do not re-report: {diags:#?}"
         );
     }
 
     #[test]
     fn becomes_in_lhs_marks_variable_as_assigned() {
-        // `x :∈ S` — x is assigned via BecomesIn, so EB012 must not fire.
+        // `x :∈ S` in an event is a modification via BecomesIn: despite the
+        // INIT assignment, x is not constant-like — EB012 must not fire.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("x")];
         m.invariants = vec![lp(
             "inv1",
             eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
         )];
+        m.initialisation = Some(init_event(&["x"], false));
         m.events = vec![Event {
             name: "evt".into(),
             status: None,
@@ -2207,13 +2156,15 @@ mod tests {
 
     #[test]
     fn function_override_lhs_marks_variable_as_assigned() {
-        // `f(1) := 0` lowered to `f ≔ f\u{E103}{1 ↦ 0}` — f is assigned.
+        // `f(1) := 0` lowered to `f ≔ f\u{E103}{1 ↦ 0}` — an event
+        // modification of f, so f is not constant-like.
         let mut m = Machine::new("M".into());
         m.variables = vec![nv("f")];
         m.invariants = vec![lp(
             "inv1",
             eq_pred(ident("f"), ExpressionKind::Integer(0).into()),
         )];
+        m.initialisation = Some(init_event(&["f"], false));
         let overwrite_rhs: Expression = ExpressionKind::Binary {
             op: BinaryOp::Overwrite,
             left: Box::new(ExpressionKind::Identifier("f".into()).into()),
@@ -2587,10 +2538,6 @@ mod tests {
             pc("b/M.bum", Component::Machine(m2)),
         ]) {
             assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
-            assert!(
-                diags_on(&diags, RuleId::UnmodifiedVariable, "M.x").is_empty(),
-                "{diags:#?}"
-            );
             assert!(eb014_on(&diags, "M").is_empty(), "{diags:#?}");
         }
     }
@@ -2803,5 +2750,249 @@ mod tests {
         // The genuinely dead variable is still reported (the arena keeps
         // duplicate judgment deterministic, not silent).
         assert_eq!(eb011_on(&fwd, "M.y").len(), 1, "{fwd:#?}");
+    }
+
+    // ---------- EB011/EB012 repartition: typing shapes, constant-like -------
+
+    /// A typing invariant `var ∈ set` for the machine's own variable.
+    fn typing_inv(var: &str, set: Expression) -> LabeledPredicate {
+        lp("typ", cmp_pred(ComparisonOp::In, ident(var), set))
+    }
+
+    fn eb012_on<'d>(diags: &'d [Diagnostic], origin: &str) -> Vec<&'d Diagnostic> {
+        diags_on(diags, RuleId::UnmodifiedVariable, origin)
+    }
+
+    #[test]
+    fn typing_only_reference_does_not_keep_variable_alive() {
+        // `x ∈ ℤ` merely types x; nothing else mentions or assigns it.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![typing_inv("x", ExpressionKind::Integers.into())];
+        m.initialisation = Some(init_event(&[], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert_eq!(eb011_on(&diags, "M.x").len(), 1, "{diags:#?}");
+    }
+
+    #[test]
+    fn typed_initialised_unused_variable_is_dead_not_constant_like() {
+        // Fully groomed — typed and initialised — but nothing uses x and no
+        // event writes it: EB011's dead case, not EB012's constant-like.
+        // Each variable draws at most one of the two advisories.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![typing_inv("x", ExpressionKind::Integers.into())];
+        m.initialisation = Some(init_event(&["x"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert_eq!(eb011_on(&diags, "M.x").len(), 1, "{diags:#?}");
+        assert!(eb012_on(&diags, "M.x").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn non_typing_conjunct_keeps_variable_alive() {
+        // `x ∈ ℤ ∧ x > 0`: the second conjunct constrains the value — a
+        // real use. Being INIT-only, x is constant-like rather than dead.
+        let conj: Predicate = PredicateKind::Logical {
+            op: LogicalOp::And,
+            left: Box::new(cmp_pred(
+                ComparisonOp::In,
+                ident("x"),
+                ExpressionKind::Integers.into(),
+            )),
+            right: Box::new(cmp_pred(
+                ComparisonOp::GreaterThan,
+                ident("x"),
+                ExpressionKind::Integer(0).into(),
+            )),
+        }
+        .into();
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![lp("inv1", conj)];
+        m.initialisation = Some(init_event(&["x"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
+        assert_eq!(eb012_on(&diags, "M.x").len(), 1, "{diags:#?}");
+    }
+
+    #[test]
+    fn variable_bound_makes_membership_a_constraint() {
+        // `y ⊆ x` relates two pieces of machine state — a constraint, not
+        // typing: BOTH variables count as used.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x"), nv("y")];
+        m.invariants = vec![lp(
+            "inv1",
+            cmp_pred(ComparisonOp::Subset, ident("y"), ident("x")),
+        )];
+        m.initialisation = Some(init_event(&["x", "y"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
+        assert!(eb011_on(&diags, "M.y").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn static_bound_membership_is_typing() {
+        // `y ⊆ s` with a variable-free bound is the typing idiom: the
+        // bound's identifiers count as used (s), the typed variable does
+        // not — y is dead.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("y")];
+        m.invariants = vec![lp(
+            "inv1",
+            cmp_pred(ComparisonOp::Subset, ident("y"), ident("s")),
+        )];
+        m.initialisation = Some(init_event(&["y"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert_eq!(eb011_on(&diags, "M.y").len(), 1, "{diags:#?}");
+    }
+
+    #[test]
+    fn theorem_membership_counts_as_use() {
+        // A theorem is a derived property, not a typing declaration: even
+        // a membership-shaped one uses the variable.
+        let mut thm = lp(
+            "thm1",
+            cmp_pred(
+                ComparisonOp::In,
+                ident("x"),
+                ExpressionKind::Naturals.into(),
+            ),
+        );
+        thm.is_theorem = true;
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![typing_inv("x", ExpressionKind::Integers.into()), thm];
+        m.initialisation = Some(init_event(&["x"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn variable_bound_gluing_invariant_counts_as_use() {
+        // The corpus shape from the review: `cur ∈ dom(routes)` constrains
+        // cur against another variable — cur is used, not dead.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("cur"), nv("routes")];
+        m.invariants = vec![lp(
+            "inv1",
+            cmp_pred(
+                ComparisonOp::In,
+                ident("cur"),
+                ExpressionKind::FunctionApplication {
+                    function: Box::new(ident("dom")),
+                    arguments: vec![ident("routes")],
+                }
+                .into(),
+            ),
+        )];
+        m.initialisation = Some(init_event(&["cur"], false));
+        m.events = vec![assigning_event("step", "routes")];
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.cur").is_empty(), "{diags:#?}");
+        // And it is not \"constant-like\" either: the constraint reads state.
+        assert_eq!(eb012_on(&diags, "M.cur").len(), 1, "{diags:#?}");
+    }
+
+    #[test]
+    fn strict_subset_counts_as_use() {
+        // `x ⊂ s` is a proper-subset constraint, not mere typing.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![lp(
+            "inv1",
+            cmp_pred(ComparisonOp::SubsetStrict, ident("x"), ident("s")),
+        )];
+        m.initialisation = Some(init_event(&["x"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn write_only_variable_is_neither_dead_nor_constant_like() {
+        // An output: events write w, nothing reads it. Deleting it would
+        // break the writing event, and it is certainly no constant.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("w")];
+        m.initialisation = Some(init_event(&["w"], false));
+        m.events = vec![assigning_event("emit", "w")];
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.w").is_empty(), "{diags:#?}");
+        assert!(eb012_on(&diags, "M.w").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn nondeterministic_init_is_still_constant_like() {
+        // `x :∈ ℕ` at INIT — chosen once, never modified. A CONSTANT with
+        // axiom `x ∈ ℕ` has identical traces.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("x")];
+        m.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("x"), ExpressionKind::Integer(0).into()),
+        )];
+        m.initialisation = Some(InitialisationEvent {
+            actions: vec![la(ActionKind::BecomesIn {
+                variables: vec!["x".into()],
+                set: ExpressionKind::Naturals.into(),
+            }
+            .into())],
+            comment: None,
+            extended: false,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+            name_span: None,
+        });
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert_eq!(eb012_on(&diags, "M.x").len(), 1, "{diags:#?}");
+    }
+
+    #[test]
+    fn truncated_chain_skips_constant_like() {
+        // C refines an absent machine: its write-set is speculation, so the
+        // constant advice stays silent (the same gate as EB011).
+        let mut c = abstract_machine("C", "v");
+        c.refines = Some("Absent".into());
+        c.invariants = vec![lp(
+            "inv1",
+            eq_pred(ident("v"), ExpressionKind::Integer(0).into()),
+        )];
+
+        let diags = run(&proj(vec![pc("C.bum", Component::Machine(c))]));
+        assert!(eb012_on(&diags, "C.v").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
+    fn inherited_clause_reference_suppresses_same_named_new_variable() {
+        // Deliberate conservatism in the inherited reference set: M0's
+        // abstract guard references the name `c` (say, a seen constant);
+        // M1 declares a NEW variable also named `c` and extends the event.
+        // References are name-based, so the inherited guard keeps M1's `c`
+        // out of EB011 — the collision itself is EB021/EB023's report.
+        let mut m0 = Machine::new("M0".into());
+        m0.initialisation = Some(init_event(&[], false));
+        m0.events = vec![guarded_event("e", "c")];
+        let mut m1 = Machine::new("M1".into());
+        m1.refines = Some("M0".into());
+        m1.variables = vec![nv("c")];
+        m1.initialisation = Some(init_event(&["c"], false));
+        m1.events = vec![extends_event("e", Some("e"))];
+
+        let diags = run(&proj(vec![
+            pc("M0.bum", Component::Machine(m0)),
+            pc("M1.bum", Component::Machine(m1)),
+        ]));
+        assert!(eb011_on(&diags, "M1.c").is_empty(), "{diags:#?}");
     }
 }

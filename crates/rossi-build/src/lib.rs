@@ -91,6 +91,15 @@ impl BuildResult {
             .any(|d| d.severity == Severity::Error)
     }
 
+    /// Returns true iff the build reported errors and emitted nothing —
+    /// the report-and-stop failures of the static checker (duplicate
+    /// component names, dependency cycles), as opposed to the drop-but-
+    /// continue diagnostics that still leave checked output.
+    #[must_use]
+    pub fn failed_outright(&self) -> bool {
+        self.files.is_empty() && !self.is_ok()
+    }
+
     /// Find an emitted file by name (e.g. `"AuctionContext.bcc"`).
     pub fn file(&self, name: &str) -> Option<&ScFile> {
         self.files.iter().find(|f| f.filename == name)
