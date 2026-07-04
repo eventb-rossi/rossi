@@ -865,6 +865,104 @@ fn build_duplicate_component_names_fail_with_eb019() {
 }
 
 #[test]
+fn build_fails_on_error_diagnostics_but_still_writes_output() {
+    // An error diagnostic that still leaves checked output (here EB006: a
+    // constant with no typing axiom) must fail the build, while the filtered
+    // output is written all the same — matching Rodin, which drops the
+    // erroneous element and still produces the checked file.
+    let tmp = tempdir_unique("rossi-cli-build-error-diag");
+    let src = tmp.join("c.eventb");
+    std::fs::write(
+        &src,
+        "CONTEXT c\nCONSTANTS\n    x\nAXIOMS\n    @axm1 1 = 1\nEND\n",
+    )
+    .unwrap();
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "error diagnostics must fail the build; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[EB006]"), "stderr: {stderr}");
+    assert!(stderr.contains("error diagnostic"), "stderr: {stderr}");
+    assert!(out_zip.exists(), "filtered output must still be written");
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    assert!(
+        dir_has_ext(&extracted, &["bcc"]),
+        "expected the checked output (.bcc) despite the error"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn build_fails_on_circular_refines_with_context_sibling() {
+    // Regression: a REFINES cycle beside a healthy context used to exit 0
+    // because the context's checked file made the project look successful.
+    // The cycle's EB008 error must fail the build while the context's output
+    // is still written.
+    let tmp = tempdir_unique("rossi-cli-build-refines-cycle");
+    let src = tmp.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("m.eventb"), "MACHINE m\nREFINES m\nEND\n").unwrap();
+    std::fs::write(src.join("c.eventb"), ASCII_CONTEXT).unwrap();
+    let out_zip = tmp.join("out.zip");
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "a dependency cycle must fail the build; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[EB008]"), "stderr: {stderr}");
+    assert!(
+        out_zip.exists(),
+        "the context's output must still be written"
+    );
+    let extracted = tmp.join("extracted");
+    std::fs::create_dir_all(&extracted).unwrap();
+    extract_zip_to(&out_zip, &extracted);
+    assert!(
+        dir_has_ext(&extracted, &["bcc"]),
+        "expected the sibling context's .bcc in the built zip"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_directory_with_no_semantic_is_rejected() {
     let tmp = tempdir_unique("rossi-cli-validate-dir-nosem");
     std::fs::create_dir_all(&tmp).unwrap();

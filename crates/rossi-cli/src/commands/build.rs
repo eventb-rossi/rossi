@@ -3,6 +3,10 @@
 //! Process one project (a `.zip` archive or a directory of `.buc` / `.bum`
 //! files). Writes either a repackaged `.zip` (when `<out>` ends in `.zip`) or
 //! loose files into a directory.
+//!
+//! Any error diagnostic makes the build exit nonzero. Matching Rodin's static
+//! checker, the filtered output is still written first: erroneous elements are
+//! dropped and their files marked inaccurate.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -47,9 +51,9 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
     // A project that failed outright — duplicate component names (EB019)
     // or a dependency cycle (EB007/EB008) — produced nothing to write.
     // Healthy sibling projects in a multi-project archive still get their
-    // output written below; the build then exits nonzero, naming the
-    // failed projects, so a broken project cannot slide through CI behind
-    // its siblings.
+    // output written below. Any error diagnostic — with or without checked
+    // output — then makes the build exit nonzero (the gates after the
+    // write), so a broken project cannot slide through CI.
     let failed: Vec<&str> = outcome
         .results
         .iter()
@@ -100,6 +104,13 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
         return Err(format!(
             "project(s) {} produced no checked output; see the diagnostics above",
             failed.join(", ")
+        )
+        .into());
+    }
+    if errors > 0 {
+        return Err(format!(
+            "{errors} error diagnostic(s); checked output was still written \
+             (erroneous elements are dropped and their files marked inaccurate)"
         )
         .into());
     }
