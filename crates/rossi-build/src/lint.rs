@@ -1374,6 +1374,34 @@ mod tests {
     }
 
     #[test]
+    fn function_position_reference_counts_as_use() {
+        // `closure` is used only as the FUNCTION of an application — the
+        // shape Rodin models give their own axiomatised closure constants
+        // (core Event-B has no closure operator). The name must not be
+        // treated as a built-in, or the reference would be invisible and
+        // `closure` would be falsely dead.
+        let mut m = Machine::new("M".into());
+        m.variables = vec![nv("closure"), nv("v")];
+        let mut e = Event::new("e".into());
+        e.guards = vec![lp(
+            "grd1",
+            eq_pred(
+                ExpressionKind::FunctionApplication {
+                    function: Box::new(ident("closure")),
+                    arguments: vec![ident("v")],
+                }
+                .into(),
+                ident("v"),
+            ),
+        )];
+        m.events = vec![e];
+        m.initialisation = Some(init_event(&["closure", "v"], false));
+
+        let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
+        assert!(eb011_on(&diags, "M.closure").is_empty(), "{diags:#?}");
+    }
+
+    #[test]
     fn duplicate_component_is_flagged() {
         let project = proj(vec![
             pc("a/M.bum", Component::Machine(Machine::new("M".into()))),
