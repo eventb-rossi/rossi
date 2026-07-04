@@ -178,12 +178,13 @@ pub fn collect_referenced_in_action_rhs_with_locals(
 /// they aren't declared in any context or machine. The relational atoms
 /// (`id`/`prj1`/`prj2`/`pred`/`succ`) are no longer here: they parse as
 /// [`rossi::ExpressionKind::AtomicBuiltin`], which the walker never reports as
-/// an identifier usage.
+/// an identifier usage. `closure`/`closure1` are deliberately absent: core
+/// Event-B has no closure operator (Rodin models axiomatise their own as a
+/// declared constant), so treating them as built-ins would hide every use
+/// of such a constant from the reference sets and exempt an undeclared
+/// `closure(x)` from the free-identifier scan.
 pub fn is_builtin_ident(name: &str) -> bool {
-    matches!(
-        name,
-        "dom" | "ran" | "card" | "min" | "max" | "closure" | "closure1"
-    )
+    matches!(name, "dom" | "ran" | "card" | "min" | "max")
 }
 
 // ---------- Visitor implementations ----------------------------------------
@@ -383,8 +384,12 @@ mod tests {
             assert!(is_builtin_ident(name), "{name} should be builtin");
         }
         // Relational atoms are AtomicBuiltin nodes, never identifiers — so
-        // is_builtin_ident (an identifier-name check) deliberately excludes them.
-        for name in ["id", "prj1", "prj2", "pred", "succ", "foo", "", "users"] {
+        // is_builtin_ident (an identifier-name check) deliberately excludes
+        // them. `closure`/`closure1` are not core Event-B: models declare
+        // their own closure constant, which must count as an identifier.
+        for name in [
+            "id", "prj1", "prj2", "pred", "succ", "foo", "", "users", "closure", "closure1",
+        ] {
             assert!(!is_builtin_ident(name), "{name} should not be builtin");
         }
     }
