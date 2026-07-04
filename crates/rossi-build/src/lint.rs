@@ -11,15 +11,17 @@
 //! - **EB011** dead variable     — declared, never referenced
 //! - **EB012** unmodified var    — referenced, never assigned by any event
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
-//! - **EB019** duplicate component — same name defined in more than one file
 //! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
 //! - **EB022** duplicate label   — invariant/event/guard/action/axiom/witness used twice
 //! - **EB023** shadowed name     — declared name re-lexes as a textual token
 //! - **EB024** new event assigns inherited variable — a non-refining event
 //!   modifies state inherited from an abstract machine
 //!
-//! EB010 (well-definedness) and EB015–17 (proof status) are deliberately
-//! out of scope here; they need their own modules.
+//! EB019 (duplicate component names) is a project-integrity failure, not
+//! advice: it is checked by the SC build itself (`crate::sc::build_project`),
+//! so `rossi build` fails on it too. EB010 (well-definedness) and EB015–17
+//! (proof status) are deliberately out of scope here; they need their own
+//! modules.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +40,7 @@ use crate::{Diagnostic, RuleId};
 /// Run every available lint over `project` and collect the diagnostics.
 #[must_use]
 pub fn run(project: &Project) -> Vec<Diagnostic> {
-    let mut diags = lint_duplicate_component(project);
+    let mut diags = Vec::new();
     let index = ProjectIndex::build(project);
     // `component_mach_ids` is parallel to `project.components` (both walk
     // the list once, in order), so every machine is judged against its own
@@ -232,34 +234,6 @@ fn lint_new_event_assigns_inherited(m: &Machine, inherited: &BTreeSet<&str>) -> 
         }
     }
     diags
-}
-
-/// EB019: duplicate component names are an Error, not advice — Rodin cannot
-/// even represent the state (a component's name is its file identity, and
-/// the per-name proof files are shared across kinds), so every reference to
-/// the duplicated name in the project is ambiguous.
-fn lint_duplicate_component(project: &Project) -> Vec<Diagnostic> {
-    let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for pc in &project.components {
-        let name = pc.component.name();
-        by_name.entry(name).or_default().push(pc.filename.as_str());
-    }
-    by_name
-        .into_iter()
-        .filter(|(_, files)| files.len() > 1)
-        .map(|(name, files)| Diagnostic {
-            severity: RuleId::DuplicateComponent.default_severity(),
-            origin: name.to_string(),
-            message: format!(
-                "component `{name}` is defined in multiple files: {}",
-                files.join(", ")
-            ),
-            rule_id: Some(RuleId::DuplicateComponent),
-            // A duplicate-component finding is about file paths, not a single
-            // source location — no span to attach.
-            span: None,
-        })
-        .collect()
 }
 
 /// EB023: a declared name that rossi's *textual* syntax can re-lex as a
@@ -1399,22 +1373,6 @@ mod tests {
 
         let diags = run(&proj(vec![pc("M.bum", Component::Machine(m))]));
         assert!(eb011_on(&diags, "M.closure").is_empty(), "{diags:#?}");
-    }
-
-    #[test]
-    fn duplicate_component_is_flagged() {
-        let project = proj(vec![
-            pc("a/M.bum", Component::Machine(Machine::new("M".into()))),
-            pc("b/M.bum", Component::Machine(Machine::new("M".into()))),
-        ]);
-        let diags = run(&project);
-        let dups: Vec<_> = diags
-            .iter()
-            .filter(|d| d.rule_id == Some(RuleId::DuplicateComponent))
-            .collect();
-        assert_eq!(dups.len(), 1);
-        assert!(dups[0].message.contains("a/M.bum"));
-        assert!(dups[0].message.contains("b/M.bum"));
     }
 
     // ---------- duplicate identifiers / labels (EB021 / EB022) --------------
@@ -2628,11 +2586,6 @@ mod tests {
             pc("a/M.bum", Component::Machine(m1)),
             pc("b/M.bum", Component::Machine(m2)),
         ]) {
-            assert_eq!(
-                diags_on(&diags, RuleId::DuplicateComponent, "M").len(),
-                1,
-                "{diags:#?}"
-            );
             assert!(eb011_on(&diags, "M.x").is_empty(), "{diags:#?}");
             assert!(
                 diags_on(&diags, RuleId::UnmodifiedVariable, "M.x").is_empty(),
@@ -2701,11 +2654,6 @@ mod tests {
             pc("C.bum", Component::Machine(c)),
         ]) {
             assert!(eb011_on(&diags, "C.w").is_empty(), "{diags:#?}");
-            assert_eq!(
-                diags_on(&diags, RuleId::DuplicateComponent, "X").len(),
-                1,
-                "{diags:#?}"
-            );
         }
     }
 
@@ -2798,7 +2746,8 @@ mod tests {
         // Machines and contexts resolve in separate namespaces: the context
         // `N` is no REFINES candidate, so `C refines N` still resolves
         // uniquely to the machine and C's kept `v` stays alive through the
-        // inherited invariant. EB019 still reports the cross-kind collision.
+        // inherited invariant. (The cross-kind collision itself is EB019,
+        // reported by the SC build, not by the lints.)
         let n_machine = self_contained_machine("N", "v");
         let n_context = Context::new("N".into());
         let mut c = abstract_machine("C", "v");
@@ -2809,11 +2758,6 @@ mod tests {
             pc("N.buc", Component::Context(n_context)),
             pc("C.bum", Component::Machine(c)),
         ]) {
-            assert_eq!(
-                diags_on(&diags, RuleId::DuplicateComponent, "N").len(),
-                1,
-                "{diags:#?}"
-            );
             assert!(eb011_on(&diags, "C.v").is_empty(), "{diags:#?}");
         }
     }
@@ -2821,8 +2765,8 @@ mod tests {
     #[test]
     fn component_order_does_not_change_the_diagnostic_set() {
         // Umbrella: a duplicate-heavy project produces the same diagnostic
-        // set regardless of load order. EB019 is compared by origin only —
-        // its message lists filenames in encounter order by design.
+        // set regardless of load order. (EB019 itself is the SC build's
+        // report, not a lint, so it does not appear here.)
         let m1 = self_contained_machine("M", "x");
         let mut m2 = Machine::new("M".into());
         m2.variables = vec![nv("y")]; // genuinely dead in every order
@@ -2851,23 +2795,11 @@ mod tests {
             pc("S.bum", Component::Machine(s)),
         ]);
         let key_set = |diags: &[Diagnostic]| -> BTreeSet<String> {
-            diags
-                .iter()
-                .map(|d| {
-                    if d.rule_id == Some(RuleId::DuplicateComponent) {
-                        format!("{:?} {}", d.rule_id, d.origin)
-                    } else {
-                        d.to_string() // the canonical rendering, severity included
-                    }
-                })
-                .collect()
+            // Keyed on the canonical rendering, severity included.
+            diags.iter().map(ToString::to_string).collect()
         };
         let (fwd_set, rev_set) = (key_set(&fwd), key_set(&rev));
         assert_eq!(fwd_set, rev_set, "fwd: {fwd:#?}\nrev: {rev:#?}");
-        assert!(
-            fwd_set.iter().any(|k| k.contains("DuplicateComponent")),
-            "{fwd_set:#?}"
-        );
         // The genuinely dead variable is still reported (the arena keeps
         // duplicate judgment deterministic, not silent).
         assert_eq!(eb011_on(&fwd, "M.y").len(), 1, "{fwd:#?}");
