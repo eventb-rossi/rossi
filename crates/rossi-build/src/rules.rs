@@ -35,9 +35,11 @@ pub enum RuleId {
     CircularRefines,
     /// EB009 — Cross-reference target not found (unknown SEES / EXTENDS / REFINES name).
     CrossReferenceNotFound,
-    /// EB011 — Declared variable never referenced.
+    /// EB011 — Variable never used: no reference outside typing
+    /// invariants and no event assigns it.
     DeadVariable,
-    /// EB012 — Variable referenced but never assigned by any event.
+    /// EB012 — Variable never assigned outside INITIALISATION: a
+    /// constant in disguise.
     UnmodifiedVariable,
     /// EB014 — INITIALISATION leaves one or more variables unassigned.
     IncompleteInitialisation,
@@ -150,10 +152,10 @@ impl RuleId {
                 "A SEES, EXTENDS, or REFINES clause names a component that does not exist."
             }
             RuleId::DeadVariable => {
-                "A machine variable is declared but never referenced in any invariant, guard, or action."
+                "A machine variable is never used: nothing references it outside typing-shaped invariants, and no event assigns it."
             }
             RuleId::UnmodifiedVariable => {
-                "A machine variable is referenced but never assigned by any event (not even INITIALISATION)."
+                "A machine variable is assigned by INITIALISATION and never modified by any event, here or in any refinement — a constant in disguise; consider a CONSTANT with the initialisation as an axiom."
             }
             RuleId::IncompleteInitialisation => {
                 "INITIALISATION leaves one or more machine variables unassigned."

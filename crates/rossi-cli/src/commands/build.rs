@@ -44,17 +44,22 @@ pub fn run_build_command(args: BuildArgs) -> ExitCode {
 fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let outcome = build_one(input)?;
 
-    // A project that produced no checked files while reporting errors failed
-    // outright — duplicate component names (EB019) or a dependency cycle
-    // (EB007/EB008). There is nothing meaningful to write, and exiting zero
-    // would let a broken project slide through CI.
-    if outcome
+    // A project that failed outright — duplicate component names (EB019)
+    // or a dependency cycle (EB007/EB008) — produced nothing to write.
+    // Healthy sibling projects in a multi-project archive still get their
+    // output written below; the build then exits nonzero, naming the
+    // failed projects, so a broken project cannot slide through CI behind
+    // its siblings.
+    let failed: Vec<&str> = outcome
         .results
         .iter()
-        .any(|(_, r)| r.files.is_empty() && !r.is_ok())
-    {
+        .filter(|(_, r)| r.failed_outright())
+        .map(|(prefix, _)| project_label(prefix))
+        .collect();
+    if outcome.results.len() == failed.len() && !failed.is_empty() {
+        // Nothing was checked at all: don't write a sources-only archive.
         report_diagnostics(&outcome);
-        return Err("a project produced no checked output; see the diagnostics above".into());
+        return Err("no project produced checked output; see the diagnostics above".into());
     }
 
     let default_out;
@@ -91,6 +96,13 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
         outcome.results.len(),
         errors
     );
+    if !failed.is_empty() {
+        return Err(format!(
+            "project(s) {} produced no checked output; see the diagnostics above",
+            failed.join(", ")
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -167,10 +179,12 @@ fn build_from_components(
     // archive (a component's name is its entry filename), and the project
     // is invalid regardless. Assemble the project directly so the failure
     // surfaces as the SC's EB019 diagnostic instead of a zip-writer error.
-    let mut seen = std::collections::BTreeSet::new();
-    let has_duplicate = components
-        .iter()
-        .any(|nc| !seen.insert(nc.component.name().to_string()));
+    let has_duplicate = {
+        let mut seen = std::collections::BTreeSet::new();
+        components
+            .iter()
+            .any(|nc| !seen.insert(nc.component.name()))
+    };
     if has_duplicate {
         let project = Project::new(
             name,
@@ -342,6 +356,16 @@ fn synthesize_flat_zip(
     Ok(cursor.into_inner())
 }
 
+/// Human-readable name for a project's archive prefix (the flat/root
+/// project has an empty prefix).
+fn project_label(prefix: &str) -> &str {
+    if prefix.is_empty() {
+        "(root)"
+    } else {
+        prefix.trim_end_matches('/')
+    }
+}
+
 fn report_diagnostics(outcome: &BuildOutcome) {
     // A diagnostic's Display carries only the bare component name, so in a
     // multi-project archive (where sibling projects can share component names)
@@ -349,11 +373,7 @@ fn report_diagnostics(outcome: &BuildOutcome) {
     let multi = outcome.results.len() > 1;
     for (prefix, result) in &outcome.results {
         if multi && !result.diagnostics.is_empty() {
-            let label = if prefix.is_empty() {
-                "(root)"
-            } else {
-                prefix.trim_end_matches('/')
-            };
+            let label = project_label(prefix);
             eprintln!("--- {label} ---");
         }
         for d in &result.diagnostics {
