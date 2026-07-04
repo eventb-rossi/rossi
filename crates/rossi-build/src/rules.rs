@@ -9,11 +9,12 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB025"`); gaps
-/// correspond to rules not yet implemented in rossi (e.g. EB010 well-
-/// definedness, EB015–17 proof status, EB020 unknown type). EB023 and EB024
-/// are rossi-only extensions; EB025 is a refinement static-check emitted by
-/// `crate::build`.
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB026"`); gaps are
+/// rules not yet implemented in rossi (EB010 well-definedness, EB015–17
+/// proof status, EB020 unknown type) or removed as valueless (EB013 dead
+/// constant — every hit was already an EB006 typing Error). EB023 and
+/// EB024 are rossi-only extensions; EB025 is a refinement static-check
+/// emitted by `crate::build`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -38,8 +39,6 @@ pub enum RuleId {
     DeadVariable,
     /// EB012 — Variable referenced but never assigned by any event.
     UnmodifiedVariable,
-    /// EB013 — Declared constant never referenced in any axiom.
-    DeadConstant,
     /// EB014 — INITIALISATION leaves one or more variables unassigned.
     IncompleteInitialisation,
     /// EB018 — Undeclared identifier in a guard, witness, or action.
@@ -69,7 +68,7 @@ pub enum RuleId {
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB023"`).
+    /// Stable string code (`"EB001"`..`"EB026"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -84,7 +83,6 @@ impl RuleId {
             RuleId::CrossReferenceNotFound => "EB009",
             RuleId::DeadVariable => "EB011",
             RuleId::UnmodifiedVariable => "EB012",
-            RuleId::DeadConstant => "EB013",
             RuleId::IncompleteInitialisation => "EB014",
             RuleId::UndeclaredIdentifier => "EB018",
             RuleId::DuplicateComponent => "EB019",
@@ -112,7 +110,6 @@ impl RuleId {
             RuleId::CrossReferenceNotFound => "Cross-reference not found",
             RuleId::DeadVariable => "Dead variable",
             RuleId::UnmodifiedVariable => "Unmodified variable",
-            RuleId::DeadConstant => "Dead constant",
             RuleId::IncompleteInitialisation => "Incomplete INITIALISATION",
             RuleId::UndeclaredIdentifier => "Undeclared identifier",
             RuleId::DuplicateComponent => "Duplicate component",
@@ -157,9 +154,6 @@ impl RuleId {
             }
             RuleId::UnmodifiedVariable => {
                 "A machine variable is referenced but never assigned by any event (not even INITIALISATION)."
-            }
-            RuleId::DeadConstant => {
-                "A constant is declared but never referenced in any axiom of the owning context chain or any machine that SEES it."
             }
             RuleId::IncompleteInitialisation => {
                 "INITIALISATION leaves one or more machine variables unassigned."
@@ -214,7 +208,6 @@ impl RuleId {
             | RuleId::DuplicateComponent => Severity::Error,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
-            | RuleId::DeadConstant
             | RuleId::IncompleteInitialisation
             | RuleId::ShadowedName => Severity::Warning,
         }
@@ -236,7 +229,6 @@ impl RuleId {
             RuleId::CrossReferenceNotFound,
             RuleId::DeadVariable,
             RuleId::UnmodifiedVariable,
-            RuleId::DeadConstant,
             RuleId::IncompleteInitialisation,
             RuleId::UndeclaredIdentifier,
             RuleId::DuplicateComponent,
@@ -280,7 +272,6 @@ mod tests {
         assert_eq!(RuleId::CrossReferenceNotFound.code(), "EB009");
         assert_eq!(RuleId::DeadVariable.code(), "EB011");
         assert_eq!(RuleId::UnmodifiedVariable.code(), "EB012");
-        assert_eq!(RuleId::DeadConstant.code(), "EB013");
         assert_eq!(RuleId::IncompleteInitialisation.code(), "EB014");
         assert_eq!(RuleId::UndeclaredIdentifier.code(), "EB018");
         assert_eq!(RuleId::DuplicateComponent.code(), "EB019");

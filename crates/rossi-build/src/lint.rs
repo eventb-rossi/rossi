@@ -10,7 +10,6 @@
 //!
 //! - **EB011** dead variable     — declared, never referenced
 //! - **EB012** unmodified var    — referenced, never assigned by any event
-//! - **EB013** dead constant     — declared, never referenced in any axiom
 //! - **EB014** incomplete INIT   — variable not assigned by INITIALISATION
 //! - **EB019** duplicate component — same name defined in more than one file
 //! - **EB021** duplicate identifier — variable/constant/set/parameter declared twice
@@ -34,48 +33,38 @@ use crate::sc::identifier_walker::{
     collect_referenced_in_expression, collect_referenced_in_predicate,
     collect_referenced_in_predicate_with_locals,
 };
-use crate::{Diagnostic, RuleId, Severity};
+use crate::{Diagnostic, RuleId};
 
 /// Run every available lint over `project` and collect the diagnostics.
 #[must_use]
 pub fn run(project: &Project) -> Vec<Diagnostic> {
     let mut diags = lint_duplicate_component(project);
     let index = ProjectIndex::build(project);
-    // `component_ids` is parallel to `project.components` (both walk the
-    // list once, in order), so every component is judged against its own
+    // `component_mach_ids` is parallel to `project.components` (both walk
+    // the list once, in order), so every machine is judged against its own
     // arena entry even when another component shares its name (EB019).
-    for (pc, comp_id) in project.components.iter().zip(&index.component_ids) {
+    for (pc, mach_id) in project.components.iter().zip(&index.component_mach_ids) {
         diags.extend(run_component(&pc.component));
-        match &pc.component {
-            Component::Machine(m) => {
-                let CompId::Mach(id) = *comp_id else {
-                    unreachable!("component_ids is parallel to project.components");
-                };
-                // `None` when the REFINES walk didn't reach a root — see
-                // `effective_refs_for_machine`.
-                if let Some(referenced) = index.effective_refs_for_machine(id) {
-                    let assigned = index.effective_assigned_for_machine(id);
-                    diags.extend(lint_dead_variable(m, &referenced));
-                    diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
-                }
-                diags.extend(lint_incomplete_init(
-                    m,
-                    index.init_inherited_assigned[id].as_ref(),
-                ));
-                // EB024 can only fire on a machine that has events; skip the
-                // ancestor-chain walk otherwise.
-                if !m.events.is_empty() {
-                    let inherited = index.inherited_vars_for_machine(id);
-                    diags.extend(lint_new_event_assigns_inherited(m, &inherited));
-                }
-            }
-            Component::Context(c) => {
-                let CompId::Ctx(id) = *comp_id else {
-                    unreachable!("component_ids is parallel to project.components");
-                };
-                let referenced = index.effective_refs_for_context(id);
-                diags.extend(lint_dead_constant(c, &referenced));
-            }
+        let Some(id) = *mach_id else {
+            continue; // contexts carry no cross-component lint data
+        };
+        let m = index.machs[id];
+        // `None` when the REFINES walk didn't reach a root — see
+        // `effective_refs_for_machine`.
+        if let Some(referenced) = index.effective_refs_for_machine(id) {
+            let assigned = index.effective_assigned_for_machine(id);
+            diags.extend(lint_dead_variable(m, &referenced));
+            diags.extend(lint_unmodified_variable(m, &referenced, &assigned));
+        }
+        diags.extend(lint_incomplete_init(
+            m,
+            index.init_inherited_assigned[id].as_ref(),
+        ));
+        // EB024 can only fire on a machine that has events; skip the
+        // ancestor-chain walk otherwise.
+        if !m.events.is_empty() {
+            let inherited = index.inherited_vars_for_machine(id);
+            diags.extend(lint_new_event_assigns_inherited(m, &inherited));
         }
     }
     diags
@@ -126,7 +115,7 @@ fn lint_unmodified_variable(
         .iter()
         .filter(|v| referenced.contains(v.name.as_str()) && !assigned.contains(&v.name))
         .map(|v| Diagnostic {
-            severity: Severity::Warning,
+            severity: RuleId::UnmodifiedVariable.default_severity(),
             origin: format!("{}.{}", m.name, v.name),
             message: format!(
                 "variable `{}` is referenced but never assigned by any event",
@@ -134,23 +123,6 @@ fn lint_unmodified_variable(
             ),
             rule_id: Some(RuleId::UnmodifiedVariable),
             span: v.span,
-        })
-        .collect()
-}
-
-fn lint_dead_constant(c: &Context, referenced: &BTreeSet<String>) -> Vec<Diagnostic> {
-    c.constants
-        .iter()
-        .filter(|k| !referenced.contains(&k.name))
-        .map(|k| Diagnostic {
-            severity: Severity::Warning,
-            origin: format!("{}.{}", c.name, k.name),
-            message: format!(
-                "constant `{}` is declared but never referenced in any axiom",
-                k.name
-            ),
-            rule_id: Some(RuleId::DeadConstant),
-            span: k.span,
         })
         .collect()
 }
@@ -621,14 +593,6 @@ fn machine_body_refs(m: &Machine, acc: &mut BTreeSet<String>) {
     }
 }
 
-fn referenced_in_context(c: &Context) -> BTreeSet<String> {
-    let mut acc = BTreeSet::new();
-    for ax in &c.axioms {
-        collect_referenced_in_predicate(&ax.predicate, &mut acc);
-    }
-    acc
-}
-
 fn assigned_in_machine(m: &Machine) -> BTreeSet<String> {
     let mut acc = BTreeSet::new();
     let labeled_actions = m
@@ -871,20 +835,10 @@ fn inherited_contributions(
 }
 
 /// A machine's position in [`ProjectIndex::machs`] — the key of every
-/// `mach_*` collection in the index.
-type MachId = usize;
-/// A context's position in the context arena — the key of every `ctx_*`
-/// collection in the index.
-type CtxId = usize;
-
-/// A component's per-kind arena id. The index is keyed by id, not name:
+/// `mach_*` collection in the index. The index is keyed by id, not name:
 /// two components may share a name (EB019's domain), and ids keep their
 /// data apart.
-#[derive(Clone, Copy)]
-enum CompId {
-    Mach(MachId),
-    Ctx(CtxId),
-}
+type MachId = usize;
 
 /// All arena ids declared under `name` (empty when the project has none).
 fn candidate_ids<'m>(by_name: &'m BTreeMap<&str, Vec<usize>>, name: &str) -> &'m [usize] {
@@ -904,16 +858,15 @@ fn unique_id(by_name: &BTreeMap<&str, Vec<usize>>, name: &str) -> Option<usize> 
 struct ProjectIndex<'a> {
     /// Machine arena, in `project.components` encounter order.
     machs: Vec<&'a Machine>,
-    /// Per-component kind + arena id, parallel to `project.components` —
-    /// how [`run`] finds each judged component's own entries.
-    component_ids: Vec<CompId>,
-    /// Per-context, the references appearing in its own axioms.
-    ctx_refs: Vec<BTreeSet<String>>,
+    /// Per-component machine arena id, parallel to `project.components` —
+    /// how [`run`] finds each judged machine's own entries. `None` for
+    /// contexts, which carry no cross-component lint data.
+    component_mach_ids: Vec<Option<MachId>>,
     /// Per-machine, references appearing in its OWN text (invariants/
     /// variant/events). Inherited names live in [`Self::mach_inherited_refs`]
-    /// and are unioned in only by [`Self::effective_refs_for_machine`]:
-    /// letting them leak into the context-consumer union would suppress
-    /// EB013 on a constant whose name collides with an ancestor identifier.
+    /// and are unioned in only by [`Self::effective_refs_for_machine`], so a
+    /// machine's inherited names don't echo into its ancestors' entries
+    /// through the downward descendant unions.
     mach_refs: Vec<BTreeSet<String>>,
     /// Per-machine, the set of variable names assigned by its OWN INIT or
     /// events (inherited assignments: [`Self::mach_inherited_assigned`]).
@@ -932,15 +885,9 @@ struct ProjectIndex<'a> {
     /// the resolved prefix in [`Self::mach_ancestors`], so truncation can't
     /// be inferred from an empty list — this flag is the source of truth.
     mach_chain_end: Vec<ChainEnd>,
-    /// `ctx → {contexts that EXTEND it transitively, excluding self}`.
-    ctx_extends_descendants: BTreeMap<CtxId, BTreeSet<CtxId>>,
-    /// `machine → {machines that REFINE it transitively, excluding self}`.
-    mach_refines_descendants: BTreeMap<MachId, BTreeSet<MachId>>,
-    /// `ctx → {machines that can syntactically reference this ctx's
-    ///         declarations: machines that SEE it directly, machines that
-    ///         SEE any of its extends-descendants, and the refines-descendants
-    ///         of any such machine}`.
-    ctx_consumer_machines: BTreeMap<CtxId, BTreeSet<MachId>>,
+    /// Per-machine, the machines that REFINE it transitively (excluding
+    /// itself; empty for leaves).
+    mach_refines_descendants: Vec<BTreeSet<MachId>>,
     /// Per-machine, the INIT-action LHS names an extended INITIALISATION
     /// inherits from its ancestor chain. `Some` only when every extended
     /// link resolved (see [`InitChain::fully_resolved`]); consulted by
@@ -950,36 +897,26 @@ struct ProjectIndex<'a> {
 
 impl<'a> ProjectIndex<'a> {
     fn build(project: &'a Project) -> Self {
-        // Arena pass: give every component a per-kind id in encounter order
-        // and index the (possibly duplicated) names.
+        // Arena pass: give every machine an id in encounter order and index
+        // the (possibly duplicated) names.
         let mut machs: Vec<&Machine> = Vec::new();
-        let mut ctxs: Vec<&Context> = Vec::new();
-        let mut component_ids: Vec<CompId> = Vec::new();
+        let mut component_mach_ids: Vec<Option<MachId>> = Vec::new();
         let mut mach_ids_by_name: BTreeMap<&str, Vec<MachId>> = BTreeMap::new();
-        let mut ctx_ids_by_name: BTreeMap<&str, Vec<CtxId>> = BTreeMap::new();
         for pc in &project.components {
             match &pc.component {
                 Component::Machine(m) => {
-                    component_ids.push(CompId::Mach(machs.len()));
+                    component_mach_ids.push(Some(machs.len()));
                     mach_ids_by_name
                         .entry(m.name.as_str())
                         .or_default()
                         .push(machs.len());
                     machs.push(m);
                 }
-                Component::Context(c) => {
-                    component_ids.push(CompId::Ctx(ctxs.len()));
-                    ctx_ids_by_name
-                        .entry(c.name.as_str())
-                        .or_default()
-                        .push(ctxs.len());
-                    ctxs.push(c);
-                }
+                Component::Context(_) => component_mach_ids.push(None),
             }
         }
 
         // Own-text reference/assignment sets, per id.
-        let ctx_refs: Vec<_> = ctxs.iter().copied().map(referenced_in_context).collect();
         let mach_inv_refs: Vec<_> = machs.iter().copied().map(invariant_refs).collect();
         let mach_refs: Vec<_> = machs
             .iter()
@@ -993,9 +930,8 @@ impl<'a> ProjectIndex<'a> {
         let mach_assigned: Vec<_> = machs.iter().copied().map(assigned_in_machine).collect();
 
         // Upward pass: what each machine's emitted `.bcm` inherits from its
-        // REFINES ancestors, kept apart from the own-text sets so EB011/
-        // EB012 judge the materialised machine while the context-consumer
-        // union (EB013) keeps seeing own-text references only.
+        // REFINES ancestors, kept apart from the own-text sets (see the
+        // `mach_refs` field doc).
         let mut mach_inherited_refs = Vec::with_capacity(machs.len());
         let mut mach_inherited_assigned = Vec::with_capacity(machs.len());
         let mut mach_ancestors = Vec::with_capacity(machs.len());
@@ -1013,20 +949,10 @@ impl<'a> ProjectIndex<'a> {
         }
 
         // Downward edges. A parent name attaches the child to EVERY
-        // component carrying that name — this data only ever suppresses
+        // machine carrying that name — this data only ever suppresses
         // warnings, so over-approximating across duplicates is conservative,
         // while dropping a candidate would false-positive on it (see the
         // module comment above `ChainEnd`).
-        let mut ctx_parents: Vec<Vec<CtxId>> = vec![Vec::new(); ctxs.len()];
-        let mut ctx_children: BTreeMap<CtxId, Vec<CtxId>> = BTreeMap::new();
-        for (child, c) in ctxs.iter().enumerate() {
-            for parent_name in &c.extends {
-                for &parent in candidate_ids(&ctx_ids_by_name, parent_name) {
-                    ctx_parents[child].push(parent);
-                    ctx_children.entry(parent).or_default().push(child);
-                }
-            }
-        }
         let mut mach_children: BTreeMap<MachId, Vec<MachId>> = BTreeMap::new();
         for (child, m) in machs.iter().enumerate() {
             if let Some(parent_name) = &m.refines {
@@ -1036,51 +962,18 @@ impl<'a> ProjectIndex<'a> {
             }
         }
 
-        // `children` maps PARENT → CHILDREN, so its keys are the ids that
-        // have at least one child — exactly the roots we need to compute
-        // descendant closures for. Leaf nodes are absent from the result;
-        // `effective_*` callers handle the missing-key case as "no
-        // descendants", which is correct.
-        let ctx_extends_descendants =
-            transitive_descendants(&ctx_children, ctx_children.keys().copied());
-        let mach_refines_descendants =
-            transitive_descendants(&mach_children, mach_children.keys().copied());
-
-        // ctx_consumer_machines: for each context, all machines that can
-        // syntactically refer to its declarations.
-        let mut ctx_consumer_machines: BTreeMap<CtxId, BTreeSet<MachId>> = BTreeMap::new();
-        for (mach, m) in machs.iter().enumerate() {
-            for seen_name in &m.sees {
-                for &ctx in candidate_ids(&ctx_ids_by_name, seen_name) {
-                    // mach sees ctx, so it also sees every extends-ancestor
-                    // of ctx.
-                    let mut ctx_and_ancestors: BTreeSet<CtxId> = BTreeSet::new();
-                    ctx_and_ancestors.insert(ctx);
-                    collect_ancestors_via(ctx, &ctx_parents, &mut ctx_and_ancestors);
-                    for &c in &ctx_and_ancestors {
-                        let entry = ctx_consumer_machines.entry(c).or_default();
-                        entry.insert(mach);
-                        if let Some(descs) = mach_refines_descendants.get(&mach) {
-                            entry.extend(descs.iter().copied());
-                        }
-                    }
-                }
-            }
-        }
+        let mach_refines_descendants = transitive_descendants(&mach_children, machs.len());
 
         Self {
             machs,
-            component_ids,
-            ctx_refs,
+            component_mach_ids,
             mach_refs,
             mach_assigned,
             mach_inherited_refs,
             mach_inherited_assigned,
             mach_ancestors,
             mach_chain_end,
-            ctx_extends_descendants,
             mach_refines_descendants,
-            ctx_consumer_machines,
             init_inherited_assigned,
         }
     }
@@ -1107,102 +1000,50 @@ impl<'a> ProjectIndex<'a> {
             return None;
         }
         let mut out: BTreeSet<&str> = self.mach_refs[id].iter().map(String::as_str).collect();
-        if let Some(descs) = self.mach_refines_descendants.get(&id) {
-            for &d in descs {
-                out.extend(self.mach_refs[d].iter().map(String::as_str));
-            }
+        for &d in &self.mach_refines_descendants[id] {
+            out.extend(self.mach_refs[d].iter().map(String::as_str));
         }
         out.extend(self.mach_inherited_refs[id].iter().map(String::as_str));
         Some(out)
     }
 
     fn effective_assigned_for_machine(&self, id: MachId) -> BTreeSet<String> {
-        let mut out = BTreeSet::new();
-        union_self_and_descendants(
-            id,
-            &self.mach_assigned,
-            self.mach_refines_descendants.get(&id),
-            &mut out,
-        );
+        let mut out: BTreeSet<String> = self.mach_assigned[id].clone();
+        for &d in &self.mach_refines_descendants[id] {
+            out.extend(self.mach_assigned[d].iter().cloned());
+        }
         out.extend(self.mach_inherited_assigned[id].iter().cloned());
         out
     }
-
-    fn effective_refs_for_context(&self, id: CtxId) -> BTreeSet<String> {
-        let mut out = BTreeSet::new();
-        union_self_and_descendants(
-            id,
-            &self.ctx_refs,
-            self.ctx_extends_descendants.get(&id),
-            &mut out,
-        );
-        if let Some(consumers) = self.ctx_consumer_machines.get(&id) {
-            for &m in consumers {
-                out.extend(self.mach_refs[m].iter().cloned());
-            }
-        }
-        out
-    }
 }
 
-/// Insert `entries[id]` plus `entries[d]` for every `d ∈ descendants` into
-/// `out`. `descendants: None` means a leaf component — common.
-fn union_self_and_descendants(
-    id: usize,
-    entries: &[BTreeSet<String>],
-    descendants: Option<&BTreeSet<usize>>,
-    out: &mut BTreeSet<String>,
-) {
-    out.extend(entries[id].iter().cloned());
-    if let Some(descs) = descendants {
-        for &d in descs {
-            out.extend(entries[d].iter().cloned());
-        }
-    }
-}
-
-/// For each id in `roots`, compute the transitive closure of `children`
-/// excluding the root itself.
-fn transitive_descendants<I>(
-    children: &BTreeMap<usize, Vec<usize>>,
-    roots: I,
-) -> BTreeMap<usize, BTreeSet<usize>>
-where
-    I: IntoIterator<Item = usize>,
-{
-    let mut out: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
-    for root in roots {
-        let mut descs = BTreeSet::new();
-        let mut stack: Vec<usize> = children.get(&root).cloned().unwrap_or_default();
-        while let Some(node) = stack.pop() {
-            if !descs.insert(node) {
-                continue;
+/// For each machine id in `0..n`, the transitive closure of `children`
+/// excluding the machine itself (empty for leaves).
+fn transitive_descendants(
+    children: &BTreeMap<MachId, Vec<MachId>>,
+    n: usize,
+) -> Vec<BTreeSet<MachId>> {
+    (0..n)
+        .map(|root| {
+            let mut descs = BTreeSet::new();
+            let mut stack: Vec<MachId> = children.get(&root).cloned().unwrap_or_default();
+            while let Some(node) = stack.pop() {
+                if !descs.insert(node) {
+                    continue;
+                }
+                if let Some(cs) = children.get(&node) {
+                    stack.extend(cs.iter().copied());
+                }
             }
-            if let Some(cs) = children.get(&node) {
-                stack.extend(cs.iter().copied());
-            }
-        }
-        out.insert(root, descs);
-    }
-    out
-}
-
-/// Collect into `acc` every context reachable from `ctx` through EXTENDS
-/// parents, transitively (`parents` is indexed by [`CtxId`] and already
-/// carries every same-name candidate per link).
-fn collect_ancestors_via(ctx: CtxId, parents: &[Vec<CtxId>], acc: &mut BTreeSet<CtxId>) {
-    let mut stack: Vec<CtxId> = parents[ctx].clone();
-    while let Some(node) = stack.pop() {
-        if !acc.insert(node) {
-            continue;
-        }
-        stack.extend(parents[node].iter().copied());
-    }
+            descs
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Severity;
     use rossi::ast::expression::BinaryOp;
     use rossi::{
         Action, ActionKind, Component, Context, Event, Expression, ExpressionKind,
@@ -1318,24 +1159,6 @@ mod tests {
             .filter(|d| d.rule_id == Some(RuleId::UnmodifiedVariable))
             .collect();
         assert_eq!(unmod.len(), 1, "expected one EB012: {diags:#?}");
-    }
-
-    #[test]
-    fn dead_constant_is_flagged() {
-        let mut c = Context::new("C".into());
-        c.constants = vec![nv("k1"), nv("k2")];
-        c.axioms = vec![lp(
-            "ax1",
-            eq_pred(ident("k1"), ExpressionKind::Integer(0).into()),
-        )];
-
-        let diags = run(&proj(vec![pc("C.buc", Component::Context(c))]));
-        let dead: Vec<_> = diags
-            .iter()
-            .filter(|d| d.rule_id == Some(RuleId::DeadConstant))
-            .collect();
-        assert_eq!(dead.len(), 1);
-        assert!(dead[0].message.contains("k2"));
     }
 
     #[test]
@@ -1843,58 +1666,6 @@ mod tests {
             dups_of(&diags, RuleId::DuplicateIdentifier).is_empty()
                 && dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
             "{diags:#?}"
-        );
-    }
-
-    #[test]
-    fn cross_extends_keeps_constant_alive() {
-        // A declares k; B extends A and uses k in an axiom. A alone has no
-        // reference to k, but EB013 should NOT fire because B sees k via
-        // EXTENDS.
-        let mut a = Context::new("A".into());
-        a.constants = vec![nv("k")];
-        let mut b = Context::new("B".into());
-        b.extends = vec!["A".into()];
-        b.axioms = vec![lp(
-            "ax1",
-            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
-        )];
-
-        let project = proj(vec![
-            pc("A.buc", Component::Context(a)),
-            pc("B.buc", Component::Context(b)),
-        ]);
-        let diags = run(&project);
-        assert!(
-            !diags
-                .iter()
-                .any(|d| d.rule_id == Some(RuleId::DeadConstant) && d.message.contains("`k`")),
-            "k is alive via extends: {diags:#?}"
-        );
-    }
-
-    #[test]
-    fn machine_sees_context_keeps_constant_alive() {
-        // C declares k; M sees C and references k. k must not be flagged dead.
-        let mut c = Context::new("C".into());
-        c.constants = vec![nv("k")];
-        let mut m = Machine::new("M".into());
-        m.sees = vec!["C".into()];
-        m.invariants = vec![lp(
-            "inv1",
-            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
-        )];
-
-        let project = proj(vec![
-            pc("C.buc", Component::Context(c)),
-            pc("M.bum", Component::Machine(m)),
-        ]);
-        let diags = run(&project);
-        assert!(
-            !diags
-                .iter()
-                .any(|d| d.rule_id == Some(RuleId::DeadConstant) && d.message.contains("`k`")),
-            "k is alive via SEES: {diags:#?}"
         );
     }
 
@@ -2411,37 +2182,6 @@ mod tests {
     }
 
     #[test]
-    fn inherited_names_do_not_suppress_dead_constant() {
-        // C1's constant `k` is referenced by nothing; M1 sees C1 and
-        // refines M0, whose invariant mentions M0's own variable also
-        // named `k`. The inherited reference must stay out of the
-        // context-consumer union, or the name collision would silently
-        // suppress EB013 for the genuinely dead constant.
-        let mut c1 = Context::new("C1".into());
-        c1.constants = vec![nv("k")];
-        let mut m0 = abstract_machine("M0", "k");
-        m0.invariants = vec![lp(
-            "inv1",
-            eq_pred(ident("k"), ExpressionKind::Integer(0).into()),
-        )];
-        let mut m1 = abstract_machine("M1", "k");
-        m1.refines = Some("M0".into());
-        m1.sees = vec!["C1".into()];
-
-        let diags = run(&proj(vec![
-            pc("C1.buc", Component::Context(c1)),
-            pc("M0.bum", Component::Machine(m0)),
-            pc("M1.bum", Component::Machine(m1)),
-        ]));
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.rule_id == Some(RuleId::DeadConstant) && d.origin == "C1.k"),
-            "the dead constant must still be reported: {diags:#?}"
-        );
-    }
-
-    #[test]
     fn becomes_in_lhs_marks_variable_as_assigned() {
         // `x :∈ S` — x is assigned via BecomesIn, so EB012 must not fire.
         let mut m = Machine::new("M".into());
@@ -2918,103 +2658,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_contexts_are_judged_on_their_own_axioms() {
-        let mut c1 = Context::new("C".into());
-        c1.constants = vec![nv("k1")];
-        c1.axioms = vec![lp(
-            "ax1",
-            eq_pred(ident("k1"), ExpressionKind::Integer(0).into()),
-        )];
-        let mut c2 = Context::new("C".into());
-        c2.constants = vec![nv("k2")];
-        c2.axioms = vec![lp(
-            "ax1",
-            eq_pred(ident("k2"), ExpressionKind::Integer(0).into()),
-        )];
-
-        for diags in run_both_orders(vec![
-            pc("a/C.buc", Component::Context(c1)),
-            pc("b/C.buc", Component::Context(c2)),
-        ]) {
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "C.k1").is_empty(),
-                "{diags:#?}"
-            );
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "C.k2").is_empty(),
-                "{diags:#?}"
-            );
-        }
-    }
-
-    #[test]
-    fn seeing_machine_keeps_constants_of_both_duplicate_contexts_alive() {
-        // S sees `D`, which extends the duplicated name `C`. The consumer
-        // walk must attach S to BOTH candidates: this union only suppresses
-        // EB013, and dropping either candidate would false-positive on the
-        // constant S references from it.
-        let mut c1 = Context::new("C".into());
-        c1.constants = vec![nv("k1")];
-        let mut c2 = Context::new("C".into());
-        c2.constants = vec![nv("k2")];
-        let mut d = Context::new("D".into());
-        d.extends = vec!["C".into()];
-        let mut s = Machine::new("S".into());
-        s.sees = vec!["D".into()];
-        s.events = vec![guarded_event("e1", "k1"), guarded_event("e2", "k2")];
-
-        for diags in run_both_orders(vec![
-            pc("a/C.buc", Component::Context(c1)),
-            pc("b/C.buc", Component::Context(c2)),
-            pc("D.buc", Component::Context(d)),
-            pc("S.bum", Component::Machine(s)),
-        ]) {
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "C.k1").is_empty(),
-                "{diags:#?}"
-            );
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "C.k2").is_empty(),
-                "{diags:#?}"
-            );
-        }
-    }
-
-    #[test]
-    fn duplicate_machines_with_different_sees_both_count_as_consumers() {
-        // Two machines named `M` see different contexts, and each context's
-        // constant is referenced only by its seeing machine. The per-name
-        // SEES map used to keep only the last `M`'s list, orphaning the
-        // other context into a false EB013.
-        let mut ca = Context::new("CA".into());
-        ca.constants = vec![nv("a")];
-        let mut cb = Context::new("CB".into());
-        cb.constants = vec![nv("b")];
-        let mut ma = Machine::new("M".into());
-        ma.sees = vec!["CA".into()];
-        ma.events = vec![guarded_event("e", "a")];
-        let mut mb = Machine::new("M".into());
-        mb.sees = vec!["CB".into()];
-        mb.events = vec![guarded_event("e", "b")];
-
-        for diags in run_both_orders(vec![
-            pc("CA.buc", Component::Context(ca)),
-            pc("CB.buc", Component::Context(cb)),
-            pc("a/M.bum", Component::Machine(ma)),
-            pc("b/M.bum", Component::Machine(mb)),
-        ]) {
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "CA.a").is_empty(),
-                "{diags:#?}"
-            );
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "CB.b").is_empty(),
-                "{diags:#?}"
-            );
-        }
-    }
-
-    #[test]
     fn child_of_duplicated_parent_is_not_reference_linted() {
         // Only one `X` carries the invariant referencing C's kept `w`, so
         // C's materialised reference set is unknowable. EB011/EB012 stay
@@ -3124,32 +2767,26 @@ mod tests {
 
     #[test]
     fn machine_and_context_sharing_a_name_do_not_interfere() {
-        // Machines and contexts resolve in separate namespaces: `S` seeing
-        // the context `N` is unaffected by the machine `N`, so the
-        // constant referenced only from S stays alive. EB019 still reports
-        // the cross-kind collision.
+        // Machines and contexts resolve in separate namespaces: the context
+        // `N` is no REFINES candidate, so `C refines N` still resolves
+        // uniquely to the machine and C's kept `v` stays alive through the
+        // inherited invariant. EB019 still reports the cross-kind collision.
         let n_machine = self_contained_machine("N", "v");
-        let mut n_context = Context::new("N".into());
-        n_context.constants = vec![nv("k")];
-        let mut s = Machine::new("S".into());
-        s.sees = vec!["N".into()];
-        s.events = vec![guarded_event("e", "k")];
+        let n_context = Context::new("N".into());
+        let mut c = abstract_machine("C", "v");
+        c.refines = Some("N".into());
 
         for diags in run_both_orders(vec![
             pc("N.bum", Component::Machine(n_machine)),
             pc("N.buc", Component::Context(n_context)),
-            pc("S.bum", Component::Machine(s)),
+            pc("C.bum", Component::Machine(c)),
         ]) {
             assert_eq!(
                 diags_on(&diags, RuleId::DuplicateComponent, "N").len(),
                 1,
                 "{diags:#?}"
             );
-            assert!(eb011_on(&diags, "N.v").is_empty(), "{diags:#?}");
-            assert!(
-                diags_on(&diags, RuleId::DeadConstant, "N.k").is_empty(),
-                "{diags:#?}"
-            );
+            assert!(eb011_on(&diags, "C.v").is_empty(), "{diags:#?}");
         }
     }
 

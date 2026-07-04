@@ -39,8 +39,8 @@ pub struct ValidateArgs {
     no_semantic: bool,
 
     /// Skip rossi-build advisory lint passes (dead variable, unmodified
-    /// variable, dead constant, incomplete INIT, duplicate component,
-    /// duplicate identifier/label, shadowed name).
+    /// variable, incomplete INIT, duplicate component, duplicate
+    /// identifier/label, shadowed name).
     #[arg(long)]
     no_lints: bool,
 
