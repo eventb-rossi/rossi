@@ -24,6 +24,7 @@
 //! ```
 
 pub mod checked_predicate;
+pub mod duplicates;
 pub mod enrich;
 pub mod error;
 pub mod handles;
