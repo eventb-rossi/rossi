@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.4](https://github.com/eventb-rossi/rossi/compare/v0.1.3...v0.1.4) - 2026-07-06
+
+### Added
+- *(build)* Enforce EB021/EB022 in the static checker
+- *(cli)* Report EB026 assignment-in-predicate in validate
+- *(parse)* Detect misplaced assignment in predicate (EB026)
+- *(build)* Register EB026 assignment-in-predicate rule
+- *(lsp)* Surface EB026 as a diagnostic with an operator quick-fix
+
+### Changed
+- *(build)* Extract duplicate-name detection into a shared module
+
+### Fixed
+- *(build)* Align EB006/EB009 severities with Rodin
+- *(cli)* Fail rossi build on any error diagnostic
+- *(lint)* Repartition the variable-usage lints (EB011/EB012)
+- *(build)* Fail the build on duplicate component names (EB019)
+- *(lint)* Remove the EB013 dead-constant lint
+- *(lint)* Report duplicate component names as errors (EB019)
+- *(parse)* Drop the misleading strict error when recovery reports EB026
+- *(build)* Closure and closure1 are not Event-B built-ins
+- *(lint)* Skip variable reference lints on unresolvable refinement chains
+- *(lint)* Key the cross-component index by component, not name
+- *(lint)* Count inherited invariants as references (EB011/EB012)
+- *(lint)* Check extended INITIALISATION against the inherited chain (EB014)
+- *(lint)* Count extended events' inherited clauses in EB011/EB012
+
 ## [0.1.3](https://github.com/eventb-rossi/rossi/compare/v0.1.2...v0.1.3) - 2026-06-29
 
 ### Added
