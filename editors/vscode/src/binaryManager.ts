@@ -1,10 +1,11 @@
-import { ExtensionContext, OutputChannel, ProgressLocation, window, workspace } from 'vscode';
+import { ExtensionContext, OutputChannel, ProgressLocation, WorkspaceConfiguration, window, workspace } from 'vscode';
 import { execFile } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as https from 'https';
 import * as path from 'path';
 import { URL } from 'url';
+import { pruneStaleVersions } from './binaryCache';
 
 // Resolved absolute paths (or PATH-resolvable names) for the two binaries the
 // extension drives.
@@ -58,6 +59,34 @@ export async function resolveBinaries(
     };
 }
 
+/**
+ * Delete every downloaded toolchain version except the one matching the running
+ * extension. Downloads are pinned to `v<extension-version>`, so any other version
+ * directory in the extension's own download cache is provably dead.
+ *
+ * Only runs when the user relies on that cache. If either binary path is set to a
+ * custom value in the settings, the user is supplying their own tools — the
+ * extension stands down and touches nothing on disk, so a user-managed install is
+ * never at risk (even one pointed inside the cache directory). Best-effort and
+ * never throws; fire-and-forget from `activate()` so it cannot block startup.
+ */
+export function pruneToolchainCache(context: ExtensionContext, output: OutputChannel): Promise<void> {
+    const config = workspace.getConfiguration('rossi');
+    if (hasCustomPath(config, 'languageServer.path', LS_NAME) || hasCustomPath(config, 'tool.path', CLI_NAME)) {
+        return Promise.resolve();
+    }
+    const version = String(context.extension.packageJSON.version);
+    return pruneStaleVersions(binRootFor(context), version, (message) => output.appendLine(message));
+}
+
+// True when the user has set a custom binary path in the settings (anything other
+// than the default bare command name). Mirrors how `resolveLocal` decides a
+// configured value overrides the download.
+function hasCustomPath(config: WorkspaceConfiguration, key: string, defaultName: string): boolean {
+    const value = config.get<string>(key, defaultName).trim();
+    return value.length > 0 && value !== defaultName;
+}
+
 // An explicit path (absolute or containing a separator) must exist; otherwise
 // treat the value as a command name and search PATH. Returns undefined when a
 // bare name is not on PATH, signalling that a download is needed.
@@ -77,7 +106,7 @@ async function ensureDownloaded(
 ): Promise<ResolvedBinaries> {
     const { triple, ext } = currentTarget();
     const version = String(context.extension.packageJSON.version);
-    const cacheDir = path.join(context.globalStorageUri.fsPath, 'bin', version, triple);
+    const cacheDir = path.join(binRootFor(context), version, triple);
     const result = binariesIn(cacheDir);
 
     if (await isFile(result.languageServer) && await isFile(result.cli)) {
@@ -128,18 +157,17 @@ async function downloadAndExtract(
 ): Promise<void> {
     const assetName = `rossi-${triple}.${ext}`;
 
-    // Pin to the tag matching the extension version so the server and client are
-    // in lock-step; fall back to the latest release if that tag has no assets
-    // (e.g. the extension was bumped ahead of a binary release).
-    let tag = `v${version}`;
-    let sums = await fetchFollowingRedirects(`${RELEASES}/download/${tag}/SHA256SUMS`);
-    if (sums.status === 404) {
-        tag = await resolveLatestTag();
-        output.appendLine(`Rossi: no release for v${version}; using the latest release (${tag}).`);
-        sums = await fetchFollowingRedirects(`${RELEASES}/download/${tag}/SHA256SUMS`);
-    }
+    // Pin strictly to the tag matching the extension version so the downloaded
+    // tools always equal the plugin version. If that release has no assets, fail
+    // clearly rather than silently installing a mismatched toolchain — activation
+    // then reports the error and falls back to any binaries on PATH.
+    const tag = `v${version}`;
+    const sums = await fetchFollowingRedirects(`${RELEASES}/download/${tag}/SHA256SUMS`);
     if (sums.status !== 200) {
-        throw new Error(`could not fetch SHA256SUMS for ${tag} (HTTP ${sums.status})`);
+        throw new Error(
+            `no prebuilt toolchain release for ${tag} (HTTP ${sums.status}); ` +
+            'the toolchain version must match the extension version'
+        );
     }
 
     const expected = parseChecksum(sums.body.toString('utf8'), assetName);
@@ -173,18 +201,6 @@ async function downloadAndExtract(
     } finally {
         await fs.rm(archivePath, { force: true });
     }
-}
-
-async function resolveLatestTag(): Promise<string> {
-    const res = await fetchFollowingRedirects(`https://api.github.com/repos/${REPO}/releases/latest`);
-    if (res.status !== 200) {
-        throw new Error(`could not query the latest release (HTTP ${res.status})`);
-    }
-    const data = JSON.parse(res.body.toString('utf8')) as { tag_name?: string };
-    if (!data.tag_name) {
-        throw new Error('the latest release has no tag');
-    }
-    return data.tag_name;
 }
 
 function currentTarget(): { triple: string; ext: string } {
@@ -294,4 +310,11 @@ function binariesIn(dir: string): ResolvedBinaries {
         languageServer: path.join(dir, exeName(LS_NAME)),
         cli: path.join(dir, exeName(CLI_NAME)),
     };
+}
+
+// Root of the per-version download cache: `…/globalStorage/rossi.event-b/bin`.
+// The single definition of the cache layout, shared by the downloader and the
+// cache pruner.
+function binRootFor(context: ExtensionContext): string {
+    return path.join(context.globalStorageUri.fsPath, 'bin');
 }

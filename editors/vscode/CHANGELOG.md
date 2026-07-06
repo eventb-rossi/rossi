@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- The auto-downloaded toolchain is now kept in lock-step with the extension: the
+  extension downloads only the binaries matching its own version (no silent
+  fall-back to a different release), and removes previously downloaded versions
+  from global storage on update instead of leaving them behind. (#146)
+
 ### Added
 
 - Sensible per-language editor defaults for `.eventb` files: semantic

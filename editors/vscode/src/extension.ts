@@ -7,7 +7,7 @@ import {
 } from 'vscode-languageclient/node';
 import { registerRossiCommands } from './rossiCommands';
 import { registerSymbolInput } from './symbolInput';
-import { resolveBinaries, ResolvedBinaries } from './binaryManager';
+import { resolveBinaries, ResolvedBinaries, pruneToolchainCache } from './binaryManager';
 
 let client: LanguageClient;
 
@@ -58,6 +58,11 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(diagnostics, output);
 
     const config = workspace.getConfiguration('rossi');
+
+    // Garbage-collect superseded downloaded toolchains left in global storage by
+    // earlier extension versions. Best-effort and independent of how the binaries
+    // resolve below, so it must not block activation — fire and forget.
+    void pruneToolchainCache(context, output);
 
     // Locate (and, if missing, download) the CLI and language-server binaries.
     // On failure, fall back to the bare command names so a developer with the
