@@ -289,10 +289,11 @@ fn rodin_build_one(rodin: &Path, regen_dir: &Path, zip: &Path, timeout: Duration
 /// the wrapper/JVM pipeline failed (launch error, internal timeout,
 /// interrupt) — possibly *before* Rodin touched the archive, whose checked
 /// files would then still be rossi's own pre-seeded output, so their accuracy
-/// proves nothing. Only after a clean exit is the accuracy of the
-/// `.bcc`/`.bcm` Rodin wrote back authoritative: a clean build marks every
-/// component `org.eventb.core.accurate="true"`. (A static-check failure is
-/// *not* signalled by the exit code — non-strict builds exit 0 and record
+/// proves nothing. A zero exit can still accompany Rodin database exceptions,
+/// so those logs gate before the rewritten archive. Only then is the accuracy
+/// of the `.bcc`/`.bcm` authoritative: a clean build marks every component
+/// `org.eventb.core.accurate="true"`. (A static-check failure is *not*
+/// signalled by the exit code — non-strict builds exit 0 and record
 /// `accurate="false"` in the rewritten archive.)
 fn classify(exit: Option<i32>, stdout: &str, stderr: &str, zip: &Path) -> Outcome {
     if exit != Some(0) {
@@ -305,11 +306,26 @@ fn classify(exit: Option<i32>, stdout: &str, stderr: &str, zip: &Path) -> Outcom
         }
         return Outcome::LoadError(hint);
     }
+    if let Some(error) = rodin_database_error(stdout, stderr) {
+        return Outcome::LoadError(error);
+    }
     match inspect_accuracy(zip) {
         Accuracy::Inaccurate(detail) => Outcome::ScError(detail),
         Accuracy::AllAccurate => Outcome::Built,
         Accuracy::Unknown => Outcome::LoadError("no checked files produced (exit 0)".into()),
     }
+}
+
+fn rodin_database_error(stdout: &str, stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .chain(stdout.lines())
+        .find(|line| {
+            line.contains("Duplicate child")
+                || line.contains("Rodin Database Exception")
+                || (line.contains("[org.eventb.core.sc") && line.contains("does not exist"))
+        })
+        .map(|line| line.trim().to_string())
 }
 
 enum Accuracy {
@@ -384,4 +400,21 @@ fn inspect_accuracy(zip: &Path) -> Accuracy {
     } else {
         Accuracy::Inaccurate(bad.join("; "))
     }
+}
+
+#[test]
+fn database_integrity_logs_fail_successful_builds() {
+    let cases = [
+        "!MESSAGE Duplicate child inv1[org.eventb.core.scInvariant]",
+        "Rodin Database Exception: Rodin Database Status",
+        "INITIALISATION[org.eventb.core.scEvent] does not exist",
+    ];
+
+    for message in cases {
+        assert!(matches!(
+            classify(Some(0), message, "", Path::new("unused.zip")),
+            Outcome::LoadError(detail) if detail == message
+        ));
+    }
+    assert!(rodin_database_error("Build complete.", "").is_none());
 }
