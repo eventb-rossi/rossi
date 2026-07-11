@@ -450,6 +450,52 @@ const LINT_FIXTURE_BUC: &str = r#"<?xml version="1.0"?>
 </org.eventb.core.contextFile>
 "#;
 
+const EXTENDED_LABEL_M0: &str = r#"MACHINE M0
+VARIABLES
+    x
+INVARIANTS
+    @inv1 x ∈ ℤ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @init1 x ≔ 0
+    END
+
+    EVENT evt
+    WHERE
+        @grd1 x ≥ 0
+    THEN
+        @act1 x ≔ x + 1
+    END
+END
+"#;
+
+const EXTENDED_LABEL_M1: &str = r#"MACHINE M1
+REFINES
+    M0
+VARIABLES
+    x
+INVARIANTS
+    @inv2 x ∈ ℤ
+EVENTS
+    EVENT INITIALISATION extends INITIALISATION
+    END
+
+    EVENT evt extends evt
+    WHERE
+        @grd1 missing ≥ 0
+        @grd2 x ≥ 1
+    END
+END
+"#;
+
+fn extended_label_fixture(prefix: &str) -> PathBuf {
+    let tmp = tempdir_unique(prefix);
+    std::fs::write(tmp.join("M0.eventb"), EXTENDED_LABEL_M0).unwrap();
+    std::fs::write(tmp.join("M1.eventb"), EXTENDED_LABEL_M1).unwrap();
+    tmp
+}
+
 /// Write the lint fixture (machine + seen context) as a zip in a fresh temp
 /// dir; returns `(tempdir, zip_path)` — remove the tempdir when done.
 fn lint_fixture_zip(prefix: &str) -> (PathBuf, PathBuf) {
@@ -909,6 +955,53 @@ fn build_fails_on_error_diagnostics_but_still_writes_output() {
     assert!(
         dir_has_ext(&extracted, &["bcc"]),
         "expected the checked output (.bcc) despite the error"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn validate_directory_reports_inherited_event_label_as_eb022_error() {
+    let tmp = extended_label_fixture("rossi-cli-validate-inherited-label");
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rossi-cli",
+            "--",
+            "validate",
+            "--format",
+            "json",
+            tmp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "inherited EB022 must fail validation; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let conflicts: Vec<_> = rows
+        .iter()
+        .filter(|row| row["rule_id"] == "EB022")
+        .collect();
+    assert_eq!(conflicts.len(), 1, "{stdout}");
+    let conflict = conflicts[0];
+    assert_eq!(conflict["severity"], "error");
+    assert_eq!(conflict["origin"], "M1.evt.grd1");
+    assert_eq!(conflict["inner_filename"], "M1.eventb");
+    assert!(
+        conflict["region"].is_object(),
+        "the error must be positioned on the concrete clause: {conflict}"
+    );
+    assert!(
+        conflict["error"]
+            .as_str()
+            .is_some_and(|m| m.contains("inherited guard label")),
+        "{conflict}"
     );
 
     std::fs::remove_dir_all(&tmp).ok();

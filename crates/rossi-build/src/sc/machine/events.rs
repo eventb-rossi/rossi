@@ -5,7 +5,7 @@
 //! layer it is. Nothing in here is exported to callers outside the
 //! `machine` module.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use rossi::{
@@ -96,6 +96,108 @@ impl<'a> EventKind<'a> {
             EventKind::Init(i) => i.name_span,
             EventKind::Ordinary(e) => e.name_span,
         }
+    }
+}
+
+/// The two clause kinds that share an Event-B event label namespace.
+#[derive(Clone, Copy)]
+enum EventClauseKind {
+    Guard,
+    Action,
+}
+
+impl EventClauseKind {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Guard => "guard",
+            Self::Action => "action",
+        }
+    }
+}
+
+/// Labels already occupied by the event body an extended event inherits.
+///
+/// Guards are kept on the [`EventDecl`] that introduced them and spliced from
+/// the full chain at render time. Actions are materialised as an effective
+/// inherited-plus-own list on the immediate parent. These borrowed keys index
+/// the complete effective namespace without copying label strings.
+struct InheritedEvent<'a> {
+    decl: Option<&'a EventDecl>,
+    labels: BTreeMap<&'a str, EventClauseKind>,
+}
+
+impl<'a> InheritedEvent<'a> {
+    fn new(decl: Option<&'a EventDecl>) -> Self {
+        let mut labels = BTreeMap::new();
+        if let Some(parent) = decl {
+            let mut event = Some(parent);
+            while let Some(current) = event {
+                for guard in &current.guards {
+                    labels
+                        .entry(guard.label.as_str())
+                        .or_insert(EventClauseKind::Guard);
+                }
+                event = current.inherited.as_deref();
+            }
+            for action in &parent.actions {
+                labels
+                    .entry(action.label.as_str())
+                    .or_insert(EventClauseKind::Action);
+            }
+        }
+        Self { decl, labels }
+    }
+
+    fn label_kind(&self, label: &str) -> Option<EventClauseKind> {
+        self.labels.get(label).copied()
+    }
+
+    fn contains_label(&self, label: Option<&str>) -> bool {
+        label.is_some_and(|label| self.labels.contains_key(label))
+    }
+}
+
+/// Report one EB022 per concrete label that is already occupied by an
+/// inherited guard or action. Rodin also attaches a second marker to the
+/// event's `extended` attribute; Rossi deliberately keeps the actionable,
+/// label-anchored error only.
+fn report_inherited_label_conflicts(
+    kind: EventKind<'_>,
+    inherited: &InheritedEvent<'_>,
+    local_duplicate_labels: &BTreeSet<String>,
+    diags: &mut Vec<Diagnostic>,
+    machine_name: &str,
+    event_label: &str,
+) {
+    let clauses = crate::duplicates::pred_labels(kind.guards())
+        .map(|(label, span)| (label, EventClauseKind::Guard, span))
+        .chain(
+            crate::duplicates::action_labels(kind.actions())
+                .map(|(label, span)| (label, EventClauseKind::Action, span)),
+        );
+
+    for (label, local_kind, span) in clauses {
+        let Some(inherited_kind) = inherited.label_kind(label) else {
+            continue;
+        };
+        // The component-local duplicate pass has already emitted EB022 for a
+        // name used more than once locally. Do not add a second diagnostic for
+        // that same label, but still let the filtering passes below drop every
+        // local occurrence because the inherited clause wins.
+        if local_duplicate_labels.contains(label) {
+            continue;
+        }
+        diags.push(Diagnostic {
+            severity: crate::RuleId::DuplicateLabel.default_severity(),
+            origin: clause_origin(machine_name, event_label, Some(label), local_kind.noun()),
+            message: format!(
+                "{} label `{label}` conflicts with inherited {} label in extended event `{event_label}`",
+                local_kind.noun(),
+                inherited_kind.noun(),
+            ),
+            rule_id: Some(crate::RuleId::DuplicateLabel),
+            span,
+        });
     }
 }
 
@@ -399,10 +501,19 @@ pub(super) fn build_event_decl(
     } else {
         None
     };
+    let inherited = InheritedEvent::new(inherited_chain.as_deref());
+    report_inherited_label_conflicts(
+        kind,
+        &inherited,
+        &event_dups.guard_action_labels.names,
+        diags,
+        machine_name,
+        label,
+    );
 
     let (mut scope, scope_accurate) = build_event_scope(
         base_env,
-        inherited_chain.as_deref(),
+        &inherited,
         kind,
         &event_dups,
         diags,
@@ -416,6 +527,7 @@ pub(super) fn build_event_decl(
         kind,
         &scope,
         abstract_only,
+        &inherited,
         &event_dups,
         diags,
         machine_name,
@@ -628,7 +740,7 @@ fn resolve_effective_refines<'a, 'b>(
 /// matching `pop_scope`.
 fn build_event_scope(
     base_env: &TypeEnv,
-    inherited_chain: Option<&EventDecl>,
+    inherited: &InheritedEvent<'_>,
     kind: EventKind<'_>,
     dups: &crate::duplicates::EventDuplicates,
     diags: &mut Vec<Diagnostic>,
@@ -637,7 +749,7 @@ fn build_event_scope(
 ) -> (TypeEnv, bool) {
     let mut scope = base_env.clone();
     scope.push_scope();
-    if let Some(pe) = inherited_chain {
+    if let Some(pe) = inherited.decl {
         // The parent's full parameter chain — ancestors root-first then the
         // parent's own, deduped by name — is the scope an extended event
         // inherits. This is the same set `chain_parameters` builds for
@@ -652,7 +764,7 @@ fn build_event_scope(
     // root-first and includes parent's own guards, gated on parent's
     // own `extended` flag.
     let mut axioms: Vec<rossi::Predicate> = Vec::new();
-    if let Some(pe) = inherited_chain {
+    if let Some(pe) = inherited.decl {
         for p in pe.typing_guard_predicates() {
             axioms.push(p.clone());
         }
@@ -662,6 +774,9 @@ fn build_event_scope(
     // either; the kept first occurrence still types its parameters.
     let mut typing_kept = crate::duplicates::FirstKept::new(&dups.guard_action_labels.names);
     for g in kind.guards() {
+        if inherited.contains_label(g.label.as_deref()) {
+            continue;
+        }
         if typing_kept.drops(g.label.as_deref()) {
             continue;
         }
@@ -716,6 +831,7 @@ fn build_event_buckets(
     kind: EventKind<'_>,
     scope: &TypeEnv,
     abstract_only: &BTreeSet<String>,
+    inherited: &InheritedEvent<'_>,
     dups: &crate::duplicates::EventDuplicates,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
@@ -730,6 +846,13 @@ fn build_event_buckets(
 
     let mut guards: Vec<GuardDecl> = Vec::with_capacity(kind.guards().len());
     for (i, g) in kind.guards().iter().enumerate() {
+        // Imported labels are installed before concrete clauses in Rodin's
+        // event label table. The inherited guard/action therefore wins and
+        // every colliding concrete clause is dropped.
+        if inherited.contains_label(g.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         // 2nd+ use of a duplicated guard/action label: Rodin keeps the first
         // occurrence, drops the rest, and marks the event inaccurate (the
         // EB022 error is already reported).
@@ -825,6 +948,10 @@ fn build_event_buckets(
     // We mirror that.
     let mut actions: Vec<ActionDecl> = Vec::with_capacity(kind.actions().len());
     for (i, act) in kind.actions().iter().enumerate() {
+        if inherited.contains_label(act.label.as_deref()) {
+            accurate = false;
+            continue;
+        }
         // Same first-kept rule as the guards loop, over the shared
         // guard+action label namespace.
         if label_kept.drops(act.label.as_deref()) {
