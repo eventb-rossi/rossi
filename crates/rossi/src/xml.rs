@@ -1635,7 +1635,7 @@ fn context_to_xml(ctx: &Context) -> String {
     }
 
     // Axioms and theorems (theorems have is_theorem = true)
-    let printer = PrettyPrinter::new();
+    let printer = rodin_xml_printer();
     write_labeled_predicates_xml(
         &mut xml,
         &ctx.axioms,
@@ -1703,7 +1703,7 @@ fn machine_to_xml(machine: &Machine) -> String {
     }
 
     // Invariants and theorems (theorems have is_theorem = true)
-    let printer = PrettyPrinter::new();
+    let printer = rodin_xml_printer();
     write_labeled_predicates_xml(
         &mut xml,
         &machine.invariants,
@@ -1752,6 +1752,15 @@ fn machine_to_xml(machine: &Machine) -> String {
 
     xml.push_str("</org.eventb.core.machineFile>\n");
     xml
+}
+
+/// Formula printer for native Rodin XML attributes.
+///
+/// Rodin's parser expects its private-use spellings for relation operators
+/// and relational override.  Portable ASCII spellings remain appropriate for
+/// textual Event-B, but make a generated `.buc` / `.bum` fail to rebuild.
+fn rodin_xml_printer() -> PrettyPrinter {
+    PrettyPrinter::new().with_private_use_glyphs(true)
 }
 
 /// Helper function to write an event to XML
@@ -2228,6 +2237,39 @@ mod tests {
         assert!(xml.contains("org.eventb.core.label=\"INITIALISATION\""));
         assert!(xml.contains("org.eventb.core.label=\"act1\""));
         assert!(xml.contains("org.eventb.core.assignment=\"count \u{2254} 0\""));
+    }
+
+    #[test]
+    fn source_xml_uses_rodin_override_glyph() {
+        use crate::ast::LabeledAction;
+
+        let action = crate::parse_action_str("image ≔ image <+ {sector ↦ value}")
+            .expect("override action parses");
+        let mut machine = Machine::new("M".to_string());
+        machine.initialisation = Some(InitialisationEvent {
+            actions: vec![LabeledAction {
+                label: Some("act1".to_string()),
+                action: action.clone(),
+                span: None,
+                comment: None,
+            }],
+            comment: None,
+            extended: false,
+            with: Vec::new(),
+            witnesses: Vec::new(),
+            span: None,
+            name_span: None,
+        });
+
+        let xml = to_xml(&Component::Machine(machine));
+        assert!(xml.contains(crate::operators::RELATIONAL_OVERRIDE));
+        assert!(!xml.contains("&lt;+"));
+
+        let reparsed = parse_xml(&xml).expect("Rodin-native XML reparses");
+        let Component::Machine(reparsed) = reparsed else {
+            panic!("expected machine");
+        };
+        assert_eq!(reparsed.initialisation.unwrap().actions[0].action, action);
     }
 
     #[test]
