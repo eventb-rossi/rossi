@@ -18,6 +18,70 @@ use std::rc::Rc;
 use quick_xml::XmlVersion;
 use quick_xml::events::BytesStart;
 
+/// Rodin database internal-name allocator.
+///
+/// This mirrors `org.rodinp.internal.core.NameGenerator`. Every XML parent
+/// owns one allocator. Explicitly named and copied children are observed;
+/// freshly-created children receive the next name after the greatest one.
+#[derive(Debug, Default)]
+pub(crate) struct RodinNameGenerator {
+    greatest: Vec<u8>,
+}
+
+impl RodinNameGenerator {
+    const FIRST: u8 = b'\'';
+    const EXCLUDED: u8 = b'<';
+    const LAST: u8 = b'~';
+
+    pub(crate) fn observe(&mut self, name: &str) {
+        let name = name.as_bytes();
+        if Self::is_valid(name)
+            && (name.len() > self.greatest.len()
+                || (name.len() == self.greatest.len() && name > self.greatest.as_slice()))
+        {
+            self.greatest.clear();
+            self.greatest.extend_from_slice(name);
+        }
+    }
+
+    pub(crate) fn fresh(&mut self) -> String {
+        for byte in self.greatest.iter_mut().rev() {
+            if *byte == Self::LAST {
+                *byte = Self::FIRST;
+                continue;
+            }
+            *byte += 1;
+            if *byte == Self::EXCLUDED {
+                *byte += 1;
+            }
+            return String::from_utf8(self.greatest.clone()).expect("Rodin names are ASCII");
+        }
+
+        self.greatest.push(Self::FIRST);
+        String::from_utf8(self.greatest.clone()).expect("Rodin names are ASCII")
+    }
+
+    /// Create a generated child and bind its fresh identity in one operation.
+    pub(crate) fn generated(&mut self, render: impl FnOnce(String) -> Element) -> Rc<Element> {
+        Rc::new(render(self.fresh()))
+    }
+
+    /// Register and return an explicitly named or copied child.
+    pub(crate) fn retained(&mut self, element: Rc<Element>) -> Rc<Element> {
+        self.observe(
+            element
+                .attr_value(attr::NAME)
+                .expect("Rodin child has an internal name"),
+        );
+        element
+    }
+
+    fn is_valid(name: &[u8]) -> bool {
+        name.iter()
+            .all(|c| (Self::FIRST..=Self::LAST).contains(c) && *c != Self::EXCLUDED)
+    }
+}
+
 /// Rodin's XML attribute namespace prefix. Stripped or prefixed when
 /// matching attribute keys in input `.buc` / `.bum` files.
 pub(crate) const NS_PREFIX: &[u8] = b"org.eventb.core.";
@@ -95,6 +159,14 @@ impl Element {
         if let Some(slot) = self.attrs.iter_mut().find(|(k, _)| k == key) {
             slot.1 = value.into();
         }
+    }
+
+    /// Read an already-emitted attribute.
+    pub fn attr_value(&self, key: &str) -> Option<&str> {
+        self.attrs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, value)| value.as_str())
     }
 
     /// Render to a full XML document.
@@ -267,5 +339,22 @@ mod tests {
         let e = Element::new("t").attr("k", "a<b&c\"d\ne");
         let xml = e.to_document();
         assert!(xml.contains("a&lt;b&amp;c&quot;d&#10;e"));
+    }
+
+    #[test]
+    fn rodin_names_follow_registered_greatest_name() {
+        let mut names = RodinNameGenerator::default();
+        assert_eq!(names.fresh(), "'");
+        assert_eq!(names.fresh(), "(");
+
+        names.observe(";");
+        assert_eq!(names.fresh(), "=");
+        names.observe("~");
+        assert_eq!(names.fresh(), "''");
+
+        names.observe("invalid ");
+        assert_eq!(names.fresh(), "'(");
+        names.observe("floppy_ctx");
+        assert_eq!(names.fresh(), "floppy_cty");
     }
 }

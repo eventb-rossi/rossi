@@ -17,11 +17,11 @@
 //!   separate edge, label-matched to the parent machine's events). Each
 //!   [`EventDecl`] carries `inherited: Option<Rc<EventDecl>>` so passes
 //!   can walk that chain in typed form, without round-tripping through
-//!   `<scGuard predicate="…">` strings. Guards and parameters are spliced
-//!   from the chain at render time; actions are instead materialised onto
-//!   each [`EventDecl`] (inherited ++ own) so the accuracy and
-//!   INITIALISATION-repair passes read one list.
+//!   `<scGuard predicate="…">` strings. Rendering copies guards, parameters,
+//!   and actions from the parent's retained checked event, preserving their
+//!   database identities without replaying the typed chain.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use rossi::{Action, EventStatus, Predicate};
@@ -29,7 +29,7 @@ use rossi::{Action, EventStatus, Predicate};
 use crate::handles::HandleUri;
 use crate::type_env::TypeEnv;
 use crate::types::Type;
-use crate::xml_out::{Element, attr, in_tag, tag};
+use crate::xml_out::{Element, RodinNameGenerator, attr, in_tag, tag};
 
 // ---------------------------------------------------------------------
 // Top-level record
@@ -314,74 +314,87 @@ impl EventDecl {
 ///   each transitively-seen context (in hoist order).
 /// - `inherited_invariants`: parent-machine's full invariant closure,
 ///   pre-rendered to splice verbatim.
-pub fn render_machine_root(
+pub(crate) struct RenderedMachine {
+    pub(crate) root: Element,
+    pub(crate) own_invariants: Vec<Rc<Element>>,
+    pub(crate) event_elems: HashMap<String, Rc<Element>>,
+}
+
+pub(crate) fn render_machine_root(
     record: &MachineRecord,
     accurate: bool,
     internal_contexts: &[Rc<Element>],
     inherited_invariants: &[Rc<Element>],
-) -> Element {
+    inherited_events: Option<&HashMap<String, Rc<Element>>>,
+) -> RenderedMachine {
+    let mut names = RodinNameGenerator::default();
     let mut root = Element::new(tag::SC_MACHINE_FILE)
         .attr_bool(attr::ACCURATE, accurate)
         .attr(attr::CONFIGURATION, record.configuration.clone());
+    let mut own_invariants = Vec::with_capacity(record.invariants.len());
+    let mut event_elems = HashMap::with_capacity(record.events.len());
 
     if let Some(rm) = &record.refines {
-        root.push(render_refines_machine(rm));
+        root.push(names.generated(|name| render_refines_machine(rm, name)));
     }
     for s in &record.sees {
-        root.push(render_sees_context(s));
+        root.push(names.generated(|name| render_sees_context(s, name)));
     }
     // Hoisted internal-contexts and inherited-invariants are
     // pre-rendered and `Rc`-shared with their producing
     // CheckedContext / CheckedMachine, so this is Rc::clone.
     for ic in internal_contexts {
-        root.push(ic.clone());
+        root.push(names.retained(ic.clone()));
     }
     for el in inherited_invariants {
-        root.push(el.clone());
+        root.push(names.retained(el.clone()));
     }
     for inv in &record.invariants {
-        root.push(render_invariant(inv));
+        let element = names.generated(|name| render_invariant(inv, name));
+        own_invariants.push(Rc::clone(&element));
+        root.push(element);
     }
     for v in &record.variables {
-        root.push(render_variable(v));
+        root.push(names.retained(Rc::new(render_variable(v))));
     }
     if let Some(va) = &record.variant {
-        root.push(render_variant(va));
+        root.push(names.generated(|name| render_variant(va, name)));
     }
     for e in &record.events {
-        root.push(render_event(e));
+        let inherited_event = e.inherited.as_ref().map(|_| {
+            inherited_events
+                .and_then(|events| events.get(&e.label))
+                .expect("inherited event has rendered parent")
+                .as_ref()
+        });
+        let element = names.generated(|name| render_event(e, name, inherited_event));
+        event_elems.insert(e.label.clone(), Rc::clone(&element));
+        root.push(element);
     }
-    root
+    RenderedMachine {
+        root,
+        own_invariants,
+        event_elems,
+    }
 }
 
-/// Render every own invariant in `record`. Used when emitting a child
-/// machine's full invariant closure (parent's already-rendered
-/// elements + this record's own).
-pub fn render_own_invariants(record: &MachineRecord) -> Vec<Rc<Element>> {
-    record
-        .invariants
-        .iter()
-        .map(|inv| Rc::new(render_invariant(inv)))
-        .collect()
-}
-
-fn render_refines_machine(rm: &RefinesMachineDecl) -> Element {
+fn render_refines_machine(rm: &RefinesMachineDecl, internal_name: String) -> Element {
     Element::new(tag::SC_REFINES_MACHINE)
-        .attr(attr::NAME, rm.parent_name.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::SC_TARGET, rm.sc_target.clone())
         .attr(attr::SOURCE, rm.source.as_str())
 }
 
-fn render_sees_context(s: &SeesContextDecl) -> Element {
+fn render_sees_context(s: &SeesContextDecl, internal_name: String) -> Element {
     Element::new(tag::SC_SEES_CONTEXT)
-        .attr(attr::NAME, s.name.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::SC_TARGET, s.sc_target.clone())
         .attr(attr::SOURCE, s.source.as_str())
 }
 
-fn render_invariant(inv: &InvariantDecl) -> Element {
+fn render_invariant(inv: &InvariantDecl, internal_name: String) -> Element {
     Element::new(tag::SC_INVARIANT)
-        .attr(attr::NAME, inv.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::LABEL, inv.label.clone())
         .attr(attr::PREDICATE, inv.predicate_canonical.clone())
         .attr(attr::SOURCE, inv.source.as_str())
@@ -397,20 +410,26 @@ fn render_variable(v: &VariableDecl) -> Element {
         .attr(attr::TYPE, v.ty.to_rodin_canonical())
 }
 
-fn render_variant(va: &VariantDecl) -> Element {
+fn render_variant(va: &VariantDecl, internal_name: String) -> Element {
     Element::new(tag::SC_VARIANT)
-        .attr(attr::NAME, va.label)
+        .attr(attr::NAME, internal_name)
         .attr(attr::EXPRESSION, va.expression_canonical.clone())
         .attr(attr::LABEL, va.label)
         .attr(attr::SOURCE, va.source.as_str())
 }
 
-/// Render an event. Guards and parameters splice the inherited-event chain
-/// (when `extended=true`) ancestors-before-own; actions are already
-/// materialised on the decl (inherited ++ own) and rendered verbatim.
-fn render_event(ev: &EventDecl) -> Element {
+/// Render an event in Rodin's module order.
+///
+/// Extended events copy their parent's guards, actions, and parameters with
+/// their existing internal names before creating local children.
+fn render_event(
+    ev: &EventDecl,
+    internal_name: String,
+    inherited_event: Option<&Element>,
+) -> Element {
+    let mut names = RodinNameGenerator::default();
     let mut scev = Element::new(tag::SC_EVENT)
-        .attr(attr::NAME, ev.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr_bool(attr::ACCURATE, ev.accurate)
         .attr(attr::CONVERGENCE, ev.convergence.code())
         .attr_bool(attr::EXTENDED, ev.extended)
@@ -418,56 +437,53 @@ fn render_event(ev: &EventDecl) -> Element {
         .attr(attr::SOURCE, ev.source.as_str());
 
     if let Some(re) = &ev.refines {
-        scev.push(render_refines_event(re));
+        scev.push(names.generated(|name| render_refines_event(re, name)));
     }
 
-    let inherited = if ev.extended {
-        ev.chain_root_first()
-    } else {
-        Vec::new()
-    };
-
-    for ancestor in &inherited {
-        for g in &ancestor.guards {
-            scev.push(render_guard(g));
+    let mut inherited_action_count = 0;
+    if let Some(parent_element) = inherited_event {
+        for copied_tag in [tag::SC_GUARD, tag::SC_ACTION, tag::SC_PARAMETER] {
+            for child in parent_element
+                .children
+                .iter()
+                .filter(|child| child.tag == copied_tag)
+            {
+                if copied_tag == tag::SC_ACTION {
+                    inherited_action_count += 1;
+                }
+                scev.push(names.retained(child.clone()));
+            }
         }
     }
+
     for g in &ev.guards {
-        scev.push(render_guard(g));
-    }
-
-    for ancestor in &inherited {
-        for p in &ancestor.parameters {
-            scev.push(render_parameter(p));
-        }
+        scev.push(names.generated(|name| render_guard(g, name)));
     }
     for p in &ev.parameters {
-        scev.push(render_parameter(p));
+        scev.push(names.retained(Rc::new(render_parameter(p))));
     }
 
-    // Actions are materialised on the decl (inherited chain ++ own), so the
-    // list is rendered as-is — no chain splice here (unlike guards/params).
-    for a in &ev.actions {
-        scev.push(render_action(a));
+    for a in ev.actions.iter().skip(inherited_action_count) {
+        scev.push(names.generated(|name| render_action(a, name)));
     }
 
     for w in &ev.witnesses {
-        scev.push(render_witness(w));
+        scev.push(names.generated(|name| render_witness(w, name)));
     }
 
     scev
 }
 
-fn render_refines_event(re: &RefinesEventDecl) -> Element {
+fn render_refines_event(re: &RefinesEventDecl, internal_name: String) -> Element {
     Element::new(tag::SC_REFINES_EVENT)
-        .attr(attr::NAME, re.abstract_label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::SC_TARGET, re.sc_target.clone())
         .attr(attr::SOURCE, re.source.as_str())
 }
 
-fn render_guard(g: &GuardDecl) -> Element {
+fn render_guard(g: &GuardDecl, internal_name: String) -> Element {
     Element::new(tag::SC_GUARD)
-        .attr(attr::NAME, g.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::LABEL, g.label.clone())
         .attr(attr::PREDICATE, g.predicate_canonical.clone())
         .attr(attr::SOURCE, g.source.as_str())
@@ -481,17 +497,17 @@ fn render_parameter(p: &ParameterDecl) -> Element {
         .attr(attr::TYPE, p.ty.to_rodin_canonical())
 }
 
-fn render_action(a: &ActionDecl) -> Element {
+fn render_action(a: &ActionDecl, internal_name: String) -> Element {
     Element::new(tag::SC_ACTION)
-        .attr(attr::NAME, a.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::ASSIGNMENT, a.canonical.clone())
         .attr(attr::LABEL, a.label.clone())
         .attr(attr::SOURCE, a.source.as_str())
 }
 
-fn render_witness(w: &WitnessDecl) -> Element {
+fn render_witness(w: &WitnessDecl, internal_name: String) -> Element {
     Element::new(tag::SC_WITNESS)
-        .attr(attr::NAME, w.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::LABEL, w.label.clone())
         .attr(attr::PREDICATE, w.predicate_canonical.clone())
         .attr(attr::SOURCE, w.source.as_str())
@@ -530,7 +546,7 @@ mod tests {
     #[test]
     fn render_root_emits_configuration_and_accurate() {
         let r = empty_record();
-        let root = render_machine_root(&r, true, &[], &[]);
+        let root = render_machine_root(&r, true, &[], &[], None).root;
         assert_eq!(root.tag, tag::SC_MACHINE_FILE);
         let attrs: Vec<_> = root.attrs.iter().map(|(k, _)| k.as_str()).collect();
         assert!(attrs.contains(&attr::ACCURATE));
@@ -559,7 +575,7 @@ mod tests {
             is_abstract: false,
             is_concrete: true,
         });
-        let root = render_machine_root(&r, true, &[], &[]);
+        let root = render_machine_root(&r, true, &[], &[], None).root;
         let tags: Vec<&str> = root.children.iter().map(|c| c.tag.as_str()).collect();
         assert_eq!(
             tags,

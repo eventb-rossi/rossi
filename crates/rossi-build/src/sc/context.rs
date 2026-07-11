@@ -22,8 +22,7 @@ use crate::{Diagnostic, ScFile, Severity};
 
 use super::CheckedContext;
 use super::context_record::{
-    AxiomDecl, CarrierSetDecl, ConstantDecl, ContextRecord, ExtendsDecl, render_body,
-    render_extends,
+    AxiomDecl, CarrierSetDecl, ConstantDecl, ContextRecord, ExtendsDecl, render_context_parts,
 };
 
 /// Emit a `.bcc` for a single context.
@@ -181,8 +180,7 @@ pub fn check_context(
     // -----------------------------------------------------------------
     // Render to XML.
     // -----------------------------------------------------------------
-    let extends_elems = render_extends(&record);
-    let own_body = render_body(&record);
+    let (extends_elems, own_body) = render_context_parts(&record);
 
     let configuration = ctx
         .metadata
@@ -257,12 +255,13 @@ fn build_extends_decls(
             in_tag::EXTENDS_CONTEXT,
             parent_name,
         );
-        let sc_target = format!(
-            "/{}/{}|org.eventb.core.scContextFile#{}",
-            project.name,
+        let sc_target = HandleUri::root(
+            &project.name,
             parent.output_filename(),
-            parent.name()
-        );
+            tag::SC_CONTEXT_FILE,
+            parent.name(),
+        )
+        .into();
         out.push(ExtendsDecl {
             parent_name: parent_name.clone(),
             sc_target,

@@ -119,6 +119,10 @@ pub struct CheckedMachine {
     /// `Predicate` and `Action` ASTs survive all the way through, no
     /// XML round-trip required.
     pub events_by_label: HashMap<String, Rc<EventDecl>>,
+    /// Rendered `scEvent` elements keyed by user-visible label. Descendants
+    /// copy inherited children from these exact elements and target their
+    /// retained Rodin database identities.
+    pub(crate) event_elems: HashMap<String, Rc<Element>>,
     /// The `accurate` flag of this machine's emitted `ScFile`. A refining
     /// machine reads it to propagate inaccuracy: refining an inaccurate
     /// machine makes the refinement inaccurate too.
@@ -138,6 +142,11 @@ impl CheckedMachine {
     /// Transitively-refined ancestor machine names, oldest first.
     pub fn ancestors(&self) -> &[String] {
         &self.record.ancestors
+    }
+    pub(crate) fn event_internal_name(&self, label: &str) -> Option<&str> {
+        self.event_elems
+            .get(label)
+            .and_then(|event| event.attr_value(crate::xml_out::attr::NAME))
     }
 
     /// The type environment in scope inside `event`: the machine env

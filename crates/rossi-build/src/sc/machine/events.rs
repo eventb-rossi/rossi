@@ -442,6 +442,7 @@ fn synthesize_witness(
 pub(super) fn build_event_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
+    project_name: &str,
     kind: EventKind<'_>,
     base_env: &TypeEnv,
     parent: Option<&CheckedMachine>,
@@ -540,6 +541,7 @@ pub(super) fn build_event_decl(
         build_refines_event_decl(
             ids,
             file_root,
+            project_name,
             label,
             abs_label,
             parent_cm,
@@ -1181,6 +1183,7 @@ fn build_witness_decl(
 fn build_refines_event_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
+    project_name: &str,
     own_event_label: &str,
     abstract_event_label: &str,
     parent: &CheckedMachine,
@@ -1200,29 +1203,22 @@ fn build_refines_event_decl(
     } else {
         event_source
     };
-    // Defensive escape: in practice user-visible event labels don't
-    // contain `|`/`\`/`/`, but apply the same escape rules as
-    // `HandleUri::child` so anything weird round-trips correctly.
-    let sc_target = format!(
-        "/{proj}/{file}|org.eventb.core.scMachineFile#{mach}|org.eventb.core.scEvent#{abs}",
-        proj = file_root_project(file_root),
-        file = parent.output_filename(),
-        mach = parent.name(),
-        abs = crate::handles::escape_handle_id_owned(abstract_event_label),
-    );
+    let abstract_internal_name = parent
+        .event_internal_name(abstract_event_label)
+        .expect("resolved parent event has an internal name");
+    let sc_target = HandleUri::root(
+        project_name,
+        parent.output_filename(),
+        crate::xml_out::tag::SC_MACHINE_FILE,
+        parent.name(),
+    )
+    .child(crate::xml_out::tag::SC_EVENT, abstract_internal_name)
+    .into();
     RefinesEventDecl {
         abstract_label: abstract_event_label.to_string(),
         sc_target,
         source: re_source,
     }
-}
-
-/// Extract the project name from a file-root URI
-/// (`/PROJECT/File.bum|...`).
-fn file_root_project(file_root: &HandleUri) -> &str {
-    let s = file_root.as_str();
-    let rest = s.strip_prefix('/').unwrap_or(s);
-    rest.split('/').next().unwrap_or("proj")
 }
 
 pub(super) use crate::ast_util::lhs_variables;

@@ -30,8 +30,8 @@ use crate::xml_out::{Element, attr, in_tag, tag};
 use crate::{Diagnostic, ScFile, Severity};
 
 use super::machine_record::{
-    EventDecl, InvariantDecl, MachineRecord, RefinesMachineDecl, SeesContextDecl, VariableDecl,
-    VariantDecl, render_machine_root, render_own_invariants,
+    EventDecl, InvariantDecl, MachineRecord, RefinesMachineDecl, RenderedMachine, SeesContextDecl,
+    VariableDecl, VariantDecl, render_machine_root,
 };
 use super::{CheckedContext, CheckedMachine};
 
@@ -321,6 +321,7 @@ pub fn check_machine(
         && let Some((decl, _ok)) = build_event_decl(
             &pc.rodin_ids,
             &file_root,
+            &project.name,
             EventKind::Init(init),
             &env,
             parent,
@@ -345,6 +346,7 @@ pub fn check_machine(
         if let Some((decl, _ok)) = build_event_decl(
             &pc.rodin_ids,
             &file_root,
+            &project.name,
             EventKind::Ordinary(event),
             &env,
             parent,
@@ -396,24 +398,34 @@ pub fn check_machine(
     let inherited_invariants: &[Rc<Element>] =
         parent.map(|p| p.invariant_elems.as_slice()).unwrap_or(&[]);
 
-    let root = render_machine_root(&record, accurate, &internal_contexts, inherited_invariants);
+    let RenderedMachine {
+        root,
+        own_invariants,
+        event_elems,
+    } = render_machine_root(
+        &record,
+        accurate,
+        &internal_contexts,
+        inherited_invariants,
+        parent.map(|p| &p.event_elems),
+    );
 
     // -----------------------------------------------------------------
-    // Cache the full invariant closure for descendants. The clone is
-    // O(N) refcount bumps on the inherited slice (subtrees are
-    // shared); own invariants are appended as freshly-rendered
-    // `Rc<Element>`s.
+    // Cache the full invariant closure for descendants. Own invariants and
+    // events come directly from the renderer so generated identities are not
+    // reconstructed by scanning or replaying XML.
     // -----------------------------------------------------------------
     let mut full_invariant_elems: Vec<Rc<Element>> = parent
         .map(|p| p.invariant_elems.clone())
         .unwrap_or_default();
-    full_invariant_elems.extend(render_own_invariants(&record));
+    full_invariant_elems.extend(own_invariants);
 
     let cm = CheckedMachine {
         record,
         visible_variables,
         invariant_elems: full_invariant_elems,
         events_by_label,
+        event_elems,
         accurate,
     };
 
@@ -697,6 +709,7 @@ fn emit_decomposition_stub(
         visible_variables: BTreeSet::new(),
         invariant_elems: Vec::new(),
         events_by_label: HashMap::new(),
+        event_elems: HashMap::new(),
         // The stub's file-level `accurate=false` reflects an empty body,
         // not a checking error, so it must not taint a machine that
         // refines it. (Rodin emits no `accurate` attribute on the stub at

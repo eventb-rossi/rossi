@@ -6,7 +6,8 @@
 //! — type bindings, carrier-set / constant / axiom tables, and the
 //! transitive EXTENDS closure.
 //!
-//! The `.bcc` XML is a *rendering* of this record (see [`render_body`]).
+//! The `.bcc` XML is a *rendering* of this record (see
+//! [`render_context_parts`]).
 //! Keeping the two layers distinct means machines can consume the record
 //! without parsing our own XML.
 
@@ -17,7 +18,7 @@ use rossi::Predicate;
 use crate::handles::HandleUri;
 use crate::type_env::TypeEnv;
 use crate::types::Type;
-use crate::xml_out::{Element, attr, tag};
+use crate::xml_out::{Element, RodinNameGenerator, attr, tag};
 
 /// The typed record produced by checking one `.buc`.
 #[derive(Debug, Clone)]
@@ -89,34 +90,44 @@ pub struct ExtendsDecl {
 /// Rows are wrapped in `Rc` at the collecting boundary so descendant
 /// contexts and machines that splice us into their own output get
 /// O(1) per-element clones.
-pub fn render_body(record: &ContextRecord) -> Vec<Rc<Element>> {
+pub(crate) fn render_context_parts(record: &ContextRecord) -> (Vec<Rc<Element>>, Vec<Rc<Element>>) {
+    let mut names = RodinNameGenerator::default();
+    let extends = render_extends(record, &mut names);
+    for ancestor in &record.ancestors {
+        names.observe(ancestor);
+    }
+    let body = render_body(record, &mut names);
+    (extends, body)
+}
+
+fn render_body(record: &ContextRecord, names: &mut RodinNameGenerator) -> Vec<Rc<Element>> {
     let mut out = Vec::with_capacity(
         record.axioms.len() + record.carrier_sets.len() + record.constants.len(),
     );
     for ax in &record.axioms {
-        out.push(Rc::new(render_axiom(ax)));
+        out.push(names.generated(|name| render_axiom(ax, name)));
     }
     for cs in &record.carrier_sets {
-        out.push(Rc::new(render_carrier_set(cs)));
+        out.push(names.retained(Rc::new(render_carrier_set(cs))));
     }
     for c in &record.constants {
-        out.push(Rc::new(render_constant(c)));
+        out.push(names.retained(Rc::new(render_constant(c))));
     }
     out
 }
 
 /// Render the `scExtendsContext` elements.
-pub fn render_extends(record: &ContextRecord) -> Vec<Rc<Element>> {
+fn render_extends(record: &ContextRecord, names: &mut RodinNameGenerator) -> Vec<Rc<Element>> {
     record
         .extends
         .iter()
-        .map(|e| Rc::new(render_extend(e)))
+        .map(|e| names.generated(|name| render_extend(e, name)))
         .collect()
 }
 
-fn render_axiom(a: &AxiomDecl) -> Element {
+fn render_axiom(a: &AxiomDecl, internal_name: String) -> Element {
     Element::new(tag::SC_AXIOM)
-        .attr(attr::NAME, a.label.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::LABEL, a.label.clone())
         .attr(attr::PREDICATE, a.predicate_canonical.clone())
         .attr(attr::SOURCE, a.source.as_str())
@@ -137,9 +148,9 @@ fn render_constant(c: &ConstantDecl) -> Element {
         .attr(attr::TYPE, c.ty.to_rodin_canonical())
 }
 
-fn render_extend(e: &ExtendsDecl) -> Element {
+fn render_extend(e: &ExtendsDecl, internal_name: String) -> Element {
     Element::new(tag::SC_EXTENDS_CONTEXT)
-        .attr(attr::NAME, e.parent_name.clone())
+        .attr(attr::NAME, internal_name)
         .attr(attr::SC_TARGET, e.sc_target.clone())
         .attr(attr::SOURCE, e.source.as_str())
 }
@@ -180,7 +191,7 @@ mod tests {
             extends: vec![],
             ancestors: vec![],
         };
-        let body = render_body(&rec);
+        let body = render_body(&rec, &mut RodinNameGenerator::default());
         assert_eq!(body.len(), 3);
         assert_eq!(body[0].tag, tag::SC_AXIOM);
         assert_eq!(body[1].tag, tag::SC_CARRIER_SET);
@@ -229,19 +240,9 @@ mod tests {
             ],
             ancestors: vec![],
         };
-        let ex = render_extends(&rec);
+        let ex = render_extends(&rec, &mut RodinNameGenerator::default());
         assert_eq!(ex.len(), 2);
-        assert!(
-            ex[0]
-                .attrs
-                .iter()
-                .any(|(k, v)| k == attr::NAME && v == "P1")
-        );
-        assert!(
-            ex[1]
-                .attrs
-                .iter()
-                .any(|(k, v)| k == attr::NAME && v == "P2")
-        );
+        assert_eq!(ex[0].attr_value(attr::NAME), Some("'"));
+        assert_eq!(ex[1].attr_value(attr::NAME), Some("("));
     }
 }

@@ -19,10 +19,10 @@ const ONE_VAR_BUM: &str = r#"<?xml version="1.0"?>
 // generated `v :∣ ⊤` action sourced at the event element.
 const ONE_VAR_BCM: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <org.eventb.core.scMachineFile org.eventb.core.accurate="true" org.eventb.core.configuration="org.eventb.core.fwd">
-<org.eventb.core.scInvariant name="I" org.eventb.core.label="I" org.eventb.core.predicate="v∈ℕ" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.invariant#_i" org.eventb.core.theorem="false"/>
+<org.eventb.core.scInvariant name="'" org.eventb.core.label="I" org.eventb.core.predicate="v∈ℕ" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.invariant#_i" org.eventb.core.theorem="false"/>
 <org.eventb.core.scVariable name="v" org.eventb.core.abstract="false" org.eventb.core.concrete="true" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.variable#_v" org.eventb.core.type="ℤ"/>
-<org.eventb.core.scEvent name="INITIALISATION" org.eventb.core.accurate="false" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.event#_init">
-<org.eventb.core.scAction name="GEN" org.eventb.core.assignment="v :∣ ⊤" org.eventb.core.label="GEN" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.event#_init"/>
+<org.eventb.core.scEvent name="w" org.eventb.core.accurate="false" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.event#_init">
+<org.eventb.core.scAction name="'" org.eventb.core.assignment="v :∣ ⊤" org.eventb.core.label="GEN" org.eventb.core.source="/r/M.bum|org.eventb.core.machineFile#M|org.eventb.core.event#_init"/>
 </org.eventb.core.scEvent>
 </org.eventb.core.scMachineFile>"#;
 

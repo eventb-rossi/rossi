@@ -13,8 +13,6 @@
 //! /COMP1216/AuctionContext.buc|org.eventb.core.contextFile#AuctionContext|org.eventb.core.carrierSet#_qJ3S4O5PEeSpR9iqQeSCVw
 //! ```
 
-use std::fmt::Write;
-
 /// A Rodin element handle URI.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HandleUri(String);
@@ -22,7 +20,12 @@ pub struct HandleUri(String);
 impl HandleUri {
     /// A file-level handle, e.g. `/COMP1216/AuctionContext.bcc`.
     pub fn file(project: &str, filename: &str) -> Self {
-        HandleUri(format!("/{project}/{filename}"))
+        let mut handle = String::with_capacity(project.len() + filename.len() + 2);
+        handle.push('/');
+        escape_handle_id(project, &mut handle);
+        handle.push('/');
+        escape_handle_id(filename, &mut handle);
+        HandleUri(handle)
     }
 
     /// Top-level element handle inside a file.
@@ -30,7 +33,12 @@ impl HandleUri {
     /// `root_type` is something like `"org.eventb.core.contextFile"` or
     /// `"org.eventb.core.machineFile"`; `name` is the component's name.
     pub fn root(project: &str, filename: &str, root_type: &str, name: &str) -> Self {
-        HandleUri(format!("/{project}/{filename}|{root_type}#{name}"))
+        let mut handle = Self::file(project, filename).0;
+        handle.push('|');
+        escape_handle_id(root_type, &mut handle);
+        handle.push('#');
+        escape_handle_id(name, &mut handle);
+        HandleUri(handle)
     }
 
     /// Extend an existing handle with a child step.
@@ -44,7 +52,9 @@ impl HandleUri {
     /// happens to land on the `/` character.
     pub fn child(&self, child_type: &str, id: &str) -> Self {
         let mut s = self.0.clone();
-        write!(&mut s, "|{child_type}#").unwrap();
+        s.push('|');
+        escape_handle_id(child_type, &mut s);
+        s.push('#');
         escape_handle_id(id, &mut s);
         HandleUri(s)
     }
@@ -76,6 +86,7 @@ impl From<HandleUri> for String {
 /// - `/` would be confused with the path separator at the start of the
 ///   URI.
 /// - `|` is the URI segment separator.
+/// - `#` separates an element type from its name.
 /// - `\` is the escape character itself, so a literal `\` must be doubled.
 ///
 /// We prepend `\` to each. Rodin emits the same shape; matching it lets
@@ -83,20 +94,11 @@ impl From<HandleUri> for String {
 /// corpus diff.
 fn escape_handle_id(id: &str, out: &mut String) {
     for c in id.chars() {
-        if matches!(c, '/' | '|' | '\\') {
+        if matches!(c, '/' | '|' | '#' | '\\') {
             out.push('\\');
         }
         out.push(c);
     }
-}
-
-/// Public escape helper for callers that build URIs by `format!()`
-/// rather than via [`HandleUri::child`]. Returns a fresh `String`.
-#[must_use]
-pub fn escape_handle_id_owned(id: &str) -> String {
-    let mut out = String::with_capacity(id.len());
-    escape_handle_id(id, &mut out);
-    out
 }
 
 #[cfg(test)]
@@ -167,9 +169,18 @@ mod tests {
     }
 
     #[test]
-    fn escape_handle_id_owned_helper() {
-        assert_eq!(escape_handle_id_owned("a/b|c\\d"), "a\\/b\\|c\\\\d");
-        assert_eq!(escape_handle_id_owned("plain"), "plain");
+    fn every_memento_name_is_escaped() {
+        let handle = HandleUri::root(
+            "project/part",
+            "M|copy.bum",
+            "org.eventb.core.machineFile",
+            "M#copy",
+        )
+        .child("org.eventb.core.event", "event\\part");
+        assert_eq!(
+            handle.as_str(),
+            "/project\\/part/M\\|copy.bum|org.eventb.core.machineFile#M\\#copy|org.eventb.core.event#event\\\\part"
+        );
     }
 
     #[test]
