@@ -1460,6 +1460,155 @@ fn fmt_preserves_multi_project_archive_structure() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+const MINIMAL_BUILD_CONTEXT_XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    <org.eventb.core.contextFile version=\"3\" \
+    org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.contextFile>\n";
+
+struct BuildFixture {
+    root: PathBuf,
+    output: PathBuf,
+}
+
+impl BuildFixture {
+    fn new(entries: &[&str], output: &str) -> Self {
+        let root = tempdir_unique("rossi-cli-build-output-paths");
+        let input = root.join("input.zip");
+        let output = root.join(output);
+        let entries: Vec<_> = entries
+            .iter()
+            .map(|name| (*name, MINIMAL_BUILD_CONTEXT_XML.as_bytes()))
+            .collect();
+        write_zip(&input, &entries);
+        Self { root, output }
+    }
+
+    fn run(&self) -> std::process::Output {
+        rossi_command()
+            .args([
+                "build",
+                self.root.join("input.zip").to_str().unwrap(),
+                "-o",
+                self.output.to_str().unwrap(),
+            ])
+            .output()
+            .expect("Failed to execute command")
+    }
+
+    fn assert_success(&self, case: &str) {
+        let output = self.run();
+        assert!(
+            output.status.success(),
+            "{case} should succeed; stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+impl Drop for BuildFixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.root).ok();
+    }
+}
+
+#[cfg(unix)]
+fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
+    std::fs::create_dir_all(target).unwrap();
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[test]
+fn build_directory_output_rejects_unsafe_prefixes_before_writing() {
+    let cases = [
+        ("parent-prefix", ["../C.buc", "safe/D.buc"]),
+        ("rooted-prefix", ["/C.buc", "safe/D.buc"]),
+        ("sanitized-collision", ["../C.buc", "./D.buc"]),
+    ];
+
+    for (case, entries) in cases {
+        let fixture = BuildFixture::new(&entries, "out");
+        let output = fixture.run();
+
+        assert!(!output.status.success(), "{case} should be rejected");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unsafe archive prefix"),
+            "{case}: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !fixture.root.join("C.bcc").exists(),
+            "{case} escaped output root"
+        );
+        assert!(
+            !fixture.output.exists(),
+            "{case} preflight failure must not create the output root"
+        );
+    }
+}
+
+#[test]
+fn build_directory_output_preserves_safe_multi_project_layout() {
+    let fixture = BuildFixture::new(&["A/C.buc", "B/D.buc"], "out");
+    fixture.assert_success("safe multi-project build");
+    assert!(fixture.output.join("A/C.bcc").exists());
+    assert!(fixture.output.join("B/D.bcc").exists());
+}
+
+#[test]
+fn build_zip_output_preserves_raw_archive_prefixes() {
+    let fixture = BuildFixture::new(&["../C.buc", "safe/D.buc"], "out.zip");
+    fixture.assert_success("archive repacking");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&fixture.output).unwrap()).unwrap();
+    assert!(archive.by_name("../C.bcc").is_ok());
+    assert!(archive.by_name("safe/D.bcc").is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn build_directory_output_rejects_escaping_project_symlink() {
+    let fixture = BuildFixture::new(&["evil/C.buc", "safe/D.buc"], "out");
+    let outside = fixture.root.join("outside");
+    symlink_dir(&outside, &fixture.output.join("evil"));
+    let output = fixture.run();
+
+    assert!(
+        !output.status.success(),
+        "escaping symlink should be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("escapes output directory"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!outside.join("C.bcc").exists());
+    assert!(
+        !fixture.output.join("safe/D.bcc").exists(),
+        "preflight must reject before writing a safe sibling"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_directory_output_allows_contained_project_symlink() {
+    let fixture = BuildFixture::new(&["linked/C.buc", "safe/D.buc"], "out");
+    let actual = fixture.output.join("actual");
+    symlink_dir(&actual, &fixture.output.join("linked"));
+    fixture.assert_success("contained symlink");
+    assert!(actual.join("C.bcc").exists());
+    assert!(fixture.output.join("safe/D.bcc").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn build_directory_output_allows_symlinked_root() {
+    let fixture = BuildFixture::new(&["A/C.buc", "B/D.buc"], "out");
+    let actual = fixture.root.join("actual");
+    symlink_dir(&actual, &fixture.output);
+    fixture.assert_success("symlinked root");
+    assert!(actual.join("A/C.bcc").exists());
+    assert!(actual.join("B/D.bcc").exists());
+}
+
 fn dir_has_rodin_file(dir: &std::path::Path) -> bool {
     dir_has_ext(dir, &["buc", "bum"])
 }

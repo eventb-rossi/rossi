@@ -8,7 +8,7 @@
 //! checker, the filtered output is still written first: erroneous elements are
 //! dropped and their files marked inaccurate.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Args;
@@ -322,24 +322,181 @@ fn write_zip(
 }
 
 fn write_dir(out_dir: &Path, outcome: &BuildOutcome) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(out_dir)?;
     // A single project writes its files flat into `out_dir` (unchanged loose
     // output); a multi-project archive writes each under its own subdirectory
     // so colliding component filenames across projects don't overwrite.
     let multi = outcome.results.len() > 1;
+    let mut pending = Vec::new();
+    let mut relative_paths = std::collections::BTreeSet::new();
     for (prefix, result) in &outcome.results {
-        let base = if multi {
-            let dir = out_dir.join(prefix.trim_end_matches('/'));
-            std::fs::create_dir_all(&dir)?;
-            dir
-        } else {
-            out_dir.to_path_buf()
-        };
+        let project_dir = loose_project_dir(prefix)?;
         for f in &result.files {
-            std::fs::write(base.join(&f.filename), &f.contents)?;
+            if !is_normal_path_component(&f.filename) {
+                return Err(format!(
+                    "unsafe generated filename {:?}; loose output filenames must be one normal path component",
+                    f.filename
+                )
+                .into());
+            }
+            let relative = if multi {
+                project_dir
+                    .as_ref()
+                    .map_or_else(|| PathBuf::from(&f.filename), |dir| dir.join(&f.filename))
+            } else {
+                PathBuf::from(&f.filename)
+            };
+            if !relative_paths.insert(relative.clone()) {
+                return Err(
+                    format!("duplicate loose output destination {}", relative.display()).into(),
+                );
+            }
+            pending.push((relative, f.contents.as_str()));
         }
     }
+
+    std::fs::create_dir_all(out_dir)?;
+    let canonical_root = std::fs::canonicalize(out_dir)?;
+    if !std::fs::metadata(&canonical_root)?.is_dir() {
+        return Err(format!("output path is not a directory: {}", out_dir.display()).into());
+    }
+    let parents: std::collections::BTreeSet<PathBuf> = pending
+        .iter()
+        .filter_map(|(relative, _)| out_dir.join(relative).parent().map(Path::to_path_buf))
+        .collect();
+
+    // Check existing paths before creating any project directories, so an
+    // escaping symlink prevents even safe sibling directories being created.
+    visit_resolved_output_paths(out_dir, &canonical_root, &parents, &pending, |_| {})?;
+    for parent in &parents {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Creating directories can reveal aliases on case-insensitive filesystems;
+    // resolve and de-duplicate again before the first checked file is written.
+    let mut destinations = Vec::with_capacity(pending.len());
+    visit_resolved_output_paths(out_dir, &canonical_root, &parents, &pending, |path| {
+        destinations.push(path)
+    })?;
+    for ((_, contents), destination) in pending.iter().zip(destinations) {
+        std::fs::write(destination, contents)?;
+    }
     Ok(())
+}
+
+/// Convert an archive prefix to the one directory component allowed for loose
+/// output. The raw prefix remains untouched for archive repacking.
+fn loose_project_dir(prefix: &str) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    if prefix.is_empty() {
+        return Ok(None);
+    }
+    let segment = prefix.strip_suffix('/').unwrap_or_default();
+    if !is_normal_path_component(segment) {
+        return Err(format!(
+            "unsafe archive prefix {prefix:?}; loose output requires an empty prefix or exactly one normal path component"
+        )
+        .into());
+    }
+    Ok(Some(PathBuf::from(segment)))
+}
+
+fn is_normal_path_component(value: &str) -> bool {
+    if value.contains('\0') {
+        return false;
+    }
+    let path = Path::new(value);
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(part)) if path.as_os_str() == part)
+        && components.next().is_none()
+}
+
+/// Resolve every pending destination against the canonical output root.
+/// Existing symlinks are allowed only when their targets remain contained.
+fn visit_resolved_output_paths(
+    out_dir: &Path,
+    canonical_root: &Path,
+    parents: &std::collections::BTreeSet<PathBuf>,
+    pending: &[(PathBuf, &str)],
+    mut visit: impl FnMut(PathBuf),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut resolved_parents = std::collections::BTreeMap::new();
+    for parent in parents {
+        resolved_parents.insert(
+            parent.clone(),
+            resolve_output_parent(out_dir, canonical_root, parent)?,
+        );
+    }
+    let mut resolved_paths = std::collections::BTreeSet::new();
+    for (relative, _) in pending {
+        let lexical = out_dir.join(relative);
+        let parent = lexical
+            .parent()
+            .ok_or_else(|| format!("output destination has no parent: {}", lexical.display()))?;
+        let resolved_parent = resolved_parents
+            .get(parent)
+            .ok_or_else(|| format!("output destination has no parent: {}", lexical.display()))?;
+        if !resolved_parent.starts_with(canonical_root) {
+            return Err(format!(
+                "output destination {} escapes output directory {}",
+                lexical.display(),
+                out_dir.display()
+            )
+            .into());
+        }
+
+        let resolved = match std::fs::symlink_metadata(&lexical) {
+            Ok(_) => {
+                let path = std::fs::canonicalize(&lexical)?;
+                if !std::fs::metadata(&path)?.is_file() {
+                    return Err(
+                        format!("output destination is not a file: {}", lexical.display()).into(),
+                    );
+                }
+                path
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                resolved_parent.join(lexical.file_name().ok_or_else(|| {
+                    format!("output destination has no filename: {}", lexical.display())
+                })?)
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if !resolved.starts_with(canonical_root) {
+            return Err(format!(
+                "output destination {} escapes output directory {}",
+                lexical.display(),
+                out_dir.display()
+            )
+            .into());
+        }
+        if !resolved_paths.insert(resolved.clone()) {
+            return Err(format!("duplicate loose output destination {}", lexical.display()).into());
+        }
+        visit(resolved);
+    }
+    Ok(())
+}
+
+fn resolve_output_parent(
+    out_dir: &Path,
+    canonical_root: &Path,
+    parent: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    match std::fs::symlink_metadata(parent) {
+        Ok(_) => {
+            let resolved = std::fs::canonicalize(parent)?;
+            if !std::fs::metadata(&resolved)?.is_dir() {
+                return Err(
+                    format!("output parent is not a directory: {}", parent.display()).into(),
+                );
+            }
+            Ok(resolved)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let relative = parent.strip_prefix(out_dir)?;
+            Ok(canonical_root.join(relative))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Emit a flat zip from `BuildResult` alone (no source archive to merge with).
