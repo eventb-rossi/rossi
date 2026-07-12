@@ -29,8 +29,10 @@ use crate::ast::{
 use crate::error::{ParseError, ParseResult, Result};
 use crate::pretty::PrettyPrinter;
 use crate::{Component, parser};
+use quick_xml::escape::{escape, unescape};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::{Reader, XmlVersion};
+use std::borrow::Cow;
 use std::io::Read as IoRead;
 
 /// Decode XML entities in a string
@@ -43,12 +45,8 @@ fn format_comment_attr(comment: Option<&str>) -> String {
 }
 
 /// Encode XML entities in a string
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+fn escape_xml(s: &str) -> Cow<'_, str> {
+    escape(s)
 }
 
 /// Extract an optional string attribute from an XML element.
@@ -335,7 +333,9 @@ fn parse_xml_labeled_predicate(
 /// valid start character for Event-B labels or identifiers, so it cannot collide with any
 /// user-defined name.
 fn label_or_index(label: Option<&str>, idx: usize) -> String {
-    label.map(escape_xml).unwrap_or_else(|| format!("_{idx}"))
+    label
+        .map(|label| escape_xml(label).into_owned())
+        .unwrap_or_else(|| format!("_{idx}"))
 }
 
 /// Write labeled predicates as XML elements.
@@ -1528,28 +1528,52 @@ fn write_projects_directory<'a>(
 
 /// Extract the project name from a Rodin/Eclipse `.project` descriptor.
 ///
-/// The descriptor is fixed Eclipse XML whose first `<name>…</name>` element
-/// holds the Eclipse `IProject` name — the same string Rodin uses as the
-/// leading `/ProjectName/` segment of every handle URI. The later `<name>`
-/// inside `<buildCommand>` (`org.rodinp.core.rodinbuilder`) is never the first
-/// match, so taking the first occurrence is correct. Returns `None` if no
-/// `<name>` element is present. The inverse of `rodin_project_file_xml`.
+/// The first element whose local name is `name` holds the Eclipse `IProject`
+/// name — the same string Rodin uses as the leading `/ProjectName/` segment of
+/// every handle URI. The later `<name>` inside `<buildCommand>`
+/// (`org.rodinp.core.rodinbuilder`) is never the first match, so taking the
+/// first occurrence is correct. Returns `None` if the XML is invalid or no
+/// non-empty `name` element is present. The inverse of
+/// `rodin_project_file_xml`.
 #[must_use]
 pub fn read_project_name(xml: &str) -> Option<String> {
-    let start = xml.find("<name>")? + "<name>".len();
-    let end = xml[start..].find("</name>")? + start;
-    let name = unescape_xml(xml[start..end].trim());
-    if name.is_empty() { None } else { Some(name) }
-}
+    let mut reader = Reader::from_str(xml);
 
-/// Reverse of [`escape_xml`] for the five predefined XML entities. `&amp;` is
-/// decoded last so an escaped entity like `&amp;lt;` round-trips to `&lt;`.
-fn unescape_xml(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    loop {
+        match reader.read_event().ok()? {
+            XmlEvent::Start(e) if e.name().local_name().as_ref() == b"name" => {
+                let mut depth = 1usize;
+                let mut name = String::new();
+                loop {
+                    match reader.read_event().ok()? {
+                        XmlEvent::Start(_) => depth += 1,
+                        XmlEvent::End(_) => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let name = name.trim();
+                                return (!name.is_empty()).then(|| name.to_string());
+                            }
+                        }
+                        XmlEvent::Text(text) => {
+                            let decoded = text.decode().ok()?;
+                            name.push_str(&unescape(&decoded).ok()?);
+                        }
+                        XmlEvent::GeneralRef(reference) => {
+                            let reference = reference.decode().ok()?;
+                            let encoded = format!("&{reference};");
+                            name.push_str(&unescape(&encoded).ok()?);
+                        }
+                        XmlEvent::CData(cdata) => name.push_str(&cdata.decode().ok()?),
+                        XmlEvent::Eof => return None,
+                        _ => {}
+                    }
+                }
+            }
+            XmlEvent::Empty(e) if e.name().local_name().as_ref() == b"name" => return None,
+            XmlEvent::Eof => return None,
+            _ => {}
+        }
+    }
 }
 
 fn rodin_project_file_xml(project_name: &str) -> String {
@@ -2957,6 +2981,28 @@ mod tests {
         // No descriptor / empty name -> None.
         assert_eq!(read_project_name("<projectDescription/>"), None);
         assert_eq!(read_project_name("<name></name>"), None);
+    }
+
+    #[test]
+    fn test_read_project_name_parses_xml_variations() {
+        let cases = [
+            (
+                r#"<projectDescription><name kind="project">A&#32;B&#x20;C</name></projectDescription>"#,
+                "A B C",
+            ),
+            (
+                r#"<p:projectDescription xmlns:p="urn:eclipse"><p:name>Namespaced</p:name></p:projectDescription>"#,
+                "Namespaced",
+            ),
+            (
+                "<projectDescription><name><![CDATA[A & B]]></name></projectDescription>",
+                "A & B",
+            ),
+        ];
+        for (xml, expected) in cases {
+            assert_eq!(read_project_name(xml).as_deref(), Some(expected));
+        }
+        assert_eq!(read_project_name("<projectDescription><name>broken"), None);
     }
 
     #[test]
