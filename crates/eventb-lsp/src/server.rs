@@ -4,7 +4,7 @@ use crate::lsp_types::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
 
@@ -24,6 +24,18 @@ use crate::selection_range::SelectionRangeProvider;
 use crate::semantic_tokens::SemanticTokensProvider;
 use crate::signature_help::SignatureHelpProvider;
 use crate::workspace::WorkspaceSymbolProvider;
+
+/// Run blocking filesystem or parsing work away from Tokio's async workers.
+async fn run_blocking<F, T>(task: F) -> Result<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(task).await.map_err(|error| {
+        info!("Blocking LSP task failed: {error}");
+        Error::internal_error()
+    })
+}
 
 /// The shared handles the post-edit analysis needs, bundled so the inline
 /// (`didOpen`/`didSave`/zero-debounce) and the spawned (debounced) paths run the
@@ -390,13 +402,15 @@ impl LanguageServer for RossiLanguageServer {
 
         // Scan workspace for Event-B files to populate cross-reference index
         if let Some(root) = self.cross_reference_manager.workspace_root() {
-            match self.cross_reference_manager.scan_workspace(&root) {
-                Ok(count) => {
+            let manager = Arc::clone(&self.cross_reference_manager);
+            match run_blocking(move || manager.scan_workspace(&root)).await {
+                Ok(Ok(count)) => {
                     info!("Indexed {} Event-B files from workspace", count);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     info!("Failed to scan workspace: {}", e);
                 }
+                Err(e) => info!("Failed to scan workspace: {}", e),
             }
         }
 
@@ -610,11 +624,14 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Completion reads the document's shared parse from the document
-        // manager — no per-request re-parse.
+        // manager — no per-request re-parse. Cross-file cold loads run on the
+        // blocking pool so they cannot occupy an async handler thread.
         let config = self.config_manager.get();
-        let response =
-            self.completion_provider
-                .complete(&params, &text, &config.completion, &config.format);
+        let provider = Arc::clone(&self.completion_provider);
+        let response = run_blocking(move || {
+            provider.complete(&params, &text, &config.completion, &config.format)
+        })
+        .await?;
 
         debug!(
             "Completion returned {} items",
@@ -642,8 +659,10 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Hover reads the document's shared parse from the document manager —
-        // no per-request re-parse.
-        let response = self.hover_provider.hover(&params, &text);
+        // no per-request re-parse. Cross-file cold loads run on the blocking
+        // pool so they cannot occupy an async handler thread.
+        let provider = Arc::clone(&self.hover_provider);
+        let response = run_blocking(move || provider.hover(&params, &text)).await?;
 
         debug!(
             "Hover returned: {}",
@@ -703,8 +722,10 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Get definition location
-        let response = self.definition_provider.goto_definition(&params, &text);
+        // Resolve cross-file definitions on the blocking pool because a cold
+        // component load reads and parses its file.
+        let provider = Arc::clone(&self.definition_provider);
+        let response = run_blocking(move || provider.goto_definition(&params, &text)).await?;
 
         debug!(
             "Go-to-definition returned: {}",
@@ -732,8 +753,10 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Find all references
-        let response = self.reference_provider.find_references(&params, &text);
+        // Search cross-file references on the blocking pool because cold
+        // component loads read and parse their files.
+        let provider = Arc::clone(&self.reference_provider);
+        let response = run_blocking(move || provider.find_references(&params, &text)).await?;
 
         debug!(
             "References returned: {} locations",
@@ -805,8 +828,10 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Perform the rename
-        let response = self.rename_provider.rename(&params, &text);
+        // A component rename reads every closed workspace file, so keep the
+        // complete operation off the async handler threads.
+        let provider = Arc::clone(&self.rename_provider);
+        let response = run_blocking(move || provider.rename(&params, &text)).await?;
 
         debug!(
             "Rename returned: {}",
@@ -950,5 +975,18 @@ impl RossiLanguageServer {
     /// calls this method.
     pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
         Ok(rossi::operators::operator_rows())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_blocking;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_work_runs_off_the_async_handler_thread() {
+        let handler_thread = std::thread::current().id();
+        let blocking_thread = run_blocking(|| std::thread::current().id()).await.unwrap();
+
+        assert_ne!(blocking_thread, handler_thread);
     }
 }
