@@ -141,3 +141,45 @@ fn non_extended_event_does_not_inherit_parent_guards() {
         "non-extended event should not carry abstract guards; got:\n{bcm}"
     );
 }
+
+#[test]
+fn extended_event_redeclaring_inherited_parameter_is_diagnosed() {
+    let m0 = ProjectComponent::from_xml(
+        "M0.bum",
+        r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION"/>
+<org.eventb.core.event name="_event" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="evt">
+<org.eventb.core.parameter name="_param" org.eventb.core.identifier="p"/>
+<org.eventb.core.guard name="_guard" org.eventb.core.label="grd1" org.eventb.core.predicate="p ∈ ℤ"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#,
+    )
+    .unwrap();
+    let m1 = ProjectComponent::from_xml(
+        "M1.bum",
+        r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.refinesMachine name="_ref_m" org.eventb.core.target="M0"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="true" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.refinesEvent name="_ref_i" org.eventb.core.target="INITIALISATION"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_event" org.eventb.core.convergence="0" org.eventb.core.extended="true" org.eventb.core.label="evt">
+<org.eventb.core.refinesEvent name="_ref_e" org.eventb.core.target="evt"/>
+<org.eventb.core.parameter name="_param" org.eventb.core.identifier="p"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#,
+    )
+    .unwrap();
+    let result = build(&Project::new("conflict", vec![m0, m1]));
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == "M1.evt.p"
+                && diagnostic
+                    .message
+                    .contains("parameter `p` conflicts with an inherited parameter")
+        }),
+        "expected inherited parameter conflict: {:?}",
+        result.diagnostics
+    );
+}

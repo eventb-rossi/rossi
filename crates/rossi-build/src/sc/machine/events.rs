@@ -447,6 +447,7 @@ pub(super) fn build_event_decl(
     base_env: &TypeEnv,
     parent: Option<&CheckedMachine>,
     abstract_only: &BTreeSet<String>,
+    declared_variable_names: &BTreeSet<String>,
     variant_usable: bool,
     // This machine's concrete, typed variables in emission (alphabetical)
     // order. Used by the INITIALISATION repair to find unassigned ones.
@@ -512,11 +513,52 @@ pub(super) fn build_event_decl(
         label,
     );
 
+    // A local event parameter may not reuse any identifier already visible
+    // in the machine environment. Rodin reports ParameterNameConflictError
+    // and filters the parameter, leaving formulas to resolve the outer name.
+    // Names duplicated within the event are already diagnosed and filtered.
+    let mut invalid_parameter_names = event_dups.parameters.names.clone();
+    let inherited_parameter_names: BTreeSet<&str> = inherited
+        .decl
+        .into_iter()
+        .flat_map(EventDecl::chain_parameters)
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    for parameter in kind.parameters() {
+        if invalid_parameter_names.contains(&parameter.name) {
+            continue;
+        }
+        let message = if inherited_parameter_names.contains(parameter.name.as_str()) {
+            format!(
+                "parameter `{}` conflicts with an inherited parameter and was dropped",
+                parameter.name
+            )
+        } else if declared_variable_names.contains(&parameter.name)
+            || base_env.contains(&parameter.name)
+        {
+            format!(
+                "parameter `{}` conflicts with a visible identifier and was dropped",
+                parameter.name
+            )
+        } else {
+            continue;
+        };
+        diags.push(Diagnostic {
+            severity: Severity::Error,
+            origin: format!("{machine_name}.{label}.{}", parameter.name),
+            message,
+            rule_id: Some(crate::RuleId::TypeError),
+            span: parameter.span,
+        });
+        invalid_parameter_names.insert(parameter.name.clone());
+    }
+
     let (mut scope, scope_accurate) = build_event_scope(
         base_env,
         &inherited,
         kind,
         &event_dups,
+        &invalid_parameter_names,
         diags,
         machine_name,
         label,
@@ -530,6 +572,7 @@ pub(super) fn build_event_decl(
         abstract_only,
         &inherited,
         &event_dups,
+        &invalid_parameter_names,
         diags,
         machine_name,
         label,
@@ -740,11 +783,13 @@ fn resolve_effective_refines<'a, 'b>(
 /// guards. Returns the scope and an `accurate` flag (false when any
 /// parameter could not be typed). The caller is responsible for the
 /// matching `pop_scope`.
+#[allow(clippy::too_many_arguments)]
 fn build_event_scope(
     base_env: &TypeEnv,
     inherited: &InheritedEvent<'_>,
     kind: EventKind<'_>,
     dups: &crate::duplicates::EventDuplicates,
+    invalid_parameter_names: &BTreeSet<String>,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
     label: &str,
@@ -784,12 +829,12 @@ fn build_event_scope(
         }
         axioms.push(g.predicate.clone());
     }
-    // Duplicated parameters are dropped entirely, so they are not typed —
-    // they are EB021 errors, not EB006 inference failures.
+    // Invalid parameters are dropped entirely, so they are not typed again.
+    // Duplicate and outer-name conflicts already have their own diagnostics.
     let param_names: Vec<String> = kind
         .parameters()
         .iter()
-        .filter(|p| !dups.parameters.names.contains(&p.name))
+        .filter(|p| !invalid_parameter_names.contains(&p.name))
         .map(|p| p.name.clone())
         .collect();
     let unresolved = infer_constants(&mut scope, &param_names, &axioms);
@@ -835,6 +880,7 @@ fn build_event_buckets(
     abstract_only: &BTreeSet<String>,
     inherited: &InheritedEvent<'_>,
     dups: &crate::duplicates::EventDuplicates,
+    invalid_parameter_names: &BTreeSet<String>,
     diags: &mut Vec<Diagnostic>,
     machine_name: &str,
     label: &str,
@@ -929,14 +975,13 @@ fn build_event_buckets(
         }
     }
 
-    // Duplicated parameters are dropped entirely (every occurrence), like
-    // Rodin's identifier-conflict rule. The scope filter alone is not
-    // enough: an outer-scope name (e.g. a seen constant) could make
-    // `scope.contains` true for a dropped parameter.
+    // Invalid parameters are dropped entirely (every duplicate occurrence,
+    // or the one declaration that conflicts with a visible outer name). The
+    // scope filter alone is not enough because that outer name is present.
     let mut params_sorted: Vec<&NamedElement> = kind
         .parameters()
         .iter()
-        .filter(|p| scope.contains(&p.name) && !dups.parameters.names.contains(&p.name))
+        .filter(|p| scope.contains(&p.name) && !invalid_parameter_names.contains(&p.name))
         .collect();
     params_sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let mut parameters: Vec<ParameterDecl> = Vec::with_capacity(params_sorted.len());

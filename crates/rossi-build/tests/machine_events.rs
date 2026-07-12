@@ -37,6 +37,30 @@ const MACHINE_BUM: &str = r#"<?xml version="1.0"?>
 </org.eventb.core.machineFile>
 "#;
 
+const PARAMETER_CONFLICT_MACHINE_BUM: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_v1" org.eventb.core.identifier="x"/>
+<org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="x ⊆ ℤ"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_a0" org.eventb.core.assignment="x ≔ ∅" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_ev" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="Clash">
+<org.eventb.core.parameter name="_p1" org.eventb.core.identifier="x"/>
+<org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="x ∈ ℤ"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>
+"#;
+
+const UNTYPED_PARAMETER_CONFLICT_MACHINE_BUM: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_v1" org.eventb.core.identifier="x"/>
+<org.eventb.core.event name="_ev" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="Clash">
+<org.eventb.core.parameter name="_p1" org.eventb.core.identifier="x"/>
+<org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="x ∈ ℤ"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>
+"#;
+
 fn make_project() -> Project {
     Project::new(
         "m2",
@@ -154,4 +178,59 @@ fn machine_file_is_accurate_when_all_events_type_check() {
     let r = build(&make_project());
     let bcm = r.file("Mch.bcm").expect("Mch.bcm");
     assert!(bcm.accurate, "diagnostics: {:?}", r.diagnostics);
+}
+
+#[test]
+fn parameter_conflicting_with_machine_variable_is_diagnosed_and_dropped() {
+    let project = Project::new(
+        "conflict",
+        vec![ProjectComponent::from_xml("Mch.bum", PARAMETER_CONFLICT_MACHINE_BUM).unwrap()],
+    );
+    let result = build(&project);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == "Mch.Clash.x"
+                && diagnostic.rule_id == Some(rossi_build::RuleId::TypeError)
+                && diagnostic
+                    .message
+                    .contains("parameter `x` conflicts with a visible identifier")
+        }),
+        "expected parameter conflict diagnostic: {:?}",
+        result.diagnostics
+    );
+
+    let bcm = result.file("Mch.bcm").expect("Mch.bcm");
+    let view = ScView::from_xml(&bcm.contents).unwrap();
+    let event = view.events.get("Clash").expect("Clash event");
+    assert!(!event.parameters.contains_key("x"));
+    assert!(event.guards.is_empty(), "conflicting guard must be dropped");
+    assert!(
+        !event.accurate,
+        "the guard must be checked against the machine variable and dropped"
+    );
+}
+
+#[test]
+fn parameter_conflicts_with_untyped_machine_variable() {
+    let project = Project::new(
+        "conflict",
+        vec![
+            ProjectComponent::from_xml("Mch.bum", UNTYPED_PARAMETER_CONFLICT_MACHINE_BUM).unwrap(),
+        ],
+    );
+    let result = build(&project);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == "Mch.Clash.x"
+                && diagnostic
+                    .message
+                    .contains("parameter `x` conflicts with a visible identifier")
+        }),
+        "expected parameter conflict diagnostic: {:?}",
+        result.diagnostics
+    );
+    let bcm = result.file("Mch.bcm").expect("Mch.bcm");
+    let view = ScView::from_xml(&bcm.contents).unwrap();
+    let event = view.events.get("Clash").expect("Clash event");
+    assert!(!event.parameters.contains_key("x"));
 }
