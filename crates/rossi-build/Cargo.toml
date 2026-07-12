@@ -15,7 +15,6 @@ rossi.workspace = true
 thiserror.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
-walkdir.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

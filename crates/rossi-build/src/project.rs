@@ -184,19 +184,21 @@ impl Project {
             .unwrap_or("project")
             .to_string();
 
-        let files: Vec<_> = walkdir::WalkDir::new(path)
-            .max_depth(1)
-            .into_iter()
-            .flatten()
-            .filter(|entry| entry.file_type().is_file())
-            .collect();
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                files.push(entry);
+            }
+        }
         let has_xml = files
             .iter()
             .any(|entry| entry.file_name().to_str().is_some_and(is_xml_input));
 
         let mut components = Vec::new();
         for entry in &files {
-            let Some(filename) = entry.file_name().to_str() else {
+            let file_name = entry.file_name();
+            let Some(filename) = file_name.to_str() else {
                 continue;
             };
             // Read only the files that are actually components of this project's

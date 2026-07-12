@@ -1343,7 +1343,6 @@ dependencies = [
  "rossi",
  "serde_json",
  "thiserror",
- "walkdir",
  "zip",
 ]
 
