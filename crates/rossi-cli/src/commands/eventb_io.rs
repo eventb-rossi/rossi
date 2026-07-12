@@ -157,40 +157,32 @@ pub(crate) fn parse_rodin_xml_file(path: &Path) -> CmdResult<NamedComponent> {
 /// Collect `.eventb`/`.txt` files from the given inputs. Directories are walked
 /// recursively; explicit file paths are taken as-is. Results are sorted.
 pub(crate) fn collect_eventb_files(inputs: &[PathBuf]) -> CmdResult<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    for input in inputs {
-        if input.is_dir() {
-            for entry in WalkDir::new(input).into_iter().filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_file()
-                    && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                    && is_text_ext(ext)
-                {
-                    files.push(path.to_path_buf());
-                }
-            }
-        } else {
-            files.push(input.clone());
-        }
-    }
-
-    files.sort();
-    Ok(files)
+    collect_files(inputs, is_text_ext)
 }
 
 /// Collect `.buc`/`.bum` files from the given inputs. Directories are walked
 /// recursively; explicit file paths are taken as-is. Results are sorted.
 pub(crate) fn collect_rodin_xml_files(inputs: &[PathBuf]) -> CmdResult<Vec<PathBuf>> {
+    collect_files(inputs, is_rodin_xml_ext)
+}
+
+fn collect_files(
+    inputs: &[PathBuf],
+    matches_extension: fn(&str) -> bool,
+) -> CmdResult<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for input in inputs {
         if input.is_dir() {
-            for entry in WalkDir::new(input).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(input) {
+                let entry = entry?;
                 let path = entry.path();
-                if path.is_file()
+                let file_type = entry.file_type();
+                let is_file = file_type.is_file()
+                    || file_type.is_symlink() && std::fs::metadata(path)?.is_file();
+                if is_file
                     && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                    && is_rodin_xml_ext(ext)
+                    && matches_extension(ext)
                 {
                     files.push(path.to_path_buf());
                 }
