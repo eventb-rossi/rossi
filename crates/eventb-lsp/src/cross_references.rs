@@ -278,7 +278,8 @@ impl CrossReferenceManager {
     pub fn scan_workspace(&self, root_path: &Path) -> std::io::Result<usize> {
         debug!("Scanning workspace at: {:?}", root_path);
 
-        let mut count = 0;
+        self.scanned.store(false, Ordering::Release);
+        let mut sources = Vec::new();
 
         // Recursively find all Event-B source files. Symlinks are followed
         // (Rodin workspaces commonly link shared model directories), so cap
@@ -287,20 +288,28 @@ impl CrossReferenceManager {
         for entry in walkdir::WalkDir::new(root_path)
             .follow_links(true)
             .max_depth(64)
-            .into_iter()
-            .filter_map(|e| e.ok())
         {
+            let entry = entry?;
             let path = entry.path();
-            if matches!(path.extension().and_then(|s| s.to_str()), Some("eventb")) {
-                // Convert path to URI
-                if let Ok(uri) = Url::from_file_path(path) {
-                    // Read and index the file
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        self.update_component(uri.to_string(), &content);
-                        count += 1;
-                    }
-                }
+            if entry.file_type().is_file()
+                && matches!(path.extension().and_then(|s| s.to_str()), Some("eventb"))
+            {
+                let uri = Url::from_file_path(path).map_err(|()| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("cannot convert {} to a file URI", path.display()),
+                    )
+                })?;
+                let content = std::fs::read_to_string(path).map_err(|error| {
+                    std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+                })?;
+                sources.push((uri.to_string(), content));
             }
+        }
+
+        let count = sources.len();
+        for (uri, content) in sources {
+            self.update_component(uri, &content);
         }
 
         debug!("Scanned {} Event-B files in workspace", count);
@@ -458,6 +467,37 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    struct TempWorkspace(PathBuf);
+
+    impl TempWorkspace {
+        fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "{prefix}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl std::ops::Deref for TempWorkspace {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn test_cross_reference_manager_creation() {
         let manager = CrossReferenceManager::new();
@@ -544,15 +584,7 @@ END
 
     #[test]
     fn test_scan_workspace_indexes_eventb_files_only() {
-        let root = std::env::temp_dir().join(format!(
-            "eventb-lsp-scan-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = TempWorkspace::new("eventb-lsp-scan-test");
         std::fs::write(root.join("eventb_ctx.eventb"), "CONTEXT eventb_ctx\nEND\n").unwrap();
         std::fs::write(root.join("rossi_ctx.rossi"), "CONTEXT rossi_ctx\nEND\n").unwrap();
         std::fs::write(root.join("ignored.txt"), "CONTEXT ignored\nEND\n").unwrap();
@@ -560,12 +592,24 @@ END
         let manager = CrossReferenceManager::new();
         let count = manager.scan_workspace(&root).unwrap();
 
-        std::fs::remove_dir_all(root).unwrap();
-
         assert_eq!(count, 1);
         assert!(manager.find_component_uri("eventb_ctx").is_some());
         assert!(manager.find_component_uri("rossi_ctx").is_none());
         assert!(manager.find_component_uri("ignored").is_none());
+    }
+
+    #[test]
+    fn scan_workspace_read_error_leaves_index_incomplete() {
+        let root = TempWorkspace::new("eventb-lsp-scan-error-test");
+        std::fs::write(root.join("good.eventb"), "CONTEXT good\nEND\n").unwrap();
+        std::fs::write(root.join("unreadable.eventb"), [0xff]).unwrap();
+
+        let manager = CrossReferenceManager::new();
+        let result = manager.scan_workspace(&root);
+
+        assert!(result.is_err());
+        assert!(!manager.is_scanned());
+        assert!(manager.find_component_uri("good").is_none());
     }
 
     /// Regression test: a single pathological file used to overflow the
@@ -574,15 +618,7 @@ END
     /// with thousands of nested parens left in /tmp).
     #[test]
     fn test_scan_workspace_survives_deeply_nested_file() {
-        let root = std::env::temp_dir().join(format!(
-            "eventb-lsp-deep-scan-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = TempWorkspace::new("eventb-lsp-deep-scan-test");
         std::fs::write(root.join("good_ctx.eventb"), "CONTEXT good_ctx\nEND\n").unwrap();
         let pathological = format!(
             "context deep_ctx axioms @a {}x{} = 1 end",
@@ -593,8 +629,6 @@ END
 
         let manager = CrossReferenceManager::new();
         let count = manager.scan_workspace(&root).unwrap();
-
-        std::fs::remove_dir_all(root).unwrap();
 
         // Both files are visited; the good one is indexed, the over-deep one
         // is rejected by the parser's nesting guard instead of crashing.
@@ -810,24 +844,15 @@ END
 
     #[test]
     fn is_scanned_set_only_after_scan() {
-        let root = std::env::temp_dir().join(format!(
-            "eventb-lsp-scanned-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = TempWorkspace::new("eventb-lsp-scanned");
         std::fs::write(root.join("c.eventb"), "CONTEXT c\nEND\n").unwrap();
 
         let manager = CrossReferenceManager::new();
         // A set workspace root alone is not yet a completed scan.
-        manager.set_workspace_root(root.clone());
+        manager.set_workspace_root(root.to_path_buf());
         assert!(!manager.is_scanned());
 
         manager.scan_workspace(&root).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
         assert!(manager.is_scanned());
     }
 
