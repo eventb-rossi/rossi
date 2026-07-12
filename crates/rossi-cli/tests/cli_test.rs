@@ -1460,6 +1460,75 @@ fn fmt_preserves_multi_project_archive_structure() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+#[test]
+fn fmt_raw_copies_non_component_entries() {
+    let tmp = tempdir_unique("rossi-cli-fmt-raw-copy");
+    let in_zip = tmp.join("input.zip");
+    let out_zip = tmp.join("output.zip");
+    let timestamp = zip::DateTime::from_date_and_time(2024, 2, 6, 12, 34, 56).unwrap();
+    let machine_xml = std::fs::read("../rossi/examples/counter.bum").unwrap();
+
+    let file = std::fs::File::create(&in_zip).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .set_raw_comment(b"archive comment".to_vec().into_boxed_slice())
+        .unwrap();
+    let directory_options = zip::write::SimpleFileOptions::default()
+        .last_modified_time(timestamp)
+        .unix_permissions(0o750)
+        .into_full_options()
+        .with_file_comment("directory comment");
+    writer
+        .add_directory("project/proofs/", directory_options)
+        .unwrap();
+    let proof_options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(timestamp)
+        .unix_permissions(0o640)
+        .into_full_options()
+        .with_file_comment("proof comment");
+    writer
+        .start_file("project/proofs/M.bpr", proof_options)
+        .unwrap();
+    std::io::Write::write_all(&mut writer, b"retained proof payload").unwrap();
+    writer
+        .start_file("project/M.bum", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut writer, &machine_xml).unwrap();
+    writer.finish().unwrap();
+
+    let output = rossi_command()
+        .args([
+            "fmt",
+            in_zip.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "fmt zip stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let input = std::fs::read(&in_zip).unwrap();
+    let output = std::fs::read(&out_zip).unwrap();
+    let input_archive = zip::ZipArchive::new(std::io::Cursor::new(&input)).unwrap();
+    let output_archive = zip::ZipArchive::new(std::io::Cursor::new(&output)).unwrap();
+    assert_eq!(output_archive.comment(), input_archive.comment());
+    assert_eq!(
+        zip_entry_snapshot(&output, "project/proofs/"),
+        zip_entry_snapshot(&input, "project/proofs/")
+    );
+    assert_eq!(
+        zip_entry_snapshot(&output, "project/proofs/M.bpr"),
+        zip_entry_snapshot(&input, "project/proofs/M.bpr")
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 const MINIMAL_BUILD_CONTEXT_XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
     <org.eventb.core.contextFile version=\"3\" \
     org.eventb.core.configuration=\"org.eventb.core.fwd\"></org.eventb.core.contextFile>\n";
@@ -2013,6 +2082,31 @@ fn write_zip(zip_path: &std::path::Path, entries: &[(&str, &[u8])]) {
         std::io::Write::write_all(&mut zw, body).unwrap();
     }
     zw.finish().unwrap();
+}
+
+fn zip_entry_snapshot(
+    bytes: &[u8],
+    name: &str,
+) -> (
+    zip::CompressionMethod,
+    Option<zip::DateTime>,
+    Option<u32>,
+    String,
+    bool,
+    Vec<u8>,
+) {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let entry = archive.by_name(name).unwrap();
+    let start = entry.data_start().unwrap() as usize;
+    let end = start + entry.compressed_size() as usize;
+    (
+        entry.compression(),
+        entry.last_modified(),
+        entry.unix_mode(),
+        entry.comment().to_string(),
+        entry.is_dir(),
+        bytes[start..end].to_vec(),
+    )
 }
 
 /// The bytes of a minimal Rodin `.project` descriptor naming `name`.

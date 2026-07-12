@@ -8,7 +8,7 @@
 //!   Unicode XML. (Rodin requires Unicode, so `--ascii` is rejected for these;
 //!   `--indent` does not affect XML. Non-component zip entries — e.g. proofs —
 //!   are preserved verbatim.) A multi-project archive keeps its per-project
-//!   directory layout: every entry is rewritten under its original path, so a
+//!   directory layout: every entry is retained under its original path, so a
 //!   bundled decomposition normalises in place without flattening.
 //!
 //! Three write modes, mutually exclusive: `-i`/`--in-place` rewrites inputs,
@@ -272,24 +272,22 @@ fn stored_options() -> zip::write::SimpleFileOptions {
 /// XML, copying all other entries (proofs, etc.) through unchanged. Returns the
 /// rebuilt archive and whether any component entry was not already canonical.
 ///
-/// Each entry is rewritten under its original name, so a multi-project archive's
+/// Each entry stays under its original name, so a multi-project archive's
 /// `<project>/` directory layout is preserved exactly — components are
-/// normalised per file regardless of which project they belong to. (Bare
-/// directory entries are dropped, which is harmless: Rodin reconstructs
-/// directories from the file paths on re-import.)
+/// normalised per file regardless of which project they belong to. Bare
+/// directory entries and all other non-components are retained verbatim.
 fn normalize_zip(bytes: &[u8]) -> CmdResult<(Vec<u8>, bool)> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+    let archive_comment = archive.comment().to_vec();
     let mut out = Vec::new();
     let mut changed = false;
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut out));
+        writer.set_raw_comment(archive_comment.into_boxed_slice())?;
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
-            if entry.is_dir() {
-                continue;
-            }
-            let name = entry.name().to_string();
-            if is_component_entry(&name) {
+            if is_component_entry(entry.name()) {
+                let name = entry.name().to_string();
                 let mut xml = String::new();
                 entry.read_to_string(&mut xml)?;
                 let component = parse_xml(&xml).map_err(|e| format!("{name}: {e}"))?;
@@ -297,11 +295,20 @@ fn normalize_zip(bytes: &[u8]) -> CmdResult<(Vec<u8>, bool)> {
                 changed |= canonical != xml;
                 writer.start_file(name, stored_options())?;
                 writer.write_all(canonical.as_bytes())?;
+            } else if entry.is_dir() {
+                // raw_copy_file marks directory Unix modes as regular files.
+                let name = entry.name().to_string();
+                let mut options = zip::write::SimpleFileOptions::default()
+                    .unix_permissions(entry.unix_mode().unwrap_or(0o755));
+                if let Some(last_modified) = entry.last_modified().filter(zip::DateTime::is_valid) {
+                    options = options.last_modified_time(last_modified);
+                }
+                let options = options
+                    .into_full_options()
+                    .with_file_comment(entry.comment());
+                writer.add_directory(name, options)?;
             } else {
-                let mut buf = Vec::new();
-                entry.read_to_end(&mut buf)?;
-                writer.start_file(name, stored_options())?;
-                writer.write_all(&buf)?;
+                writer.raw_copy_file(entry)?;
             }
         }
         writer.finish()?;
