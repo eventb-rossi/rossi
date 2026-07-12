@@ -2,10 +2,14 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn rossi_command() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_rossi"))
+}
+
 #[test]
 fn test_cli_help() {
-    let output = Command::new("cargo")
-        .args(["run", "-p", "rossi-cli", "--", "validate", "--help"])
+    let output = rossi_command()
+        .args(["validate", "--help"])
         .output()
         .expect("Failed to execute command");
 
@@ -17,8 +21,8 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_version() {
-    let output = Command::new("cargo")
-        .args(["run", "-p", "rossi-cli", "--", "validate", "--version"])
+    let output = rossi_command()
+        .args(["validate", "--version"])
         .output()
         .expect("Failed to execute command");
 
@@ -60,15 +64,8 @@ fn test_fmt_stdin_inverse_operator_conversion() {
 
 #[test]
 fn test_cli_valid_context() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "../rossi/examples/counter.eventb",
-        ])
+    let output = rossi_command()
+        .args(["validate", "../rossi/examples/counter.eventb"])
         .output()
         .expect("Failed to execute command");
 
@@ -80,15 +77,8 @@ fn test_cli_valid_context() {
 
 #[test]
 fn test_cli_valid_machine() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "../rossi/examples/counter_machine.eventb",
-        ])
+    let output = rossi_command()
+        .args(["validate", "../rossi/examples/counter_machine.eventb"])
         .output()
         .expect("Failed to execute command");
 
@@ -100,12 +90,8 @@ fn test_cli_valid_machine() {
 
 #[test]
 fn test_cli_multiple_files() {
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "validate",
             "../rossi/examples/counter.eventb",
             "../rossi/examples/counter_machine.eventb",
@@ -124,15 +110,8 @@ fn test_cli_multiple_files() {
 
 #[test]
 fn test_cli_nonexistent_file() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "nonexistent.eventb",
-        ])
+    let output = rossi_command()
+        .args(["validate", "nonexistent.eventb"])
         .output()
         .expect("Failed to execute command");
 
@@ -144,12 +123,8 @@ fn test_cli_nonexistent_file() {
 
 #[test]
 fn test_cli_json_output() {
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "validate",
             "--format",
             "json",
@@ -168,16 +143,8 @@ fn test_cli_json_output() {
 
 #[test]
 fn test_cli_quiet_mode_success() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--quiet",
-            "../rossi/examples/counter.eventb",
-        ])
+    let output = rossi_command()
+        .args(["validate", "--quiet", "../rossi/examples/counter.eventb"])
         .output()
         .expect("Failed to execute command");
 
@@ -189,16 +156,8 @@ fn test_cli_quiet_mode_success() {
 
 #[test]
 fn test_cli_quiet_mode_with_error() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--quiet",
-            "nonexistent.eventb",
-        ])
+    let output = rossi_command()
+        .args(["validate", "--quiet", "nonexistent.eventb"])
         .output()
         .expect("Failed to execute command");
 
@@ -210,8 +169,8 @@ fn test_cli_quiet_mode_with_error() {
 
 #[test]
 fn test_cli_no_files_provided() {
-    let output = Command::new("cargo")
-        .args(["run", "-p", "rossi-cli", "--", "validate"])
+    let output = rossi_command()
+        .args(["validate"])
         .output()
         .expect("Failed to execute command");
 
@@ -223,12 +182,8 @@ fn test_cli_no_files_provided() {
 
 #[test]
 fn test_cli_valid_zip_file() {
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "validate",
             "--no-semantic",
             "../rossi/examples/traffic-light.zip",
@@ -249,12 +204,8 @@ fn test_cli_valid_zip_file() {
 
 #[test]
 fn test_cli_zip_file_json_output() {
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "validate",
             "--format",
             "json",
@@ -297,17 +248,8 @@ fn validate_multi_project_archive_is_per_project() {
         ],
     );
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -356,17 +298,8 @@ fn validate_stray_root_descriptor_keeps_single_project_basenames() {
         ],
     );
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -389,12 +322,8 @@ fn validate_stray_root_descriptor_keeps_single_project_basenames() {
 
 #[test]
 fn test_cli_mixed_text_and_zip_files() {
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "validate",
             "--no-semantic",
             "../rossi/examples/counter.eventb",
@@ -516,15 +445,8 @@ fn validate_zip_lint_warning_exits_zero() {
     // The fixture machine leaves `dead` unreferenced, so EB011 fires.
     // Warnings must not flip the exit code.
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-lint-warn-zip");
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -543,16 +465,8 @@ fn validate_no_lints_drops_lint_rows() {
     // Same model, but --no-lints disables the advisory passes. No EB011
     // rows should remain.
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-no-lints");
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--no-lints",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--no-lints", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -569,17 +483,8 @@ fn validate_no_lints_drops_lint_rows() {
 #[test]
 fn validate_json_includes_rule_id_for_lint() {
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-json-rule-id");
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -624,17 +529,8 @@ fn validate_directory_flags_new_event_assigning_inherited_variable() {
     std::fs::write(tmp.join("M1.eventb"), m1).unwrap();
     std::fs::write(tmp.join("M2.eventb"), m2).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -683,17 +579,8 @@ fn validate_flags_assignment_operator_in_invariant() {
     let file = tmp.join("M.eventb");
     std::fs::write(&file, m).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            file.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -724,17 +611,8 @@ fn validate_flags_assignment_operator_in_invariant() {
 #[test]
 fn validate_sarif_output_is_valid() {
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-sarif");
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "sarif",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "sarif", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -813,15 +691,8 @@ fn validate_directory_input() {
     std::fs::write(tmp.join("Ctx.buc"), LINT_FIXTURE_BUC).unwrap();
     std::fs::write(tmp.join("Lint.bum"), LINT_FIXTURE_BUM).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -848,15 +719,8 @@ fn validate_duplicate_component_names_fail_with_eb019() {
     std::fs::write(tmp.join("a.eventb"), "MACHINE M\nEND\n").unwrap();
     std::fs::write(tmp.join("b.eventb"), "MACHINE M\nEND\n").unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -881,12 +745,8 @@ fn build_duplicate_component_names_fail_with_eb019() {
     std::fs::write(tmp.join("b.eventb"), "MACHINE M\nEND\n").unwrap();
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             tmp.to_str().unwrap(),
             "--output",
@@ -926,12 +786,8 @@ fn build_fails_on_error_diagnostics_but_still_writes_output() {
     .unwrap();
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             src.to_str().unwrap(),
             "-o",
@@ -963,17 +819,8 @@ fn build_fails_on_error_diagnostics_but_still_writes_output() {
 #[test]
 fn validate_directory_reports_inherited_event_label_as_eb022_error() {
     let tmp = extended_label_fixture("rossi-cli-validate-inherited-label");
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1020,12 +867,8 @@ fn build_fails_on_circular_refines_with_context_sibling() {
     std::fs::write(src.join("c.eventb"), ASCII_CONTEXT).unwrap();
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             src.to_str().unwrap(),
             "-o",
@@ -1065,17 +908,8 @@ fn validate_project_reports_duplicate_identifier_exactly_once() {
     let tmp = tempdir_unique("rossi-cli-validate-dup-var-once");
     std::fs::write(tmp.join("M.eventb"), DUP_VARIABLE_MACHINE).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1096,12 +930,8 @@ fn build_fails_on_duplicate_identifier() {
     std::fs::write(tmp.join("M.eventb"), DUP_VARIABLE_MACHINE).unwrap();
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             tmp.to_str().unwrap(),
             "-o",
@@ -1130,16 +960,8 @@ fn validate_directory_with_no_semantic_is_rejected() {
     let tmp = tempdir_unique("rossi-cli-validate-dir-nosem");
     std::fs::create_dir_all(&tmp).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--no-semantic",
-            tmp.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--no-semantic", tmp.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1155,12 +977,8 @@ fn import_rodin_buc_file_to_eventb() {
     let tmp = tempdir_unique("rossi-cli-import-buc");
     let out_dir = tmp.join("out");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             "../rossi/examples/counter_ctx.buc",
             "-o",
@@ -1185,12 +1003,8 @@ fn import_rodin_bum_file_to_eventb() {
     let tmp = tempdir_unique("rossi-cli-import-bum");
     let out_dir = tmp.join("out");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             "../rossi/examples/counter.bum",
             "-o",
@@ -1227,12 +1041,8 @@ fn import_rodin_directory_to_eventb_files() {
     )
     .unwrap();
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             rodin_dir.to_str().unwrap(),
             "-o",
@@ -1274,12 +1084,8 @@ fn import_multi_project_archive_writes_per_project_subdirs() {
         ],
     );
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             zip_path.to_str().unwrap(),
             "-o",
@@ -1325,12 +1131,8 @@ fn import_keys_subdirs_on_prefix_not_colliding_name() {
         ],
     );
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             zip_path.to_str().unwrap(),
             "-o",
@@ -1370,12 +1172,8 @@ fn import_contains_path_traversal_project_name() {
         ],
     );
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "import",
             zip_path.to_str().unwrap(),
             "-o",
@@ -1406,12 +1204,8 @@ fn export_eventb_file_to_zip() {
     let tmp = tempdir_unique("rossi-cli-export-eventb");
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "export",
             "../rossi/examples/counter.eventb",
             "-o",
@@ -1449,15 +1243,8 @@ fn fmt_ascii_text_to_unicode_stdout() {
     let file = tmp.join("c.eventb");
     std::fs::write(&file, ASCII_CONTEXT).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            file.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["fmt", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1479,17 +1266,8 @@ fn fmt_indent_option_changes_indentation() {
     let file = tmp.join("c.eventb");
     std::fs::write(&file, ASCII_CONTEXT).unwrap();
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            "--indent",
-            "  ",
-            file.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["fmt", "--indent", "  ", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -1514,16 +1292,8 @@ fn fmt_check_then_in_place() {
     std::fs::write(&file, ASCII_CONTEXT).unwrap();
 
     // --check on an ASCII file (canonical form is Unicode) flags it and exits non-zero.
-    let checked = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            "--check",
-            file.to_str().unwrap(),
-        ])
+    let checked = rossi_command()
+        .args(["fmt", "--check", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -1537,16 +1307,8 @@ fn fmt_check_then_in_place() {
     );
 
     // -i rewrites the file in place to Unicode.
-    let fixed = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            "-i",
-            file.to_str().unwrap(),
-        ])
+    let fixed = rossi_command()
+        .args(["fmt", "-i", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -1561,16 +1323,8 @@ fn fmt_check_then_in_place() {
     );
 
     // --check now passes (exit 0).
-    let recheck = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            "--check",
-            file.to_str().unwrap(),
-        ])
+    let recheck = rossi_command()
+        .args(["fmt", "--check", file.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -1584,16 +1338,8 @@ fn fmt_check_then_in_place() {
 
 #[test]
 fn fmt_ascii_on_rodin_zip_is_rejected() {
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "fmt",
-            "--ascii",
-            "../rossi/examples/traffic-light.zip",
-        ])
+    let output = rossi_command()
+        .args(["fmt", "--ascii", "../rossi/examples/traffic-light.zip"])
         .output()
         .expect("Failed to execute command");
     assert!(
@@ -1612,12 +1358,8 @@ fn fmt_normalizes_rodin_zip() {
     let tmp = tempdir_unique("rossi-cli-fmt-zip");
     let out_zip = tmp.join("norm.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "fmt",
             "../rossi/examples/traffic-light.zip",
             "-o",
@@ -1669,12 +1411,8 @@ fn fmt_preserves_multi_project_archive_structure() {
         ],
     );
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "fmt",
             in_zip.to_str().unwrap(),
             "-o",
@@ -1745,12 +1483,8 @@ fn build_eventb_file_packs_sources_and_checked() {
     let tmp = tempdir_unique("rossi-cli-build-eventb");
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             "../rossi/examples/counter.eventb",
             "-o",
@@ -1791,12 +1525,8 @@ fn build_eventb_directory() {
     std::fs::write(src.join("c.eventb"), ASCII_CONTEXT).unwrap();
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "build",
             src.to_str().unwrap(),
             "-o",
@@ -1827,12 +1557,8 @@ fn export_eventb_to_rodin_zip_includes_project_descriptor() {
     let tmp = tempdir_unique("rossi-cli-export-project-zip");
     let out_zip = tmp.join("counter project.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "export",
             "../rossi/examples/counter.eventb",
             "-o",
@@ -1869,12 +1595,8 @@ fn export_eventb_to_rodin_directory_includes_project_descriptor() {
     let tmp = tempdir_unique("rossi-cli-export-project-dir");
     let out_dir = tmp.join("counter project");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "export",
             "../rossi/examples/counter.eventb",
             "-o",
@@ -1917,12 +1639,8 @@ fn export_directory_of_subprojects_to_multi_project_zip() {
     }
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "export",
             src.to_str().unwrap(),
             "-o",
@@ -1979,12 +1697,8 @@ fn export_stray_top_level_txt_still_splits_subprojects() {
     }
     let out_zip = tmp.join("out.zip");
 
-    let output = Command::new("cargo")
+    let output = rossi_command()
         .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
             "export",
             src.to_str().unwrap(),
             "-o",
@@ -2119,17 +1833,8 @@ fn assert_validate_zip_json_contains_rule(
     let zip_path = tmp.join(zip_name);
     write_zip(&zip_path, &[(entry_name, entry_body)]);
 
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rossi-cli",
-            "--",
-            "validate",
-            "--format",
-            "json",
-            zip_path.to_str().unwrap(),
-        ])
+    let output = rossi_command()
+        .args(["validate", "--format", "json", zip_path.to_str().unwrap()])
         .output()
         .expect("Failed to execute command");
 
@@ -2198,8 +1903,7 @@ fn extract_zip_to(zip_path: &PathBuf, dest: &std::path::Path) {
 fn run_cli_with_stdin(args: &[&str], stdin_data: &str) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new("cargo")
-        .args(["run", "-p", "rossi-cli", "--"])
+    let mut child = rossi_command()
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2366,8 +2070,8 @@ fn test_completions_emits_script() {
     // body is clap_complete's to produce, so we only check it ran and named the
     // right binary — `_rossi` (the function) plus the `complete` builtin prove
     // a real bash script was emitted for `rossi`.
-    let output = Command::new("cargo")
-        .args(["run", "-p", "rossi-cli", "--", "completions", "bash"])
+    let output = rossi_command()
+        .args(["completions", "bash"])
         .output()
         .expect("Failed to execute command");
 
