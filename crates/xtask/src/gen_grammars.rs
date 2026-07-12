@@ -111,7 +111,11 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let mut stale = 0usize;
     for (rel, desired) in &targets {
         let path = root.join(rel);
-        let up_to_date = fs::read_to_string(&path).ok().as_deref() == Some(desired.as_str());
+        let up_to_date = match fs::read_to_string(&path) {
+            Ok(existing) => existing == *desired,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(io_err(&path, e)),
+        };
         match (args.check, up_to_date) {
             (true, true) => {
                 if args.verbose {
@@ -148,15 +152,21 @@ fn run_inner(args: &GenGrammarsArgs) -> Result<ExitCode, String> {
     let wanted: std::collections::HashSet<&str> =
         targets.iter().map(|(rel, _)| rel.as_str()).collect();
     for dir in [paths::EMACS_SNIPPETS_DIR, paths::TS_EXAMPLES_DIR] {
-        let entries = match fs::read_dir(root.join(dir)) {
+        let dir_path = root.join(dir);
+        let entries = match fs::read_dir(&dir_path) {
             Ok(entries) => entries,
-            Err(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(&dir_path, e)),
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|e| io_err(&dir_path, e))?;
             let path = entry.path();
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with('.') || !path.is_file() {
+            if name.starts_with('.') {
+                continue;
+            }
+            if !fs::metadata(&path).map_err(|e| io_err(&path, e))?.is_file() {
                 continue;
             }
             let rel = format!("{dir}/{name}");
