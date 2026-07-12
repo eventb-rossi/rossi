@@ -97,7 +97,7 @@ fn setup() -> (DefinitionProvider, HoverProvider) {
     let crm = Arc::new(CrossReferenceManager::new());
     let dm = Arc::new(DocumentManager::new());
     crm.update_component(uri().to_string(), SOURCE);
-    dm.open(uri(), "eventb".to_string(), 1, SOURCE.to_string());
+    dm.open(uri(), 1, SOURCE.to_string());
 
     let mut def = DefinitionProvider::new();
     def.set_cross_reference_manager(Arc::clone(&crm));
@@ -200,12 +200,7 @@ fn setup_broken_guard() -> DefinitionProvider {
     let crm = Arc::new(CrossReferenceManager::new());
     let dm = Arc::new(DocumentManager::new());
     crm.update_component(broken_guard_uri().to_string(), BROKEN_GUARD_SOURCE);
-    dm.open(
-        broken_guard_uri(),
-        "eventb".to_string(),
-        1,
-        BROKEN_GUARD_SOURCE.to_string(),
-    );
+    dm.open(broken_guard_uri(), 1, BROKEN_GUARD_SOURCE.to_string());
     let mut def = DefinitionProvider::new();
     def.set_cross_reference_manager(Arc::clone(&crm));
     def.set_document_manager(Arc::clone(&dm));

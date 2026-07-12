@@ -8,7 +8,6 @@ use dashmap::DashMap;
 use ropey::Rope;
 use rossi::{Component, ParseResult};
 use std::sync::Arc;
-use std::time::Instant;
 
 /// A document's text together with its recovered parse, captured as one
 /// snapshot. Bundling the two means every feature that reads the store gets
@@ -49,23 +48,12 @@ pub struct DocumentManager {
 }
 
 /// Represents a single document
-pub struct Document {
-    /// Document URI
-    #[allow(dead_code)]
-    pub uri: Url,
-
-    /// Language ID (should be "eventb")
-    #[allow(dead_code)]
-    pub language_id: String,
-
+struct Document {
     /// Document version (incremented on each change)
-    pub version: i32,
+    version: i32,
 
     /// Text content (efficient rope data structure)
-    pub text: Rope,
-
-    /// Last modification timestamp
-    pub last_modified: Instant,
+    text: Rope,
 }
 
 impl DocumentManager {
@@ -78,14 +66,11 @@ impl DocumentManager {
     }
 
     /// Open a new document
-    pub fn open(&self, uri: Url, language_id: String, version: i32, text: String) {
+    pub fn open(&self, uri: Url, version: i32, text: String) {
         let rope = Rope::from_str(&text);
         let document = Document {
-            uri: uri.clone(),
-            language_id,
             version,
             text: rope,
-            last_modified: Instant::now(),
         };
         // Drop any parse left over from a previous open of this URI (a re-open
         // without an intervening close, possibly with a colliding version):
@@ -102,7 +87,6 @@ impl DocumentManager {
     pub fn change(&self, uri: &Url, version: i32, changes: Vec<TextDocumentContentChangeEvent>) {
         if let Some(mut doc) = self.documents.get_mut(uri) {
             doc.version = version;
-            doc.last_modified = Instant::now();
 
             for change in changes {
                 match change.range {
@@ -193,12 +177,6 @@ impl DocumentManager {
         self.documents.get(uri).map(|doc| doc.text.to_string())
     }
 
-    /// Get document
-    #[allow(dead_code)]
-    pub fn get(&self, uri: &Url) -> Option<dashmap::mapref::one::Ref<'_, Url, Document>> {
-        self.documents.get(uri)
-    }
-
     /// Convert an LSP [`Position`] to a `ropey` char index.
     ///
     /// The rope-based twin of [`crate::position::position_to_offset`]: the
@@ -245,20 +223,14 @@ mod tests {
         let uri = Url::parse("file:///test.eventb").unwrap();
 
         // Open document
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT test\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());
 
         // Check document exists
-        assert!(manager.get(&uri).is_some());
         assert_eq!(manager.get_text(&uri).unwrap(), "CONTEXT test\nEND\n");
 
         // Close document
         manager.close(&uri);
-        assert!(manager.get(&uri).is_none());
+        assert!(manager.get_text(&uri).is_none());
     }
 
     #[test]
@@ -269,7 +241,6 @@ mod tests {
         // Open populates the stored parse.
         manager.open(
             uri.clone(),
-            "rossi".to_string(),
             1,
             "CONTEXT C0\nCONSTANTS\n    k\nEND\n".to_string(),
         );
@@ -314,12 +285,7 @@ mod tests {
     fn parse_result_is_lazy_and_memoised_per_version() {
         let manager = DocumentManager::new();
         let uri = Url::parse("file:///lazy.eventb").unwrap();
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT C0\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT C0\nEND\n".to_string());
 
         // Two reads at the same version share one parse — the second is a cheap
         // `Arc` clone, not a re-parse.
@@ -359,12 +325,7 @@ mod tests {
         let manager = DocumentManager::new();
         let uri = Url::parse("file:///reopen.eventb").unwrap();
 
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT A\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT A\nEND\n".to_string());
         assert_eq!(
             manager.parse_result(&uri).unwrap().components()[0].name(),
             "A"
@@ -373,12 +334,7 @@ mod tests {
         // Re-open the same URI (no intervening close) with new text but the SAME
         // version number. Unless `open` drops the prior parse, the version-keyed
         // fast path would hand back the stale "A" parse for the new text.
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT B\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT B\nEND\n".to_string());
         let parsed = manager.parse_result(&uri).unwrap();
         assert_eq!(parsed.text, "CONTEXT B\nEND\n");
         assert_eq!(parsed.components()[0].name(), "B");
@@ -393,7 +349,6 @@ mod tests {
         let uri = Url::parse("file:///broken.eventb").unwrap();
         manager.open(
             uri.clone(),
-            "rossi".to_string(),
             1,
             "MACHINE m\nVARIABLES\n    counter\nINVARIANTS\n    @i counter ∈\nEND\n".to_string(),
         );
@@ -429,12 +384,7 @@ mod tests {
         let uri = Url::parse("file:///test.eventb").unwrap();
 
         // Open document
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT test\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());
 
         // Make an incremental change: insert " example" after "test"
         let changes = vec![TextDocumentContentChangeEvent {
@@ -461,7 +411,7 @@ mod tests {
         // Char-indexing the column would splice in the wrong place.
         let manager = DocumentManager::new();
         let uri = Url::parse("file:///test.eventb").unwrap();
-        manager.open(uri.clone(), "rossi".to_string(), 1, "𝔹x\n".to_string());
+        manager.open(uri.clone(), 1, "𝔹x\n".to_string());
 
         // Insert "Y" at UTF-16 column 2 = between `𝔹` and `x`.
         let changes = vec![TextDocumentContentChangeEvent {
@@ -483,12 +433,7 @@ mod tests {
         let uri = Url::parse("file:///test.eventb").unwrap();
 
         // Open document
-        manager.open(
-            uri.clone(),
-            "rossi".to_string(),
-            1,
-            "CONTEXT test\nEND\n".to_string(),
-        );
+        manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());
 
         // Full document update
         let changes = vec![TextDocumentContentChangeEvent {

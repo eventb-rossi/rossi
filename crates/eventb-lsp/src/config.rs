@@ -25,10 +25,6 @@ pub struct RossiConfig {
     /// Completion configuration
     #[serde(default)]
     pub completion: CompletionConfig,
-
-    /// Trace configuration
-    #[serde(default)]
-    pub trace: TraceConfig,
 }
 
 impl RossiConfig {
@@ -55,10 +51,6 @@ pub struct FormatConfig {
     /// Indentation string (e.g., "  " or "    ")
     #[serde(default = "default_indentation")]
     pub indentation: String,
-
-    /// Maximum line length for formatting (currently not used)
-    #[serde(default = "default_max_line_length")]
-    pub max_line_length: u32,
 }
 
 impl Default for FormatConfig {
@@ -66,7 +58,6 @@ impl Default for FormatConfig {
         Self {
             use_unicode: default_use_unicode(),
             indentation: default_indentation(),
-            max_line_length: default_max_line_length(),
         }
     }
 }
@@ -77,10 +68,6 @@ fn default_use_unicode() -> bool {
 
 fn default_indentation() -> String {
     "    ".to_string()
-}
-
-fn default_max_line_length() -> u32 {
-    100
 }
 
 /// Diagnostics configuration
@@ -122,17 +109,12 @@ pub struct CompletionConfig {
     /// Enable completion
     #[serde(default = "default_completion_enabled")]
     pub enabled: bool,
-
-    /// Trigger characters for completion
-    #[serde(default = "default_trigger_characters")]
-    pub trigger_characters: Vec<String>,
 }
 
 impl Default for CompletionConfig {
     fn default() -> Self {
         Self {
             enabled: default_completion_enabled(),
-            trigger_characters: default_trigger_characters(),
         }
     }
 }
@@ -141,105 +123,27 @@ fn default_completion_enabled() -> bool {
     true
 }
 
-fn default_trigger_characters() -> Vec<String> {
-    vec![
-        ":".to_string(),
-        ".".to_string(),
-        "(".to_string(),
-        "{".to_string(),
-    ]
-}
-
-/// Trace configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TraceConfig {
-    /// Server trace level: "off", "messages", or "verbose"
-    #[serde(default = "default_trace_level")]
-    pub server: String,
-}
-
-impl Default for TraceConfig {
-    fn default() -> Self {
-        Self {
-            server: default_trace_level(),
-        }
-    }
-}
-
-fn default_trace_level() -> String {
-    "off".to_string()
-}
-
 /// Configuration manager that holds the current configuration
 pub struct ConfigManager {
-    config: Arc<RwLock<RossiConfig>>,
+    config: RwLock<Arc<RossiConfig>>,
 }
 
 impl ConfigManager {
     /// Create a new configuration manager with default settings
     pub fn new() -> Self {
         Self {
-            config: Arc::new(RwLock::new(RossiConfig::default())),
+            config: RwLock::new(Arc::new(RossiConfig::default())),
         }
     }
 
-    /// Get the current configuration
-    pub fn get(&self) -> RossiConfig {
-        self.config.read().clone()
+    /// Get a cheap snapshot of the current configuration.
+    pub fn get(&self) -> Arc<RossiConfig> {
+        Arc::clone(&self.config.read())
     }
 
     /// Update the entire configuration
     pub fn update(&self, config: RossiConfig) {
-        *self.config.write() = config;
-    }
-
-    /// Update just the format configuration
-    #[allow(dead_code)]
-    pub fn update_format(&self, format: FormatConfig) {
-        self.config.write().format = format;
-    }
-
-    /// Update just the diagnostics configuration
-    #[allow(dead_code)]
-    pub fn update_diagnostics(&self, diagnostics: DiagnosticsConfig) {
-        self.config.write().diagnostics = diagnostics;
-    }
-
-    /// Update just the completion configuration
-    #[allow(dead_code)]
-    pub fn update_completion(&self, completion: CompletionConfig) {
-        self.config.write().completion = completion;
-    }
-
-    /// Update just the trace configuration
-    #[allow(dead_code)]
-    pub fn update_trace(&self, trace: TraceConfig) {
-        self.config.write().trace = trace;
-    }
-
-    /// Get the format configuration
-    #[allow(dead_code)]
-    pub fn get_format(&self) -> FormatConfig {
-        self.config.read().format.clone()
-    }
-
-    /// Get the diagnostics configuration
-    #[allow(dead_code)]
-    pub fn get_diagnostics(&self) -> DiagnosticsConfig {
-        self.config.read().diagnostics.clone()
-    }
-
-    /// Get the completion configuration
-    #[allow(dead_code)]
-    pub fn get_completion(&self) -> CompletionConfig {
-        self.config.read().completion.clone()
-    }
-
-    /// Get the trace configuration
-    #[allow(dead_code)]
-    pub fn get_trace(&self) -> TraceConfig {
-        self.config.read().trace.clone()
+        *self.config.write() = Arc::new(config);
     }
 }
 
@@ -259,15 +163,11 @@ mod tests {
 
         assert!(config.format.use_unicode);
         assert_eq!(config.format.indentation, "    ");
-        assert_eq!(config.format.max_line_length, 100);
 
         assert!(config.diagnostics.enabled);
         assert_eq!(config.diagnostics.debounce_ms, 500);
 
         assert!(config.completion.enabled);
-        assert_eq!(config.completion.trigger_characters.len(), 4);
-
-        assert_eq!(config.trace.server, "off");
     }
 
     #[test]
@@ -279,7 +179,7 @@ mod tests {
         assert!(config.format.use_unicode);
 
         // Update configuration
-        let mut new_config = config.clone();
+        let mut new_config = (*config).clone();
         new_config.format.use_unicode = false;
         new_config.format.indentation = "  ".to_string();
         manager.update(new_config);
@@ -288,36 +188,6 @@ mod tests {
         let updated = manager.get();
         assert!(!updated.format.use_unicode);
         assert_eq!(updated.format.indentation, "  ");
-    }
-
-    #[test]
-    fn test_config_manager_partial_updates() {
-        let manager = ConfigManager::new();
-
-        // Update only format config
-        manager.update_format(FormatConfig {
-            use_unicode: false,
-            indentation: "  ".to_string(),
-            max_line_length: 120,
-        });
-
-        let config = manager.get();
-        assert!(!config.format.use_unicode);
-        assert_eq!(config.format.indentation, "  ");
-        assert_eq!(config.format.max_line_length, 120);
-
-        // Other configs should remain default
-        assert!(config.diagnostics.enabled);
-        assert!(config.completion.enabled);
-    }
-
-    #[test]
-    fn test_format_config_getters() {
-        let manager = ConfigManager::new();
-
-        let format = manager.get_format();
-        assert!(format.use_unicode);
-        assert_eq!(format.indentation, "    ");
     }
 
     #[test]
@@ -339,19 +209,14 @@ mod tests {
         let json = r#"{
             "format": {
                 "useUnicode": false,
-                "indentation": "  ",
-                "maxLineLength": 80
+                "indentation": "  "
             },
             "diagnostics": {
                 "enabled": false,
                 "debounceMs": 1000
             },
             "completion": {
-                "enabled": true,
-                "triggerCharacters": [":", "."]
-            },
-            "trace": {
-                "server": "verbose"
+                "enabled": true
             }
         }"#;
 
@@ -359,15 +224,11 @@ mod tests {
 
         assert!(!config.format.use_unicode);
         assert_eq!(config.format.indentation, "  ");
-        assert_eq!(config.format.max_line_length, 80);
 
         assert!(!config.diagnostics.enabled);
         assert_eq!(config.diagnostics.debounce_ms, 1000);
 
         assert!(config.completion.enabled);
-        assert_eq!(config.completion.trigger_characters.len(), 2);
-
-        assert_eq!(config.trace.server, "verbose");
     }
 
     #[test]
@@ -385,7 +246,6 @@ mod tests {
 
         // Default values
         assert_eq!(config.format.indentation, "    ");
-        assert_eq!(config.format.max_line_length, 100);
         assert!(config.diagnostics.enabled);
     }
 

@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use rossi::{Context, LabeledPredicate, NamedElement, SetDeclaration};
 
 use crate::checked_predicate::check_labeled_predicate;
-use crate::error::Result;
 use crate::handles::HandleUri;
 use crate::infer::infer_constants;
 use crate::project::{Project, ProjectComponent};
@@ -34,7 +33,7 @@ pub fn check_context(
     pc: &ProjectComponent,
     ctx: &Context,
     checked: &HashMap<String, CheckedContext>,
-) -> Result<(ScFile, CheckedContext, Vec<Diagnostic>)> {
+) -> (ScFile, CheckedContext, Vec<Diagnostic>) {
     let mut diags = Vec::new();
     let mut accurate = true;
 
@@ -229,7 +228,7 @@ pub fn check_context(
         accurate,
     };
 
-    Ok((file, cc, diags))
+    (file, cc, diags)
 }
 
 // ---------------------------------------------------------------------

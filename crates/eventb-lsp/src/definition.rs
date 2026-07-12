@@ -155,7 +155,7 @@ mod tests {
         for (uri, source) in components {
             crm.update_component(uri.to_string(), source);
             let url = Url::parse(uri).unwrap();
-            dm.open(url, "rossi".to_string(), 1, source.to_string());
+            dm.open(url, 1, source.to_string());
         }
 
         let mut provider = DefinitionProvider::new();

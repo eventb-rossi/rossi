@@ -10,11 +10,11 @@ use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, Position, Range, TextEdit,
 };
-use parking_lot::RwLock;
 use rossi::{Component, keywords, operators};
 
 use crate::component_loader::ComponentLoader;
 use crate::component_util::component_at_offset;
+use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_char_col};
 use std::collections::HashSet;
@@ -24,27 +24,6 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::references::component_reference_clause;
 use crate::text_utils;
-
-/// Configuration for completion behavior
-#[derive(Debug, Clone)]
-pub struct CompletionConfig {
-    /// Enable completion responses
-    pub enabled: bool,
-    /// Use Unicode operators (∧, ∨, ⇒) instead of ASCII (/\, \/, =>)
-    pub use_unicode: bool,
-    /// Enable snippet completion
-    pub enable_snippets: bool,
-}
-
-impl Default for CompletionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            use_unicode: true,
-            enable_snippets: true,
-        }
-    }
-}
 
 /// Completion context - tracks what's available at the cursor position
 #[derive(Debug, Clone)]
@@ -158,7 +137,6 @@ impl CompletionContext {
 
 /// Provides code completion for Event-B documents
 pub struct CompletionProvider {
-    config: Arc<RwLock<CompletionConfig>>,
     /// Cross-reference manager for workspace-wide navigation
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
     /// Document manager — the source of the document's shared recovered parse
@@ -168,7 +146,6 @@ pub struct CompletionProvider {
 impl CompletionProvider {
     pub fn new() -> Self {
         Self {
-            config: Arc::new(RwLock::new(CompletionConfig::default())),
             cross_ref_manager: None,
             document_manager: None,
         }
@@ -184,21 +161,17 @@ impl CompletionProvider {
         self.document_manager = Some(manager);
     }
 
-    #[allow(dead_code)]
-    pub fn update_config(&self, config: CompletionConfig) {
-        *self.config.write() = config;
-    }
-
-    pub fn get_config(&self) -> CompletionConfig {
-        self.config.read().clone()
-    }
-
     /// Generate completion items for the given position
-    pub fn complete(&self, params: &CompletionParams, text: &str) -> Option<CompletionResponse> {
+    pub fn complete(
+        &self,
+        params: &CompletionParams,
+        text: &str,
+        completion_config: &CompletionConfig,
+        format_config: &FormatConfig,
+    ) -> Option<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let config = self.get_config();
-        if !config.enabled {
+        if !completion_config.enabled {
             return None;
         }
 
@@ -273,7 +246,7 @@ impl CompletionProvider {
         items.extend(self.get_keyword_completions(&line_text, &word_at_cursor));
 
         // Add operator completions
-        items.extend(self.get_operator_completions(&config, &word_at_cursor));
+        items.extend(self.get_operator_completions(format_config.use_unicode));
 
         // Add identifier completions
         items.extend(self.get_identifier_completions(&completion_ctx, &word_at_cursor));
@@ -283,9 +256,7 @@ impl CompletionProvider {
         items.extend(self.get_component_name_completions(&masked, position, self_name.as_deref()));
 
         // Add snippet completions
-        if config.enable_snippets {
-            items.extend(self.get_snippet_completions(&line_text, position));
-        }
+        items.extend(self.get_snippet_completions(&line_text, position));
 
         // Add built-in type completions
         items.extend(self.get_builtin_completions(&word_at_cursor));
@@ -341,17 +312,13 @@ impl CompletionProvider {
     }
 
     /// Get operator completions (Unicode or ASCII based on config)
-    fn get_operator_completions(
-        &self,
-        config: &CompletionConfig,
-        _word: &str,
-    ) -> Vec<CompletionItem> {
+    fn get_operator_completions(&self, use_unicode: bool) -> Vec<CompletionItem> {
         operators::OPERATOR_SPELLINGS
             .iter()
             .filter(|entry| entry.completion)
             .map(|entry| {
-                let label = entry.emit_text(config.use_unicode);
-                let alternative = entry.emit_text(!config.use_unicode);
+                let label = entry.emit_text(use_unicode);
+                let alternative = entry.emit_text(!use_unicode);
                 let alternative = if alternative == label {
                     ""
                 } else {
@@ -749,30 +716,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_completion_provider_creation() {
-        let provider = CompletionProvider::new();
-        let config = provider.get_config();
-        assert!(config.enabled);
-        assert!(config.use_unicode);
-        assert!(config.enable_snippets);
-    }
-
-    #[test]
-    fn test_config_update() {
-        let provider = CompletionProvider::new();
-        let new_config = CompletionConfig {
-            enabled: false,
-            use_unicode: false,
-            enable_snippets: false,
-        };
-        provider.update_config(new_config);
-        let config = provider.get_config();
-        assert!(!config.enabled);
-        assert!(!config.use_unicode);
-        assert!(!config.enable_snippets);
-    }
-
-    #[test]
     fn test_keyword_completions() {
         let provider = CompletionProvider::new();
         let items = provider.get_keyword_completions("", "");
@@ -798,18 +741,22 @@ mod tests {
             context: None,
         };
 
-        assert!(provider.complete(&params, text).is_none());
+        assert!(
+            provider
+                .complete(
+                    &params,
+                    text,
+                    &CompletionConfig::default(),
+                    &FormatConfig::default(),
+                )
+                .is_none()
+        );
     }
 
     #[test]
     fn test_operator_completions_unicode() {
         let provider = CompletionProvider::new();
-        let config = CompletionConfig {
-            enabled: true,
-            use_unicode: true,
-            enable_snippets: true,
-        };
-        let items = provider.get_operator_completions(&config, "");
+        let items = provider.get_operator_completions(true);
 
         // Should include Unicode operators
         assert!(items.iter().any(|item| item.label == "∧"));
@@ -837,12 +784,7 @@ mod tests {
     #[test]
     fn test_operator_completions_ascii() {
         let provider = CompletionProvider::new();
-        let config = CompletionConfig {
-            enabled: true,
-            use_unicode: false,
-            enable_snippets: true,
-        };
-        let items = provider.get_operator_completions(&config, "");
+        let items = provider.get_operator_completions(false);
 
         // Should include ASCII operators
         assert!(items.iter().any(|item| item.label == "&"));
@@ -1004,16 +946,11 @@ mod tests {
 
         crm.update_component("file:///abstract_mch.eventb".to_string(), abstract_source);
         let url = Url::parse("file:///abstract_mch.eventb").unwrap();
-        dm.open(url, "rossi".to_string(), 1, abstract_source.to_string());
+        dm.open(url, 1, abstract_source.to_string());
 
         crm.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
         let concrete_url = Url::parse("file:///concrete_mch.eventb").unwrap();
-        dm.open(
-            concrete_url.clone(),
-            "rossi".to_string(),
-            1,
-            concrete_source.to_string(),
-        );
+        dm.open(concrete_url.clone(), 1, concrete_source.to_string());
 
         let mut provider = CompletionProvider::new();
         provider.set_cross_reference_manager(Arc::clone(&crm));
@@ -1052,7 +989,7 @@ mod tests {
         let dm = Arc::new(DocumentManager::new());
         let url = Url::parse("file:///m.eventb").unwrap();
         crm.update_component(url.to_string(), source);
-        dm.open(url.clone(), "rossi".to_string(), 1, source.to_string());
+        dm.open(url.clone(), 1, source.to_string());
 
         let mut provider = CompletionProvider::new();
         provider.set_cross_reference_manager(crm);
@@ -1068,7 +1005,12 @@ mod tests {
             context: None,
         };
 
-        match provider.complete(&params, source) {
+        match provider.complete(
+            &params,
+            source,
+            &CompletionConfig::default(),
+            &FormatConfig::default(),
+        ) {
             Some(CompletionResponse::Array(items)) => {
                 items.into_iter().map(|i| (i.label, i.detail)).collect()
             }

@@ -966,7 +966,7 @@ END
         let stored = "MACHINE m\nVARIABLES\ncount\nINVARIANTS\n@i1 count > 0\nEND\n";
 
         let documents = Arc::new(DocumentManager::new());
-        documents.open(uri.clone(), "eventb".to_string(), 1, stored.to_string());
+        documents.open(uri.clone(), 1, stored.to_string());
 
         let mut provider = RenameProvider::new();
         provider.set_document_manager(Arc::clone(&documents));

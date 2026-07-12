@@ -50,7 +50,7 @@ fn make_reference_provider(documents: &[(Url, &str)]) -> ReferenceProvider {
 
     for (uri, source) in documents {
         cross_ref_manager.update_component(uri.to_string(), source);
-        document_manager.open(uri.clone(), "eventb".to_string(), 1, (*source).to_string());
+        document_manager.open(uri.clone(), 1, (*source).to_string());
     }
 
     let mut reference_provider = ReferenceProvider::new();

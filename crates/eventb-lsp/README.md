@@ -410,7 +410,6 @@ interface RossiConfig {
   format: {
     useUnicode: boolean;      // Use Unicode operators (default: true)
     indentation: string;      // Indentation string (default: "    ")
-    maxLineLength: number;    // Parsed for future wrapping behavior (default: 100)
   };
   diagnostics: {
     enabled: boolean;         // Enable diagnostics (default: true)
@@ -418,10 +417,6 @@ interface RossiConfig {
   };
   completion: {
     enabled: boolean;         // Enable completion (default: true)
-    triggerCharacters: string[];
-  };
-  trace: {
-    server: "off" | "messages" | "verbose";
   };
 }
 ```
@@ -497,4 +492,3 @@ at your option.
 - **Event-B Language**: https://wiki.event-b.org/index.php/Event-B_Language
 - **tower-lsp Documentation**: https://docs.rs/tower-lsp
 - **Rodin Platform**: https://www.event-b.org/
-

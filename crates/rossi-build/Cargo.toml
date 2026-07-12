@@ -16,7 +16,6 @@ thiserror.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
 walkdir.workspace = true
-serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
@@ -24,7 +23,7 @@ serde_json.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "rossi/serde"]
+serde = ["rossi/serde"]
 
 [package.metadata.docs.rs]
 # Document the `serde`-gated APIs on docs.rs.

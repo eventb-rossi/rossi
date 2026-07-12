@@ -276,22 +276,10 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
             rossi::Component::Context(c) => c,
             _ => continue,
         };
-        match context::check_context(project, pc, ctx, &checked) {
-            Ok((file, cc, mut diags)) => {
-                checked.insert(cc.name().to_string(), cc);
-                result.files.push(file);
-                result.diagnostics.append(&mut diags);
-            }
-            Err(e) => {
-                result.diagnostics.push(crate::Diagnostic {
-                    severity: Severity::Error,
-                    origin: ctx.name.clone(),
-                    message: format!("failed to check context: {e}"),
-                    rule_id: None,
-                    span: ctx.name_span,
-                });
-            }
-        }
+        let (file, cc, mut diags) = context::check_context(project, pc, ctx, &checked);
+        checked.insert(cc.name().to_string(), cc);
+        result.files.push(file);
+        result.diagnostics.append(&mut diags);
     }
 
     // Machines: emit after all contexts have been checked so SEES
@@ -317,8 +305,6 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
             );
         }
     };
-    // NOTE: `checked` / `checked_machines` keep only components whose check
-    // succeeded — failed components have diagnostics but no model entry.
     let mut checked_machines: HashMap<String, CheckedMachine> = HashMap::new();
     for idx in mach_order {
         let pc = &project.components[idx];
@@ -326,22 +312,11 @@ pub fn build_project(project: &Project) -> (BuildResult, ScModel) {
             rossi::Component::Machine(m) => m,
             _ => continue,
         };
-        match machine::check_machine(project, pc, m, &checked, &checked_machines) {
-            Ok((file, cm, mut diags)) => {
-                checked_machines.insert(cm.name().to_string(), cm);
-                result.files.push(file);
-                result.diagnostics.append(&mut diags);
-            }
-            Err(e) => {
-                result.diagnostics.push(crate::Diagnostic {
-                    severity: Severity::Error,
-                    origin: m.name.clone(),
-                    message: format!("failed to check machine: {e}"),
-                    rule_id: None,
-                    span: m.name_span,
-                });
-            }
-        }
+        let (file, cm, mut diags) =
+            machine::check_machine(project, pc, m, &checked, &checked_machines);
+        checked_machines.insert(cm.name().to_string(), cm);
+        result.files.push(file);
+        result.diagnostics.append(&mut diags);
     }
 
     (

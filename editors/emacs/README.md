@@ -161,7 +161,6 @@ All settings can be customized via Emacs customization interface (`M-x customize
 ;; Formatting options
 (setq lsp-rossi-format-use-unicode t)        ; Use Unicode (∧, ∨, ⇒) or ASCII (/\, \/, =>)
 (setq lsp-rossi-format-indentation "    ")   ; Indentation string (spaces or tabs)
-(setq lsp-rossi-format-max-line-length 100)  ; Parsed for future wrapping; not applied yet
 
 ;; Diagnostics options
 (setq lsp-rossi-diagnostics-enabled t)       ; Enable/disable diagnostics

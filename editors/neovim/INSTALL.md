@@ -312,7 +312,6 @@ lspconfig.eventb.setup{
       format = {
         useUnicode = true,
         indentation = "    ",
-        maxLineLength = 100, -- Parsed for future wrapping; not applied yet
       },
       diagnostics = {
         enabled = true,

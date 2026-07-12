@@ -20,12 +20,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eventb_lsp::analysis;
+use eventb_lsp::config::FormatConfig;
 use eventb_lsp::cross_references::{CrossReferenceManager, ReferenceKind};
 use eventb_lsp::definition::DefinitionProvider;
 use eventb_lsp::document::DocumentManager;
 use eventb_lsp::document_links::DocumentLinkProvider;
 use eventb_lsp::folding::FoldingRangeProvider;
-use eventb_lsp::formatting::FormattingProvider;
+use eventb_lsp::formatting;
 use eventb_lsp::hover::HoverProvider;
 use eventb_lsp::identifier_utils::{WordBoundary, find_whole_word_locations, position_to_offset};
 use eventb_lsp::lsp_types::*;
@@ -168,7 +169,7 @@ impl Workspace {
         // and these synthetic URIs have no disk file behind them.
         for file in &files {
             crm.update_component(file.uri.to_string(), &file.text);
-            dm.open(file.uri.clone(), "eventb".to_string(), 1, file.text.clone());
+            dm.open(file.uri.clone(), 1, file.text.clone());
         }
         assert_eq!(
             crm.all_component_names().len(),
@@ -220,7 +221,7 @@ impl Workspace {
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
         crm.update_component(uri.to_string(), text);
-        dm.open(uri, "eventb".to_string(), 1, text.to_string());
+        dm.open(uri, 1, text.to_string());
         assert_eq!(
             crm.all_component_names().len(),
             files.len(),
@@ -237,8 +238,7 @@ impl Workspace {
         let name = component.name().to_string();
         let uri = Url::parse(&format!("file:///{model}/{name}.eventb")).unwrap();
         self.crm.update_component(uri.to_string(), text);
-        self.dm
-            .open(uri.clone(), "eventb".to_string(), 1, text.to_string());
+        self.dm.open(uri.clone(), 1, text.to_string());
         self.files.push(ModelFile {
             name,
             uri,
@@ -959,11 +959,9 @@ fn all_models_selection_ranges_nest() {
 
 #[test]
 fn all_models_formatting_identity() {
-    let provider = FormattingProvider::new();
     for (zip_name, file) in all_model_files() {
         let name = &file.name;
-        let edits = provider
-            .format(&file.text)
+        let edits = formatting::format(&file.text, &FormatConfig::default())
             .unwrap_or_else(|e| panic!("{zip_name}/{name}: format failed: {e}"));
         assert_eq!(
             edits.len(),

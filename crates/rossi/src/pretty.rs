@@ -724,15 +724,9 @@ impl PrettyPrinter {
                 false
             } else {
                 // Same precedence: check compatibility matrix
-                if !op_info::binary_ops_compatible(*child_op, parent_op) {
-                    true // Incompatible operators: always need parens
-                } else if op_info::is_right_associative(parent_op) {
-                    !is_right // left child needs parens for right-associative
-                } else if op_info::is_non_associative(parent_op) {
-                    true // non-associative ops always need parens at same level
-                } else {
-                    is_right // right child needs parens for left-associative
-                }
+                !op_info::binary_ops_compatible(*child_op, parent_op)
+                    || op_info::is_non_associative(parent_op)
+                    || is_right
             };
 
             if needs_parens {

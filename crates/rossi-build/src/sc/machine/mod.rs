@@ -19,7 +19,6 @@ use std::rc::Rc;
 use rossi::{LabeledPredicate, Machine};
 
 use crate::checked_predicate::{check_expression, check_labeled_predicate};
-use crate::error::Result;
 use crate::handles::HandleUri;
 use crate::infer::infer_constants;
 use crate::project::{Project, ProjectComponent};
@@ -44,7 +43,7 @@ pub fn check_machine(
     machine: &Machine,
     checked_contexts: &HashMap<String, CheckedContext>,
     checked_machines: &HashMap<String, CheckedMachine>,
-) -> Result<(ScFile, CheckedMachine, Vec<Diagnostic>)> {
+) -> (ScFile, CheckedMachine, Vec<Diagnostic>) {
     // Decomposition base machines: replace the standard SC pipeline with an
     // attribute-only stub that mirrors what the ETH Zurich Decomposition
     // plugin produces.
@@ -94,7 +93,7 @@ pub fn check_machine(
         .and_then(|m| m.configuration.as_deref())
         && is_decomposition_stub_config(cfg)
     {
-        return Ok(emit_decomposition_stub(pc, &machine.name, cfg));
+        return emit_decomposition_stub(pc, &machine.name, cfg);
     }
 
     let mut diags = Vec::new();
@@ -429,7 +428,7 @@ pub fn check_machine(
         accurate,
     };
 
-    Ok((
+    (
         ScFile {
             filename: pc.output_filename(),
             contents: root.to_document(),
@@ -437,7 +436,7 @@ pub fn check_machine(
         },
         cm,
         diags,
-    ))
+    )
 }
 
 /// An extended child INITIALISATION inherits its parent's INIT actions

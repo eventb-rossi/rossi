@@ -477,12 +477,7 @@ mod tests {
         let crm = Arc::new(CrossReferenceManager::new());
         crm.update_component(uri.to_string(), source);
         let dm = Arc::new(DocumentManager::new());
-        dm.open(
-            Url::parse(uri).unwrap(),
-            "eventb".to_string(),
-            1,
-            source.to_string(),
-        );
+        dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
         let mut provider = ReferenceProvider::new();
         provider.set_cross_reference_manager(crm);
         provider.set_document_manager(dm);

@@ -132,14 +132,6 @@ impl Element {
         self
     }
 
-    /// Append an optional attribute — only added when `Some`.
-    pub fn attr_opt(self, key: impl Into<String>, value: Option<impl Into<String>>) -> Self {
-        match value {
-            Some(v) => self.attr(key, v),
-            None => self,
-        }
-    }
-
     /// Append a boolean attribute written as `"true"` / `"false"`.
     pub fn attr_bool(self, key: impl Into<String>, value: bool) -> Self {
         self.attr(key, if value { "true" } else { "false" })
@@ -150,15 +142,6 @@ impl Element {
     /// the fast path used by ancestor-hoist loops).
     pub fn push(&mut self, child: impl Into<Rc<Element>>) {
         self.children.push(child.into());
-    }
-
-    /// Overwrite the value of a previously-set attribute. No-op if the
-    /// attribute isn't present (emitters should only call this on
-    /// attributes they know they added).
-    pub fn set_attr(&mut self, key: &str, value: impl Into<String>) {
-        if let Some(slot) = self.attrs.iter_mut().find(|(k, _)| k == key) {
-            slot.1 = value.into();
-        }
     }
 
     /// Read an already-emitted attribute.

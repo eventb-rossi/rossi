@@ -140,7 +140,6 @@ This extension contributes the following settings:
 - `rossi.rodin.path`: Path to the Rodin IDE executable, macOS `.app` bundle, or app name used by `Open in Rodin` (defaults: `/Applications/Rodin.app` on macOS, `rodin.exe` on Windows, `rodin` on Linux)
 - `rossi.format.useUnicode`: Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\, \/, =>, :) when formatting (default: `true`)
 - `rossi.format.indentation`: Indentation string (spaces or tabs) to use when formatting (default: `"    "` - 4 spaces)
-- `rossi.format.maxLineLength`: Maximum line length for future formatter wrapping behavior (default: `100`)
 - `rossi.diagnostics.enabled`: Enable real-time diagnostics for syntax errors (default: `true`)
 - `rossi.diagnostics.debounceMs`: Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing (default: `500`)
 - `rossi.completion.enabled`: Enable Event-B code completion (default: `true`)
@@ -159,7 +158,6 @@ Add to your `.vscode/settings.json`:
   "rossi.rodin.path": "/Applications/Rodin.app", // only if Rodin isn't at the platform default
   "rossi.format.useUnicode": true,
   "rossi.format.indentation": "    ",
-  "rossi.format.maxLineLength": 100,
   "rossi.diagnostics.enabled": true,
   "rossi.diagnostics.debounceMs": 500,
   "rossi.completion.enabled": true,

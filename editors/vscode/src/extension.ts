@@ -15,7 +15,6 @@ interface RossiConfiguration {
     format: {
         useUnicode: boolean;
         indentation: string;
-        maxLineLength: number;
     };
     diagnostics: {
         enabled: boolean;
@@ -23,9 +22,6 @@ interface RossiConfiguration {
     };
     completion: {
         enabled: boolean;
-    };
-    trace: {
-        server: string;
     };
 }
 
@@ -35,7 +31,6 @@ function getRossiConfiguration(): RossiConfiguration {
         format: {
             useUnicode: config.get<boolean>('format.useUnicode', true),
             indentation: config.get<string>('format.indentation', '    '),
-            maxLineLength: config.get<number>('format.maxLineLength', 100),
         },
         diagnostics: {
             enabled: config.get<boolean>('diagnostics.enabled', true),
@@ -43,9 +38,6 @@ function getRossiConfiguration(): RossiConfiguration {
         },
         completion: {
             enabled: config.get<boolean>('completion.enabled', true),
-        },
-        trace: {
-            server: config.get<string>('trace.server', 'off'),
         },
     };
 }

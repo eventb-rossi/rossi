@@ -67,27 +67,6 @@ pub fn binary_precedence(op: BinaryOp) -> u8 {
     }
 }
 
-/// Precedence of the unary minus prefix `−e`, for Rodin-faithful
-/// rendering of mixed arithmetic.
-///
-/// Empirically (eventb-checker's `Predicate#toString()`), unary minus
-/// binds at the additive level and left-associatively: `−a∗b`
-/// parenthesizes its operand to `(−a)∗b`, while `−a+b` and `−a − b` stay
-/// bare. Equal to [`binary_precedence`] of `Add`/`Subtract`.
-#[must_use]
-pub fn unary_minus_precedence() -> u8 {
-    binary_precedence(BinaryOp::Add)
-}
-
-#[must_use]
-pub fn is_right_associative(_op: BinaryOp) -> bool {
-    // Event-B has no right-associative binary operators at expression
-    // level. Maplet is left-associative per spec p.18 (`a ↦ b ↦ c =
-    // (a ↦ b) ↦ c`). Kept as a function for symmetry with
-    // `is_non_associative`.
-    false
-}
-
 #[must_use]
 pub fn is_non_associative(op: BinaryOp) -> bool {
     matches!(

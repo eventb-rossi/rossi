@@ -53,11 +53,12 @@ pub use types::Type;
 
 /// Static-check a whole project and emit one `.bcc` / `.bcm` per component.
 ///
-/// Returns on the first fatal error (bad I/O, unparseable XML). Non-fatal
-/// issues (type errors that result in an element being dropped from the
-/// output, missing SEES target, etc.) appear in [`BuildResult::diagnostics`]
-/// and do not abort the build — Rodin's SC has the same "drop but continue"
-/// philosophy and downstream tools tolerate it.
+/// Loading a [`Project`] owns fatal I/O and XML errors. Once loaded, static-check
+/// issues (type errors that result in an element being dropped from the output,
+/// missing SEES targets, dependency cycles, etc.) appear in
+/// [`BuildResult::diagnostics`]. Rodin's SC has the same "drop but continue"
+/// philosophy, except for project-integrity failures that stop checked-file
+/// emission.
 pub fn build(project: &Project) -> BuildResult {
     sc::build_project(project).0
 }

@@ -362,7 +362,6 @@ Enhanced configuration with keybindings and settings:
   ;; Event-B specific settings
   (setq lsp-rossi-format-use-unicode t)
   (setq lsp-rossi-format-indentation "    ")
-  (setq lsp-rossi-format-max-line-length 100)
   (setq lsp-rossi-diagnostics-enabled t)
   (setq lsp-rossi-diagnostics-debounce-ms 500)
   (setq lsp-rossi-completion-enabled t)

@@ -1341,7 +1341,6 @@ dependencies = [
  "proptest",
  "quick-xml",
  "rossi",
- "serde",
  "serde_json",
  "thiserror",
  "walkdir",

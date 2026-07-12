@@ -1207,12 +1207,7 @@ mod tests {
         let uri = "file:///test.eventb";
         let source = "CONTEXT test\nCONSTANTS\n    max_value\nAXIOMS\n    @axm1 max_value ∈ ℕ\nEND";
         let dm = Arc::new(DocumentManager::new());
-        dm.open(
-            Url::parse(uri).unwrap(),
-            "rossi".to_string(),
-            1,
-            source.to_string(),
-        );
+        dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
         let mut provider = HoverProvider::new();
         provider.set_document_manager(Arc::clone(&dm));
 
@@ -1244,12 +1239,7 @@ mod tests {
     fn hover_with_doc(source: &str, line: u32, character: u32) -> Option<Hover> {
         let uri = "file:///param.eventb";
         let dm = Arc::new(DocumentManager::new());
-        dm.open(
-            Url::parse(uri).unwrap(),
-            "eventb".to_string(),
-            1,
-            source.to_string(),
-        );
+        dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
         let mut provider = HoverProvider::new();
         provider.set_document_manager(Arc::clone(&dm));
         provider.hover(
@@ -1411,12 +1401,7 @@ mod tests {
         let dm = Arc::new(DocumentManager::new());
         for (uri, src) in docs {
             crm.update_component((*uri).to_string(), src);
-            dm.open(
-                Url::parse(uri).unwrap(),
-                "rossi".to_string(),
-                1,
-                (*src).to_string(),
-            );
+            dm.open(Url::parse(uri).unwrap(), 1, (*src).to_string());
         }
         let mut provider = HoverProvider::new();
         provider.set_cross_reference_manager(Arc::clone(&crm));
@@ -1910,12 +1895,7 @@ END
 
         let uri = "file:///counter_ctx.eventb".to_string();
         let dm = Arc::new(DocumentManager::new());
-        dm.open(
-            Url::parse(&uri).unwrap(),
-            "rossi".to_string(),
-            1,
-            source.to_string(),
-        );
+        dm.open(Url::parse(&uri).unwrap(), 1, source.to_string());
         let mut provider = HoverProvider::new();
         provider.set_document_manager(Arc::clone(&dm));
 
@@ -1987,16 +1967,11 @@ END
 
         crm.update_component("file:///abstract_mch.eventb".to_string(), abstract_source);
         let url = Url::parse("file:///abstract_mch.eventb").unwrap();
-        dm.open(url, "rossi".to_string(), 1, abstract_source.to_string());
+        dm.open(url, 1, abstract_source.to_string());
 
         crm.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
         let url = Url::parse("file:///concrete_mch.eventb").unwrap();
-        dm.open(
-            url.clone(),
-            "rossi".to_string(),
-            1,
-            concrete_source.to_string(),
-        );
+        dm.open(url.clone(), 1, concrete_source.to_string());
 
         let mut provider = HoverProvider::new();
         provider.set_cross_reference_manager(Arc::clone(&crm));

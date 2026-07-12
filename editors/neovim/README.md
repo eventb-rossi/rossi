@@ -162,7 +162,6 @@ require('lspconfig').eventb.setup{
       format = {
         useUnicode = true,      -- Use Unicode operators
         indentation = "    ",   -- 4 spaces
-        maxLineLength = 100,    -- Parsed for future wrapping; not applied yet
       },
       diagnostics = {
         enabled = true,
@@ -170,7 +169,6 @@ require('lspconfig').eventb.setup{
       },
       completion = {
         enabled = true,
-        triggerCharacters = { ":", ".", "(", "{" },
       },
     },
   },
@@ -200,7 +198,6 @@ settings = {
     format = {
       useUnicode = true,        -- Use Unicode (∧, ∨, ⇒) or ASCII (/\, \/, =>)
       indentation = "    ",     -- Indentation string (spaces or tabs)
-      maxLineLength = 100,      -- Parsed for future wrapping; not applied yet
     },
 
     -- Diagnostics options
@@ -212,12 +209,6 @@ settings = {
     -- Completion options
     completion = {
       enabled = true,           -- Enable/disable completion
-      triggerCharacters = { ":", ".", "(", "{" },
-    },
-
-    -- Trace options
-    trace = {
-      server = "off",           -- "off", "messages", "verbose"
     },
   },
 }

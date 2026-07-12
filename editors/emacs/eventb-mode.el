@@ -216,11 +216,6 @@ must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
   :type 'string
   :group 'eventb)
 
-(defcustom lsp-rossi-format-max-line-length 100
-  "Reserved for future formatter wrapping; currently parsed but not applied."
-  :type 'integer
-  :group 'eventb)
-
 (defcustom lsp-rossi-diagnostics-enabled t
   "Enable or disable Event-B diagnostics."
   :type 'boolean
@@ -250,13 +245,10 @@ must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
     :initialization-options
     (lambda ()
       `(:rossi (:format (:useUnicode ,lsp-rossi-format-use-unicode
-                          :indentation ,lsp-rossi-format-indentation
-                          :maxLineLength ,lsp-rossi-format-max-line-length)
+                          :indentation ,lsp-rossi-format-indentation)
                  :diagnostics (:enabled ,lsp-rossi-diagnostics-enabled
                                :debounceMs ,lsp-rossi-diagnostics-debounce-ms)
-                 :completion (:enabled ,lsp-rossi-completion-enabled
-                              :triggerCharacters [":" "." "(" "{"])
-                 :trace (:server "off")))))))
+                 :completion (:enabled ,lsp-rossi-completion-enabled)))))))
 
 ;;; Unicode input method
 

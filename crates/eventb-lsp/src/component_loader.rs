@@ -156,7 +156,7 @@ mod tests {
         let manager = CrossReferenceManager::new();
         manager.update_component(uri.to_string(), text);
         let documents = DocumentManager::new();
-        documents.open(uri.clone(), "eventb".to_string(), 1, text.to_string());
+        documents.open(uri.clone(), 1, text.to_string());
 
         let loader = ComponentLoader::new(&manager, Some(&documents));
         let a = loader.load("A").expect("A loads");
@@ -217,7 +217,7 @@ mod tests {
         let manager = CrossReferenceManager::new();
         manager.update_component(uri.to_string(), text);
         let documents = DocumentManager::new();
-        documents.open(uri.clone(), "eventb".to_string(), 1, text.to_string());
+        documents.open(uri.clone(), 1, text.to_string());
 
         let loader = ComponentLoader::new(&manager, Some(&documents));
         let c = loader.load("C").expect("C loads");

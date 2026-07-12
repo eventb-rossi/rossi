@@ -286,11 +286,6 @@
           "default": "    ",
           "description": "Indentation string (spaces or tabs) to use when formatting."
         },
-        "rossi.format.maxLineLength": {
-          "type": "number",
-          "default": 100,
-          "description": "Maximum line length for future formatter wrapping behavior."
-        },
         "rossi.diagnostics.enabled": {
           "type": "boolean",
           "default": true,

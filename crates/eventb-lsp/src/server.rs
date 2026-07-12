@@ -17,7 +17,6 @@ use crate::definition::DefinitionProvider;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::document_links::DocumentLinkProvider;
 use crate::folding::FoldingRangeProvider;
-use crate::formatting::FormattingProvider;
 use crate::hover::HoverProvider;
 use crate::references::ReferenceProvider;
 use crate::rename::RenameProvider;
@@ -140,8 +139,6 @@ pub struct RossiLanguageServer {
     document_manager: Arc<DocumentManager>,
     /// Cross-reference manager for workspace-wide dependencies
     cross_reference_manager: Arc<CrossReferenceManager>,
-    /// Formatting provider
-    formatting_provider: Arc<FormattingProvider>,
     /// Completion provider
     completion_provider: Arc<CompletionProvider>,
     /// Hover provider
@@ -229,7 +226,6 @@ impl RossiLanguageServer {
             config_manager,
             document_manager,
             cross_reference_manager,
-            formatting_provider: Arc::new(FormattingProvider::new()),
             completion_provider: Arc::new(completion_provider),
             hover_provider: Arc::new(hover_provider),
             definition_provider,
@@ -392,9 +388,6 @@ impl LanguageServer for RossiLanguageServer {
     async fn initialized(&self, _params: InitializedParams) {
         info!("Server initialized successfully");
 
-        // Apply default configuration to all providers
-        self.apply_configuration();
-
         // Scan workspace for Event-B files to populate cross-reference index
         if let Some(root) = self.cross_reference_manager.workspace_root() {
             match self.cross_reference_manager.scan_workspace(&root) {
@@ -419,7 +412,6 @@ impl LanguageServer for RossiLanguageServer {
             Ok(config) => {
                 info!("Updating configuration: {:?}", config);
                 self.config_manager.update(config);
-                self.apply_configuration();
 
                 self.client
                     .log_message(MessageType::INFO, "Configuration updated successfully")
@@ -450,8 +442,7 @@ impl LanguageServer for RossiLanguageServer {
         debug!("Document opened: {}", uri);
 
         // Store the document; its parse is produced lazily on first read below.
-        self.document_manager
-            .open(uri.clone(), params.text_document.language_id, version, text);
+        self.document_manager.open(uri.clone(), version, text);
 
         // Opening analyzes promptly (not debounced): refresh the eager indexes
         // and publish diagnostics from the document's stored parse.
@@ -590,7 +581,8 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Format the document
-        match self.formatting_provider.format(&text) {
+        let config = self.config_manager.get();
+        match crate::formatting::format(&text, &config.format) {
             Ok(edits) => {
                 debug!("Document formatted successfully: {}", uri);
                 Ok(Some(edits))
@@ -619,7 +611,10 @@ impl LanguageServer for RossiLanguageServer {
 
         // Completion reads the document's shared parse from the document
         // manager — no per-request re-parse.
-        let response = self.completion_provider.complete(&params, &text);
+        let config = self.config_manager.get();
+        let response =
+            self.completion_provider
+                .complete(&params, &text, &config.completion, &config.format);
 
         debug!(
             "Completion returned {} items",
@@ -955,30 +950,5 @@ impl RossiLanguageServer {
     /// calls this method.
     pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
         Ok(rossi::operators::operator_rows())
-    }
-
-    /// Apply current configuration to all providers
-    fn apply_configuration(&self) {
-        use crate::completion::CompletionConfig as LspCompletionConfig;
-        use crate::formatting::FormattingConfig;
-
-        let config = self.config_manager.get();
-
-        // Apply formatting configuration
-        let format_config = FormattingConfig {
-            use_unicode: config.format.use_unicode,
-            indentation: config.format.indentation.clone(),
-        };
-        self.formatting_provider.update_config(format_config);
-
-        // Apply completion configuration
-        let completion_config = LspCompletionConfig {
-            enabled: config.completion.enabled,
-            use_unicode: config.format.use_unicode,
-            enable_snippets: true, // Always enable snippets for now
-        };
-        self.completion_provider.update_config(completion_config);
-
-        info!("Configuration applied to all providers");
     }
 }

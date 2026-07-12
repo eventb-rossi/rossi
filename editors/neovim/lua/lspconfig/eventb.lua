@@ -75,8 +75,6 @@ return {
           useUnicode = true,
           -- Indentation string (spaces or tabs)
           indentation = "    ",
-          -- Parsed for future wrapping; not applied yet
-          maxLineLength = 100,
         },
 
         -- Diagnostics configuration
@@ -91,14 +89,6 @@ return {
         completion = {
           -- Enable/disable completion
           enabled = true,
-          -- Trigger characters for completion
-          triggerCharacters = { ":", ".", "(", "{" },
-        },
-
-        -- Trace configuration
-        trace = {
-          -- Server trace level: "off", "messages", "verbose"
-          server = "off",
         },
       },
     },
