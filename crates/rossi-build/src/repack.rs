@@ -74,22 +74,34 @@ fn repackage_archive<'a, R: Read + Seek>(
     mut archive: ZipArchive<R>,
     builds: impl IntoIterator<Item = (&'a str, &'a BuildResult)>,
 ) -> std::io::Result<Vec<u8>> {
+    let archive_comment = archive.comment().to_vec();
     let mut out = std::io::Cursor::new(Vec::<u8>::new());
     let mut writer = ZipWriter::new(&mut out);
+    writer
+        .set_raw_comment(archive_comment.into_boxed_slice())
+        .map_err(zip_to_io)?;
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(zip_to_io)?;
-        let name = entry.name().to_string();
-        if !keep_input_entry(&name) {
+        let entry = archive.by_index(i).map_err(zip_to_io)?;
+        if !keep_input_entry(entry.name()) {
             continue;
         }
+        // raw_copy_file marks directory Unix modes as regular files.
         if entry.is_dir() {
-            writer.add_directory(&name, options).map_err(zip_to_io)?;
+            let name = entry.name().to_string();
+            let mut options =
+                SimpleFileOptions::default().unix_permissions(entry.unix_mode().unwrap_or(0o755));
+            if let Some(last_modified) = entry.last_modified().filter(zip::DateTime::is_valid) {
+                options = options.last_modified_time(last_modified);
+            }
+            let options = options
+                .into_full_options()
+                .with_file_comment(entry.comment());
+            writer.add_directory(name, options).map_err(zip_to_io)?;
             continue;
         }
-        writer.start_file(&name, options).map_err(zip_to_io)?;
-        std::io::copy(&mut entry, &mut writer)?;
+        writer.raw_copy_file(entry).map_err(zip_to_io)?;
     }
 
     for (prefix, build_result) in builds {
@@ -172,6 +184,79 @@ mod tests {
         let mut v = Vec::new();
         e.read_to_end(&mut v).unwrap();
         v
+    }
+
+    fn entry_snapshot(
+        bytes: &[u8],
+        name: &str,
+    ) -> (
+        zip::CompressionMethod,
+        Option<zip::DateTime>,
+        Option<u32>,
+        String,
+        bool,
+        Vec<u8>,
+    ) {
+        let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let entry = archive.by_name(name).unwrap();
+        let start = entry.data_start().unwrap() as usize;
+        let end = start + entry.compressed_size() as usize;
+        (
+            entry.compression(),
+            entry.last_modified(),
+            entry.unix_mode(),
+            entry.comment().to_string(),
+            entry.is_dir(),
+            bytes[start..end].to_vec(),
+        )
+    }
+
+    #[test]
+    fn retained_entries_keep_compressed_bytes_and_metadata() {
+        let timestamp = zip::DateTime::from_date_and_time(2024, 2, 6, 12, 34, 56).unwrap();
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(&mut cursor);
+        writer
+            .set_raw_comment(b"archive comment".to_vec().into_boxed_slice())
+            .unwrap();
+        let directory_options = SimpleFileOptions::default()
+            .last_modified_time(timestamp)
+            .unix_permissions(0o750)
+            .into_full_options()
+            .with_file_comment("directory comment");
+        writer
+            .add_directory("m/extras/", directory_options)
+            .unwrap();
+        let file_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .last_modified_time(timestamp)
+            .unix_permissions(0o640)
+            .into_full_options()
+            .with_file_comment("file comment");
+        writer
+            .start_file("m/extras/notes.txt", file_options)
+            .unwrap();
+        writer.write_all(b"retained payload").unwrap();
+        writer.finish().unwrap();
+        let input = cursor.into_inner();
+
+        let build_result = BuildResult {
+            files: vec![],
+            diagnostics: vec![],
+        };
+        let output = repackage_zip_bytes(&input, &build_result).unwrap();
+
+        let input_archive = ZipArchive::new(std::io::Cursor::new(&input)).unwrap();
+        let output_archive = ZipArchive::new(std::io::Cursor::new(&output)).unwrap();
+        assert_eq!(output_archive.comment(), input_archive.comment());
+        assert_eq!(
+            entry_snapshot(&output, "m/extras/"),
+            entry_snapshot(&input, "m/extras/")
+        );
+        assert_eq!(
+            entry_snapshot(&output, "m/extras/notes.txt"),
+            entry_snapshot(&input, "m/extras/notes.txt")
+        );
     }
 
     #[test]
