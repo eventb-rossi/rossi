@@ -115,15 +115,11 @@ fn binary_fold_span_covers_both_operands() {
 fn function_application_identifier_is_spanned() {
     let src = "f(x)";
     let expr = parse_expression_str(src).expect("parses");
-    let ExpressionKind::FunctionApplication {
-        function,
-        arguments,
-    } = &expr.kind
-    else {
+    let ExpressionKind::FunctionApplication { function, argument } = &expr.kind else {
         panic!("expected function application");
     };
     assert_eq!(slice(src, function.span.unwrap()), "f");
-    assert_eq!(slice(src, arguments[0].span.unwrap()), "x");
+    assert_eq!(slice(src, argument.span.unwrap()), "x");
 }
 
 #[test]

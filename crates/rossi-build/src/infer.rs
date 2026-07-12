@@ -482,10 +482,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // [`Type`] rather than as a set value.
             BinaryOp::OfType => parse_type_from_expression(right).map(|t| ITy::from(&t)),
         },
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, argument } => {
             // `f(x)`: when `f : ℙ(α × β)`, the application has type `β`. A pair
             // argument is the single maplet `f(a ↦ b)`. Best-effort unify the
             // argument against the domain (an argument still resolving in the
@@ -493,17 +490,12 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // gets pinned; return the codomain.
             let f = synth(env, function, u)?;
             let (dom, codomain) = u.as_relation(&f)?;
-            if let Some(arg) = arguments.first()
-                && let Some(arg_t) = synth(env, arg, u)
-            {
+            if let Some(arg_t) = synth(env, argument, u) {
                 u.unify(&dom, &arg_t).ok();
             }
             Some(codomain)
         }
-        ExpressionKind::BuiltinApplication {
-            function,
-            arguments,
-        } => match function {
+        ExpressionKind::BuiltinApplication { function, argument } => match function {
             // Cardinality / min / max of any set return integers.
             BuiltinFunction::Card | BuiltinFunction::Min | BuiltinFunction::Max => {
                 Some(ITy::Integer)
@@ -511,7 +503,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // Generalized union/intersection collapses one power-set level:
             // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).
             BuiltinFunction::Union | BuiltinFunction::Inter => {
-                let arg = synth(env, arguments.first()?, u)?;
+                let arg = synth(env, argument, u)?;
                 match u.resolve(&arg) {
                     ITy::PowerSet(inner) if matches!(*inner, ITy::PowerSet(_)) => Some(*inner),
                     _ => None,
@@ -949,19 +941,12 @@ fn collect_free_idents_expr<'a>(
                 collect_free_idents_expr(i, shadow, out);
             }
         }
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, argument } => {
             collect_free_idents_expr(function, shadow, out);
-            for a in arguments {
-                collect_free_idents_expr(a, shadow, out);
-            }
+            collect_free_idents_expr(argument, shadow, out);
         }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                collect_free_idents_expr(a, shadow, out);
-            }
+        ExpressionKind::BuiltinApplication { argument, .. } => {
+            collect_free_idents_expr(argument, shadow, out);
         }
         ExpressionKind::RelationalImage { relation, set } => {
             collect_free_idents_expr(relation, shadow, out);
@@ -1079,13 +1064,9 @@ pub fn infer_constant_from_predicate(
                 // argument type to S's element type. (Covers the corpus
                 // shape `∀i · i ∈ 0‥7 ⇒ P(i) ∈ 0‥6`, which types
                 // `P : ℙ(ℤ × ℤ)` in Rodin.)
-                if let ExpressionKind::FunctionApplication {
-                    function,
-                    arguments,
-                } = &left.kind
+                if let ExpressionKind::FunctionApplication { function, argument } = &left.kind
                     && matches!(&function.kind, ExpressionKind::Identifier(n) if n == constant_name)
-                    && let Some(arg) = arguments.first()
-                    && let Some(arg_t) = type_of_expression(env, arg)
+                    && let Some(arg_t) = type_of_expression(env, argument)
                     && let Some(Type::PowerSet(elem)) = type_of_expression(env, right)
                 {
                     return Some(Type::pow(Type::prod(arg_t, *elem)));
@@ -1212,27 +1193,18 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
         return;
     }
     match &e.kind {
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, argument } => {
             walk_expr_for_arg(env, function, target, found);
             if found.is_some() {
                 return;
             }
             if let Some((dom, _)) = type_of_expression(env, function).and_then(Type::into_relation)
-                && let Some(arg) = arguments.first()
-                && let Some(t) = infer_from_maplet_pattern(arg, &dom, target)
+                && let Some(t) = infer_from_maplet_pattern(argument, &dom, target)
             {
                 *found = Some(t);
                 return;
             }
-            for a in arguments {
-                walk_expr_for_arg(env, a, target, found);
-                if found.is_some() {
-                    return;
-                }
-            }
+            walk_expr_for_arg(env, argument, target, found);
         }
         ExpressionKind::Binary { left, right, .. } => {
             walk_expr_for_arg(env, left, target, found);
@@ -1250,13 +1222,8 @@ fn walk_expr_for_arg(env: &TypeEnv, e: &Expression, target: &str, found: &mut Op
                 }
             }
         }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                walk_expr_for_arg(env, a, target, found);
-                if found.is_some() {
-                    return;
-                }
-            }
+        ExpressionKind::BuiltinApplication { argument, .. } => {
+            walk_expr_for_arg(env, argument, target, found);
         }
         ExpressionKind::RelationalImage { relation, set } => {
             walk_expr_for_arg(env, relation, target, found);

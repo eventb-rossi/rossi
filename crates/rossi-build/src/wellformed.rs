@@ -96,15 +96,11 @@ pub fn is_well_typed_expression(env: &TypeEnv, expr: &Expression) -> bool {
             is_well_typed_expression(env, left) && is_well_typed_expression(env, right)
         }
         ExpressionKind::Unary { operand, .. } => is_well_typed_expression(env, operand),
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
-            is_well_typed_expression(env, function)
-                && arguments.iter().all(|a| is_well_typed_expression(env, a))
+        ExpressionKind::FunctionApplication { function, argument } => {
+            is_well_typed_expression(env, function) && is_well_typed_expression(env, argument)
         }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            arguments.iter().all(|a| is_well_typed_expression(env, a))
+        ExpressionKind::BuiltinApplication { argument, .. } => {
+            is_well_typed_expression(env, argument)
         }
         ExpressionKind::SetEnumeration(items) => {
             items.iter().all(|i| is_well_typed_expression(env, i))

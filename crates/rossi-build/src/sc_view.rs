@@ -571,10 +571,7 @@ fn strip_expr(e: Expression) -> Expression {
             operand: Box::new(strip_expr(*operand)),
         }
         .into(),
-        E::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        E::FunctionApplication { function, argument } => {
             // Rodin's static checker emits `prj1(s)` etc. as the generic-atomic
             // form `(prj1 ⦂ T)(s)`: a type-ascribed atom applied as a function.
             // After `OfType` stripping the atom is a bare `AtomicBuiltin(Prj1)`
@@ -583,16 +580,13 @@ fn strip_expr(e: Expression) -> Expression {
             // needed.
             E::FunctionApplication {
                 function: Box::new(strip_expr(*function)),
-                arguments: arguments.into_iter().map(strip_expr).collect(),
+                argument: Box::new(strip_expr(*argument)),
             }
             .into()
         }
-        E::BuiltinApplication {
+        E::BuiltinApplication { function, argument } => E::BuiltinApplication {
             function,
-            arguments,
-        } => E::BuiltinApplication {
-            function,
-            arguments: arguments.into_iter().map(strip_expr).collect(),
+            argument: Box::new(strip_expr(*argument)),
         }
         .into(),
         E::SetEnumeration(items) => {

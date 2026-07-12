@@ -608,26 +608,16 @@ impl PrettyPrinter {
                 }
             }
 
-            ExpressionKind::FunctionApplication {
-                function,
-                arguments,
-            } => {
+            ExpressionKind::FunctionApplication { function, argument } => {
                 let mut func_str = self.print_expression(function);
                 if Self::needs_parens_for_relational_image(function) {
                     func_str = format!("({})", func_str);
                 }
-                let args: Vec<String> =
-                    arguments.iter().map(|a| self.print_expression(a)).collect();
-                format!("{}({})", func_str, args.join(", "))
+                format!("{}({})", func_str, self.print_expression(argument))
             }
 
-            ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } => {
-                let args: Vec<String> =
-                    arguments.iter().map(|a| self.print_expression(a)).collect();
-                format!("{}({})", function.name(), args.join(", "))
+            ExpressionKind::BuiltinApplication { function, argument } => {
+                format!("{}({})", function.name(), self.print_expression(argument))
             }
 
             // Generic relational atom (`id`, `prj1`, …): a bare word.

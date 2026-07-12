@@ -335,13 +335,13 @@ pub enum ExpressionKind {
     /// Function/relation application: f(x)
     FunctionApplication {
         function: Box<Expression>,
-        arguments: Vec<Expression>,
+        argument: Box<Expression>,
     },
 
     /// Built-in function application: card(S), min(S), etc.
     BuiltinApplication {
         function: BuiltinFunction,
-        arguments: Vec<Expression>,
+        argument: Box<Expression>,
     },
 
     /// A generic relational atom written bare: `id`, `prj1`, `prj2`, `pred`,

@@ -1694,7 +1694,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                         result = Expression::new(
                             ExpressionKind::BuiltinApplication {
                                 function: builtin,
-                                arguments: vec![argument],
+                                argument: Box::new(argument),
                             },
                             node_span,
                         );
@@ -1703,7 +1703,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, Par
                     result = Expression::new(
                         ExpressionKind::FunctionApplication {
                             function: Box::new(result),
-                            arguments: vec![argument],
+                            argument: Box::new(argument),
                         },
                         node_span,
                     );
@@ -3254,20 +3254,11 @@ fn shift_expr_spans(expr: &mut Expression, delta: usize) {
             shift_expr_spans(right, delta);
         }
         ExpressionKind::Unary { operand, .. } => shift_expr_spans(operand, delta),
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, argument } => {
             shift_expr_spans(function, delta);
-            for a in arguments {
-                shift_expr_spans(a, delta);
-            }
+            shift_expr_spans(argument, delta);
         }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                shift_expr_spans(a, delta);
-            }
-        }
+        ExpressionKind::BuiltinApplication { argument, .. } => shift_expr_spans(argument, delta),
         ExpressionKind::Bool(p) => shift_pred_spans(p, delta),
     }
 }

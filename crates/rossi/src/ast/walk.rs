@@ -176,21 +176,12 @@ pub fn walk_expression<V: IdentVisitor>(
             walk_expression(right, binders, v)
         }
         ExpressionKind::Unary { operand, .. } => walk_expression(operand, binders, v),
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, argument } => {
             walk_expression(function, binders, v)?;
-            for a in arguments {
-                walk_expression(a, binders, v)?;
-            }
-            ControlFlow::Continue(())
+            walk_expression(argument, binders, v)
         }
-        ExpressionKind::BuiltinApplication { arguments, .. } => {
-            for a in arguments {
-                walk_expression(a, binders, v)?;
-            }
-            ControlFlow::Continue(())
+        ExpressionKind::BuiltinApplication { argument, .. } => {
+            walk_expression(argument, binders, v)
         }
         ExpressionKind::SetEnumeration(items) => {
             for a in items {

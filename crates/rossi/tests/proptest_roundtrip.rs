@@ -311,7 +311,7 @@ fn arb_builtin_application(inner: BoxedStrategy<Expression>) -> impl Strategy<Va
     (arb_builtin_function(), inner).prop_map(|(function, arg)| {
         ExpressionKind::BuiltinApplication {
             function,
-            arguments: vec![arg],
+            argument: Box::new(arg),
         }
         .into()
     })
@@ -324,7 +324,7 @@ fn arb_function_application(inner: BoxedStrategy<Expression>) -> impl Strategy<V
     (arb_identifier(), inner).prop_map(|(name, argument)| {
         ExpressionKind::FunctionApplication {
             function: Box::new(ExpressionKind::Identifier(name).into()),
-            arguments: vec![argument],
+            argument: Box::new(argument),
         }
         .into()
     })

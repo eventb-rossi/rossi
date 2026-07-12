@@ -1113,14 +1113,10 @@ fn test_builtin_card() {
     let pred = &ctx.axioms[0].predicate;
     if let PredicateKind::Comparison { left, .. } = &pred.kind {
         match &left.kind {
-            ExpressionKind::BuiltinApplication {
-                function,
-                arguments,
-            } => {
+            ExpressionKind::BuiltinApplication { function, argument } => {
                 assert_eq!(*function, BuiltinFunction::Card);
-                assert_eq!(arguments.len(), 1);
                 assert_eq!(
-                    arguments[0],
+                    **argument,
                     ExpressionKind::Identifier("S".to_string()).into()
                 );
             }
@@ -1166,12 +1162,8 @@ fn comparison_lhs(kind: &PredicateKind) -> &ExpressionKind {
 /// the V2 form `prj1(x)` = `FUNIMAGE(prj1, x)`.
 fn assert_applied_atom(left: &ExpressionKind, kind: AtomicBuiltinKind) {
     match left {
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => {
+        ExpressionKind::FunctionApplication { function, .. } => {
             assert_eq!(function.kind, ExpressionKind::AtomicBuiltin(kind));
-            assert_eq!(arguments.len(), 1);
         }
         other => panic!("Expected FunctionApplication(AtomicBuiltin({kind:?})), got {other:?}"),
     }

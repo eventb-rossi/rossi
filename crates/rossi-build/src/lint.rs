@@ -1243,7 +1243,7 @@ mod tests {
             eq_pred(
                 ExpressionKind::FunctionApplication {
                     function: Box::new(ident("closure")),
-                    arguments: vec![ident("v")],
+                    argument: Box::new(ident("v")),
                 }
                 .into(),
                 ident("v"),
@@ -2381,7 +2381,7 @@ mod tests {
                 ident("cur"),
                 ExpressionKind::FunctionApplication {
                     function: Box::new(ident("dom")),
-                    arguments: vec![ident("routes")],
+                    argument: Box::new(ident("routes")),
                 }
                 .into(),
             ),

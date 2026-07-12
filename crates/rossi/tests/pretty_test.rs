@@ -603,7 +603,7 @@ fn test_pretty_print_function_application_binary_function_keeps_parens() {
             }
             .into(),
         ),
-        arguments: vec![ExpressionKind::Identifier("x".into()).into()],
+        argument: Box::new(ExpressionKind::Identifier("x".into()).into()),
     }
     .into();
     let output = PrettyPrinter::new().print_expression(&expr);
@@ -629,11 +629,41 @@ fn test_pretty_print_function_application_identifier_function_no_parens() {
     // f(x): the function side is an Identifier, so no parens needed.
     let expr: Expression = ExpressionKind::FunctionApplication {
         function: Box::new(ExpressionKind::Identifier("f".into()).into()),
-        arguments: vec![ExpressionKind::Identifier("x".into()).into()],
+        argument: Box::new(ExpressionKind::Identifier("x".into()).into()),
     }
     .into();
     let output = PrettyPrinter::new().print_expression(&expr);
     assert_eq!(output, "f(x)");
+}
+
+#[test]
+fn test_single_argument_application_ast_roundtrips() {
+    use rossi::ast::expression::BuiltinFunction;
+
+    let applications: [(Expression, &str); 2] = [
+        (
+            ExpressionKind::FunctionApplication {
+                function: Box::new(Expression::identifier("f")),
+                argument: Box::new(Expression::identifier("x")),
+            }
+            .into(),
+            "f(x)",
+        ),
+        (
+            ExpressionKind::BuiltinApplication {
+                function: BuiltinFunction::Card,
+                argument: Box::new(Expression::identifier("x")),
+            }
+            .into(),
+            "card(x)",
+        ),
+    ];
+
+    for (application, expected) in applications {
+        let printed = PrettyPrinter::new().print_expression(&application);
+        assert_eq!(printed, expected);
+        assert_eq!(rossi::parse_expression_str(&printed).unwrap(), application);
+    }
 }
 
 #[test]

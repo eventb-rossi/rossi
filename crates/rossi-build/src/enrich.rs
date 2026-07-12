@@ -310,28 +310,20 @@ fn enrich_expression_in_with_expected(
             operand: Box::new(enrich_expression_in(*operand, env)),
         }
         .into(),
-        ExpressionKind::FunctionApplication {
-            function,
-            arguments,
-        } => ExpressionKind::FunctionApplication {
-            function: Box::new(enrich_expression_in(*function, env)),
-            arguments: arguments
-                .into_iter()
-                .map(|e| enrich_expression_in(e, env))
-                .collect(),
+        ExpressionKind::FunctionApplication { function, argument } => {
+            ExpressionKind::FunctionApplication {
+                function: Box::new(enrich_expression_in(*function, env)),
+                argument: Box::new(enrich_expression_in(*argument, env)),
+            }
+            .into()
         }
-        .into(),
-        ExpressionKind::BuiltinApplication {
-            function,
-            arguments,
-        } => ExpressionKind::BuiltinApplication {
-            function,
-            arguments: arguments
-                .into_iter()
-                .map(|e| enrich_expression_in(e, env))
-                .collect(),
+        ExpressionKind::BuiltinApplication { function, argument } => {
+            ExpressionKind::BuiltinApplication {
+                function,
+                argument: Box::new(enrich_expression_in(*argument, env)),
+            }
+            .into()
         }
-        .into(),
         ExpressionKind::RelationalImage { relation, set } => ExpressionKind::RelationalImage {
             relation: Box::new(enrich_expression_in(*relation, env)),
             set: Box::new(enrich_expression_in(*set, env)),
