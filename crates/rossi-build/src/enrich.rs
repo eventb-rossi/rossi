@@ -68,10 +68,11 @@ fn enrich_predicate_in(pred: Predicate, env: &mut TypeEnv) -> Predicate {
             identifiers,
             predicate,
         } => {
-            let new_identifiers = enrich_typed_identifiers(&identifiers, &predicate, env);
-            let predicate = env.scoped(|env| {
-                bind_typed_identifiers(env, &new_identifiers);
-                Box::new(enrich_predicate_in(*predicate, env))
+            let (new_identifiers, predicate) = env.scoped(|env| {
+                let new_identifiers =
+                    enrich_typed_identifiers_in_scope(&identifiers, &predicate, env);
+                let predicate = Box::new(enrich_predicate_in(*predicate, env));
+                (new_identifiers, predicate)
             });
             PredicateKind::Quantified {
                 quantifier,
@@ -165,13 +166,17 @@ fn enrich_expression_in_with_expected(
                 },
                 _ => None,
             });
-            let new_pattern = enrich_ident_pattern(pattern, &predicate, env, expected_domain);
-            let (predicate, expression) = env.scoped(|env| {
-                bind_ident_pattern(env, &new_pattern);
-                (
+            let (new_pattern, predicate, expression) = env.scoped(|env| {
+                for name in pattern.identifiers() {
+                    env.remove(name);
+                }
+                bind_ident_pattern(env, &pattern);
+                let new_pattern = enrich_ident_pattern(pattern, &predicate, env, expected_domain);
+                let (predicate, expression) = (
                     Box::new(enrich_predicate_in(*predicate, env)),
                     Box::new(enrich_expression_in(*expression, env)),
-                )
+                );
+                (new_pattern, predicate, expression)
             });
             ExpressionKind::Lambda {
                 pattern: new_pattern,
@@ -185,14 +190,8 @@ fn enrich_expression_in_with_expected(
             predicate,
             expression,
         } => {
-            let new_identifiers = enrich_typed_identifiers(&identifiers, &predicate, env);
-            let (predicate, expression) = env.scoped(|env| {
-                bind_typed_identifiers(env, &new_identifiers);
-                (
-                    Box::new(enrich_predicate_in(*predicate, env)),
-                    Box::new(enrich_expression_in(*expression, env)),
-                )
-            });
+            let (new_identifiers, predicate, expression) =
+                enrich_scoped_binder_expression(&identifiers, predicate, expression, env);
             ExpressionKind::QuantifiedUnion {
                 identifiers: new_identifiers,
                 predicate,
@@ -205,14 +204,8 @@ fn enrich_expression_in_with_expected(
             predicate,
             expression,
         } => {
-            let new_identifiers = enrich_typed_identifiers(&identifiers, &predicate, env);
-            let (predicate, expression) = env.scoped(|env| {
-                bind_typed_identifiers(env, &new_identifiers);
-                (
-                    Box::new(enrich_predicate_in(*predicate, env)),
-                    Box::new(enrich_expression_in(*expression, env)),
-                )
-            });
+            let (new_identifiers, predicate, expression) =
+                enrich_scoped_binder_expression(&identifiers, predicate, expression, env);
             ExpressionKind::QuantifiedInter {
                 identifiers: new_identifiers,
                 predicate,
@@ -225,12 +218,12 @@ fn enrich_expression_in_with_expected(
             predicate,
             expression,
         } => {
-            let new_identifiers = enrich_typed_identifiers(&identifiers, &predicate, env);
-            let (predicate, expression) = env.scoped(|env| {
-                bind_typed_identifiers(env, &new_identifiers);
+            let (new_identifiers, predicate, expression) = env.scoped(|env| {
+                let new_identifiers =
+                    enrich_typed_identifiers_in_scope(&identifiers, &predicate, env);
                 let p = Box::new(enrich_predicate_in(*predicate, env));
                 let e = expression.map(|e| Box::new(enrich_expression_in(*e, env)));
-                (p, e)
+                (new_identifiers, p, e)
             });
             // ProB's predicate parser rejects the short form
             // (`Expected: · but was: ∣`); Rodin's SC lowers it
@@ -257,25 +250,22 @@ fn enrich_expression_in_with_expected(
         } => {
             // Lower `{E ∣ P}` to the long form `{x₁⦂T₁,…,xₙ⦂Tₙ · P ∣ E}`
             // per the Event-B spec (and what Rodin's bcc/bcm emits): the
-            // binders are the free identifiers of E in left-to-right
-            // order, even when they would shadow a same-named global.
+            // binders are identifiers of E that aren't already supplied by
+            // the enclosing environment, in left-to-right order.
             let free_names: Vec<String> = {
                 let mut acc: Vec<&str> = Vec::new();
                 collect_free_identifiers(&member_expression, &mut acc);
-                acc.into_iter().map(String::from).collect()
+                acc.into_iter()
+                    .filter(|name| !env.contains(name))
+                    .map(String::from)
+                    .collect()
             };
             let untyped_idents: Vec<TypedIdentifier> = free_names
                 .iter()
                 .map(|n| TypedIdentifier::untyped(n.clone()))
                 .collect();
-            let new_identifiers = enrich_typed_identifiers(&untyped_idents, &predicate, env);
-            let (predicate, member_expression) = env.scoped(|env| {
-                bind_typed_identifiers(env, &new_identifiers);
-                (
-                    Box::new(enrich_predicate_in(*predicate, env)),
-                    Box::new(enrich_expression_in(*member_expression, env)),
-                )
-            });
+            let (new_identifiers, predicate, member_expression) =
+                enrich_scoped_binder_expression(&untyped_idents, predicate, member_expression, env);
             ExpressionKind::SetComprehension {
                 identifiers: new_identifiers,
                 predicate,
@@ -386,6 +376,32 @@ fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
 // Binder helpers
 // ---------------------------------------------------------------------
 
+fn enrich_typed_identifiers_in_scope(
+    identifiers: &[TypedIdentifier],
+    body: &Predicate,
+    env: &mut TypeEnv,
+) -> Vec<TypedIdentifier> {
+    for identifier in identifiers {
+        env.remove(&identifier.name);
+    }
+    bind_typed_identifiers(env, identifiers);
+    enrich_typed_identifiers(identifiers, body, env)
+}
+
+fn enrich_scoped_binder_expression(
+    identifiers: &[TypedIdentifier],
+    predicate: Box<Predicate>,
+    expression: Box<Expression>,
+    env: &mut TypeEnv,
+) -> (Vec<TypedIdentifier>, Box<Predicate>, Box<Expression>) {
+    env.scoped(|env| {
+        let identifiers = enrich_typed_identifiers_in_scope(identifiers, &predicate, env);
+        let predicate = Box::new(enrich_predicate_in(*predicate, env));
+        let expression = Box::new(enrich_expression_in(*expression, env));
+        (identifiers, predicate, expression)
+    })
+}
+
 /// Stamp inferred types onto a `Vec<TypedIdentifier>` (quantifiers,
 /// quantified-union/inter, long-form set comprehension). Identifiers
 /// that already carry a type, or whose type can't be inferred, are
@@ -393,7 +409,7 @@ fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
 fn enrich_typed_identifiers(
     identifiers: &[TypedIdentifier],
     body: &Predicate,
-    env: &TypeEnv,
+    env: &mut TypeEnv,
 ) -> Vec<TypedIdentifier> {
     let untyped_names: Vec<&str> = identifiers
         .iter()
@@ -405,6 +421,9 @@ fn enrich_typed_identifiers(
     }
     let mut bound: BTreeMap<String, Type> = BTreeMap::new();
     collect_binder_types(env, body, &untyped_names, &mut bound);
+    for (name, ty) in &bound {
+        env.insert(name.clone(), ty.clone());
+    }
     identifiers
         .iter()
         .map(|t| match (&t.type_expr, bound.get(&t.name)) {
@@ -423,7 +442,7 @@ fn enrich_typed_identifiers(
 fn enrich_ident_pattern(
     pattern: IdentPattern,
     body: &Predicate,
-    env: &TypeEnv,
+    env: &mut TypeEnv,
     expected_domain: Option<&Type>,
 ) -> IdentPattern {
     let untyped_names: Vec<&str> = collect_untyped_pattern_names(&pattern);
@@ -439,6 +458,11 @@ fn enrich_ident_pattern(
         // gaps from the expected-type source.
         for (name, ty) in extra {
             bound.entry(name).or_insert(ty);
+        }
+    }
+    for name in &untyped_names {
+        if let Some(ty) = bound.get(*name) {
+            env.insert((*name).to_string(), ty.clone());
         }
     }
     rewrite_ident_pattern(pattern, &bound)
@@ -583,6 +607,138 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn same_named_outer_does_not_type_quantifier_binder() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let p = parse_predicate_str("∀x·x=x").unwrap();
+        let enriched = enrich_predicate(p, &env);
+        let PredicateKind::Quantified { identifiers, .. } = enriched.kind else {
+            panic!("expected Quantified")
+        };
+        assert!(
+            identifiers[0].type_expr.is_none(),
+            "the fresh binder must not inherit the outer x type"
+        );
+    }
+
+    #[test]
+    fn explicit_binder_types_remain_evidence_for_siblings() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Boolean);
+        let p = parse_predicate_str("∀x⦂ℤ,y·y=x").unwrap();
+        let enriched = enrich_predicate(p, &env);
+        let PredicateKind::Quantified { identifiers, .. } = enriched.kind else {
+            panic!("expected Quantified")
+        };
+        assert_eq!(identifiers.len(), 2);
+        let y_type = identifiers[1]
+            .type_expr
+            .as_ref()
+            .and_then(|expr| parse_type_from_expression(expr));
+        assert_eq!(y_type, Some(Type::Integer));
+    }
+
+    #[test]
+    fn unresolved_binder_masks_outer_while_enriching_nested_binder() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let p = parse_predicate_str("∀x·∀y·y=x").unwrap();
+        let enriched = enrich_predicate(p, &env);
+        let PredicateKind::Quantified {
+            identifiers: outer,
+            predicate,
+            ..
+        } = enriched.kind
+        else {
+            panic!("expected outer Quantified")
+        };
+        assert!(outer[0].type_expr.is_none());
+        let PredicateKind::Quantified {
+            identifiers: inner, ..
+        } = predicate.kind
+        else {
+            panic!("expected inner Quantified")
+        };
+        assert!(
+            inner[0].type_expr.is_none(),
+            "nested y must not use the shadowed outer x"
+        );
+    }
+
+    #[test]
+    fn nested_untyped_binder_masks_its_same_named_outer_declaration() {
+        let mut env = TypeEnv::new();
+        env.insert("y", Type::Boolean);
+        let p = parse_predicate_str("∀x·∀y·x=y").unwrap();
+        let enriched = enrich_predicate(p, &env);
+        let PredicateKind::Quantified {
+            identifiers: outer,
+            predicate,
+            ..
+        } = enriched.kind
+        else {
+            panic!("expected outer Quantified")
+        };
+        assert!(outer[0].type_expr.is_none());
+        let PredicateKind::Quantified {
+            identifiers: inner, ..
+        } = predicate.kind
+        else {
+            panic!("expected inner Quantified")
+        };
+        assert!(inner[0].type_expr.is_none());
+    }
+
+    #[test]
+    fn explicit_inner_binder_can_type_outer_binder() {
+        let p = parse_predicate_str("∀x·∀y⦂ℤ·x=y").unwrap();
+        let enriched = enrich_predicate(p, &empty_env());
+        let PredicateKind::Quantified {
+            identifiers: outer, ..
+        } = enriched.kind
+        else {
+            panic!("expected outer Quantified")
+        };
+        let outer_type = outer[0]
+            .type_expr
+            .as_ref()
+            .and_then(|expr| parse_type_from_expression(expr));
+        assert_eq!(outer_type, Some(Type::Integer));
+    }
+
+    #[test]
+    fn set_builder_keeps_known_member_names_free() {
+        let mut env = TypeEnv::new();
+        env.add_carrier_set("S");
+        let e = parse_expression_str("{bool(x∈S) ∣ x∈S}").unwrap();
+        let enriched = enrich_expression(e, &env);
+        let ExpressionKind::SetComprehension { identifiers, .. } = enriched.kind else {
+            panic!("expected SetComprehension")
+        };
+        assert_eq!(identifiers.len(), 1);
+        assert_eq!(identifiers[0].name, "x");
+        assert!(identifiers[0].type_expr.is_some());
+    }
+
+    #[test]
+    fn same_named_outer_does_not_type_lambda_binder() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let e = parse_expression_str("λx·x=x ∣ x").unwrap();
+        let enriched = enrich_expression(e, &env);
+        let ExpressionKind::Lambda { pattern, .. } = enriched.kind else {
+            panic!("expected Lambda")
+        };
+        let IdentPattern::Identifier(identifier) = pattern else {
+            panic!("expected identifier pattern")
+        };
+        assert!(
+            identifier.type_expr.is_none(),
+            "the lambda binder must not inherit the outer x type"
+        );
     }
 
     #[test]

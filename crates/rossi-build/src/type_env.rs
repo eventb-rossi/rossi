@@ -201,6 +201,18 @@ mod tests {
     }
 
     #[test]
+    fn scoped_remove_masks_and_restores_outer() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let seen_inside = env.scoped(|env| {
+            env.remove("x");
+            env.get("x").cloned()
+        });
+        assert_eq!(seen_inside, None);
+        assert_eq!(env.get("x"), Some(&Type::Integer));
+    }
+
+    #[test]
     #[should_panic]
     fn pop_without_matching_push_panics() {
         let mut env = TypeEnv::new();

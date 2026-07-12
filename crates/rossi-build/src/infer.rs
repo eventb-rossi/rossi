@@ -538,8 +538,10 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             expression,
         } => {
             let names = pattern.identifiers();
+            let mut identifiers = Vec::new();
+            collect_pattern_identifiers(pattern, &mut identifiers);
             let mut local = env.clone();
-            let bound = bind_names(&mut local, &names, &[], predicate);
+            let bound = bind_names(&mut local, &names, &identifiers, predicate);
             if !names.iter().all(|n| bound.contains_key(*n)) {
                 return None;
             }
@@ -636,8 +638,13 @@ fn bind_names(
     predicate: &Predicate,
 ) -> BTreeMap<String, Type> {
     let mut found: BTreeMap<String, Type> = BTreeMap::new();
-    // Pass 1: explicit `⦂ T`. The map of TypedIdentifiers may be empty
-    // (Lambda / SetBuilder don't carry one).
+    // `local` is a clone dedicated to this binder. Mask every same-named
+    // outer declaration before installing explicit or inferred binder types.
+    for name in names {
+        local.remove(name);
+    }
+    // Pass 1: explicit `⦂ T`. The slice is empty for binder forms that
+    // cannot carry explicit annotations.
     for ti in idents {
         if let Some(te) = &ti.type_expr
             && let Some(t) = parse_type_from_expression(te)
@@ -701,6 +708,16 @@ fn pattern_to_type(pat: &IdentPattern, bound: &BTreeMap<String, Type>) -> Option
     }
 }
 
+fn collect_pattern_identifiers(pat: &IdentPattern, out: &mut Vec<TypedIdentifier>) {
+    match pat {
+        IdentPattern::Identifier(identifier) => out.push(identifier.clone()),
+        IdentPattern::Maplet(left, right) => {
+            collect_pattern_identifiers(left, out);
+            collect_pattern_identifiers(right, out);
+        }
+    }
+}
+
 /// Distribute an expected type across an [`IdentPattern`], returning
 /// each binder's type. Inverse of [`pattern_to_type`]: maps `(Maplet l r,
 /// Product L R)` into `{l: L, r: R}` recursively. Returns `None` if
@@ -743,6 +760,8 @@ fn fill_pattern_binder_types(
 /// (membership, maplet membership, equality), descends through `∧`,
 /// and into universal/existential bodies. Bound variables from inner
 /// quantifiers shadow same-named entries in `names` for that subtree.
+/// The caller must ensure each candidate name is absent from `env` or bound
+/// there to the fresh binder, never inherited from an outer declaration.
 pub(crate) fn collect_binder_types(
     env: &TypeEnv,
     pred: &Predicate,
@@ -854,7 +873,13 @@ pub(crate) fn collect_binder_types(
                 .filter(|n| !shadowed.contains(*n))
                 .collect();
             if !unshadowed.is_empty() {
-                collect_binder_types(env, body, &unshadowed, out);
+                let inner_names: Vec<&str> = identifiers
+                    .iter()
+                    .map(|identifier| identifier.name.as_str())
+                    .collect();
+                let mut local = env.clone();
+                bind_names(&mut local, &inner_names, identifiers, body);
+                collect_binder_types(&local, body, &unshadowed, out);
             }
         }
         _ => {}
@@ -995,6 +1020,27 @@ pub fn infer_constant_from_predicate(
     predicate: &Predicate,
     constant_name: &str,
 ) -> Option<Type> {
+    if let PredicateKind::Quantified {
+        identifiers,
+        predicate: body,
+        ..
+    } = &predicate.kind
+    {
+        // A same-named bound variable is a different identifier, so the
+        // quantified subtree contains no occurrence of this outer constant.
+        if identifiers.iter().any(|t| t.name == constant_name) {
+            return None;
+        }
+
+        // Enter the quantifier once through a binder-local environment. This
+        // keeps both the main inference rules and their fallback passes from
+        // revisiting the body against unmasked outer declarations.
+        let names: Vec<&str> = identifiers.iter().map(|t| t.name.as_str()).collect();
+        let mut local = env.clone();
+        bind_names(&mut local, &names, identifiers, body);
+        return infer_constant_from_predicate(&local, body, constant_name);
+    }
+
     match &predicate.kind {
         PredicateKind::Comparison { op, left, right } => match op {
             ComparisonOp::In | ComparisonOp::NotIn => {
@@ -1104,33 +1150,6 @@ pub fn infer_constant_from_predicate(
             right,
         } => infer_constant_from_predicate(env, left, constant_name)
             .or_else(|| infer_constant_from_predicate(env, right, constant_name)),
-        // Descend through quantifier bodies. Bound variables that
-        // happen to share the constant's name shadow it inside the
-        // body, so we skip the descent in that case.
-        //
-        // Augment the env with each binder's inferred type before
-        // recursing — typing predicates inside the body that mention
-        // the constant on one side and a binder on the other (e.g.
-        // `a ∈ POLICYSETS` where `a` is a quantifier-bound variable
-        // with type `ACCESSES`) need the binder typed in scope.
-        PredicateKind::Quantified {
-            identifiers,
-            predicate: body,
-            ..
-        } if !identifiers.iter().any(|t| t.name == constant_name) => {
-            let names: Vec<&str> = identifiers.iter().map(|t| t.name.as_str()).collect();
-            let mut binder_types: BTreeMap<String, Type> = BTreeMap::new();
-            collect_binder_types(env, body, &names, &mut binder_types);
-            if binder_types.is_empty() {
-                infer_constant_from_predicate(env, body, constant_name)
-            } else {
-                let mut local = env.clone();
-                for (n, t) in binder_types {
-                    local.insert(n, t);
-                }
-                infer_constant_from_predicate(&local, body, constant_name)
-            }
-        }
         _ => None,
     }
     .or_else(|| infer_from_function_argument(env, predicate, constant_name))
@@ -1620,7 +1639,7 @@ pub fn infer_constants<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rossi::parse_predicate_str;
+    use rossi::{parse_expression_str, parse_predicate_str};
 
     fn env_with(pairs: &[(&str, Type)]) -> TypeEnv {
         let mut env = TypeEnv::new();
@@ -1749,6 +1768,33 @@ mod tests {
         env.insert("c", Type::pow(Type::GivenSet("S".into())));
         let p = parse_predicate_str("c = {x · x ∈ S ∣ x}").unwrap();
         assert_eq!(infer_constant_from_predicate(&env, &p, "x"), None);
+    }
+
+    #[test]
+    fn same_named_outer_does_not_type_lambda_binder() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let expr = parse_expression_str("λx·x=x ∣ x").unwrap();
+        assert_eq!(type_of_expression(&env, &expr), None);
+    }
+
+    #[test]
+    fn explicitly_typed_lambda_binder_survives_outer_masking() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Boolean);
+        let expr = parse_expression_str("λx⦂ℤ·⊤ ∣ x").unwrap();
+        assert_eq!(
+            type_of_expression(&env, &expr),
+            Some(Type::relation(Type::Integer, Type::Integer))
+        );
+    }
+
+    #[test]
+    fn same_named_outer_does_not_type_quantified_constant_dependency() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let pred = parse_predicate_str("∀x·c=x").unwrap();
+        assert_eq!(infer_constant_from_predicate(&env, &pred, "c"), None);
     }
 
     #[test]
