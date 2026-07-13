@@ -15,7 +15,7 @@
 //! landing on one element are joined with `\n` — exactly how a multiline
 //! Rodin comment is stored, so XML → text → XML preserves comment content.
 
-use crate::ast::Component;
+use crate::ast::{Component, Span};
 use crate::comments;
 
 /// Attach every comment in `source` to the element it follows.
@@ -25,6 +25,15 @@ use crate::comments;
 /// simply never receive comments.
 pub(crate) fn attach_comments(source: &str, components: &mut [Component]) {
     let comment_spans = comments::comment_spans(source);
+    attach_comments_from_spans(source, components, &comment_spans);
+}
+
+/// Attach comments using spans already produced by the shared lexical scan.
+pub(crate) fn attach_comments_from_spans(
+    source: &str,
+    components: &mut [Component],
+    comment_spans: &[Span],
+) {
     if comment_spans.is_empty() {
         return;
     }
@@ -103,7 +112,7 @@ pub(crate) fn attach_comments(source: &str, components: &mut [Component]) {
     // interleave: struct order is not source order.
     anchors.sort_by_key(|(start, _)| *start);
 
-    for span in &comment_spans {
+    for span in comment_spans {
         let Some(text) = comments::comment_text(&source[span.start..span.end]) else {
             continue; // blank comment — nothing worth keeping
         };

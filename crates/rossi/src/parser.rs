@@ -6,8 +6,44 @@ use pest::Parser;
 use pest_derive::Parser;
 
 use crate::ast::*;
-use crate::error::ParseError;
+use crate::error::{ParseError, ParseResult};
 use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
+use crate::selection::SyntaxSnapshot;
+
+/// Source, recovered AST, and owned syntax data from one revision.
+#[derive(Debug)]
+pub struct ParseSnapshot {
+    source: String,
+    result: ParseResult<Vec<Component>>,
+    syntax: SyntaxSnapshot,
+}
+
+impl ParseSnapshot {
+    /// Source text shared by every parsed and syntactic value in this snapshot.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The recovered components and parse errors from this snapshot.
+    pub fn result(&self) -> &ParseResult<Vec<Component>> {
+        &self.result
+    }
+
+    /// Return one enclosing-span chain per byte offset, in input order.
+    pub fn enclosing_spans(&self, offsets: &[usize]) -> Vec<Vec<Span>> {
+        self.syntax.enclosing_spans(&self.source, offsets)
+    }
+
+    /// Query signature syntax against this snapshot's own recovered errors.
+    pub fn syntax_at_offset(&self, offset: usize) -> Option<crate::SyntaxAtOffset> {
+        self.syntax.syntax_at_offset(
+            &self.source,
+            self.result.component.as_deref().unwrap_or_default(),
+            &self.result.errors,
+            offset,
+        )
+    }
+}
 
 /// The pest-generated parser.
 ///
@@ -530,24 +566,42 @@ fn parse_unguarded(input: &str) -> Result<Component, ParseError> {
 ///
 /// Returns `Ok(Vec<Component>)` with one entry per parsed component.
 pub fn parse_components(input: &str) -> Result<Vec<Component>, ParseError> {
-    let depth = nesting::check_nesting(input)?;
-    with_parser_stack(depth, || parse_components_unguarded(input))
+    parse_components_guarded(input, |pair| components_from_pair(pair, input))
 }
 
-/// Body of [`parse_components`]. Only callable through the guarded entry
-/// point — see the invariant on [`RossiParser`].
-fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError> {
+pub(crate) fn parse_components_guarded<T>(
+    input: &str,
+    build: impl FnOnce(pest::iterators::Pair<'_, Rule>) -> Result<T, ParseError>,
+) -> Result<T, ParseError> {
+    let depth = nesting::check_nesting(input)?;
+    with_parser_stack(depth, || build(parse_components_pair(input)?))
+}
+
+fn parse_components_pair(input: &str) -> Result<pest::iterators::Pair<'_, Rule>, ParseError> {
     let pairs =
         RossiParser::parse(Rule::components, input).map_err(|e| ParseError::from(Box::new(e)))?;
 
-    let components_pair = pairs
+    pairs
         .into_iter()
         .next()
         .ok_or_else(|| ParseError::UnexpectedRule {
             expected: "components".to_string(),
             found: "empty parse result".to_string(),
-        })?;
+        })
+}
 
+fn components_from_pair(
+    components_pair: pest::iterators::Pair<Rule>,
+    input: &str,
+) -> Result<Vec<Component>, ParseError> {
+    let mut result = components_from_pair_unattached(components_pair)?;
+    crate::comment_attach::attach_comments(input, &mut result);
+    Ok(result)
+}
+
+fn components_from_pair_unattached(
+    components_pair: pest::iterators::Pair<Rule>,
+) -> Result<Vec<Component>, ParseError> {
     let mut result = Vec::new();
     for inner in components_pair.into_inner() {
         match inner.as_rule() {
@@ -563,7 +617,6 @@ fn parse_components_unguarded(input: &str) -> Result<Vec<Component>, ParseError>
         }
     }
 
-    crate::comment_attach::attach_comments(input, &mut result);
     Ok(result)
 }
 
@@ -2543,7 +2596,6 @@ fn assignment_in_predicate_error(input: &str) -> Option<ParseError> {
 // Error Recovery Functions
 // ============================================================================
 
-use crate::error::ParseResult;
 use crate::keywords::{KeywordId, is_structural_word_bounded};
 
 /// Compute (line, column) from a byte offset in the source text, both 1-indexed.
@@ -3172,66 +3224,98 @@ pub fn parse_components_with_recovery(input: &str) -> ParseResult<Vec<Component>
         Ok(components) => ParseResult::ok(components),
         // A depth rejection applies to the whole input — see parse_with_recovery.
         Err(first_error @ ParseError::NestingTooDeep { .. }) => ParseResult::err(first_error),
-        Err(first_error) => {
-            let text = RecoveryText::new(input);
-            let headers = component_header_starts(&text);
-            if headers.len() < 2 {
-                // Zero or one component header: single-component recovery
-                // already handles this exactly (including the no-header case).
-                let result = parse_with_recovery(input);
-                return ParseResult::with_errors(result.component.map(|c| vec![c]), result.errors);
-            }
+        Err(first_error) => recover_components_after_error(input, first_error),
+    }
+}
 
-            // Region i runs from its header's line start to the next header's
-            // line start; the first region is extended back to offset 0 so
-            // junk before the first header is still reported. Headers sit on
-            // distinct lines (line-anchored), so the starts stay strictly
-            // ascending even after the first is pulled back to 0.
-            let mut starts: Vec<usize> = headers
-                .iter()
-                .map(|&pos| line_start(&text.masked, pos))
-                .collect();
-            starts[0] = 0;
+/// Parse components and retain the owned syntax hierarchy for the same source.
+///
+/// On a strict parse, the AST and syntax hierarchy are both derived from one
+/// Pest parse. Error recovery remains identical to
+/// [`parse_components_with_recovery`]; a failed whole-document grammar parse
+/// has no selection hierarchy, but lexical spans and recovered AST nodes remain
+/// available for offset queries.
+pub fn parse_components_snapshot(input: impl Into<String>) -> ParseSnapshot {
+    let source = input.into();
+    let strict = parse_components_guarded(&source, |components_pair| {
+        let lexical = crate::comments::lexical_spans(&source);
+        let mut components = components_from_pair_unattached(components_pair.clone())?;
+        crate::comment_attach::attach_comments_from_spans(
+            &source,
+            &mut components,
+            &lexical.comments,
+        );
+        let syntax = SyntaxSnapshot::from_pair_with_lexical(components_pair, lexical);
+        Ok((components, syntax))
+    });
+    let (result, syntax) = match strict {
+        Ok((components, syntax)) => (ParseResult::ok(components), syntax),
+        Err(first_error @ ParseError::NestingTooDeep { .. }) => (
+            ParseResult::err(first_error),
+            SyntaxSnapshot::empty(&source),
+        ),
+        Err(first_error) => (
+            recover_components_after_error(&source, first_error),
+            SyntaxSnapshot::empty(&source),
+        ),
+    };
+    ParseSnapshot {
+        source,
+        result,
+        syntax,
+    }
+}
 
-            let mut components = Vec::new();
-            let mut errors = Vec::new();
-            // Regions begin at line boundaries, so the slice's line N is the
-            // input's line N + line_delta (columns are unchanged). Counted
-            // incrementally — regions are consecutive, so each gap between
-            // starts is scanned once.
-            let mut line_delta = 0;
-            let mut prev_start = 0;
-            for (i, &start) in starts.iter().enumerate() {
-                let end = starts.get(i + 1).copied().unwrap_or(input.len());
-                line_delta += input[prev_start..start].matches('\n').count();
-                prev_start = start;
-                let result = parse_with_recovery(&input[start..end]);
-                errors.extend(
-                    result
-                        .errors
-                        .into_iter()
-                        .map(|e| e.shift_location(start, line_delta)),
-                );
-                if let Some(mut component) = result.component {
-                    // Recovery already spans each component from its header; here
-                    // we only translate those slice-relative spans into absolute
-                    // document coordinates.
-                    shift_component_spans(&mut component, start);
-                    components.push(component);
-                }
-            }
+fn recover_components_after_error(
+    input: &str,
+    first_error: ParseError,
+) -> ParseResult<Vec<Component>> {
+    let text = RecoveryText::new(input);
+    let headers = component_header_starts(&text);
+    if headers.len() < 2 {
+        // Zero or one component header: single-component recovery already
+        // handles this exactly (including the no-header case).
+        let result = parse_with_recovery(input);
+        return ParseResult::with_errors(result.component.map(|c| vec![c]), result.errors);
+    }
 
-            if components.is_empty() {
-                return ParseResult::err(first_error);
-            }
-            if errors.is_empty() {
-                // The whole-file parse failed, so something is wrong even if
-                // every region recovered silently — keep the original error.
-                errors.push(first_error);
-            }
-            ParseResult::with_errors(Some(components), errors)
+    // Region i runs from its header's line start to the next header's line
+    // start; the first region extends back to offset 0 so junk before the first
+    // header is still reported.
+    let mut starts: Vec<usize> = headers
+        .iter()
+        .map(|&pos| line_start(&text.masked, pos))
+        .collect();
+    starts[0] = 0;
+
+    let mut components = Vec::new();
+    let mut errors = Vec::new();
+    let mut line_delta = 0;
+    let mut prev_start = 0;
+    for (i, &start) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(input.len());
+        line_delta += input[prev_start..start].matches('\n').count();
+        prev_start = start;
+        let result = parse_with_recovery(&input[start..end]);
+        errors.extend(
+            result
+                .errors
+                .into_iter()
+                .map(|error| error.shift_location(start, line_delta)),
+        );
+        if let Some(mut component) = result.component {
+            shift_component_spans(&mut component, start);
+            components.push(component);
         }
     }
+
+    if components.is_empty() {
+        return ParseResult::err(first_error);
+    }
+    if errors.is_empty() {
+        errors.push(first_error);
+    }
+    ParseResult::with_errors(Some(components), errors)
 }
 
 /// Byte offsets of every line-anchored, whole-word `CONTEXT`/`MACHINE`
@@ -3320,7 +3404,7 @@ pub fn component_name_occurrences(input: &str) -> Vec<Ident> {
 }
 
 /// Byte offset of the start of the line containing `pos`.
-fn line_start(s: &str, pos: usize) -> usize {
+pub(crate) fn line_start(s: &str, pos: usize) -> usize {
     s[..pos].rfind('\n').map_or(0, |i| i + 1)
 }
 

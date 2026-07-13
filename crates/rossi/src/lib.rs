@@ -68,14 +68,17 @@ pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
 pub use error::{ParseError, ParseResult, Result};
 pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{
-    component_name_occurrences, parse, parse_action_str, parse_components,
-    parse_components_with_recovery, parse_expression_str, parse_predicate_str, parse_with_recovery,
+    ParseSnapshot, component_name_occurrences, parse, parse_action_str, parse_components,
+    parse_components_snapshot, parse_components_with_recovery, parse_expression_str,
+    parse_predicate_str, parse_with_recovery,
 };
 pub use pretty::{
     PrettyPrinter, components_to_string, components_to_string_ascii, format_str, to_string,
     to_string_ascii,
 };
-pub use selection::enclosing_spans;
+pub use selection::{
+    SyntaxAtOffset, SyntaxConstruct, SyntaxParameter, enclosing_spans, enclosing_spans_batch,
+};
 pub use xml::{
     NamedComponent, NamedProject, component_filename, parse_xml, parse_zip, parse_zip_file,
     parse_zip_file_with_recovery, parse_zip_with_recovery, read_project_name, to_multi_project_zip,
