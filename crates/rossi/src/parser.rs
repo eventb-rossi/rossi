@@ -2602,6 +2602,8 @@ struct RecoveredClause<T> {
     data: T,
 }
 
+type RecoveryPosition = (usize, KeywordId, usize);
+
 impl<T> RecoveredClause<T> {
     /// A clause whose keyword was not found: no region, paired with whatever
     /// (empty) payload the caller has accumulated so far.
@@ -2623,8 +2625,9 @@ fn clause_region(
     text: &RecoveryText,
     keyword: KeywordId,
     bound: usize,
+    positions: &[RecoveryPosition],
 ) -> Option<(Span, ClauseRegion)> {
-    let raw = extract_clause_content(text, crate::keywords::spell(keyword), bound)?;
+    let raw = extract_clause_content(keyword, bound, positions)?;
     let region = ClauseRegion::new(
         keyword,
         trimmed_span(raw.start, &text.masked[raw.start..raw.end]),
@@ -2634,12 +2637,59 @@ fn clause_region(
 
 /// Whether `name` is acceptable as a declared identifier (parameter,
 /// variable, constant, set carrier) in error-recovery output. Rejects
-/// reserved words and structural keywords so that a recovered AST never
-/// carries a name the pretty-printer or downstream consumers cannot handle.
+/// kernel_lang reserved words, matching [`declared_name`]. Structural keywords
+/// remain valid when the grammar consumes them in an identifier position.
 fn accepts_declared_name(name: &str) -> bool {
-    crate::names::is_valid_math_identifier(name)
-        && !crate::builtins::is_reserved_word(name)
-        && !crate::keywords::is_keyword(name)
+    crate::names::is_valid_math_identifier(name) && !crate::builtins::is_reserved_word(name)
+}
+
+/// Whether `name` is valid in the required first-name position after a clause
+/// keyword. The grammar consumes this first name before applying its structural
+/// keyword follow-set, so recovery must do the same before scanning for the next
+/// clause boundary.
+fn accepts_required_clause_name(keyword: KeywordId, name: &str) -> bool {
+    match keyword {
+        KeywordId::Sets | KeywordId::Constants | KeywordId::Variables | KeywordId::Any => {
+            accepts_declared_name(name)
+        }
+        KeywordId::Extends | KeywordId::Refines | KeywordId::Sees => {
+            crate::names::is_valid_component_name(name)
+        }
+        _ => false,
+    }
+}
+
+/// The first non-whitespace token in `s`, with its document-relative span.
+/// A single trailing comma is tolerated for recovery, but a bare leading comma
+/// remains an invalid token rather than disappearing as an empty split item.
+fn first_identifier_candidate(s: &str, base: usize) -> Option<(&str, Span)> {
+    let candidate = s.trim_start().split(char::is_whitespace).next()?;
+    let identifier = candidate.strip_suffix(',').unwrap_or(candidate);
+    if identifier.is_empty() {
+        return None;
+    }
+    let start = base + subslice_offset(s, identifier);
+    Some((
+        identifier,
+        Span {
+            start,
+            end: start + identifier.len(),
+        },
+    ))
+}
+
+/// The required first name immediately following `content_start`, if it is
+/// valid for `keyword`. Later tokens are deliberately not considered: an
+/// invalid first token makes the strict grammar fail before reaching them.
+fn required_clause_name_span(
+    text: &RecoveryText,
+    keyword: KeywordId,
+    content_start: usize,
+    bound: usize,
+) -> Option<Span> {
+    first_identifier_candidate(&text.masked[content_start..bound], content_start)
+        .filter(|(name, _)| accepts_required_clause_name(keyword, name))
+        .map(|(_, span)| span)
 }
 
 /// Extract identifiers (each with its source [`Span`]) from a clause during
@@ -2663,26 +2713,17 @@ fn recover_identifiers(
     text: &RecoveryText,
     keyword: KeywordId,
     bound: usize,
+    positions: &[RecoveryPosition],
 ) -> RecoveredClause<Vec<(String, Span)>> {
-    let declares = matches!(
-        keyword,
-        KeywordId::Sets | KeywordId::Constants | KeywordId::Variables
-    );
-    // Keep only names the grammar would re-accept in this position, so a
+    // Keep only names the canonical validators accept in this position, so a
     // recovered AST stays round-trippable — whitespace-split recovery would
     // otherwise yield `a--b`/`x-y`, which the pretty-printer cannot re-emit.
     // Declaring clauses (SETS/CONSTANTS/VARIABLES) take mathematical
-    // identifiers (and reject reserved words, mirroring the strict path);
+    // identifiers (and reject mathematical reserved words, mirroring the
+    // strict path);
     // reference clauses (EXTENDS/SEES/REFINES) take component names.
-    let accepts = |name: &str| {
-        if declares {
-            accepts_declared_name(name)
-        } else {
-            crate::names::is_valid_component_name(name)
-        }
-    };
     let mut result = Vec::new();
-    let Some((span, region)) = clause_region(text, keyword, bound) else {
+    let Some((span, region)) = clause_region(text, keyword, bound, positions) else {
         return RecoveredClause::absent(result);
     };
     let spelling = crate::keywords::spell(keyword);
@@ -2698,7 +2739,7 @@ fn recover_identifiers(
         result.extend(
             extract_identifiers(content, base)
                 .into_iter()
-                .filter(|(name, _)| accepts(name)),
+                .filter(|(name, _)| accepts_required_clause_name(keyword, name)),
         );
     }
     RecoveredClause {
@@ -2723,10 +2764,11 @@ fn recover_labeled_predicates(
     keyword: KeywordId,
     label: &str,
     bound: usize,
+    positions: &[RecoveryPosition],
     errors: &mut Vec<ParseError>,
 ) -> RecoveredClause<Vec<LabeledPredicate>> {
     let mut result = Vec::new();
-    let Some((span, region)) = clause_region(text, keyword, bound) else {
+    let Some((span, region)) = clause_region(text, keyword, bound, positions) else {
         return RecoveredClause::absent(result);
     };
     let spelling = crate::keywords::spell(keyword);
@@ -2991,10 +3033,17 @@ fn leading_label(content: &str) -> Option<&str> {
 fn recover_theorem_predicates(
     text: &RecoveryText,
     bound: usize,
+    positions: &[RecoveryPosition],
     errors: &mut Vec<ParseError>,
 ) -> RecoveredClause<Vec<LabeledPredicate>> {
-    let mut recovered =
-        recover_labeled_predicates(text, KeywordId::Theorems, "theorem", bound, errors);
+    let mut recovered = recover_labeled_predicates(
+        text,
+        KeywordId::Theorems,
+        "theorem",
+        bound,
+        positions,
+        errors,
+    );
     for p in &mut recovered.data {
         p.is_theorem = true;
     }
@@ -3147,12 +3196,19 @@ pub fn parse_components_with_recovery(input: &str) -> ParseResult<Vec<Component>
 fn component_header_starts(text: &RecoveryText) -> Vec<usize> {
     let mut starts = Vec::new();
     let end = text.masked.len();
+    let protected_names: Vec<Span> = [
+        crate::keywords::scope::CONTEXT,
+        crate::keywords::scope::MACHINE,
+    ]
+    .into_iter()
+    .flat_map(|scope| recovery_clause_positions(text, scope, 0, end))
+    .filter_map(|(pos, keyword, len)| required_clause_name_span(text, keyword, pos + len, end))
+    .collect();
     for keyword in ["CONTEXT", "MACHINE"] {
         let mut from = 0;
         while let Some(pos) = find_keyword_word(text, keyword, from, end) {
-            if text.masked[line_start(&text.masked, pos)..pos]
-                .chars()
-                .all(char::is_whitespace)
+            if is_line_anchored(&text.masked, pos)
+                && !protected_names.iter().any(|span| span.start == pos)
             {
                 starts.push(pos);
             }
@@ -3539,9 +3595,11 @@ fn parse_context_with_recovery(
     // Try to parse each clause independently. Contexts have no event
     // section, so the clause scan is unbounded.
     let bound = text.masked.len();
-    let extends = recover_identifiers(text, KeywordId::Extends, bound);
+    let scope = crate::keywords::scope::CONTEXT;
+    let positions = recovery_clause_positions(text, scope, 0, bound);
+    let extends = recover_identifiers(text, KeywordId::Extends, bound, &positions);
     context.extends = extends.data.into_iter().map(|(name, _)| name).collect();
-    let sets = recover_identifiers(text, KeywordId::Sets, bound);
+    let sets = recover_identifiers(text, KeywordId::Sets, bound, &positions);
     context.sets.extend(
         sets.data
             .into_iter()
@@ -3551,15 +3609,22 @@ fn parse_context_with_recovery(
                 span: Some(span),
             }),
     );
-    let constants = recover_identifiers(text, KeywordId::Constants, bound);
+    let constants = recover_identifiers(text, KeywordId::Constants, bound, &positions);
     context.constants = constants
         .data
         .into_iter()
         .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
-    let axioms = recover_labeled_predicates(text, KeywordId::Axioms, "axiom", bound, &mut errors);
+    let axioms = recover_labeled_predicates(
+        text,
+        KeywordId::Axioms,
+        "axiom",
+        bound,
+        &positions,
+        &mut errors,
+    );
     context.axioms = axioms.data;
-    let theorems = recover_theorem_predicates(text, bound, &mut errors);
+    let theorems = recover_theorem_predicates(text, bound, &positions, &mut errors);
     context.axioms.extend(theorems.data);
 
     // Record each clause's source region (folding/outline consume these even in
@@ -3607,27 +3672,36 @@ fn parse_machine_with_recovery(
     // precede the event section, so bound the scan by its start: an
     // event-level REFINES (or a guard that parses like an invariant) must
     // not be recovered as machine-level data.
-    let bound = first_event_region_start(text);
-    let refines = recover_identifiers(text, KeywordId::Refines, bound);
+    let scope = crate::keywords::scope::MACHINE;
+    let positions = recovery_clause_positions(text, scope, 0, text.masked.len());
+    let bound = first_event_region_start(text, &positions);
+    let refines = recover_identifiers(text, KeywordId::Refines, bound, &positions);
     machine.refines = refines.data.into_iter().next().map(|(name, _)| name);
-    let sees = recover_identifiers(text, KeywordId::Sees, bound);
+    let sees = recover_identifiers(text, KeywordId::Sees, bound, &positions);
     machine.sees = sees.data.into_iter().map(|(name, _)| name).collect();
-    let variables = recover_identifiers(text, KeywordId::Variables, bound);
+    let variables = recover_identifiers(text, KeywordId::Variables, bound, &positions);
     machine.variables = variables
         .data
         .into_iter()
         .map(|(name, span)| NamedElement::with_span(name, span))
         .collect();
-    let invariants =
-        recover_labeled_predicates(text, KeywordId::Invariants, "invariant", bound, &mut errors);
+    let invariants = recover_labeled_predicates(
+        text,
+        KeywordId::Invariants,
+        "invariant",
+        bound,
+        &positions,
+        &mut errors,
+    );
     machine.invariants = invariants.data;
-    let theorems = recover_theorem_predicates(text, bound, &mut errors);
+    let theorems = recover_theorem_predicates(text, bound, &positions, &mut errors);
     machine.invariants.extend(theorems.data);
 
     // The variant has no data-recovery helper; record its region from the same
     // single-scan source of truth as the clauses above (a `ClauseRegion` is
     // `Copy`, so this stays usable after it is collected into `clauses`).
-    let variant = clause_region(text, KeywordId::Variant, bound).map(|(_, region)| region);
+    let variant =
+        clause_region(text, KeywordId::Variant, bound, &positions).map(|(_, region)| region);
 
     // Best-effort recovery of the variant expression (for the outline): the
     // region's content past the `VARIANT` keyword, if it parses.
@@ -3756,19 +3830,30 @@ fn dedup_recovered_errors(errors: &mut Vec<ParseError>) {
     }
 }
 
-/// Byte offset where the event section begins: the first whole-word
-/// `EVENTS`/`EVENT`/`INITIALISATION`, or the end of the text if there is none.
-fn first_event_region_start(text: &RecoveryText) -> usize {
-    [
-        KeywordId::Events,
-        KeywordId::Event,
-        KeywordId::Initialisation,
-    ]
-    .iter()
-    .flat_map(|&id| crate::keywords::keyword(id).spellings)
-    .filter_map(|spelling| find_keyword_word(text, spelling, 0, text.masked.len()))
-    .min()
-    .unwrap_or(text.masked.len())
+/// Byte offset where the event section begins. Prefer the structurally
+/// classified machine `EVENTS` clause; the raw event spellings remain a
+/// fallback for malformed input that omitted the section keyword entirely.
+fn first_event_region_start(text: &RecoveryText, positions: &[RecoveryPosition]) -> usize {
+    if let Some((pos, _, _)) = positions
+        .iter()
+        .copied()
+        .find(|&(_, keyword, _)| keyword == KeywordId::Events)
+    {
+        return pos;
+    }
+    let protected_names: Vec<Span> = positions
+        .iter()
+        .filter_map(|&(pos, keyword, len)| {
+            required_clause_name_span(text, keyword, pos + len, text.masked.len())
+        })
+        .collect();
+    [KeywordId::Event, KeywordId::Initialisation]
+        .iter()
+        .flat_map(|&id| crate::keywords::keyword(id).spellings)
+        .filter_map(|spelling| find_keyword_word(text, spelling, 0, text.masked.len()))
+        .filter(|pos| !protected_names.iter().any(|span| span.start == *pos))
+        .min()
+        .unwrap_or(text.masked.len())
 }
 
 /// Find `needle_upper` (an ASCII-uppercase keyword) in the uppercased
@@ -3804,6 +3889,150 @@ fn find_keyword_word(
     None
 }
 
+/// Whether `pos` starts a non-whitespace token on its line.
+fn is_line_anchored(s: &str, pos: usize) -> bool {
+    s[line_start(s, pos)..pos].chars().all(char::is_whitespace)
+}
+
+fn last_formula_segment_start(text: &RecoveryText, content_start: usize, boundary: usize) -> usize {
+    let preceding = text.labels.partition_point(|label| label.start < boundary);
+    text.labels[..preceding]
+        .last()
+        .filter(|label| label.start >= content_start)
+        .map_or(content_start, |label| {
+            predicate_start_for_label(&text.masked, content_start, label.start)
+        })
+}
+
+#[derive(Clone, Copy)]
+enum RecoveryFormulaKind {
+    Component,
+    Event,
+}
+
+impl RecoveryFormulaKind {
+    fn contains(self, keyword: KeywordId) -> bool {
+        match self {
+            Self::Component => matches!(
+                keyword,
+                KeywordId::Axioms
+                    | KeywordId::Invariants
+                    | KeywordId::Theorems
+                    | KeywordId::Variant
+            ),
+            Self::Event => matches!(
+                keyword,
+                KeywordId::Where | KeywordId::With | KeywordId::Witness | KeywordId::Then
+            ),
+        }
+    }
+
+    fn ends_before(
+        self,
+        text: &RecoveryText,
+        keyword: KeywordId,
+        content_start: usize,
+        boundary: usize,
+    ) -> bool {
+        let segment_start = last_formula_segment_start(text, content_start, boundary);
+        let content = text.masked[segment_start..boundary].trim();
+        if content.is_empty() {
+            return false;
+        }
+        match (self, keyword) {
+            (Self::Component, KeywordId::Axioms | KeywordId::Invariants | KeywordId::Theorems)
+            | (Self::Event, KeywordId::Where | KeywordId::With | KeywordId::Witness) => {
+                try_parse_labeled_predicate_from_text(content).is_ok()
+            }
+            (Self::Component, KeywordId::Variant) => parse_expression_str(content).is_ok(),
+            (Self::Event, KeywordId::Then) => try_parse_labeled_action_from_text(content).is_ok(),
+            _ => true,
+        }
+    }
+}
+
+/// Classify sorted structural-keyword candidates while preserving required
+/// names and structural words used inside formulas.
+fn classify_recovery_positions(
+    text: &RecoveryText,
+    mut candidates: Vec<RecoveryPosition>,
+    to: usize,
+    formula_kind: RecoveryFormulaKind,
+    mut protected_name: Option<Span>,
+) -> Vec<RecoveryPosition> {
+    candidates.sort_unstable_by_key(|&(pos, _, _)| pos);
+    let mut positions = Vec::new();
+    let mut formula_clause = None;
+    for (pos, keyword, len) in candidates {
+        if protected_name.is_some_and(|span| span.start == pos) {
+            protected_name = None;
+            continue;
+        }
+        if let Some((active_keyword, content_start)) = formula_clause
+            && !is_line_anchored(&text.masked, pos)
+            && !formula_kind.ends_before(text, active_keyword, content_start, pos)
+        {
+            continue;
+        }
+
+        positions.push((pos, keyword, len));
+        protected_name = required_clause_name_span(text, keyword, pos + len, to);
+        formula_clause = formula_kind
+            .contains(keyword)
+            .then_some((keyword, pos + len));
+    }
+    positions
+}
+
+/// Structurally classified context/machine clause boundaries in source order.
+///
+/// The pass is forward and scope-aware: after an actual clause header it marks
+/// only that header's required first name as an identifier position, and it
+/// parses formula prefixes before accepting inline boundaries. This mirrors the
+/// grammar follow-set without repeatedly inferring roles from raw preceding
+/// keyword spellings.
+fn recovery_clause_positions(
+    text: &RecoveryText,
+    scope: u8,
+    from: usize,
+    to: usize,
+) -> Vec<(usize, KeywordId, usize)> {
+    let component_spelling = if scope == crate::keywords::scope::CONTEXT {
+        crate::keywords::spell(KeywordId::Context)
+    } else {
+        crate::keywords::spell(KeywordId::Machine)
+    };
+    let header = find_keyword_word(text, component_spelling, from, to);
+    let scan_from = header.map_or(from, |pos| pos + component_spelling.len());
+    let protected_name = header.and_then(|pos| {
+        first_identifier_candidate(
+            text.masked[pos + component_spelling.len()..]
+                .lines()
+                .next()
+                .unwrap_or(""),
+            pos + component_spelling.len(),
+        )
+        .filter(|(name, _)| crate::names::is_valid_component_name(name))
+        .map(|(_, span)| span)
+    });
+
+    let mut candidates = Vec::new();
+    for keyword in crate::keywords::iter_completion_scope(scope) {
+        for &spelling in keyword.spellings {
+            for pos in keyword_positions(text, spelling, scan_from, to) {
+                candidates.push((pos, keyword.id, spelling.len()));
+            }
+        }
+    }
+    classify_recovery_positions(
+        text,
+        candidates,
+        to,
+        RecoveryFormulaKind::Component,
+        protected_name,
+    )
+}
+
 /// Byte offsets of every whole-word occurrence of `needle_upper` (an
 /// ASCII-uppercase keyword) in `[from, to)`, in source order.
 fn keyword_positions(
@@ -3821,33 +4050,125 @@ fn keyword_positions(
     positions
 }
 
-/// Find the content range of an event clause within `[from, to)`: returns
-/// `(content_start, content_end)` where `content_start` is just after the
-/// clause keyword and `content_end` is the earliest of any `boundary_kws`
-/// occurrence after `content_start`. Returns `None` if no spelling of
-/// `clause_kw` appears in the range.
-fn clause_content_range(
+struct RecoveredEventRegion {
+    header: usize,
+    header_name: Option<(String, Span)>,
+    is_initialisation: bool,
+    header_target: Option<(String, Span, bool)>,
+    body_end: usize,
+    positions: Vec<RecoveryPosition>,
+}
+
+/// Structurally locate and classify each event once, retaining the decoded
+/// header and clause positions for AST recovery.
+fn recovered_event_regions(
     text: &RecoveryText,
-    clause_kw: KeywordId,
-    boundary_kws: &[KeywordId],
     from: usize,
     to: usize,
-) -> Option<(usize, usize)> {
-    let (kw_pos, kw_len) = crate::keywords::keyword(clause_kw)
-        .spellings
-        .iter()
-        .filter_map(|&s| find_keyword_word(text, s, from, to).map(|p| (p, s.len())))
-        .min_by_key(|&(p, _)| p)?;
+) -> Vec<RecoveredEventRegion> {
+    let event_kw = crate::keywords::spell(KeywordId::Event);
+    let init_kw = crate::keywords::spell(KeywordId::Initialisation);
+    let end_len = crate::keywords::spell(KeywordId::End).len();
+    let mut regions = Vec::new();
+    let mut search = from;
+    while let Some(pos) = find_keyword_word(text, event_kw, search, to) {
+        let kw_end = pos + event_kw.len();
+        let header_line = text.masked[kw_end..].lines().next().unwrap_or("");
+        let header_name = first_identifier_candidate(header_line, kw_end)
+            .filter(|(name, _)| crate::names::is_valid_component_name(name))
+            .map(|(name, span)| (name.to_string(), span));
+        let name_end = header_name.as_ref().map_or(kw_end, |(_, span)| span.end);
+        let is_initialisation = strip_keyword_prefix(header_line.trim_start(), init_kw).is_some();
+        let header_target = (!is_initialisation)
+            .then(|| event_header_target(text, name_end, to))
+            .flatten();
+        let body_start = header_target
+            .as_ref()
+            .map_or(name_end, |(_, span, _)| span.end);
 
-    // The content ends at the earliest following boundary keyword, or at `to`
-    // if none appears. Take the minimum over every boundary spelling's first
-    // occurrence, mirroring the `min_by_key` used for the clause keyword above.
-    let content_start = kw_pos + kw_len;
-    let content_end = boundary_kws
+        // A line-anchored EVENT is the missing-END recovery fallback. Inline
+        // headers are found after the preceding END advances `search` here.
+        let mut header_search = name_end;
+        let next_header = loop {
+            let Some(candidate) = find_keyword_word(text, event_kw, header_search, to) else {
+                break to;
+            };
+            if is_line_anchored(&text.masked, candidate) {
+                break candidate;
+            }
+            header_search = candidate + event_kw.len();
+        };
+        let mut positions =
+            event_clause_positions(text, is_initialisation, body_start, next_header);
+        let end_index = positions
+            .iter()
+            .position(|&(_, keyword, _)| keyword == KeywordId::End);
+        let body_end = end_index.map_or(next_header, |index| positions[index].0 + end_len);
+        if let Some(index) = end_index {
+            positions.truncate(index + 1);
+        }
+        regions.push(RecoveredEventRegion {
+            header: pos,
+            header_name,
+            is_initialisation,
+            header_target,
+            body_end,
+            positions,
+        });
+        search = body_end;
+        if search <= pos {
+            search = kw_end;
+        }
+    }
+    regions
+}
+
+/// Structurally classified boundaries inside one recovered event.
+fn event_clause_positions(
+    text: &RecoveryText,
+    is_initialisation: bool,
+    from: usize,
+    to: usize,
+) -> Vec<RecoveryPosition> {
+    let mut candidates = Vec::new();
+    let mut add_keyword = |keyword: KeywordId| {
+        for &spelling in crate::keywords::keyword(keyword).spellings {
+            for pos in keyword_positions(text, spelling, from, to) {
+                candidates.push((pos, keyword, spelling.len()));
+            }
+        }
+    };
+    if is_initialisation {
+        for keyword in [KeywordId::Then, KeywordId::End] {
+            add_keyword(keyword);
+        }
+    } else {
+        for keyword in crate::keywords::iter_completion_scope(crate::keywords::scope::EVENT)
+            .filter(|keyword| keyword.id != KeywordId::Extends)
+        {
+            add_keyword(keyword.id);
+        }
+    }
+    classify_recovery_positions(text, candidates, to, RecoveryFormulaKind::Event, None)
+}
+
+/// Derive an event clause's content range from its classified positions.
+fn clause_content_range(
+    positions: &[RecoveryPosition],
+    clause_kw: KeywordId,
+    boundary_kws: &[KeywordId],
+    to: usize,
+) -> Option<(usize, usize)> {
+    let (index, &(kw_pos, _, kw_len)) = positions
         .iter()
-        .flat_map(|&bkw| crate::keywords::keyword(bkw).spellings.iter().copied())
-        .filter_map(|s| find_keyword_word(text, s, content_start, to))
-        .min()
+        .enumerate()
+        .find(|&(_, &(_, keyword, _))| keyword == clause_kw)?;
+
+    let content_start = kw_pos + kw_len;
+    let content_end = positions[index + 1..]
+        .iter()
+        .find(|&&(_, keyword, _)| boundary_kws.contains(&keyword))
+        .map(|&(pos, _, _)| pos)
         .unwrap_or(to);
     Some((content_start, content_end))
 }
@@ -3857,38 +4178,56 @@ fn clause_content_range(
 /// INITIALISATION has only a THEN clause and is handled separately.
 fn recover_common_event_clauses(
     text: &RecoveryText,
+    positions: &[RecoveryPosition],
     with: &mut Vec<LabeledPredicate>,
     witnesses: &mut Vec<LabeledPredicate>,
     actions: &mut Vec<LabeledAction>,
-    kw_end: usize,
     body_end: usize,
     errors: &mut Vec<ParseError>,
 ) {
     if let Some((content_start, content_end)) = clause_content_range(
-        text,
+        positions,
         KeywordId::With,
         &[KeywordId::Witness, KeywordId::Then, KeywordId::End],
-        kw_end,
         body_end,
     ) {
         *with =
             recover_predicates_in_range(text, content_start, content_end, "with predicate", errors);
     }
     if let Some((content_start, content_end)) = clause_content_range(
-        text,
+        positions,
         KeywordId::Witness,
         &[KeywordId::Then, KeywordId::End],
-        kw_end,
         body_end,
     ) {
         *witnesses =
             recover_predicates_in_range(text, content_start, content_end, "witness", errors);
     }
     if let Some((content_start, content_end)) =
-        clause_content_range(text, KeywordId::Then, &[KeywordId::End], kw_end, body_end)
+        clause_content_range(positions, KeywordId::Then, &[KeywordId::End], body_end)
     {
         *actions = recover_actions_in_range(text, content_start, content_end, errors);
     }
+}
+
+/// Optional `REFINES`/`EXTENDS` target immediately after a named event.
+fn event_header_target(
+    text: &RecoveryText,
+    name_end: usize,
+    next_header: usize,
+) -> Option<(String, Span, bool)> {
+    let header_tail = text.masked.get(name_end..next_header)?;
+    let (keyword, keyword_span) = first_identifier_candidate(header_tail, name_end)?;
+    let keyword = crate::keywords::lookup(keyword)?.id;
+    if !matches!(keyword, KeywordId::Extends | KeywordId::Refines) {
+        return None;
+    }
+    first_identifier_candidate(
+        &text.masked[keyword_span.end..next_header],
+        keyword_span.end,
+    )
+    .filter(|(name, _)| crate::names::is_valid_component_name(name))
+    .map(|(name, span)| (name.to_string(), span, keyword == KeywordId::Extends))
 }
 
 /// Recover a machine's events from the event region.
@@ -3906,44 +4245,29 @@ fn recover_events(
     events_start: usize,
     errors: &mut Vec<ParseError>,
 ) -> (Option<InitialisationEvent>, Vec<Event>, Option<usize>) {
-    let text_end = text.masked.len();
-    let end_kw = crate::keywords::spell(KeywordId::End);
-    let event_kw = crate::keywords::spell(KeywordId::Event);
-    let init_kw = crate::keywords::spell(KeywordId::Initialisation);
-
-    let ends = keyword_positions(text, end_kw, events_start, text_end);
-    let headers = keyword_positions(text, event_kw, events_start, text_end);
+    let regions = recovered_event_regions(text, events_start, text.masked.len());
 
     let mut initialisation = None;
     let mut events = Vec::new();
     // The EVENTS clause runs from its header through the last event's END.
     let mut events_end = None;
 
-    for (i, &header) in headers.iter().enumerate() {
-        let kw_end = header + event_kw.len();
-        let next_header = headers.get(i + 1).copied().unwrap_or(text_end);
-        // The event closes at the first END after its header; a malformed event
-        // with no END before the next header spans up to that header.
-        let body_end = ends
-            .iter()
-            .copied()
-            .find(|&e| e >= kw_end && e < next_header)
-            .map_or(next_header, |e| (e + end_kw.len()).min(text_end));
+    for region in regions {
+        let RecoveredEventRegion {
+            header,
+            header_name,
+            is_initialisation,
+            header_target,
+            body_end,
+            positions,
+        } = region;
         let span = Span {
             start: header,
             end: body_end,
         };
         events_end = Some(events_end.map_or(body_end, |prev: usize| prev.max(body_end)));
 
-        // The rest of the header line distinguishes INITIALISATION from a named
-        // event.
-        let header_line = text.masked[kw_end..].lines().next().unwrap_or("");
-        let rest = header_line.trim_start();
-        if strip_keyword_prefix(rest, init_kw).is_some() {
-            // The name token is the event's own INITIALISATION keyword, at the
-            // start of the header tail — already located by the prefix check, so
-            // no second scan is needed.
-            let name_start = kw_end + (header_line.len() - rest.len());
+        if is_initialisation {
             let mut init = InitialisationEvent {
                 actions: Vec::new(),
                 comment: None,
@@ -3951,35 +4275,21 @@ fn recover_events(
                 with: Vec::new(),
                 witnesses: Vec::new(),
                 span: Some(span),
-                name_span: Some(Span {
-                    start: name_start,
-                    end: name_start + init_kw.len(),
-                }),
+                name_span: header_name.map(|(_, span)| span),
             };
             // INITIALISATION has only a THEN/BEGIN action clause; the grammar
             // forbids WITH/WITNESS here and the strict parser always leaves
             // those empty, so recover just the actions rather than synthesizing
             // clauses a valid parse could never produce.
             if let Some((content_start, content_end)) =
-                clause_content_range(text, KeywordId::Then, &[KeywordId::End], kw_end, body_end)
+                clause_content_range(&positions, KeywordId::Then, &[KeywordId::End], body_end)
             {
                 init.actions = recover_actions_in_range(text, content_start, content_end, errors);
             }
             initialisation = Some(init);
         } else {
-            let (name, name_span) = extract_identifiers(header_line, kw_end)
-                .into_iter()
-                .next()
-                .map_or_else(|| (String::from("unknown"), None), |(n, s)| (n, Some(s)));
-            let mut event = Event::new(name);
-            event.span = Some(span);
-            event.name_span = name_span;
-
-            // Recover ANY-clause parameters so goto-definition and semantic
-            // tokens keep working for event parameters even when a guard or
-            // action failed to parse.
-            if let Some((content_start, content_end)) = clause_content_range(
-                text,
+            let any_range = clause_content_range(
+                &positions,
                 KeywordId::Any,
                 &[
                     KeywordId::Where,
@@ -3988,9 +4298,23 @@ fn recover_events(
                     KeywordId::Then,
                     KeywordId::End,
                 ],
-                kw_end,
                 body_end,
-            ) {
+            );
+            let (name, name_span) =
+                header_name.map_or_else(|| (String::from("unknown"), None), |(n, s)| (n, Some(s)));
+            let mut event = Event::new(name);
+            event.span = Some(span);
+            event.name_span = name_span;
+            if let Some((target, target_span, extended)) = header_target {
+                event.refines = Some(target);
+                event.refines_span = Some(target_span);
+                event.extended = extended;
+            }
+
+            // Recover ANY-clause parameters so goto-definition and semantic
+            // tokens keep working for event parameters even when a guard or
+            // action failed to parse.
+            if let Some((content_start, content_end)) = any_range {
                 event.parameters =
                     extract_identifiers(&text.masked[content_start..content_end], content_start)
                         .into_iter()
@@ -4001,7 +4325,7 @@ fn recover_events(
 
             // Recover WHERE/WHEN clause guards.
             if let Some((content_start, content_end)) = clause_content_range(
-                text,
+                &positions,
                 KeywordId::Where,
                 &[
                     KeywordId::With,
@@ -4009,7 +4333,6 @@ fn recover_events(
                     KeywordId::Then,
                     KeywordId::End,
                 ],
-                kw_end,
                 body_end,
             ) {
                 event.guards =
@@ -4018,10 +4341,10 @@ fn recover_events(
 
             recover_common_event_clauses(
                 text,
+                &positions,
                 &mut event.with,
                 &mut event.witnesses,
                 &mut event.actions,
-                kw_end,
                 body_end,
                 errors,
             );
@@ -4051,8 +4374,8 @@ fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 /// component's default `"unknown"` name.
 fn component_name_after(text: &RecoveryText, keyword_pos: usize, keyword: &str) -> Option<String> {
     let rest = text.masked[keyword_pos + keyword.len()..].lines().next()?;
-    extract_identifier(rest)
-        .ok()
+    first_identifier_candidate(rest, 0)
+        .map(|(name, _)| name.to_string())
         .filter(|name| crate::names::is_valid_component_name(name))
 }
 
@@ -4065,44 +4388,21 @@ fn component_name_after(text: &RecoveryText, keyword_pos: usize, keyword: &str) 
 /// the keyword table) are uppercase by convention, so no case mapping happens
 /// here — which is also what keeps the offsets valid: Unicode `to_uppercase`
 /// could change byte length (ß → SS).
-fn extract_clause_content(text: &RecoveryText, clause_keyword: &str, bound: usize) -> Option<Span> {
-    // Find the start of this clause
-    let start = find_keyword_word(text, clause_keyword, 0, bound)?;
-
-    // Find the end of this clause: the next clause keyword, THEOREMS, or END.
-    // Each scan is capped at the best end found so far.
-    let mut end = bound;
-    for keyword in crate::keywords::recovery_boundary_spellings() {
-        if keyword.eq_ignore_ascii_case(clause_keyword) {
-            continue;
-        }
-        if let Some(pos) = find_keyword_word(text, keyword, start + clause_keyword.len(), end) {
-            end = pos;
-        }
-    }
+fn extract_clause_content(
+    clause_keyword: KeywordId,
+    bound: usize,
+    positions: &[RecoveryPosition],
+) -> Option<Span> {
+    let (index, &(start, _, _)) = positions
+        .iter()
+        .enumerate()
+        .find(|&(_, &(start, keyword, _))| keyword == clause_keyword && start < bound)?;
+    let end = positions
+        .get(index + 1)
+        .map(|&(pos, _, _)| pos.min(bound))
+        .unwrap_or(bound);
 
     Some(Span { start, end })
-}
-
-/// Extract an identifier from a string (handles commas and whitespace)
-fn extract_identifier(s: &str) -> Result<String, ParseError> {
-    let s = s.trim().trim_end_matches(',').trim();
-    if s.is_empty() {
-        return Err(ParseError::MissingVariable);
-    }
-
-    // Take the first word as identifier
-    let id = s
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .next()
-        .unwrap_or("")
-        .trim();
-
-    if id.is_empty() || !id.starts_with(|c: char| c.is_alphabetic()) {
-        return Err(ParseError::MissingVariable);
-    }
-
-    Ok(id.to_string())
 }
 
 /// Split a clause line into declared identifiers, each paired with its [`Span`].
@@ -4118,17 +4418,13 @@ fn extract_identifier(s: &str) -> Result<String, ParseError> {
 fn extract_identifiers(s: &str, base: usize) -> Vec<(String, Span)> {
     s.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|part| !part.is_empty())
-        .filter_map(|id| {
-            if id.chars().next().is_some_and(|c| c.is_alphabetic()) {
-                let start = base + subslice_offset(s, id);
-                let span = Span {
-                    start,
-                    end: start + id.len(),
-                };
-                Some((id.to_string(), span))
-            } else {
-                None
-            }
+        .map(|id| {
+            let start = base + subslice_offset(s, id);
+            let span = Span {
+                start,
+                end: start + id.len(),
+            };
+            (id.to_string(), span)
         })
         .collect()
 }

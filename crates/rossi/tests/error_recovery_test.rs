@@ -3,7 +3,7 @@
 //! These tests verify that the parser can recover from syntax errors
 //! and produce partial ASTs with error information.
 
-use rossi::{Component, parse_components_with_recovery, parse_with_recovery};
+use rossi::{Component, parse, parse_components_with_recovery, parse_with_recovery};
 
 /// Unwrap the recovered component as a context, failing the test otherwise.
 fn expect_context(result: &rossi::ParseResult<Component>) -> &rossi::ast::Context {
@@ -100,6 +100,400 @@ fn recovery_records_declaration_spans() {
     // the broken invariant.
     assert_eq!(span.start, source.find("    counter\n").unwrap() + 4);
     assert_eq!(&source[span.start..span.end], "counter");
+}
+
+#[test]
+fn recovery_accepts_underscore_names_like_strict_parser() {
+    let strict_source = "\
+MACHINE _m
+SEES
+    _ctx
+VARIABLES
+    _x
+INVARIANTS
+    @i _x ∈ ℤ
+EVENTS
+    EVENT _evt
+    ANY
+        _p
+    WHERE
+        @g _p = _x
+    END
+END
+";
+    let recovered_source = strict_source.replace("@i _x ∈ ℤ", "@i _x ∈");
+
+    let strict = parse(strict_source).expect("strict parsing accepts leading underscores");
+    let recovered = parse_with_recovery(&recovered_source);
+    let strict = match strict {
+        Component::Machine(machine) => machine,
+        other => panic!("expected a strict machine, got {other:?}"),
+    };
+    let recovered = expect_machine(&recovered);
+
+    assert_eq!(recovered.name, strict.name);
+    assert_eq!(recovered.sees, strict.sees);
+    assert_eq!(recovered.variables[0].name, strict.variables[0].name);
+    assert_eq!(recovered.events[0].name, strict.events[0].name);
+    assert_eq!(
+        recovered.events[0].parameters[0].name,
+        strict.events[0].parameters[0].name
+    );
+
+    for declaration in [&recovered.variables[0], &recovered.events[0].parameters[0]] {
+        let span = declaration
+            .span
+            .expect("recovered declaration carries a span");
+        assert_eq!(&recovered_source[span.start..span.end], declaration.name);
+    }
+}
+
+#[test]
+fn recovery_accepts_structural_keyword_declarations_like_strict_parser() {
+    let strict_machine = "MACHINE m\nVARIABLES\n    end\nINVARIANTS\n    @i end ∈ ℤ\nEND\n";
+    parse(strict_machine).expect("strict parsing accepts `end` as the first variable");
+    let broken_machine = strict_machine.replace("@i end ∈ ℤ", "@i end ∈");
+    let recovered = parse_with_recovery(&broken_machine);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.variables[0].name, "end");
+
+    let strict_context = "CONTEXT c\nCONSTANTS\n    end\nAXIOMS\n    @a end = end\nEND\n";
+    parse(strict_context).expect("strict parsing accepts `end` as the first constant");
+    let broken_context = strict_context.replace("@a end = end", "@a end =");
+    let recovered = parse_with_recovery(&broken_context);
+    let context = expect_context(&recovered);
+    assert_eq!(context.constants[0].name, "end");
+
+    let strict_event = "\
+MACHINE m
+EVENTS
+    EVENT e
+    ANY
+        end
+    WHERE
+        @g end = end
+    END
+END
+";
+    parse(strict_event).expect("strict parsing accepts `end` as the first parameter");
+    let broken_event = strict_event.replace("@g end = end", "@g end =");
+    let recovered = parse_with_recovery(&broken_event);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.events[0].parameters[0].name, "end");
+}
+
+#[test]
+fn recovery_still_rejects_noncanonical_and_reserved_names() {
+    let source = "\
+MACHINE 1m
+SEES
+    1ctx a--b ä
+VARIABLES
+    1x ä x-y dom _x
+INVARIANTS
+    @i _x ∈
+EVENTS
+    EVENT a--b
+    ANY
+        1p ä p-q dom _p
+    WHERE
+        @g _p = _x
+    END
+END
+";
+
+    let recovered = parse_with_recovery(source);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.name, "unknown");
+    assert!(machine.sees.is_empty());
+    let variables: Vec<&str> = machine
+        .variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect();
+    assert_eq!(variables, ["_x"]);
+    assert_eq!(machine.events[0].name, "unknown");
+    let parameters: Vec<&str> = machine.events[0]
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    assert_eq!(parameters, ["_p"]);
+}
+
+#[test]
+fn recovery_does_not_treat_component_or_reference_names_as_clauses() {
+    let component_name = "MACHINE VARIABLES\nINVARIANTS\n    @i 1 =\nEND\n";
+    let recovered = parse_with_recovery(component_name);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.name, "VARIABLES");
+    assert!(machine.variables.is_empty());
+
+    let reference_name = "\
+MACHINE m
+SEES
+    VARIABLES
+INVARIANTS
+    @i 1 =
+END
+";
+    let recovered = parse_with_recovery(reference_name);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.sees, ["VARIABLES"]);
+    assert!(machine.variables.is_empty());
+}
+
+#[test]
+fn recovery_does_not_readmit_later_structural_keywords_as_names() {
+    let source = "\
+MACHINE m
+VARIABLES x VARIABLES
+INVARIANTS
+    @i x ∈
+END
+";
+    let recovered = parse_with_recovery(source);
+    let machine = expect_machine(&recovered);
+    let variables: Vec<&str> = machine
+        .variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect();
+    assert_eq!(variables, ["x"]);
+}
+
+#[test]
+fn recovery_does_not_protect_a_name_after_an_invalid_leading_comma() {
+    let source = "\
+MACHINE m
+VARIABLES ,
+INVARIANTS
+    @i x ∈
+END
+";
+    let recovered = parse_with_recovery(source);
+    let machine = expect_machine(&recovered);
+    assert!(machine.variables.is_empty());
+}
+
+#[test]
+fn recovery_scopes_event_names_targets_and_any_clauses() {
+    let source = "\
+MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @broken x ∈
+EVENTS
+    EVENT ANY
+    WHERE
+        @g x = any
+    END
+    EVENT refined REFINES any
+    WHERE
+        @g x = any
+    END
+    EVENT target_end REFINES END
+    END
+END
+";
+    let recovered = parse_with_recovery(source);
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.events.len(), 3);
+    assert!(
+        machine
+            .events
+            .iter()
+            .all(|event| event.parameters.is_empty())
+    );
+
+    for event in &machine.events {
+        let span = event.span.expect("recovered event carries a span");
+        let event_text = &source[span.start..span.end];
+        assert!(event_text.trim_end().ends_with("END"));
+        assert_eq!(event_text.matches("\n    END").count(), 1, "{event_text:?}");
+    }
+}
+
+#[test]
+fn recovery_handles_multibyte_whitespace_before_keyword_named_clauses() {
+    let source = "MACHINE\u{a0}m\nVARIABLES\n    x\nINVARIANTS\n    @i x ∈\nEND\n";
+    let recovered = parse_with_recovery(source);
+
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.variables[0].name, "x");
+}
+
+#[test]
+fn recovery_accepts_event_as_an_event_name() {
+    let source = "\
+MACHINE m
+INVARIANTS
+    @broken 1 =
+EVENTS
+    EVENT EVENT
+    END
+END
+";
+    let recovered = parse_with_recovery(source);
+
+    let machine = expect_machine(&recovered);
+    assert_eq!(machine.events.len(), 1);
+    assert_eq!(machine.events[0].name, "EVENT");
+}
+
+#[test]
+fn recovery_uses_component_specific_clause_boundaries() {
+    let strict_source = "\
+MACHINE m
+VARIABLES x CONSTANTS
+INVARIANTS
+    @i x = x
+END
+";
+    let recovered_source = strict_source.replace("@i x = x", "@i x =");
+    let Component::Machine(strict) = parse(strict_source).expect("strict source parses") else {
+        panic!("expected a machine");
+    };
+    let recovered = parse_with_recovery(&recovered_source);
+    let recovered = expect_machine(&recovered);
+
+    let strict_names: Vec<&str> = strict.variables.iter().map(|v| v.name.as_str()).collect();
+    let recovered_names: Vec<&str> = recovered
+        .variables
+        .iter()
+        .map(|v| v.name.as_str())
+        .collect();
+    assert_eq!(recovered_names, strict_names);
+    assert_eq!(recovered_names, ["x", "CONSTANTS"]);
+}
+
+#[test]
+fn recovery_distinguishes_formula_keywords_from_machine_clauses() {
+    let strict_source = "\
+MACHINE m
+INVARIANTS
+    @valid SEES = SEES
+VARIABLES x
+END
+";
+    let recovered_source = strict_source.replace("@valid", "@broken x ∈\n    @valid");
+    let Component::Machine(strict) = parse(strict_source).expect("strict source parses") else {
+        panic!("expected a machine");
+    };
+    let recovered = parse_with_recovery(&recovered_source);
+    let recovered = expect_machine(&recovered);
+
+    assert_eq!(strict.variables[0].name, "x");
+    assert_eq!(recovered.variables[0].name, "x");
+}
+
+#[test]
+fn recovery_keeps_keyword_named_variables_before_the_event_section() {
+    for name in ["EVENTS", "EVENT", "INITIALISATION"] {
+        let strict_source =
+            format!("MACHINE m\nVARIABLES {name} x\nINVARIANTS\n    @i {name} = {name}\nEND\n");
+        parse(&strict_source).expect("strict source parses");
+        let recovered_source =
+            strict_source.replace(&format!("@i {name} = {name}"), &format!("@i {name} ="));
+        let recovered = parse_with_recovery(&recovered_source);
+        let machine = expect_machine(&recovered);
+        let names: Vec<&str> = machine.variables.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, [name, "x"], "failed for {name}");
+        assert!(machine.events.is_empty(), "failed for {name}");
+    }
+}
+
+#[test]
+fn recovery_preserves_event_header_metadata() {
+    for (keyword, extended) in [("REFINES", false), ("EXTENDS", true)] {
+        let source = format!(
+            "MACHINE m\nINVARIANTS\n    @broken 1 =\nEVENTS\n    EVENT e {keyword} abstract\n    WHERE\n        @g 1 = 1\n    END\nEND\n"
+        );
+        let recovered = parse_with_recovery(&source);
+        let event = &expect_machine(&recovered).events[0];
+
+        assert_eq!(event.refines.as_deref(), Some("abstract"));
+        assert_eq!(event.extended, extended);
+        let span = event.refines_span.expect("target span recovered");
+        assert_eq!(&source[span.start..span.end], "abstract");
+    }
+}
+
+#[test]
+fn recovery_keeps_formula_keywords_inside_event_clauses() {
+    for strict_source in [
+        "MACHINE m\nVARIABLES then x\nINVARIANTS @i x ∈ ℤ\nEVENTS EVENT e WHERE @g then = then THEN x := then END END\n",
+        "MACHINE m\nVARIABLES end x\nINVARIANTS @i x ∈ ℤ\nEVENTS EVENT e WHERE @g end = end THEN x := x END END\n",
+        "MACHINE m\nVARIABLES event x\nINVARIANTS @i x ∈ ℤ\nEVENTS EVENT e WHERE @g event = event THEN x := x END END\n",
+    ] {
+        let recovered_source = strict_source.replace("@i x ∈ ℤ", "@i x ∈");
+        parse(strict_source).expect("strict source parses");
+        let recovered = parse_with_recovery(&recovered_source);
+        let event = &expect_machine(&recovered).events[0];
+
+        assert_eq!(
+            event.guards.len(),
+            1,
+            "{strict_source}\nevent={event:?}\nerrors={:?}",
+            recovered.errors
+        );
+        assert_eq!(event.actions.len(), 1, "{strict_source}\nevent={event:?}");
+        let span = event.span.expect("event span recovered");
+        assert_eq!(&recovered_source[span.end - "END".len()..span.end], "END");
+    }
+}
+
+#[test]
+fn recovery_does_not_apply_named_targets_to_initialisation() {
+    let source = "\
+MACHINE m
+INVARIANTS
+    @broken 1 =
+EVENTS
+    EVENT INITIALISATION REFINES END
+END
+";
+    let recovered = parse_with_recovery(source);
+    let init = expect_machine(&recovered)
+        .initialisation
+        .as_ref()
+        .expect("initialisation recovered");
+    let span = init.span.expect("initialisation span recovered");
+
+    assert_eq!(
+        source[span.start..span.end].trim(),
+        "EVENT INITIALISATION REFINES END"
+    );
+}
+
+#[test]
+fn multi_component_recovery_ignores_keyword_named_declarations_as_headers() {
+    let source = "\
+MACHINE m1
+VARIABLES
+    MACHINE
+INVARIANTS
+    @i MACHINE = MACHINE
+END
+
+MACHINE m2
+INVARIANTS
+    @j 1 =
+END
+";
+    let recovered = parse_components_with_recovery(source);
+    let components = recovered.component.expect("components recovered");
+
+    assert_eq!(components.len(), 2);
+    let first = components
+        .iter()
+        .find_map(|component| match component {
+            Component::Machine(machine) if machine.name == "m1" => Some(machine),
+            _ => None,
+        })
+        .expect("first machine recovered");
+    assert_eq!(first.variables[0].name, "MACHINE");
 }
 
 #[test]
