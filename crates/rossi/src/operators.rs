@@ -1110,6 +1110,34 @@ pub fn operator_at(line: &str, char_pos: usize) -> Option<(&'static str, std::op
     None
 }
 
+/// Maximal munch at a byte offset: the longest operator spelling beginning at
+/// `byte_pos`, together with its byte range.
+pub(crate) fn operator_starting_at(
+    input: &str,
+    byte_pos: usize,
+) -> Option<(&'static str, std::ops::Range<usize>)> {
+    if !input.is_char_boundary(byte_pos) {
+        return None;
+    }
+    let rest = &input[byte_pos..];
+    for &(text, _) in SPELLINGS_BY_LENGTH.iter() {
+        if !rest.starts_with(text) {
+            continue;
+        }
+        let end = byte_pos + text.len();
+        let blocked = is_alphabetic_op(text)
+            && (input[..byte_pos]
+                .chars()
+                .next_back()
+                .is_some_and(is_word_char)
+                || input[end..].chars().next().is_some_and(is_word_char));
+        if !blocked {
+            return Some((text, byte_pos..end));
+        }
+    }
+    None
+}
+
 pub fn binary_op_id(op: BinaryOp) -> OperatorId {
     match op {
         BinaryOp::Add => OperatorId::Add,
@@ -1345,6 +1373,14 @@ mod tests {
             assert_eq!(operator_at("a <=> b", pos), Some(("<=>", 2..5)));
         }
         assert_eq!(operator_at("x /= y", 2), Some(("/=", 2..4)));
+    }
+
+    #[test]
+    fn operator_starting_at_prefers_longest_match_and_byte_ranges() {
+        assert_eq!(operator_starting_at("r |>> S", 2), Some(("|>>", 2..5)));
+        assert_eq!(operator_starting_at("λx·P", 0), Some(("λ", 0..2)));
+        assert_eq!(operator_starting_at("λx·P", 3), Some(("·", 3..5)));
+        assert_eq!(operator_starting_at("model", 0), None);
     }
 
     #[test]
