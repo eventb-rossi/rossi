@@ -124,16 +124,17 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
         let file_results = validate_file(file, &cli);
 
         for result in file_results {
+            if cli.format == OutputFormat::Text
+                && (!cli.quiet || result.severity == Some(Severity::Error))
+            {
+                print_text_result(&result);
+            }
+
             if !result.success {
                 all_success = false;
                 if !cli.continue_on_error && !aggregating_format {
-                    print_text_result(&result, cli.quiet);
                     return ExitCode::from(1);
                 }
-            }
-
-            if cli.format == OutputFormat::Text && !cli.quiet {
-                print_text_result(&result, cli.quiet);
             }
 
             results.push(result);
@@ -675,7 +676,7 @@ fn span_to_region(source: &str, span: rossi::ast::Span) -> Region {
     }
 }
 
-fn print_text_result(result: &ValidationResult, quiet: bool) {
+fn print_text_result(result: &ValidationResult) {
     let mut file_info = match &result.inner_filename {
         Some(inner) => format!("{}:{}", result.file.display(), inner),
         None => format!("{}", result.file.display()),
@@ -686,14 +687,12 @@ fn print_text_result(result: &ValidationResult, quiet: bool) {
     }
 
     if result.component_name.is_some() {
-        if !quiet {
-            println!(
-                "✓ {} - Valid {} '{}'",
-                file_info,
-                result.component_type.unwrap_or("?"),
-                result.component_name.as_deref().unwrap_or("?")
-            );
-        }
+        println!(
+            "✓ {} - Valid {} '{}'",
+            file_info,
+            result.component_type.unwrap_or("?"),
+            result.component_name.as_deref().unwrap_or("?")
+        );
         return;
     }
 

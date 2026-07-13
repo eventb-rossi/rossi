@@ -168,6 +168,26 @@ fn test_cli_quiet_mode_with_error() {
 }
 
 #[test]
+fn test_cli_quiet_mode_continue_on_error_shows_all_errors() {
+    let output = rossi_command()
+        .args([
+            "validate",
+            "--quiet",
+            "--continue-on-error",
+            "missing-one.eventb",
+            "missing-two.eventb",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("✗ missing-one.eventb"));
+    assert!(stderr.contains("✗ missing-two.eventb"));
+}
+
+#[test]
 fn test_cli_no_files_provided() {
     let output = rossi_command()
         .args(["validate"])
