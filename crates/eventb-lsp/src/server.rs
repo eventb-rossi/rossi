@@ -10,6 +10,8 @@ use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
 
+use rossi::operators::{OperatorId, spelling};
+
 use crate::analysis;
 use crate::code_actions::CodeActionProvider;
 use crate::completion::CompletionProvider;
@@ -60,6 +62,33 @@ where
     })
 }
 
+fn operator_characters(ids: &[OperatorId]) -> Vec<String> {
+    ids.iter()
+        .flat_map(|id| {
+            let operator = spelling(*id);
+            [operator.unicode.to_string(), operator.ascii.to_string()]
+        })
+        .collect()
+}
+
+fn signature_trigger_characters() -> Vec<String> {
+    let mut characters = operator_characters(&[
+        OperatorId::ForAll,
+        OperatorId::Exists,
+        OperatorId::Lambda,
+        OperatorId::Dot,
+        OperatorId::Bar,
+    ]);
+    characters.extend(["{".to_string(), ",".to_string()]);
+    characters
+}
+
+fn signature_retrigger_characters() -> Vec<String> {
+    let mut characters = operator_characters(&[OperatorId::Dot, OperatorId::Bar]);
+    characters.push(",".to_string());
+    characters
+}
+
 /// The shared handles the post-edit analysis needs, bundled so the inline
 /// (`didOpen`/`didSave`/zero-debounce) and the spawned (debounced) paths run the
 /// same code. `Clone` is a handful of `Arc`/`Client` clones, so the debounced
@@ -98,7 +127,7 @@ impl Analyzer {
                     self.cross_reference_manager
                         .index_components(key.clone(), components);
                     self.workspace_symbol_provider
-                        .index_components(key, components, &doc.text);
+                        .index_components(key, components, doc.text());
                     version
                 });
 
@@ -165,7 +194,7 @@ impl Analyzer {
     fn diagnostics_for(&self, doc: &ParsedDocument) -> Vec<Diagnostic> {
         let xrefs = &self.cross_reference_manager;
         let mut diags = crate::diagnostics::document_diagnostics(doc);
-        if !doc.parse.errors.is_empty() {
+        if !doc.parse().errors.is_empty() {
             return diags;
         }
         // Circular EXTENDS/REFINES need no workspace gating: a detected cycle is
@@ -173,7 +202,7 @@ impl Analyzer {
         diags.extend(crate::diagnostics::cycle_diagnostics(
             doc.components(),
             &xrefs.detect_cycles(None),
-            &doc.text,
+            doc.text(),
         ));
         // Unresolved references / duplicate names would false-positive without a
         // workspace view (single-file mode indexes no siblings), so emit them
@@ -182,12 +211,12 @@ impl Analyzer {
             diags.extend(crate::diagnostics::cross_reference_diagnostics(
                 doc.components(),
                 |kind, name| xrefs.contains(kind, name),
-                &doc.text,
+                doc.text(),
             ));
             diags.extend(crate::diagnostics::duplicate_component_diagnostics(
                 doc.components(),
                 |name| xrefs.component_definition_files(name),
-                &doc.text,
+                doc.text(),
             ));
         }
         diags
@@ -428,26 +457,8 @@ impl LanguageServer for RossiLanguageServer {
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec![
-                        "∀".to_string(),
-                        "∃".to_string(),
-                        "!".to_string(),
-                        "#".to_string(),
-                        "λ".to_string(),
-                        "{".to_string(),
-                        "·".to_string(),
-                        ".".to_string(),
-                        ",".to_string(),
-                        "⇒".to_string(),
-                        "|".to_string(),
-                    ]),
-                    retrigger_characters: Some(vec![
-                        "·".to_string(),
-                        ".".to_string(),
-                        ",".to_string(),
-                        "⇒".to_string(),
-                        "|".to_string(),
-                    ]),
+                    trigger_characters: Some(signature_trigger_characters()),
+                    retrigger_characters: Some(signature_retrigger_characters()),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
                 ..Default::default()
@@ -642,7 +653,7 @@ impl LanguageServer for RossiLanguageServer {
         // Extract symbols with source text for accurate span information
         let symbols = components
             .iter()
-            .flat_map(|component| analysis::extract_symbols(component, &doc.text))
+            .flat_map(|component| analysis::extract_symbols(component, doc.text()))
             .collect();
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
@@ -655,7 +666,11 @@ impl LanguageServer for RossiLanguageServer {
         let uri = params.text_document.uri;
         debug!("Selection range request for: {}", uri);
 
-        let Some(document) = self.document_manager.parse_result(&uri) else {
+        let manager = Arc::clone(&self.document_manager);
+        let parse_uri = uri.clone();
+        let Some(document) =
+            run_blocking(move || manager.parse_result_for_request(&parse_uri)).await?
+        else {
             debug!("Document not found: {}", uri);
             return Ok(None);
         };
@@ -766,17 +781,18 @@ impl LanguageServer for RossiLanguageServer {
         let position = params.text_document_position_params.position;
         debug!("Signature help request for: {} at {:?}", uri, position);
 
-        // Get document text
-        let text = match self.document_manager.get_text(uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
+        let manager = Arc::clone(&self.document_manager);
+        let parse_uri = uri.clone();
+        let Some(document) =
+            run_blocking(move || manager.parse_result_for_request(&parse_uri)).await?
+        else {
+            debug!("Document not found: {}", uri);
+            return Ok(None);
         };
 
-        // Get signature help information
-        let response = self.signature_help_provider.signature_help(&params, &text);
+        let response = self
+            .signature_help_provider
+            .signature_help(&params, &document);
 
         debug!(
             "Signature help returned: {}",
@@ -949,7 +965,7 @@ impl LanguageServer for RossiLanguageServer {
         };
         let response =
             self.semantic_tokens_provider
-                .semantic_tokens(&params, &doc.text, doc.components());
+                .semantic_tokens(&params, doc.text(), doc.components());
 
         debug!(
             "Semantic tokens returned: {}",
@@ -1026,7 +1042,7 @@ impl LanguageServer for RossiLanguageServer {
         };
         let response = self
             .folding_range_provider
-            .folding_ranges_from_components(doc.components(), &doc.text);
+            .folding_ranges_from_components(doc.components(), doc.text());
 
         debug!(
             "Folding ranges returned: {}",
