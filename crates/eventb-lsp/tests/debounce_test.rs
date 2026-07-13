@@ -156,3 +156,109 @@ async fn zero_debounce_publishes_each_edit_inline() {
         assert_eq!(published["version"], json!(version));
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn debounce_does_not_cross_document_lifecycles() {
+    const LIFECYCLE_DEBOUNCE_MS: u64 = 200;
+
+    let (mut service, mut messages) = LspService::build(RossiLanguageServer::new).finish();
+    let init = Request::build("initialize")
+        .id(1)
+        .params(json!({
+            "capabilities": {},
+            "initializationOptions": {
+                "diagnostics": { "debounceMs": LIFECYCLE_DEBOUNCE_MS }
+            }
+        }))
+        .finish();
+    service.ready().await.unwrap().call(init).await.unwrap();
+
+    let open = |version: i32, name: &str| {
+        notification(
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": URI,
+                    "languageId": "eventb",
+                    "version": version,
+                    "text": format!("CONTEXT {name}\nEND\n")
+                }
+            }),
+        )
+    };
+    let change = |version: i32, name: &str| {
+        notification(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": URI, "version": version },
+                "contentChanges": [{ "text": format!("CONTEXT {name}\nEND\n") }]
+            }),
+        )
+    };
+
+    service
+        .ready()
+        .await
+        .unwrap()
+        .call(open(0, "first"))
+        .await
+        .unwrap();
+    next_publish(&mut messages, Duration::from_millis(500))
+        .await
+        .expect("first open publishes");
+    service
+        .ready()
+        .await
+        .unwrap()
+        .call(change(1, "first_changed"))
+        .await
+        .unwrap();
+
+    service
+        .ready()
+        .await
+        .unwrap()
+        .call(notification(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": URI } }),
+        ))
+        .await
+        .unwrap();
+    next_publish(&mut messages, Duration::from_millis(500))
+        .await
+        .expect("close clears diagnostics");
+    service
+        .ready()
+        .await
+        .unwrap()
+        .call(open(0, "second"))
+        .await
+        .unwrap();
+    next_publish(&mut messages, Duration::from_millis(500))
+        .await
+        .expect("second open publishes");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    service
+        .ready()
+        .await
+        .unwrap()
+        .call(change(1, "second_changed"))
+        .await
+        .unwrap();
+
+    // Lifecycle A's version-1 timer wakes during this interval. It must not
+    // analyze lifecycle B merely because B has independently reached version 1.
+    tokio::time::sleep(Duration::from_millis(130)).await;
+    assert!(
+        next_publish(&mut messages, Duration::from_millis(20))
+            .await
+            .is_none(),
+        "an old lifecycle's debounce task must not publish for the new document"
+    );
+
+    let published = next_publish(&mut messages, Duration::from_millis(150))
+        .await
+        .expect("the current lifecycle publishes after its own debounce");
+    assert_eq!(published["version"], json!(1));
+}

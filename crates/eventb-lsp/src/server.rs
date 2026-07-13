@@ -1,9 +1,11 @@
 //! LSP Server implementation
 
 use crate::lsp_types::*;
+use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
@@ -47,6 +49,7 @@ struct Analyzer {
     cross_reference_manager: Arc<CrossReferenceManager>,
     workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
     config_manager: Arc<ConfigManager>,
+    diagnostic_locks: Arc<DashMap<Url, Arc<Mutex<()>>>>,
     client: Client,
 }
 
@@ -57,45 +60,74 @@ impl Analyzer {
     /// re-parses). Go-to-definition keeps no index — it resolves on demand
     /// against this same stored parse.
     async fn analyze(&self, uri: Url) {
-        // Read the single source of truth (and the version it is for) once, then
-        // fan the same snapshot out to every eager index and the diagnostics.
-        let doc = self.document_manager.parse_result(&uri);
-        let version = self.document_manager.version(&uri);
-        if let Some(doc) = &doc {
-            let key = uri.to_string();
-            let components = doc.components();
-            self.cross_reference_manager
-                .index_components(key.clone(), components);
-            self.workspace_symbol_provider
-                .index_components(key, components, &doc.text);
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return;
+        };
+        let diagnostic_lock = self.diagnostic_lock(&uri);
+        {
+            let _publish_guard = diagnostic_lock.lock().await;
+            let version = self
+                .document_manager
+                .with_current_snapshot(&uri, &doc, |version| {
+                    // Commit both indexes while the exact snapshot remains current. A
+                    // concurrent edit either happens before this guard (and skips the
+                    // whole commit) or after it.
+                    let key = uri.to_string();
+                    let components = doc.components();
+                    self.cross_reference_manager
+                        .index_components(key.clone(), components);
+                    self.workspace_symbol_provider
+                        .index_components(key, components, &doc.text);
+                    version
+                });
+
+            if let Some(version) = version {
+                // Workspace-wide diagnostics can be expensive, so derive them outside
+                // the per-document state lock and recheck the snapshot before sending.
+                let diagnostics = if self.config_manager.get().diagnostics.enabled {
+                    self.diagnostics_for(&doc)
+                } else {
+                    vec![]
+                };
+                if self
+                    .document_manager
+                    .with_current_snapshot(&uri, &doc, |_| ())
+                    .is_some()
+                {
+                    self.client
+                        .publish_diagnostics(uri.clone(), diagnostics, Some(version))
+                        .await;
+                }
+            }
         }
-        self.publish_diagnostics(uri, doc.as_deref(), version).await;
+        self.evict_diagnostic_lock(&uri, &diagnostic_lock);
     }
 
-    /// Publish `uri`'s diagnostics from the already-read parse `doc`, or clear
-    /// them when diagnostics are disabled. The diagnostics
-    /// ([`crate::diagnostics::document_diagnostics`]) are the parse errors plus,
-    /// on a clean parse, the cheap single-component checks (duplicate /
-    /// shadowed names, EB021-023). The publish is tagged with the document's current
-    /// `version` so the version always identifies the text the diagnostics were
-    /// computed from. Spans are mapped against that parse's own text, so a
-    /// concurrent edit cannot make a span index past the text it is rendered
-    /// into.
-    async fn publish_diagnostics(
-        &self,
-        uri: Url,
-        doc: Option<&ParsedDocument>,
-        version: Option<i32>,
-    ) {
-        if !self.config_manager.get().diagnostics.enabled {
-            self.client.publish_diagnostics(uri, vec![], version).await;
-            return;
+    /// Clear diagnostics after every earlier analysis for this URI has either
+    /// published or bowed out. The same lock also orders a subsequent reopen.
+    async fn clear_diagnostics(&self, uri: Url) {
+        let diagnostic_lock = self.diagnostic_lock(&uri);
+        {
+            let _publish_guard = diagnostic_lock.lock().await;
+            self.client
+                .publish_diagnostics(uri.clone(), vec![], None)
+                .await;
         }
+        self.evict_diagnostic_lock(&uri, &diagnostic_lock);
+    }
 
-        let diagnostics = doc.map(|doc| self.diagnostics_for(doc)).unwrap_or_default();
-        self.client
-            .publish_diagnostics(uri, diagnostics, version)
-            .await;
+    fn diagnostic_lock(&self, uri: &Url) -> Arc<Mutex<()>> {
+        let entry = self
+            .diagnostic_locks
+            .entry(uri.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())));
+        Arc::clone(entry.value())
+    }
+
+    fn evict_diagnostic_lock(&self, uri: &Url, lock: &Arc<Mutex<()>>) {
+        self.diagnostic_locks.remove_if(uri, |_, current| {
+            Arc::ptr_eq(current, lock) && Arc::strong_count(current) == 2
+        });
     }
 
     /// All diagnostics for a parsed document: the parse errors and
@@ -230,6 +262,7 @@ impl RossiLanguageServer {
             cross_reference_manager: Arc::clone(&cross_reference_manager),
             workspace_symbol_provider: Arc::clone(&workspace_symbol_provider),
             config_manager: Arc::clone(&config_manager),
+            diagnostic_locks: Arc::new(DashMap::new()),
             client: client.clone(),
         };
 
@@ -473,6 +506,7 @@ impl LanguageServer for RossiLanguageServer {
         // Apply the text edit synchronously (cheap); the (re)parse is deferred
         // to the analysis below so a burst of keystrokes parses at most once.
         self.document_manager.change(&uri, version, changes);
+        let revision = self.document_manager.revision(&uri);
 
         // Coalesce rapid edits behind the configured debounce window. A zero
         // window analyzes inline (the previous behaviour).
@@ -483,14 +517,16 @@ impl LanguageServer for RossiLanguageServer {
         }
 
         // Schedule the analysis after the window. Rather than tracking and
-        // aborting prior tasks, each task checks at wake-up whether its edit is
-        // still the document's latest version; a superseded (or closed) document
-        // makes the task bow out, so only the final edit of a burst analyzes —
-        // and it publishes for exactly the version it parsed.
+        // aborting prior tasks, each task checks at wake-up whether its unique
+        // internal revision is still current. This also distinguishes a reopened
+        // document whose LSP version counter happens to collide.
+        let Some(revision) = revision else {
+            return;
+        };
         let analyzer = self.analyzer.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(debounce_ms as u64)).await;
-            if analyzer.document_manager.version(&uri) == Some(version) {
+            if analyzer.document_manager.revision(&uri) == Some(revision) {
                 analyzer.analyze(uri).await;
             }
         });
@@ -501,8 +537,8 @@ impl LanguageServer for RossiLanguageServer {
         debug!("Document closed: {}", uri);
 
         // Remove document from open-document tracking. Any debounced analysis
-        // still pending for this URI finds `version(&uri) == None` at wake-up and
-        // bows out, so it cannot publish diagnostics after this close clears them.
+        // still pending for this URI finds no matching revision at wake-up and
+        // bows out.
         self.document_manager.close(&uri);
 
         // Retain cross-reference data so that other open documents (machines/contexts)
@@ -512,7 +548,7 @@ impl LanguageServer for RossiLanguageServer {
         self.workspace_symbol_provider.remove_document(uri.as_ref());
 
         // Clear diagnostics
-        self.client.publish_diagnostics(uri, vec![], None).await;
+        self.analyzer.clear_diagnostics(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
