@@ -3165,7 +3165,7 @@ pub fn parse_components_with_recovery(input: &str) -> ParseResult<Vec<Component>
                     result
                         .errors
                         .into_iter()
-                        .map(|e| offset_error_lines(e, line_delta)),
+                        .map(|e| e.shift_location(start, line_delta)),
                 );
                 if let Some(mut component) = result.component {
                     // Recovery already spans each component from its header; here
@@ -3485,96 +3485,6 @@ fn shift_component_spans(component: &mut Component, delta: usize) {
                 }
             }
         }
-    }
-}
-
-/// Shift the 1-indexed line numbers in an error by `line_delta` lines.
-/// Region slices start at line boundaries, so columns are unchanged.
-fn offset_error_lines(error: ParseError, line_delta: usize) -> ParseError {
-    if line_delta == 0 {
-        return error;
-    }
-    match error {
-        // The byte span is relative to the slice that produced the error; a
-        // line delta can't translate byte offsets, so drop it and let consumers
-        // fall back to the (shifted) line/column.
-        ParseError::PestError {
-            message,
-            line,
-            column,
-            span: _,
-        } => ParseError::PestError {
-            message,
-            line: line + line_delta,
-            column,
-            span: None,
-        },
-        ParseError::NestingTooDeep {
-            limit,
-            line,
-            column,
-        } => ParseError::NestingTooDeep {
-            limit,
-            line: line + line_delta,
-            column,
-        },
-        ParseError::ReservedWord {
-            word,
-            line,
-            column,
-            span: _,
-        } => ParseError::ReservedWord {
-            word,
-            line: line + line_delta,
-            column,
-            span: None,
-        },
-        ParseError::AssignmentInPredicate {
-            operator,
-            line,
-            column,
-            span: _,
-        } => ParseError::AssignmentInPredicate {
-            operator,
-            line: line + line_delta,
-            column,
-            // Byte span is relative to the region slice; drop it like the
-            // other span-bearing variants and fall back to the shifted line.
-            span: None,
-        },
-        ParseError::ClauseError {
-            clause_type,
-            line,
-            column,
-            message,
-        } => ParseError::ClauseError {
-            clause_type,
-            line: line + line_delta,
-            column,
-            message,
-        },
-        ParseError::RecoverableError {
-            line,
-            column,
-            message,
-            span: _,
-            source,
-        } => ParseError::RecoverableError {
-            line: line + line_delta,
-            column,
-            message,
-            // Byte span is relative to the region slice; drop it like the
-            // other span-bearing variants above.
-            span: None,
-            source: source.map(|e| Box::new(offset_error_lines(*e, line_delta))),
-        },
-        ParseError::MultipleErrors(errors) => ParseError::MultipleErrors(
-            errors
-                .into_iter()
-                .map(|e| offset_error_lines(e, line_delta))
-                .collect(),
-        ),
-        other => other,
     }
 }
 

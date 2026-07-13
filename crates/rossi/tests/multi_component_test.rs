@@ -120,14 +120,7 @@ fn test_duplicate_component_names_accepted() {
 
 /// The structured 1-indexed line of an error, where it carries one.
 fn error_line(error: &ParseError) -> Option<usize> {
-    match error {
-        ParseError::PestError { line, .. }
-        | ParseError::NestingTooDeep { line, .. }
-        | ParseError::ClauseError { line, .. }
-        | ParseError::RecoverableError { line, .. }
-        | ParseError::ReservedWord { line, .. } => Some(*line),
-        _ => None,
-    }
+    error.position().map(|(line, _)| line)
 }
 
 #[test]
@@ -220,6 +213,146 @@ fn recovery_shifts_reserved_word_errors_to_absolute_lines() {
     assert_eq!(reserved.len(), 1, "errors: {:?}", result.errors);
     // `dom` is declared on (1-indexed) line 6 of the full input.
     assert_eq!(error_line(reserved[0]), Some(6));
+    let span = reserved[0].span().expect("reserved word keeps its span");
+    assert_eq!(&source[span.start..span.end], "dom");
+}
+
+#[test]
+fn recovery_shifts_incompatible_operator_error_to_absolute_location() {
+    let source = indoc! {"
+        CONTEXT C0
+        END
+        MACHINE M1
+        VARIABLES
+            a
+            b
+            c
+        VARIANT
+            a ∪ b ∩ c
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    let error = result
+        .errors
+        .iter()
+        .find(|error| matches!(error, ParseError::IncompatibleOperators { .. }))
+        .unwrap_or_else(|| panic!("expected incompatible operators, got {:?}", result.errors));
+
+    assert_eq!(error_line(error), Some(9));
+    let span = error.span().expect("incompatible operator keeps its span");
+    assert_eq!(&source[span.start..span.end], "∩");
+    assert!(span.start > source.find("MACHINE M1").unwrap());
+}
+
+#[test]
+fn recovery_shifts_assignment_error_span_to_absolute_location() {
+    let source = indoc! {"
+        CONTEXT C0
+        END
+        MACHINE M1
+        VARIABLES
+            x
+        INVARIANTS
+            @inv1 x := 5
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    let error = result
+        .errors
+        .iter()
+        .find(|error| matches!(error, ParseError::AssignmentInPredicate { .. }))
+        .expect("the later component reports assignment in a predicate");
+
+    assert_eq!(error_line(error), Some(7));
+    let span = error.span().expect("assignment operator keeps its span");
+    assert_eq!(&source[span.start..span.end], ":=");
+}
+
+#[test]
+fn recovery_shifts_clause_error_to_absolute_line() {
+    let source = indoc! {"
+        CONTEXT C0
+        END
+        MACHINE M1
+        VARIABLES
+            x
+        VARIABLES
+            y
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    let error = result
+        .errors
+        .iter()
+        .find(|error| matches!(error, ParseError::ClauseError { .. }))
+        .expect("the later component reports its duplicate clause");
+
+    assert_eq!(error.position(), Some((6, 1)));
+}
+
+#[test]
+fn recovery_preserves_absolute_pest_error_span() {
+    let source = indoc! {"
+        CONTEXT C0
+        END
+        MACHINE M1
+        VARIABLES
+            x-y
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    let error = result
+        .errors
+        .iter()
+        .find(|error| matches!(error, ParseError::PestError { .. }))
+        .expect("the later component reports its syntax error");
+    let span = error.span().expect("pest error keeps its span");
+
+    assert!(span.start >= source.find("x-y").unwrap());
+    assert!(span.start < source.rfind("END\n").unwrap_or(source.len()));
+    assert_eq!(
+        error_line(error),
+        Some(source[..span.start].matches('\n').count() + 1)
+    );
+}
+
+#[test]
+fn recovery_preserves_absolute_recoverable_error_span() {
+    let source = indoc! {"
+        CONTEXT C0
+        END
+        CONTEXT C1
+        AXIOMS
+            @axm1 $$$
+            @axm2 ###
+        END
+    "};
+    let result = parse_components_with_recovery(source);
+    let error = result
+        .errors
+        .iter()
+        .find(|error| {
+            matches!(
+                error,
+                ParseError::RecoverableError { message, .. } if message.contains("@axm2")
+            )
+        })
+        .expect("the later component reports its second broken axiom");
+
+    assert_eq!(error.position(), Some((6, 5)));
+    let span = error.span().expect("recoverable error keeps its span");
+    assert_eq!(&source[span.start..span.end], "@axm2 ###");
+
+    let ParseError::RecoverableError {
+        source: Some(nested),
+        ..
+    } = error
+    else {
+        panic!("recoverable error keeps its parser source");
+    };
+    let nested_span = nested.span().expect("nested parser error keeps its span");
+    assert_eq!(nested.position(), Some((1, 8)));
+    assert_eq!((nested_span.start, nested_span.end), (7, 7));
 }
 
 #[test]
@@ -294,16 +427,19 @@ fn recovery_midline_keyword_does_not_split() {
 #[test]
 fn recovery_nesting_too_deep_fails_fast() {
     let source = format!(
-        "MACHINE M0\nINVARIANTS\n    @inv1 {}1 = 1{}\nEND\n\nMACHINE M1\nEND\n",
+        "MACHINE M0\nEND\n\nMACHINE M1\nINVARIANTS\n    @inv1 {}1 = 1{}\nEND\n",
         "(".repeat(400),
         ")".repeat(400)
     );
     let result = parse_components_with_recovery(&source);
     assert!(result.is_err());
-    assert!(matches!(
-        result.errors.as_slice(),
-        [ParseError::NestingTooDeep { .. }]
-    ));
+    let [ParseError::NestingTooDeep { line, .. }] = result.errors.as_slice() else {
+        panic!("expected one nesting error, got {:?}", result.errors);
+    };
+    assert_eq!(
+        *line, 6,
+        "the whole-input guard already reports absolute lines"
+    );
 }
 
 #[test]

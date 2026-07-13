@@ -164,6 +164,7 @@ pub enum ParseError {
         /// Byte span of the recovered predicate that failed to parse — the
         /// whole `@label … predicate`, so consumers underline it precisely.
         span: Option<Span>,
+        /// Parser failure in the isolated recovered segment's coordinate space.
         source: Option<Box<ParseError>>,
     },
 
@@ -236,6 +237,67 @@ impl From<Box<pest::error::Error<crate::parser::Rule>>> for ParseError {
 }
 
 impl ParseError {
+    /// Translate a location captured while parsing a source slice into the
+    /// coordinate space of its containing document.
+    pub(crate) fn shift_location(mut self, byte_delta: usize, line_delta: usize) -> Self {
+        if byte_delta == 0 && line_delta == 0 {
+            return self;
+        }
+        self.shift_location_mut(byte_delta, line_delta);
+        self
+    }
+
+    fn shift_location_mut(&mut self, byte_delta: usize, line_delta: usize) {
+        fn shift_span(span: &mut Option<Span>, byte_delta: usize) {
+            if let Some(span) = span {
+                span.shift(byte_delta);
+            }
+        }
+
+        match self {
+            ParseError::PestError { line, span, .. }
+            | ParseError::ReservedWord { line, span, .. }
+            | ParseError::IncompatibleOperators { line, span, .. }
+            | ParseError::AssignmentInPredicate { line, span, .. } => {
+                *line += line_delta;
+                shift_span(span, byte_delta);
+            }
+            ParseError::NestingTooDeep { line, .. } | ParseError::ClauseError { line, .. } => {
+                *line += line_delta;
+            }
+            ParseError::RecoverableError { line, span, .. } => {
+                *line += line_delta;
+                shift_span(span, byte_delta);
+                // `source` was parsed from the recovered formula segment, not
+                // the component slice, so it has a different coordinate origin.
+            }
+            ParseError::FileContext { source, .. } => {
+                source.shift_location_mut(byte_delta, line_delta);
+            }
+            ParseError::MultipleErrors(errors) => {
+                for error in errors {
+                    error.shift_location_mut(byte_delta, line_delta);
+                }
+            }
+            ParseError::UnexpectedRule { .. }
+            | ParseError::InvalidInteger(_)
+            | ParseError::EmptyExpression
+            | ParseError::EmptyPredicate
+            | ParseError::MissingPredicate
+            | ParseError::MissingAction
+            | ParseError::MissingVariable
+            | ParseError::MissingOperator
+            | ParseError::MissingValue
+            | ParseError::InvalidXml(_)
+            | ParseError::UnexpectedXmlRoot { .. }
+            | ParseError::MissingXmlAttribute { .. }
+            | ParseError::UnsupportedIdentifier { .. }
+            | ParseError::MalformedAttribute { .. }
+            | ParseError::IoError(_)
+            | ParseError::ArityMismatch { .. } => {}
+        }
+    }
+
     /// 1-indexed `(line, column)` of where this error starts, when it carries a
     /// source position. Unwraps a [`ParseError::FileContext`] envelope and
     /// follows [`ParseError::MultipleErrors`] to its first entry.
@@ -350,6 +412,57 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_location_respects_wrapped_error_coordinate_frames() {
+        let error = ParseError::MultipleErrors(vec![ParseError::FileContext {
+            filename: "model.eventb".to_string(),
+            source: Box::new(ParseError::RecoverableError {
+                line: 2,
+                column: 4,
+                message: "broken invariant".to_string(),
+                span: Some(Span { start: 10, end: 20 }),
+                source: Some(Box::new(ParseError::IncompatibleOperators {
+                    left: "∪".to_string(),
+                    right: "∩".to_string(),
+                    line: 1,
+                    column: 8,
+                    span: Some(Span { start: 3, end: 6 }),
+                })),
+            }),
+        }])
+        .shift_location(100, 5);
+
+        let ParseError::MultipleErrors(errors) = error else {
+            panic!("expected aggregate error");
+        };
+        let ParseError::FileContext { source, .. } = &errors[0] else {
+            panic!("expected file wrapper");
+        };
+        let ParseError::RecoverableError {
+            line, span, source, ..
+        } = source.as_ref()
+        else {
+            panic!("expected recovery wrapper");
+        };
+        assert_eq!(
+            (*line, *span),
+            (
+                7,
+                Some(Span {
+                    start: 110,
+                    end: 120
+                })
+            )
+        );
+
+        let ParseError::IncompatibleOperators { line, span, .. } =
+            source.as_deref().expect("nested source")
+        else {
+            panic!("expected nested operator error");
+        };
+        assert_eq!((*line, *span), (1, Some(Span { start: 3, end: 6 })));
+    }
 
     #[test]
     fn span_is_additive_and_display_ignores_it() {
