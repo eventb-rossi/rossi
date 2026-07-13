@@ -90,9 +90,7 @@ impl RenameProvider {
             .document_manager
             .as_ref()
             .and_then(|dm| dm.parse_result(uri));
-        let text = cursor
-            .as_deref()
-            .map_or(text, |parsed| parsed.text.as_str());
+        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
 
         // Get the identifier at the cursor position
         let (identifier, _) = get_identifier_and_range_at_position(text, position)?;

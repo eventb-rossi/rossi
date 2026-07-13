@@ -76,9 +76,7 @@ impl DefinitionProvider {
             .document_manager
             .as_ref()
             .and_then(|dm| dm.parse_result(uri));
-        let text = cursor
-            .as_deref()
-            .map_or(text, |parsed| parsed.text.as_str());
+        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
 
         // Structural scans run on comment-masked text (char columns preserved):
         // a cursor inside a comment finds no identifier and resolves to nothing.

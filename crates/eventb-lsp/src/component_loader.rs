@@ -49,7 +49,7 @@ impl LoadedComponent {
 
     /// The whole-file source text the component's spans index into.
     pub fn text(&self) -> &str {
-        &self.doc.text
+        self.doc.text()
     }
 
     /// The parsed component.
@@ -153,8 +153,7 @@ impl<'a> ComponentLoader<'a> {
             }
         }
         let text = read_source_file(uri)?;
-        let parse = rossi::parse_components_with_recovery(&text);
-        Some(Arc::new(ParsedDocument { text, parse }))
+        Some(Arc::new(ParsedDocument::from_text(text)))
     }
 
     /// Load the component named `name`: resolve its file, get that file's parsed

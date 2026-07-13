@@ -196,18 +196,18 @@ impl CompletionProvider {
             .as_deref()
             .and_then(|parsed| {
                 let offset =
-                    position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
+                    position_to_offset(parsed.text(), position).unwrap_or(parsed.text().len());
                 // Scope keywords, event `ANY` parameters, and formula binders
                 // against the same snapshot the component was parsed from. When
                 // it matches the handler text (the common case), reuse its mask.
                 let reparsed_mask;
-                let scope_masked = if parsed.text == text {
+                let scope_masked = if parsed.text() == text {
                     masked.as_str()
                 } else {
-                    reparsed_mask = rossi::comments::mask_comments_chars(&parsed.text);
+                    reparsed_mask = rossi::comments::mask_comments_chars(parsed.text());
                     &reparsed_mask
                 };
-                let scope_line = if parsed.text == text {
+                let scope_line = if parsed.text() == text {
                     line_text
                 } else {
                     get_line_text(scope_masked, position)
@@ -1123,7 +1123,7 @@ mod tests {
         // Build completion context from the component in the shared parse — the
         // same source `complete` reads from.
         let parsed = dm.parse_result(&concrete_url).unwrap();
-        let components = parsed.parse.component.as_deref().unwrap();
+        let components = parsed.parse().component.as_deref().unwrap();
         let loader = ComponentLoader::optional(
             provider.cross_ref_manager.as_deref(),
             provider.document_manager.as_deref(),

@@ -23,7 +23,7 @@ use eventb_lsp::analysis;
 use eventb_lsp::config::FormatConfig;
 use eventb_lsp::cross_references::{CrossReferenceManager, ReferenceKind};
 use eventb_lsp::definition::DefinitionProvider;
-use eventb_lsp::document::DocumentManager;
+use eventb_lsp::document::{DocumentManager, ParsedDocument};
 use eventb_lsp::document_links::DocumentLinkProvider;
 use eventb_lsp::folding::FoldingRangeProvider;
 use eventb_lsp::formatting;
@@ -931,7 +931,8 @@ fn all_models_selection_ranges_nest() {
             continue; // component declares no identifiers (axioms-only context)
         }
 
-        let results = provider.selection_ranges(&file.text, &positions);
+        let document = ParsedDocument::from_text(file.text.clone());
+        let results = provider.selection_ranges(&document, &positions);
         assert_eq!(
             results.len(),
             positions.len(),

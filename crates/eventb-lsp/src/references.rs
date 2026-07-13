@@ -74,9 +74,7 @@ impl ReferenceProvider {
             .document_manager
             .as_ref()
             .and_then(|dm| dm.parse_result(uri));
-        let text = cursor
-            .as_deref()
-            .map_or(text, |parsed| parsed.text.as_str());
+        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
 
         // Mask comments once for the whole request: every line/identifier scan
         // on the cursor document reads this instead of re-masking. The mask

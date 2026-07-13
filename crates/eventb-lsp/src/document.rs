@@ -7,7 +7,7 @@ use crate::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use ropey::Rope;
-use rossi::{Component, ParseResult};
+use rossi::{Component, ParseResult, ParseSnapshot, SyntaxAtOffset};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -17,17 +17,41 @@ use std::sync::{Arc, OnceLock};
 /// where a reader pairs one version's `text` with another version's AST (which
 /// would slice out of bounds, since requests and `didChange` run concurrently).
 pub struct ParsedDocument {
-    /// The text this parse was produced from.
-    pub text: String,
-    /// Recovered components + errors for [`Self::text`].
-    pub parse: ParseResult<Vec<Component>>,
+    snapshot: ParseSnapshot,
 }
 
 impl ParsedDocument {
+    /// Parse one source snapshot into its recovered AST and owned syntax data.
+    pub fn from_text(text: String) -> Self {
+        Self {
+            snapshot: rossi::parse_components_snapshot(text),
+        }
+    }
+
+    /// Source text shared by the recovered parse and syntax hierarchy.
+    pub fn text(&self) -> &str {
+        self.snapshot.source()
+    }
+
+    /// Recovered components and errors from the same source snapshot.
+    pub fn parse(&self) -> &ParseResult<Vec<Component>> {
+        self.snapshot.result()
+    }
+
+    /// Return one enclosing-span chain per byte offset, in input order.
+    pub fn enclosing_spans(&self, offsets: &[usize]) -> Vec<Vec<rossi::ast::Span>> {
+        self.snapshot.enclosing_spans(offsets)
+    }
+
+    /// Find signature syntax without allowing cross-revision inputs.
+    pub fn syntax_at_offset(&self, offset: usize) -> Option<SyntaxAtOffset> {
+        self.snapshot.syntax_at_offset(offset)
+    }
+
     /// The recovered components, or an empty slice when nothing parsed. Saves
     /// every reader from spelling out `parse.component.as_deref().unwrap_or_default()`.
     pub fn components(&self) -> &[Component] {
-        self.parse.component.as_deref().unwrap_or_default()
+        self.parse().component.as_deref().unwrap_or_default()
     }
 }
 
@@ -154,14 +178,30 @@ impl DocumentManager {
     /// one initialization. An edit swaps in a fresh empty cache without waiting
     /// for an older parse, and that older caller returns `None` when superseded.
     pub fn parse_result(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
-        self.parse_result_with_hook(uri, || {}, rossi::parse_components_with_recovery)
+        self.parse_result_with_hook(uri, || {}, rossi::parse_components_snapshot)
+    }
+
+    /// Resolve an interactive request against the current revision, retrying
+    /// once when an edit supersedes the parse that was in flight.
+    pub(crate) fn parse_result_for_request(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+        self.parse_result_for_request_with_hook(uri, || {}, rossi::parse_components_snapshot)
+    }
+
+    fn parse_result_for_request_with_hook(
+        &self,
+        uri: &Url,
+        before_initialize: impl FnOnce(),
+        parse: impl Fn(String) -> ParseSnapshot,
+    ) -> Option<Arc<ParsedDocument>> {
+        self.parse_result_with_hook(uri, before_initialize, parse)
+            .or_else(|| self.parse_result(uri))
     }
 
     fn parse_result_with_hook(
         &self,
         uri: &Url,
         before_initialize: impl FnOnce(),
-        parse: impl Fn(&str) -> ParseResult<Vec<Component>>,
+        parse: impl Fn(String) -> ParseSnapshot,
     ) -> Option<Arc<ParsedDocument>> {
         let document = self.document(uri)?;
         let (parse_cell, text) = {
@@ -181,8 +221,7 @@ impl DocumentManager {
         let parsed = Arc::clone(parse_cell.get_or_init(|| {
             let text = text.to_string();
             Arc::new(ParsedDocument {
-                parse: parse(&text),
-                text,
+                snapshot: parse(text),
             })
         }));
 
@@ -340,9 +379,9 @@ mod tests {
         let parsed = manager.parse_result(&uri).expect("parse stored on open");
         assert_eq!(manager.version(&uri), Some(1));
         // The bundled text matches what was opened (so span-indexing is safe).
-        assert_eq!(parsed.text, "CONTEXT C0\nCONSTANTS\n    k\nEND\n");
+        assert_eq!(parsed.text(), "CONTEXT C0\nCONSTANTS\n    k\nEND\n");
         let names: Vec<&str> = parsed
-            .parse
+            .parse()
             .component
             .as_deref()
             .unwrap_or_default()
@@ -365,9 +404,9 @@ mod tests {
             .parse_result(&uri)
             .expect("parse refreshed on change");
         assert_eq!(manager.version(&uri), Some(2));
-        assert_eq!(parsed.text, "MACHINE M1\nEND\n");
+        assert_eq!(parsed.text(), "MACHINE M1\nEND\n");
         assert_eq!(
-            parsed.parse.component.as_deref().unwrap_or_default()[0].name(),
+            parsed.parse().component.as_deref().unwrap_or_default()[0].name(),
             "M1"
         );
 
@@ -431,7 +470,7 @@ mod tests {
         // fast path would hand back the stale "A" parse for the new text.
         manager.open(uri.clone(), 1, "CONTEXT B\nEND\n".to_string());
         let parsed = manager.parse_result(&uri).unwrap();
-        assert_eq!(parsed.text, "CONTEXT B\nEND\n");
+        assert_eq!(parsed.text(), "CONTEXT B\nEND\n");
         assert_eq!(parsed.components()[0].name(), "B");
     }
 
@@ -452,7 +491,7 @@ mod tests {
                 |text| {
                     parse_started_tx.send(()).unwrap();
                     resume_parse_rx.recv().unwrap();
-                    rossi::parse_components_with_recovery(text)
+                    rossi::parse_components_snapshot(text)
                 },
             )
         });
@@ -474,6 +513,48 @@ mod tests {
         assert!(delayed.is_none(), "the superseded parse must bow out");
         assert_eq!(manager.version(&uri), Some(2));
         assert_eq!(current.components()[0].name(), "new");
+    }
+
+    #[test]
+    fn interactive_request_retries_a_superseded_parse() {
+        let manager = Arc::new(DocumentManager::new());
+        let uri = Url::parse("file:///interactive-concurrent.eventb").unwrap();
+        manager.open(uri.clone(), 1, "CONTEXT old\nEND\n".to_string());
+
+        let (parse_started_tx, parse_started_rx) = mpsc::channel();
+        let (resume_parse_tx, resume_parse_rx) = mpsc::channel();
+        let worker_manager = Arc::clone(&manager);
+        let worker_uri = uri.clone();
+        let worker = thread::spawn(move || {
+            worker_manager.parse_result_for_request_with_hook(
+                &worker_uri,
+                || {},
+                |text| {
+                    parse_started_tx.send(()).unwrap();
+                    resume_parse_rx.recv().unwrap();
+                    rossi::parse_components_snapshot(text)
+                },
+            )
+        });
+
+        parse_started_rx.recv().unwrap();
+        manager.change(
+            &uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "CONTEXT new\nEND\n".to_string(),
+            }],
+        );
+        resume_parse_tx.send(()).unwrap();
+        let parsed = worker
+            .join()
+            .unwrap()
+            .expect("request retries current parse");
+
+        assert_eq!(parsed.text(), "CONTEXT new\nEND\n");
+        assert_eq!(parsed.components()[0].name(), "new");
     }
 
     #[test]
@@ -502,7 +583,7 @@ mod tests {
                     |text| {
                         parses.fetch_add(1, Ordering::Relaxed);
                         parse_started.wait();
-                        rossi::parse_components_with_recovery(text)
+                        rossi::parse_components_snapshot(text)
                     },
                 )
             }));
@@ -582,10 +663,10 @@ mod tests {
 
         let parsed = manager.parse_result(&uri).unwrap();
         assert!(
-            !parsed.parse.errors.is_empty(),
+            !parsed.parse().errors.is_empty(),
             "the broken invariant is reported"
         );
-        let machine = parsed.parse.component.as_deref().unwrap_or_default();
+        let machine = parsed.parse().component.as_deref().unwrap_or_default();
         assert_eq!(machine[0].name(), "m");
     }
 
