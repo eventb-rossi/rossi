@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use tracing::debug;
 
 use crate::formula_walk;
+use crate::position::PositionIndex;
 use crate::symbols::{SymbolKind, enumerate_symbols};
 
 /// Semantic tokens provider
@@ -102,8 +103,8 @@ struct SemanticTokensBuilder<'a> {
     /// ASCII-lowercased copy of `text` for case-insensitive keyword search.
     /// ASCII-lowercasing preserves byte length, so offsets match `text`.
     text_lower: String,
-    /// Line offsets for quick position calculation
-    line_offsets: Vec<usize>,
+    /// Reusable source-position index.
+    positions: PositionIndex<'a>,
     /// One lexical scan of the source: the byte spans of all comments and all
     /// `@`-labels, each sorted and disjoint. Keyword/identifier searches must
     /// never match inside either (issue #24); label tokens are emitted directly
@@ -125,18 +126,10 @@ struct SemanticTokenData {
 
 impl<'a> SemanticTokensBuilder<'a> {
     fn new(text: &'a str) -> Self {
-        // Calculate line offsets for quick position lookup
-        let mut line_offsets = vec![0];
-        for (i, c) in text.char_indices() {
-            if c == '\n' {
-                line_offsets.push(i + 1);
-            }
-        }
-
         Self {
             text,
             text_lower: text.to_ascii_lowercase(),
-            line_offsets,
+            positions: PositionIndex::new(text),
             lexical: lexical_spans(text),
             tokens: Vec::new(),
         }
@@ -158,13 +151,11 @@ impl<'a> SemanticTokensBuilder<'a> {
     /// Find position (line, UTF-16 column) from a byte offset.
     ///
     /// LSP columns are UTF-16 code units (the protocol's default encoding); see
-    /// [`crate::position`]. The line is located via the precomputed
-    /// `line_offsets` table so this stays cheap when emitting many tokens.
+    /// [`crate::position`]. The shared position index keeps this cheap when
+    /// emitting many tokens.
     fn position_from_offset(&self, offset: usize) -> (u32, u32) {
-        // line_offsets[0] == 0 <= offset, so the partition point is >= 1.
-        let line = self.line_offsets.partition_point(|&start| start <= offset) - 1;
-        let column = crate::position::utf16_len(&self.text[self.line_offsets[line]..offset]);
-        (line as u32, column)
+        let position = self.positions.position(offset);
+        (position.line, position.character)
     }
 
     /// Find `needle` in `haystack` (a same-length view of the source, byte

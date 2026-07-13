@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
@@ -26,6 +26,27 @@ use crate::selection_range::SelectionRangeProvider;
 use crate::semantic_tokens::SemanticTokensProvider;
 use crate::signature_help::SignatureHelpProvider;
 use crate::workspace::WorkspaceSymbolProvider;
+
+#[derive(Debug)]
+struct WorkspaceScanState {
+    complete: watch::Sender<bool>,
+}
+
+impl WorkspaceScanState {
+    fn new() -> Self {
+        let (complete, _) = watch::channel(false);
+        Self { complete }
+    }
+
+    fn complete(&self) {
+        self.complete.send_replace(true);
+    }
+
+    async fn wait(&self) {
+        let mut complete = self.complete.subscribe();
+        let _ = complete.wait_for(|complete| *complete).await;
+    }
+}
 
 /// Run blocking filesystem or parsing work away from Tokio's async workers.
 async fn run_blocking<F, T>(task: F) -> Result<T>
@@ -195,6 +216,8 @@ pub struct RossiLanguageServer {
     rename_provider: Arc<RenameProvider>,
     /// Workspace symbol provider
     workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
+    /// Completion signal for the initial disk-backed workspace scan.
+    workspace_scan_state: WorkspaceScanState,
     /// Semantic tokens provider
     semantic_tokens_provider: Arc<SemanticTokensProvider>,
     /// Document links provider
@@ -257,6 +280,7 @@ impl RossiLanguageServer {
         let config_manager = Arc::new(ConfigManager::new());
         let definition_provider = Arc::new(definition_provider);
         let workspace_symbol_provider = Arc::new(WorkspaceSymbolProvider::new());
+        let workspace_scan_state = WorkspaceScanState::new();
         let analyzer = Analyzer {
             document_manager: Arc::clone(&document_manager),
             cross_reference_manager: Arc::clone(&cross_reference_manager),
@@ -277,6 +301,7 @@ impl RossiLanguageServer {
             reference_provider: Arc::new(reference_provider),
             rename_provider: Arc::new(rename_provider),
             workspace_symbol_provider,
+            workspace_scan_state,
             semantic_tokens_provider: Arc::new(SemanticTokensProvider::new()),
             document_links_provider: Arc::new(document_links_provider),
             code_actions_provider: Arc::new(CodeActionProvider::new()),
@@ -436,7 +461,14 @@ impl LanguageServer for RossiLanguageServer {
         // Scan workspace for Event-B files to populate cross-reference index
         if let Some(root) = self.cross_reference_manager.workspace_root() {
             let manager = Arc::clone(&self.cross_reference_manager);
-            match run_blocking(move || manager.scan_workspace(&root)).await {
+            let symbols = Arc::clone(&self.workspace_symbol_provider);
+            match run_blocking(move || {
+                manager.scan_workspace_with(&root, |uri, components, text| {
+                    symbols.index_disk_components(uri, components, text);
+                })
+            })
+            .await
+            {
                 Ok(Ok(count)) => {
                     info!("Indexed {} Event-B files from workspace", count);
                 }
@@ -446,6 +478,7 @@ impl LanguageServer for RossiLanguageServer {
                 Err(e) => info!("Failed to scan workspace: {}", e),
             }
         }
+        self.workspace_scan_state.complete();
 
         self.client
             .log_message(MessageType::INFO, "Rossi Language Server initialized")
@@ -487,6 +520,12 @@ impl LanguageServer for RossiLanguageServer {
         let version = params.text_document.version;
 
         debug!("Document opened: {}", uri);
+
+        let symbols = Arc::clone(&self.workspace_symbol_provider);
+        let uri_key = uri.to_string();
+        if let Err(error) = run_blocking(move || symbols.register_document_uri(&uri_key)).await {
+            info!("Failed to normalize document URI: {error}");
+        }
 
         // Store the document; its parse is produced lazily on first read below.
         self.document_manager.open(uri.clone(), version, text);
@@ -541,10 +580,16 @@ impl LanguageServer for RossiLanguageServer {
         // bows out.
         self.document_manager.close(&uri);
 
-        // Retain cross-reference data so that other open documents (machines/contexts)
-        // can still resolve SEES/EXTENDS/REFINES references to this component.
+        // Restore the disk graph after discarding any unsaved open overlay.
+        let manager = Arc::clone(&self.cross_reference_manager);
+        let restore_uri = uri.clone();
+        match run_blocking(move || manager.restore_document_from_disk(&restore_uri)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => info!("Failed to restore cross-references for {uri}: {error}"),
+            Err(error) => info!("Failed to restore cross-references for {uri}: {error}"),
+        }
 
-        // Remove workspace symbols
+        // Remove the open symbol overlay, revealing the startup disk snapshot.
         self.workspace_symbol_provider.remove_document(uri.as_ref());
 
         // Clear diagnostics
@@ -561,7 +606,14 @@ impl LanguageServer for RossiLanguageServer {
         // same version then finds nothing newer and re-runs an identical (cheap,
         // memoised-parse) analysis.
         if self.document_manager.version(&uri).is_some() {
-            self.analyzer.analyze(uri).await;
+            self.analyzer.analyze(uri.clone()).await;
+            let symbols = Arc::clone(&self.workspace_symbol_provider);
+            let save_uri = uri.clone();
+            match run_blocking(move || symbols.refresh_document_from_disk(&save_uri)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => info!("Failed to refresh saved symbols for {uri}: {error}"),
+                Err(error) => info!("Failed to refresh saved symbols for {uri}: {error}"),
+            }
         }
     }
 
@@ -809,6 +861,8 @@ impl LanguageServer for RossiLanguageServer {
         let query = &params.query;
         debug!("Workspace symbol search for: '{}'", query);
 
+        self.workspace_scan_state.wait().await;
+
         // Search across all indexed symbols
         let symbols = self.workspace_symbol_provider.search(query);
 
@@ -1016,7 +1070,8 @@ impl RossiLanguageServer {
 
 #[cfg(test)]
 mod tests {
-    use super::run_blocking;
+    use super::{WorkspaceScanState, run_blocking};
+    use std::time::Duration;
 
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_work_runs_off_the_async_handler_thread() {
@@ -1024,5 +1079,18 @@ mod tests {
         let blocking_thread = run_blocking(|| std::thread::current().id()).await.unwrap();
 
         assert_ne!(blocking_thread, handler_thread);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_symbol_requests_wait_for_the_disk_scan() {
+        let state = WorkspaceScanState::new();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), state.wait())
+                .await
+                .is_err()
+        );
+
+        state.complete();
+        state.wait().await;
     }
 }

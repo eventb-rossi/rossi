@@ -276,6 +276,19 @@ impl CrossReferenceManager {
 
     /// Scan a directory for Event-B files and index them
     pub fn scan_workspace(&self, root_path: &Path) -> std::io::Result<usize> {
+        self.scan_workspace_with(root_path, |_, _, _| {})
+    }
+
+    /// Scan a directory once, exposing each parsed file to another workspace
+    /// index so callers do not repeat the filesystem walk or parse.
+    pub(crate) fn scan_workspace_with<F>(
+        &self,
+        root_path: &Path,
+        mut index_file: F,
+    ) -> std::io::Result<usize>
+    where
+        F: FnMut(String, &[rossi::Component], &str),
+    {
         debug!("Scanning workspace at: {:?}", root_path);
 
         self.scanned.store(false, Ordering::Release);
@@ -309,12 +322,34 @@ impl CrossReferenceManager {
 
         let count = sources.len();
         for (uri, content) in sources {
-            self.update_component(uri, &content);
+            let components = crate::component_util::parse_all(&content);
+            self.index_components(uri.clone(), &components);
+            index_file(uri, &components, &content);
         }
 
         debug!("Scanned {} Event-B files in workspace", count);
         self.scanned.store(true, Ordering::Release);
         Ok(count)
+    }
+
+    /// Replace an open-document graph overlay with the file currently on disk.
+    pub(crate) fn restore_document_from_disk(&self, uri: &Url) -> std::io::Result<()> {
+        let key = uri.to_string();
+        let Ok(path) = uri.to_file_path() else {
+            self.remove_component(&key);
+            return Ok(());
+        };
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                self.update_component(key, &text);
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.remove_component(&key);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Get all component names in the workspace
@@ -606,6 +641,21 @@ END
         assert!(manager.find_component_uri("eventb_ctx").is_some());
         assert!(manager.find_component_uri("rossi_ctx").is_none());
         assert!(manager.find_component_uri("ignored").is_none());
+    }
+
+    #[test]
+    fn closing_an_unsaved_overlay_restores_disk_cross_references() {
+        let root = TempWorkspace::new("eventb-lsp-close-restore-test");
+        let path = root.join("model.eventb");
+        std::fs::write(&path, "CONTEXT saved\nEND\n").unwrap();
+        let uri = Url::from_file_path(&path).unwrap();
+        let manager = CrossReferenceManager::new();
+
+        manager.update_component(uri.to_string(), "CONTEXT unsaved\nEND\n");
+        manager.restore_document_from_disk(&uri).unwrap();
+
+        assert!(manager.find_component_uri("unsaved").is_none());
+        assert_eq!(manager.find_component_uri("saved"), Some(uri.to_string()));
     }
 
     #[test]

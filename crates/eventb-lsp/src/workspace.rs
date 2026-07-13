@@ -5,10 +5,9 @@
 //! fuzzy search for quick navigation.
 
 use crate::lsp_types::*;
-use crate::position::offset_to_position;
+use crate::position::PositionIndex;
 use dashmap::DashMap;
 use rossi::ast::*;
-use std::sync::Arc;
 use tracing::debug;
 
 /// Information about a symbol in the workspace
@@ -16,19 +15,29 @@ use tracing::debug;
 struct SymbolEntry {
     /// Symbol name
     name: String,
+    /// Case-folded name used by workspace-symbol filtering.
+    folded_name: String,
     /// Symbol kind (variable, constant, etc.)
     kind: SymbolKind,
     /// Container name (e.g., machine/context name)
-    container: String,
+    container: Option<String>,
     /// Location in the document
     location: Location,
 }
 
+/// The saved workspace snapshot and any currently open overlay for one URI.
+#[derive(Debug, Default)]
+struct DocumentSymbols {
+    disk: Vec<SymbolEntry>,
+    open: Option<Vec<SymbolEntry>>,
+}
+
 /// Provider for workspace-wide symbol search
 pub struct WorkspaceSymbolProvider {
-    /// Index of all symbols across all documents
-    /// Key: document URI, Value: list of symbols in that document
-    symbol_index: Arc<DashMap<String, Vec<SymbolEntry>>>,
+    /// Disk symbols and open-document overlays keyed by document URI.
+    symbol_index: DashMap<String, DocumentSymbols>,
+    /// Raw client/scan URI spellings mapped to one canonical file identity.
+    document_aliases: DashMap<String, String>,
 }
 
 impl Default for WorkspaceSymbolProvider {
@@ -41,7 +50,8 @@ impl WorkspaceSymbolProvider {
     /// Create a new workspace symbol provider
     pub fn new() -> Self {
         Self {
-            symbol_index: Arc::new(DashMap::new()),
+            symbol_index: DashMap::new(),
+            document_aliases: DashMap::new(),
         }
     }
 
@@ -59,31 +69,59 @@ impl WorkspaceSymbolProvider {
         self.index_components(uri, &components, text);
     }
 
-    /// Refresh the symbol index from a document's already-parsed components.
-    /// `text` must be the source those component spans index into.
+    /// Refresh the open overlay from a document's already-parsed components.
+    /// `text` must be the source those component spans index into. An empty
+    /// parse deliberately installs an empty overlay so stale disk symbols do
+    /// not leak through while an invalid document is open.
     pub fn index_components(&self, uri: String, components: &[Component], text: &str) {
         debug!("Updating workspace symbols for: {}", uri);
-
-        if components.is_empty() {
-            // Nothing recovered — remove any stale symbols for this document.
-            self.symbol_index.remove(&uri);
-            return;
-        }
-
-        // Extract symbols from every component in the document
-        let symbols = components
-            .iter()
-            .flat_map(|component| self.extract_symbols_from_component(component, &uri, text))
-            .collect();
-
-        // Update index
-        self.symbol_index.insert(uri, symbols);
+        let symbols = self.extract_symbols(components, &uri, text);
+        self.symbol_index
+            .entry(self.document_key(&uri))
+            .or_default()
+            .open = Some(symbols);
     }
 
-    /// Remove symbols for a document (when it's closed)
+    /// Refresh the saved workspace snapshot from the startup disk scan.
+    pub(crate) fn index_disk_components(&self, uri: String, components: &[Component], text: &str) {
+        debug!("Updating disk workspace symbols for: {}", uri);
+        self.register_document_uri(&uri);
+        let symbols = self.extract_symbols(components, &uri, text);
+        self.symbol_index
+            .entry(self.document_key(&uri))
+            .or_default()
+            .disk = symbols;
+    }
+
+    /// Resolve a file URI once on the blocking pool before open-document
+    /// analysis starts, so scan and client aliases share one overlay key.
+    pub(crate) fn register_document_uri(&self, uri: &str) {
+        let canonical = Self::canonical_file_uri(uri).unwrap_or_else(|| uri.to_string());
+        self.document_aliases.insert(uri.to_string(), canonical);
+    }
+
+    /// Refresh the disk layer from the file a client has just saved.
+    pub(crate) fn refresh_document_from_disk(&self, uri: &Url) -> std::io::Result<()> {
+        let path = uri.to_file_path().map_err(|()| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{uri} is not a file URI"),
+            )
+        })?;
+        let text = std::fs::read_to_string(path)?;
+        let components = crate::component_util::parse_all(&text);
+        self.index_disk_components(uri.to_string(), &components, &text);
+        Ok(())
+    }
+
+    /// Remove an open overlay, revealing its saved disk symbols if present.
     pub fn remove_document(&self, uri: &str) {
-        debug!("Removing workspace symbols for: {}", uri);
-        self.symbol_index.remove(uri);
+        debug!("Removing open workspace symbols for: {}", uri);
+        self.symbol_index
+            .remove_if_mut(&self.document_key(uri), |_, document| {
+                document.open = None;
+                document.disk.is_empty()
+            });
     }
 
     /// Search for symbols matching the query
@@ -96,9 +134,11 @@ impl WorkspaceSymbolProvider {
 
         // Search through all indexed documents
         for entry in self.symbol_index.iter() {
-            for symbol in entry.value() {
+            let document = entry.value();
+            let symbols = document.open.as_ref().unwrap_or(&document.disk);
+            for symbol in symbols {
                 // Match against symbol name (case-insensitive substring match)
-                if symbol.name.to_lowercase().contains(&query_lower) {
+                if symbol.folded_name.contains(&query_lower) {
                     results.push(SymbolInformation {
                         name: symbol.name.clone(),
                         kind: symbol.kind,
@@ -106,7 +146,7 @@ impl WorkspaceSymbolProvider {
                         #[allow(deprecated)]
                         deprecated: None,
                         location: symbol.location.clone(),
-                        container_name: Some(symbol.container.clone()),
+                        container_name: symbol.container.clone(),
                     });
                 }
             }
@@ -121,6 +161,33 @@ impl WorkspaceSymbolProvider {
         results
     }
 
+    fn extract_symbols(&self, components: &[Component], uri: &str, text: &str) -> Vec<SymbolEntry> {
+        if components.is_empty() {
+            return vec![];
+        }
+        let Ok(uri) = Url::parse(uri) else {
+            return vec![];
+        };
+        let positions = PositionIndex::new(text);
+        components
+            .iter()
+            .flat_map(|component| self.extract_symbols_from_component(component, &uri, &positions))
+            .collect()
+    }
+
+    fn document_key(&self, uri: &str) -> String {
+        self.document_aliases
+            .get(uri)
+            .map(|key| key.value().clone())
+            .unwrap_or_else(|| uri.to_string())
+    }
+
+    fn canonical_file_uri(uri: &str) -> Option<String> {
+        let path = Url::parse(uri).ok()?.to_file_path().ok()?;
+        let canonical = std::fs::canonicalize(path).ok()?;
+        Url::from_file_path(canonical).ok().map(Into::into)
+    }
+
     /// Extract all symbols from a component, locating each at the span the
     /// parser recorded for its declared name. Spans are absolute offsets into
     /// `text`, so symbols land in the right component of a multi-component
@@ -129,49 +196,55 @@ impl WorkspaceSymbolProvider {
     fn extract_symbols_from_component(
         &self,
         component: &Component,
-        uri: &str,
-        text: &str,
+        uri: &Url,
+        positions: &PositionIndex<'_>,
     ) -> Vec<SymbolEntry> {
         let mut symbols = Vec::new();
 
-        let entry = |name: &str, kind: SymbolKind, container: &str, span: Option<Span>| {
+        let entry = |name: &str, kind: SymbolKind, container: Option<&str>, span: Option<Span>| {
             Some(SymbolEntry {
                 name: name.to_string(),
+                folded_name: name.to_lowercase(),
                 kind,
-                container: container.to_string(),
-                location: self.locate_at(uri, text, span?.start)?,
+                container: container.map(str::to_string),
+                location: self.locate_at(uri, positions, span?.start),
             })
         };
+
+        symbols.extend(entry(
+            component.name(),
+            SymbolKind::MODULE,
+            None,
+            component.name_span(),
+        ));
 
         match component {
             Component::Context(ctx) => {
                 symbols.extend(
-                    ctx.sets
-                        .iter()
-                        .filter_map(|s| entry(s.name(), SymbolKind::ENUM, &ctx.name, s.span())),
+                    ctx.sets.iter().filter_map(|s| {
+                        entry(s.name(), SymbolKind::ENUM, Some(&ctx.name), s.span())
+                    }),
                 );
                 symbols.extend(
-                    ctx.constants
-                        .iter()
-                        .filter_map(|c| entry(&c.name, SymbolKind::CONSTANT, &ctx.name, c.span)),
+                    ctx.constants.iter().filter_map(|c| {
+                        entry(&c.name, SymbolKind::CONSTANT, Some(&ctx.name), c.span)
+                    }),
                 );
             }
             Component::Machine(mch) => {
                 symbols.extend(
-                    mch.variables
-                        .iter()
-                        .filter_map(|v| entry(&v.name, SymbolKind::VARIABLE, &mch.name, v.span)),
+                    mch.variables.iter().filter_map(|v| {
+                        entry(&v.name, SymbolKind::VARIABLE, Some(&mch.name), v.span)
+                    }),
                 );
-                symbols.extend(
-                    mch.events
-                        .iter()
-                        .filter_map(|e| entry(&e.name, SymbolKind::EVENT, &mch.name, e.name_span)),
-                );
+                symbols.extend(mch.events.iter().filter_map(|e| {
+                    entry(&e.name, SymbolKind::EVENT, Some(&mch.name), e.name_span)
+                }));
                 if let Some(init) = &mch.initialisation {
                     symbols.extend(entry(
                         "INITIALISATION",
                         SymbolKind::EVENT,
-                        &mch.name,
+                        Some(&mch.name),
                         init.name_span,
                     ));
                 }
@@ -190,9 +263,9 @@ impl WorkspaceSymbolProvider {
 
     /// Wrap the position at byte offset `start` in `text` into a zero-width
     /// [`Location`] in `uri`.
-    fn locate_at(&self, uri: &str, text: &str, start: usize) -> Option<Location> {
-        let pos = offset_to_position(text, start);
-        Some(Location::new(Url::parse(uri).ok()?, Range::new(pos, pos)))
+    fn locate_at(&self, uri: &Url, positions: &PositionIndex<'_>, start: usize) -> Location {
+        let pos = positions.position(start);
+        Location::new(uri.clone(), Range::new(pos, pos))
     }
 }
 
@@ -238,6 +311,12 @@ END
         assert_eq!(results[0].name, "max_count");
         assert_eq!(results[0].kind, SymbolKind::CONSTANT);
 
+        // Component declarations are workspace symbols too.
+        let results = provider.search("counter");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, SymbolKind::MODULE);
+        assert_eq!(results[0].container_name, None);
+
         // Case-insensitive search
         let results = provider.search("status");
         assert_eq!(results.len(), 1);
@@ -275,9 +354,11 @@ END
 
         // Search for variable
         let results = provider.search("count");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "count");
-        assert_eq!(results[0].kind, SymbolKind::VARIABLE);
+        let count = results
+            .iter()
+            .find(|symbol| symbol.name == "count")
+            .expect("count variable is indexed");
+        assert_eq!(count.kind, SymbolKind::VARIABLE);
 
         // Search for event
         let results = provider.search("increment");
@@ -421,7 +502,34 @@ END
 
         // Empty query should match everything
         let results = provider.search("");
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn open_symbols_overlay_and_then_restore_disk_symbols() {
+        let provider = WorkspaceSymbolProvider::new();
+        let uri = "file:///test.eventb".to_string();
+        let disk_source = "CONTEXT disk\nCONSTANTS\n    disk_value\nEND\n";
+        let disk_components = crate::component_util::parse_all(disk_source);
+        provider.index_disk_components(uri.clone(), &disk_components, disk_source);
+
+        assert_eq!(provider.search("disk_value").len(), 1);
+
+        provider.update_symbols(
+            uri.clone(),
+            "CONTEXT open\nCONSTANTS\n    open_value\nEND\n",
+        );
+        assert!(provider.search("disk_value").is_empty());
+        assert_eq!(provider.search("open_value").len(), 1);
+
+        // An unrecoverable open buffer still shadows the valid disk snapshot.
+        provider.index_components(uri.clone(), &[], "not Event-B");
+        assert!(provider.search("disk_value").is_empty());
+        assert!(provider.search("open_value").is_empty());
+
+        provider.remove_document(&uri);
+        assert_eq!(provider.search("disk_value").len(), 1);
+        assert!(provider.search("open_value").is_empty());
     }
 
     #[test]

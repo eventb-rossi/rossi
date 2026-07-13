@@ -100,6 +100,34 @@ pub fn offset_to_position(text: &str, byte_offset: usize) -> Position {
     Position::new(line, col)
 }
 
+/// Reusable byte-offset lookup for providers that emit many positions from
+/// one source document.
+pub(crate) struct PositionIndex<'a> {
+    text: &'a str,
+    line_offsets: Vec<usize>,
+}
+
+impl<'a> PositionIndex<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        let mut line_offsets = vec![0];
+        line_offsets.extend(
+            text.char_indices()
+                .filter_map(|(offset, ch)| (ch == '\n').then_some(offset + 1)),
+        );
+        Self { text, line_offsets }
+    }
+
+    pub(crate) fn position(&self, byte_offset: usize) -> Position {
+        let mut offset = byte_offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset += 1;
+        }
+        let line = self.line_offsets.partition_point(|&start| start <= offset) - 1;
+        let column = utf16_len(&self.text[self.line_offsets[line]..offset]);
+        Position::new(line as u32, column)
+    }
+}
+
 /// Convert an LSP [`Position`] (line, UTF-16 column) to a byte offset into `text`.
 ///
 /// Returns `None` when the position is out of bounds; a position at end-of-file
@@ -282,6 +310,15 @@ mod tests {
         assert_eq!(offset_to_position(text, 7), pos(2, 1));
         // Past end clamps to the final position.
         assert_eq!(offset_to_position(text, 999), pos(2, 2));
+    }
+
+    #[test]
+    fn position_index_matches_single_offset_conversion() {
+        let text = "a𝔹\n∈z";
+        let index = PositionIndex::new(text);
+        for offset in 0..=text.len() + 2 {
+            assert_eq!(index.position(offset), offset_to_position(text, offset));
+        }
     }
 
     #[test]
