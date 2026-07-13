@@ -219,6 +219,28 @@ impl CrossReferenceManager {
             .map(|u| u.value().clone())
     }
 
+    /// URIs of every indexed file declaring any of `component_names`.
+    ///
+    /// Unlike [`Self::find_component_uri`], this preserves duplicate
+    /// declarations so syntax-aware workspace operations can still visit every
+    /// file while diagnostics report the invalid duplicate-name state. The URI
+    /// index is scanned once however many names the caller supplies.
+    pub(crate) fn component_uris_for_names(
+        &self,
+        component_names: &HashSet<String>,
+    ) -> Vec<String> {
+        self.uri_to_component
+            .iter()
+            .filter(|entry| {
+                entry
+                    .value()
+                    .iter()
+                    .any(|location| component_names.contains(location.name.as_str()))
+            })
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// Get component info by name
     pub fn get_component(&self, name: &str) -> Option<ComponentInfo> {
         let (kind, references) = self.graph.read().references_of(name)?;

@@ -12,13 +12,15 @@ use tracing::debug;
 use rossi::Component;
 use rossi::ast::Span;
 
-use crate::component_util::{component_at_offset, parse_all};
+use crate::component_loader::ComponentLoader;
+use crate::component_util::{component_at_offset, is_component_name_site, parse_all};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
+use crate::references::{component_reference_clause, find_references_in_workspace};
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -100,8 +102,15 @@ impl RenameProvider {
             identifier, new_name, position
         );
 
-        // Check if this is a component name that should be renamed across files
-        let is_component = self.is_component_name(&identifier);
+        // A spelling is a component name only at its declaration or in a
+        // component-level EXTENDS/SEES/REFINES operand. A same-named formula
+        // symbol must stay on the local, scope-aware path.
+        let offset = position_to_offset(text, position)?;
+        let is_component = self.cross_ref_manager.is_some()
+            && is_component_name_site(text, &identifier, offset, || {
+                let masked = rossi::comments::mask_comments_chars(text);
+                component_reference_clause(&masked, position).is_some()
+            });
 
         // A structural name may be hyphenated (Rodin labels/file names);
         // mathematical symbols may not (kernel_lang §2.2). Beyond tracked
@@ -131,14 +140,9 @@ impl RenameProvider {
             // Rename only in the current document. A hyphenated symbol (an
             // event name) gets the component boundary; a math symbol the math one.
             debug!("Renaming symbol '{}' in current document", identifier);
-            // Resolve the rename from the AST: a binder of the same name keeps
-            // its own scope, and the after-state form `x'` is renamed at its
-            // base. Fall back to a whole-word scan when the document doesn't
-            // parse far enough to resolve the cursor.
-            //
             // Reuse the open document's components when we have them; otherwise
             // recover them from the served text. `text` and these components are
-            // the same snapshot, so the offset and the spans agree.
+            // the same snapshot, so the cursor and every semantic span agree.
             let owned;
             let components: &[Component] = match cursor.as_deref() {
                 Some(parsed) => parsed.components(),
@@ -147,6 +151,11 @@ impl RenameProvider {
                     &owned
                 }
             };
+            // Resolve the rename from the AST: a binder of the same name keeps
+            // its own scope, and the after-state form `x'` is renamed at its
+            // base. Fall back to a whole-word scan when the document doesn't
+            // parse far enough to resolve the cursor.
+            //
             let edits = ast_rename_edits(text, components, position, &identifier, new_name)
                 .or_else(|| text_rename_edits(text, &identifier, uri, new_name))?;
 
@@ -171,15 +180,6 @@ impl RenameProvider {
         })
     }
 
-    /// Check if an identifier is a component name (context or machine)
-    fn is_component_name(&self, identifier: &str) -> bool {
-        if let Some(ref manager) = self.cross_ref_manager {
-            manager.find_component_uri(identifier).is_some()
-        } else {
-            false
-        }
-    }
-
     /// Rename a component across all workspace files
     fn rename_across_workspace(
         &self,
@@ -192,58 +192,17 @@ impl RenameProvider {
             None => return,
         };
 
-        // Get all component URIs in the workspace
-        let component_uris = manager.all_component_uris();
-
-        for uri_str in component_uris {
-            // Try to get the document content
-            let text = if let Some(doc_mgr) = &self.document_manager {
-                // First try to get from open documents
-                if let Ok(url) = Url::parse(&uri_str) {
-                    doc_mgr.get_text(&url)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // If not in open documents, read from file
-            let text = text.or_else(|| {
-                if let Ok(url) = Url::parse(&uri_str) {
-                    if let Ok(path) = url.to_file_path() {
-                        std::fs::read_to_string(path).ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+        for location in find_references_in_workspace(&loader, old_name) {
+            changes.entry(location.uri).or_default().push(TextEdit {
+                range: location.range,
+                new_text: new_name.to_string(),
             });
+        }
 
-            if let Some(text) = text
-                && let Ok(url) = Url::parse(&uri_str)
-                && let Some(locations) = find_all_references(
-                    &text,
-                    old_name,
-                    &url,
-                    // Component boundary: renaming component `ENV_C` must not
-                    // rewrite the prefix of a sibling named `ENV_C-1`.
-                    identifier_utils::WordBoundary::ComponentName,
-                )
-            {
-                let mut edits: Vec<TextEdit> = locations
-                    .into_iter()
-                    .map(|loc| TextEdit {
-                        range: loc.range,
-                        new_text: new_name.to_string(),
-                    })
-                    .collect();
-
-                sort_edits_reverse(&mut edits);
-
-                changes.insert(url, edits);
-            }
+        for edits in changes.values_mut() {
+            sort_edits_reverse(edits);
+            edits.dedup_by(|a, b| a.range == b.range);
         }
     }
 }
@@ -827,6 +786,222 @@ END
         // Should have 3 edits: line 0 col 0, line 1 col 0, line 1 col 9
         // Should NOT include the 'count' inside the comment
         assert_eq!(text_edits.len(), 3);
+    }
+
+    fn collision_provider(context: &str, machine: &str) -> (RenameProvider, Url, Url) {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), machine);
+        let documents = Arc::new(DocumentManager::new());
+        documents.open(context_uri.clone(), 1, context.to_string());
+        documents.open(machine_uri.clone(), 1, machine.to_string());
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        (provider, context_uri, machine_uri)
+    }
+
+    #[test]
+    fn component_rename_excludes_same_spelling_in_formulas_and_labels() {
+        let context = "CONTEXT C\nCONSTANTS\n    C\nAXIOMS\n    @C C =\nEND";
+        let machine = "MACHINE M\nSEES C\nVARIABLES\n    C\nINVARIANTS\n    @C C ∈\nEND";
+        let (provider, context_uri, machine_uri) = collision_provider(context, machine);
+        let params = make_rename_params(0, 8, context_uri.clone(), "D".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("component rename")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            "CONTEXT D\nCONSTANTS\n    C\nAXIOMS\n    @C C =\nEND"
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES D\nVARIABLES\n    C\nINVARIANTS\n    @C C ∈\nEND"
+        );
+    }
+
+    #[test]
+    fn local_rename_does_not_become_component_rename_on_name_collision() {
+        let context = "CONTEXT C\nEND";
+        let machine = "MACHINE M\nSEES C\nVARIABLES\n    C\nINVARIANTS\n    @i C ∈ ℕ\nEND";
+        let (provider, context_uri, machine_uri) = collision_provider(context, machine);
+        let params = make_rename_params(3, 4, machine_uri.clone(), "x".to_string());
+        let mut changes = provider
+            .rename(&params, machine)
+            .expect("local rename")
+            .changes
+            .unwrap();
+
+        assert!(!changes.contains_key(&context_uri));
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES C\nVARIABLES\n    x\nINVARIANTS\n    @i x ∈ ℕ\nEND"
+        );
+    }
+
+    #[test]
+    fn component_rename_accepts_the_name_trailing_edge() {
+        let context = "CONTEXT C \nEND";
+        let machine = "MACHINE M\nSEES C\nEND";
+        let (provider, context_uri, machine_uri) = collision_provider(context, machine);
+        let params = make_rename_params(0, 9, context_uri.clone(), "D".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("component rename from trailing edge")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            "CONTEXT D \nEND"
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES D\nEND"
+        );
+    }
+
+    #[test]
+    fn component_rename_includes_a_repeated_dependency_clause() {
+        let context = "CONTEXT D\nEND";
+        let machine = "MACHINE M\nSEES C\nSEES D\nEND";
+        let (provider, context_uri, machine_uri) = collision_provider(context, machine);
+        let params = make_rename_params(0, 8, context_uri.clone(), "E".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("component rename through repeated SEES")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            "CONTEXT E\nEND"
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES C\nSEES E\nEND"
+        );
+    }
+
+    #[test]
+    fn component_rename_includes_a_headerless_open_dependent() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT C\nEND";
+        let indexed_machine = "MACHINE M\nSEES C\nEND";
+        let current_machine = "SEES C\nEND";
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), indexed_machine);
+        let documents = Arc::new(DocumentManager::new());
+        documents.open(context_uri.clone(), 1, context.to_string());
+        documents.open(machine_uri.clone(), 1, indexed_machine.to_string());
+        documents.change(
+            &machine_uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: current_machine.to_string(),
+            }],
+        );
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        let params = make_rename_params(0, 8, context_uri.clone(), "D".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("component rename with headerless dependent")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(
+                current_machine,
+                changes.remove(&machine_uri).as_deref().unwrap()
+            ),
+            "SEES D\nEND"
+        );
+    }
+
+    #[test]
+    fn component_rename_visits_every_duplicate_declaration_file() {
+        let first_uri = Url::parse("file:///a.eventb").unwrap();
+        let second_uri = Url::parse("file:///b.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT C\nEND";
+        let machine = "MACHINE M\nSEES C\nEND";
+        let crm = Arc::new(CrossReferenceManager::new());
+        let documents = Arc::new(DocumentManager::new());
+        for uri in [&first_uri, &second_uri] {
+            crm.update_component(uri.to_string(), context);
+            documents.open(uri.clone(), 1, context.to_string());
+        }
+        crm.update_component(machine_uri.to_string(), machine);
+        documents.open(machine_uri.clone(), 1, machine.to_string());
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        let params = make_rename_params(0, 8, first_uri.clone(), "D".to_string());
+        let changes = provider
+            .rename(&params, context)
+            .expect("component rename with duplicate declarations")
+            .changes
+            .unwrap();
+
+        assert_eq!(changes.get(&first_uri).map(Vec::len), Some(1));
+        assert_eq!(changes.get(&second_uri).map(Vec::len), Some(1));
+        assert_eq!(changes.get(&machine_uri).map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn component_rename_loads_a_closed_dependent_from_disk() {
+        let root = std::env::temp_dir().join(format!(
+            "eventb-lsp-component-rename-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let context_path = root.join("c.eventb");
+        let machine_path = root.join("m.eventb");
+        let context = "CONTEXT C\nEND";
+        let machine = "MACHINE M\nSEES C\nEND";
+        std::fs::write(&context_path, context).unwrap();
+        std::fs::write(&machine_path, machine).unwrap();
+        let context_uri = Url::from_file_path(&context_path).unwrap();
+        let machine_uri = Url::from_file_path(&machine_path).unwrap();
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.scan_workspace(&root).unwrap();
+        let documents = Arc::new(DocumentManager::new());
+        documents.open(context_uri.clone(), 1, context.to_string());
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        let params = make_rename_params(0, 8, context_uri.clone(), "D".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("component rename")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            "CONTEXT D\nEND"
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES D\nEND"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

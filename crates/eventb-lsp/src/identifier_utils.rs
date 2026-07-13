@@ -4,6 +4,8 @@
 //! is under the cursor?". Keep that logic in one place so the three variants
 //! can't drift apart.
 
+use rossi::keywords::{self, KeywordId};
+
 use crate::lsp_types::{Location, Position, Range, Url};
 use crate::position::{line_run_to_range, utf16_to_char_col};
 use crate::text_utils;
@@ -99,23 +101,29 @@ fn extend_over_hyphens(
         .then(|| (candidate, line_run_to_range(line, line_idx, cstart, cend)))
 }
 
+fn keyword_id(word: &str) -> Option<KeywordId> {
+    keywords::lookup(word).map(|keyword| keyword.id)
+}
+
 /// Reference clauses whose component-name operands continue onto following
-/// lines — unlike the MACHINE/CONTEXT/EVENT headers, which are followed by a
-/// body rather than more names.
-const REFERENCE_LIST_CLAUSES: [&str; 3] = ["REFINES", "SEES", "EXTENDS"];
+/// lines — unlike component/event headers, which are followed by a body.
+const REFERENCE_LIST_CLAUSES: [KeywordId; 3] =
+    [KeywordId::Refines, KeywordId::Sees, KeywordId::Extends];
 /// Status modifiers that may precede an inline `EVENT` header
 /// (`convergent EVENT do-step`).
-const INLINE_EVENT_STATUS: [&str; 3] = ["ordinary", "convergent", "anticipated"];
-
-fn matches_any(word: &str, set: &[&str]) -> bool {
-    set.iter().any(|kw| word.eq_ignore_ascii_case(kw))
-}
+const INLINE_EVENT_STATUS: [KeywordId; 3] = [
+    KeywordId::Ordinary,
+    KeywordId::Convergent,
+    KeywordId::Anticipated,
+];
 
 /// Clause keywords whose operands are component names (hyphen-capable
 /// structural names): component headers and the reference clauses.
-fn is_structural_name_clause(word: &str) -> bool {
-    matches_any(word, &["MACHINE", "CONTEXT", "EVENT"])
-        || matches_any(word, &REFERENCE_LIST_CLAUSES)
+fn is_structural_name_clause(keyword: KeywordId) -> bool {
+    matches!(
+        keyword,
+        KeywordId::Machine | KeywordId::Context | KeywordId::Event
+    ) || REFERENCE_LIST_CLAUSES.contains(&keyword)
 }
 
 /// Whether tokens on line `line_idx` sit in a structural-name position: the
@@ -132,13 +140,14 @@ fn in_structural_name_context(text: &str, line_idx: usize) -> bool {
 
     let words = text_utils::identifier_words(lines[line_idx]);
     if let Some(first) = words.first() {
-        if is_structural_name_clause(first) {
+        let first_keyword = keyword_id(first);
+        if first_keyword.is_some_and(is_structural_name_clause) {
             return true;
         }
         // `convergent EVENT do-step` — inline status before the keyword.
         if words.len() >= 2
-            && matches_any(first, &INLINE_EVENT_STATUS)
-            && words[1].eq_ignore_ascii_case("EVENT")
+            && first_keyword.is_some_and(|keyword| INLINE_EVENT_STATUS.contains(&keyword))
+            && keyword_id(&words[1]) == Some(KeywordId::Event)
         {
             return true;
         }
@@ -150,7 +159,7 @@ fn in_structural_name_context(text: &str, line_idx: usize) -> bool {
     // Continuation line: the nearest clause opened above decides.
     for prev in lines[..line_idx].iter().rev() {
         if let Some(first) = text_utils::first_identifier_word(prev) {
-            if matches_any(&first, &REFERENCE_LIST_CLAUSES) {
+            if keyword_id(&first).is_some_and(|keyword| REFERENCE_LIST_CLAUSES.contains(&keyword)) {
                 return true;
             }
             if text_utils::is_clause_boundary_keyword(&first) {

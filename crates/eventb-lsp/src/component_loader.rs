@@ -22,7 +22,7 @@
 //! (it holds a `!Sync` `RefCell`); it is never stored on a provider.
 
 use std::cell::{OnceCell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use rossi::Component;
@@ -119,14 +119,40 @@ impl<'a> ComponentLoader<'a> {
         Some(doc)
     }
 
+    /// Current source text for `uri` without building an AST.
+    ///
+    /// Component occurrence queries need only the recovery scanner's exact
+    /// source locations. Open documents come directly from the document store;
+    /// closed documents incur one disk read and no otherwise-unused full parse.
+    pub(crate) fn source_text(&self, uri: &Url) -> Option<String> {
+        if let Some(documents) = self.documents {
+            if let Some(text) = documents.get_text(uri) {
+                return Some(text);
+            }
+            // Mirror `build`: do not fall through to stale disk text while a
+            // concurrently replaced document is still open.
+            if documents.version(uri).is_some() {
+                return documents.get_text(uri);
+            }
+        }
+        read_source_file(uri)
+    }
+
     /// Parse the file at `uri` from the open-document store or disk. Never
     /// touches the cache itself.
     fn build(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
-        if let Some(doc) = self.documents.and_then(|dm| dm.parse_result(uri)) {
-            return Some(doc);
+        if let Some(documents) = self.documents {
+            if let Some(doc) = documents.parse_result(uri) {
+                return Some(doc);
+            }
+            // A concurrent edit can supersede the parse that just completed.
+            // Retry the current open revision once, but never fall through to
+            // stale disk text for a URI that is still open.
+            if documents.version(uri).is_some() {
+                return documents.parse_result(uri);
+            }
         }
-        let path = uri.to_file_path().ok()?;
-        let text = std::fs::read_to_string(path).ok()?;
+        let text = read_source_file(uri)?;
         let parse = rossi::parse_components_with_recovery(&text);
         Some(Arc::new(ParsedDocument { text, parse }))
     }
@@ -175,16 +201,30 @@ impl<'a> ComponentLoader<'a> {
         })
     }
 
-    pub(crate) fn is_component_name(&self, name: &str) -> bool {
-        self.manager.find_component_uri(name).is_some() || self.open_components().contains_key(name)
-    }
+    /// Files that can contain a declaration or direct structural reference to
+    /// `target`, plus every open document whose graph overlay may still be
+    /// waiting for the diagnostics debounce.
+    pub(crate) fn candidate_uris_for_component(&self, target: &str) -> Vec<Url> {
+        let mut names = HashSet::from([target.to_string()]);
+        names.extend(
+            self.manager
+                .find_referencing_components(target, None)
+                .into_iter()
+                .map(|component| component.name),
+        );
 
-    pub(crate) fn all_component_names(&self) -> Vec<String> {
-        let mut names = self.manager.all_component_names();
-        names.extend(self.open_component_names().map(str::to_owned));
-        names.sort();
-        names.dedup();
-        names
+        let mut uris: Vec<Url> = self
+            .manager
+            .component_uris_for_names(&names)
+            .into_iter()
+            .filter_map(|uri| Url::parse(&uri).ok())
+            .collect();
+        if let Some(documents) = self.documents {
+            uris.extend(documents.all_uris());
+        }
+        uris.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        uris.dedup();
+        uris
     }
 
     fn load_from_uri(&self, uri: Url, name: &str) -> Option<LoadedComponent> {
@@ -192,6 +232,10 @@ impl<'a> ComponentLoader<'a> {
         let index = doc.components().iter().position(|c| c.name() == name)?;
         Some(LoadedComponent { uri, doc, index })
     }
+}
+
+fn read_source_file(uri: &Url) -> Option<String> {
+    std::fs::read_to_string(uri.to_file_path().ok()?).ok()
 }
 
 #[cfg(test)]
@@ -296,5 +340,22 @@ mod tests {
 
         let loader = ComponentLoader::new(&manager, Some(&documents));
         assert_eq!(loader.load("new").unwrap().component().name(), "new");
+    }
+
+    #[test]
+    fn component_candidates_skip_unrelated_closed_files() {
+        let manager = CrossReferenceManager::new();
+        manager.update_component("file:///c.eventb".into(), "CONTEXT C\nEND");
+        manager.update_component("file:///m.eventb".into(), "MACHINE M\nSEES C\nEND");
+        manager.update_component("file:///unrelated.eventb".into(), "CONTEXT U\nEND");
+
+        let loader = ComponentLoader::new(&manager, None);
+        let uris: Vec<_> = loader
+            .candidate_uris_for_component("C")
+            .into_iter()
+            .map(|uri| uri.to_string())
+            .collect();
+
+        assert_eq!(uris, ["file:///c.eventb", "file:///m.eventb"]);
     }
 }

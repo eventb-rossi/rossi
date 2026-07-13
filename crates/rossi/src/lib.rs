@@ -68,8 +68,8 @@ pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
 pub use error::{ParseError, ParseResult, Result};
 pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{
-    parse, parse_action_str, parse_components, parse_components_with_recovery,
-    parse_expression_str, parse_predicate_str, parse_with_recovery,
+    component_name_occurrences, parse, parse_action_str, parse_components,
+    parse_components_with_recovery, parse_expression_str, parse_predicate_str, parse_with_recovery,
 };
 pub use pretty::{
     PrettyPrinter, components_to_string, components_to_string_ascii, format_str, to_string,

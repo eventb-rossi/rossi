@@ -2692,6 +2692,34 @@ fn required_clause_name_span(
         .map(|(_, span)| span)
 }
 
+/// Extract the valid identifiers and source spans from one recovered clause.
+fn recover_identifiers_from_span(
+    text: &RecoveryText,
+    keyword: KeywordId,
+    span: Span,
+) -> Vec<(String, Span)> {
+    let spelling = crate::keywords::spell(keyword);
+    let mut identifiers = Vec::new();
+
+    for line in text.masked[span.start..span.end].lines() {
+        let line = line.trim();
+        let content = strip_keyword_prefix(line, spelling).unwrap_or(line);
+        if content.is_empty() {
+            continue;
+        }
+        // `content` is a subslice of `text.masked`; its byte offset there is
+        // also its offset in the original (masking preserves byte layout).
+        let base = subslice_offset(&text.masked, content);
+        identifiers.extend(
+            extract_identifiers(content, base)
+                .into_iter()
+                .filter(|(name, _)| accepts_required_clause_name(keyword, name)),
+        );
+    }
+
+    identifiers
+}
+
 /// Extract identifiers (each with its source [`Span`]) from a clause during
 /// error recovery. Also returns the clause's [`ClauseRegion`], recovered from the
 /// same single [`clause_region`] scan.
@@ -2722,30 +2750,45 @@ fn recover_identifiers(
     // identifiers (and reject mathematical reserved words, mirroring the
     // strict path);
     // reference clauses (EXTENDS/SEES/REFINES) take component names.
-    let mut result = Vec::new();
     let Some((span, region)) = clause_region(text, keyword, bound, positions) else {
-        return RecoveredClause::absent(result);
+        return RecoveredClause::absent(Vec::new());
     };
-    let spelling = crate::keywords::spell(keyword);
-    for line in text.masked[span.start..span.end].lines() {
-        let line = line.trim();
-        let content = strip_keyword_prefix(line, spelling).unwrap_or(line);
-        if content.is_empty() {
-            continue;
-        }
-        // `content` is a subslice of `text.masked`; its byte offset there is
-        // also its offset in the original (masking preserves byte layout).
-        let base = subslice_offset(&text.masked, content);
-        result.extend(
-            extract_identifiers(content, base)
-                .into_iter()
-                .filter(|(name, _)| accepts_required_clause_name(keyword, name)),
-        );
-    }
     RecoveredClause {
         region: Some(region),
-        data: result,
+        data: recover_identifiers_from_span(text, keyword, span),
     }
+}
+
+/// Recover every occurrence of one component-level dependency clause.
+///
+/// The ordinary recovery AST keeps the first clause region because duplicate
+/// clauses are invalid. Navigation and rename still need each operand's exact
+/// location while the user is editing, so this source-location scan visits all
+/// classified occurrences without changing the semantic AST.
+fn recover_all_component_references(
+    text: &RecoveryText,
+    keyword: KeywordId,
+    bound: usize,
+    positions: &[RecoveryPosition],
+) -> Vec<Ident> {
+    let mut references = Vec::new();
+
+    for (index, &(start, found, _)) in positions.iter().enumerate() {
+        if found != keyword || start >= bound {
+            continue;
+        }
+        let end = positions
+            .get(index + 1)
+            .map(|&(pos, _, _)| pos.min(bound))
+            .unwrap_or(bound);
+        references.extend(
+            recover_identifiers_from_span(text, keyword, Span { start, end })
+                .into_iter()
+                .map(|(name, span)| Ident::new(name, Some(span))),
+        );
+    }
+
+    references
 }
 
 /// Extract labeled predicates from a clause during error recovery. Also returns
@@ -3097,8 +3140,10 @@ pub fn parse_with_recovery(input: &str) -> ParseResult<Component> {
             // not defeat recovery.
             let text = RecoveryText::new(input);
             let end = text.masked.len();
-            let context_pos = find_keyword_word(&text, "CONTEXT", 0, end);
-            let machine_pos = find_keyword_word(&text, "MACHINE", 0, end);
+            let context_pos =
+                find_keyword_word(&text, crate::keywords::spell(KeywordId::Context), 0, end);
+            let machine_pos =
+                find_keyword_word(&text, crate::keywords::spell(KeywordId::Machine), 0, end);
             match (context_pos, machine_pos) {
                 (Some(ctx), Some(mch)) if mch < ctx => {
                     parse_machine_with_recovery(&text, mch, first_error)
@@ -3204,19 +3249,74 @@ fn component_header_starts(text: &RecoveryText) -> Vec<usize> {
     .flat_map(|scope| recovery_clause_positions(text, scope, 0, end))
     .filter_map(|(pos, keyword, len)| required_clause_name_span(text, keyword, pos + len, end))
     .collect();
-    for keyword in ["CONTEXT", "MACHINE"] {
+    for keyword in [KeywordId::Context, KeywordId::Machine] {
+        let spelling = crate::keywords::spell(keyword);
         let mut from = 0;
-        while let Some(pos) = find_keyword_word(text, keyword, from, end) {
+        while let Some(pos) = find_keyword_word(text, spelling, from, end) {
             if is_line_anchored(&text.masked, pos)
                 && !protected_names.iter().any(|span| span.start == pos)
             {
                 starts.push(pos);
             }
-            from = pos + keyword.len();
+            from = pos + spelling.len();
         }
     }
     starts.sort_unstable();
     starts
+}
+
+/// Locate component declarations and component-level dependency operands.
+///
+/// The result contains the names after `CONTEXT` / `MACHINE` headers and every
+/// target in context `EXTENDS` or machine `REFINES` / `SEES` clauses. Event
+/// refinement targets are excluded. The recovery scanner is used directly, so
+/// locations remain available in syntactically broken components and repeated
+/// structural clauses without adding source-only fields to the public AST.
+pub fn component_name_occurrences(input: &str) -> Vec<Ident> {
+    let text = RecoveryText::new(input);
+    let headers = component_header_starts(&text);
+    let mut occurrences = Vec::new();
+
+    for (index, &header) in headers.iter().enumerate() {
+        let end = headers.get(index + 1).copied().unwrap_or(input.len());
+        let (keyword, scope, dependencies) = if text.masked_upper[header..]
+            .starts_with(crate::keywords::spell(KeywordId::Context))
+        {
+            (
+                KeywordId::Context,
+                crate::keywords::scope::CONTEXT,
+                &[KeywordId::Extends][..],
+            )
+        } else {
+            (
+                KeywordId::Machine,
+                crate::keywords::scope::MACHINE,
+                &[KeywordId::Refines, KeywordId::Sees][..],
+            )
+        };
+
+        if let Some((name, span)) = component_name_after(&text, header, keyword)
+            && span.end <= end
+        {
+            occurrences.push(Ident::new(name, Some(span)));
+        }
+
+        let positions = recovery_clause_positions(&text, scope, header, end);
+        let bound = if keyword == KeywordId::Machine {
+            first_event_region_start(&text, &positions).min(end)
+        } else {
+            end
+        };
+        for &dependency in dependencies {
+            occurrences.extend(recover_all_component_references(
+                &text, dependency, bound, &positions,
+            ));
+        }
+    }
+
+    occurrences.sort_by_key(|ident| ident.span.map(|span| (span.start, span.end)));
+    occurrences.dedup_by(|left, right| left.name == right.name && left.span == right.span);
+    occurrences
 }
 
 /// Byte offset of the start of the line containing `pos`.
@@ -3498,8 +3598,9 @@ fn parse_context_with_recovery(
     let mut context = Context::new(String::from("unknown"));
 
     // Try to extract the context name
-    if let Some(name) = component_name_after(text, header_pos, "CONTEXT") {
+    if let Some((name, span)) = component_name_after(text, header_pos, KeywordId::Context) {
         context.name = name;
+        context.name_span = Some(span);
     }
 
     // Try to parse each clause independently. Contexts have no event
@@ -3574,8 +3675,9 @@ fn parse_machine_with_recovery(
     let mut machine = Machine::new(String::from("unknown"));
 
     // Try to extract the machine name
-    if let Some(name) = component_name_after(text, header_pos, "MACHINE") {
+    if let Some((name, span)) = component_name_after(text, header_pos, KeywordId::Machine) {
         machine.name = name;
+        machine.name_span = Some(span);
     }
 
     // Try to parse each clause independently. Machine-level clauses all
@@ -4282,11 +4384,16 @@ fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
 /// recovered AST never carries a name the pretty-printer cannot re-emit
 /// (`MACHINE a--b`, `CONTEXT ä`); a malformed header simply leaves the
 /// component's default `"unknown"` name.
-fn component_name_after(text: &RecoveryText, keyword_pos: usize, keyword: &str) -> Option<String> {
-    let rest = text.masked[keyword_pos + keyword.len()..].lines().next()?;
-    first_identifier_candidate(rest, 0)
-        .map(|(name, _)| name.to_string())
-        .filter(|name| crate::names::is_valid_component_name(name))
+fn component_name_after(
+    text: &RecoveryText,
+    keyword_pos: usize,
+    keyword: KeywordId,
+) -> Option<(String, Span)> {
+    let content_start = keyword_pos + crate::keywords::spell(keyword).len();
+    let rest = text.masked[content_start..].lines().next()?;
+    first_identifier_candidate(rest, content_start)
+        .filter(|(name, _)| crate::names::is_valid_component_name(name))
+        .map(|(name, span)| (name.to_string(), span))
 }
 
 /// Find the span between a clause keyword and the next clause or END,
@@ -4782,6 +4889,56 @@ mod tests {
                 "name span should be the event's own INITIALISATION token"
             );
         }
+    }
+
+    #[test]
+    fn component_name_occurrences_cover_exact_structural_targets() {
+        let source = "CONTEXT Derived\nEXTENDS Base ENV-C\nEND\n\nMACHINE Concrete\nREFINES Abstract-M\nSEES Base ENV-C\nEND";
+        let occurrences = component_name_occurrences(source);
+        let names: Vec<_> = occurrences
+            .iter()
+            .map(|occurrence| occurrence.name.as_str())
+            .collect();
+
+        assert_eq!(
+            names,
+            [
+                "Derived",
+                "Base",
+                "ENV-C",
+                "Concrete",
+                "Abstract-M",
+                "Base",
+                "ENV-C"
+            ]
+        );
+        for occurrence in occurrences {
+            let span = occurrence.span.expect("text occurrence has a span");
+            assert_eq!(&source[span.start..span.end], occurrence.name);
+        }
+    }
+
+    #[test]
+    fn component_name_occurrences_survive_errors_and_repeated_clauses() {
+        let source = "CONTEXT D\nAXIOMS\n    @a x ∈\nEND\n\nMACHINE M\nSEES C\nSEES D\nINVARIANTS\n    @i y ∈\nEND";
+        let occurrences = component_name_occurrences(source);
+        let sites: Vec<_> = occurrences
+            .iter()
+            .map(|occurrence| {
+                let span = occurrence.span.expect("text occurrence has a span");
+                (occurrence.name.as_str(), span.start)
+            })
+            .collect();
+
+        assert_eq!(
+            sites,
+            [
+                ("D", source.find("D").unwrap()),
+                ("M", source.find("MACHINE M").unwrap() + "MACHINE ".len()),
+                ("C", source.find("SEES C").unwrap() + "SEES ".len()),
+                ("D", source.find("SEES D").unwrap() + "SEES ".len()),
+            ]
+        );
     }
 
     /// The `refines`/`extends` target's span is captured (inline and body-level),

@@ -10,8 +10,9 @@ use rossi::ast::Span;
 use rossi::keywords::KeywordId;
 
 use crate::component_loader::ComponentLoader;
+use crate::component_util::is_component_name_site;
 use crate::formula_walk;
-use crate::position::span_to_range;
+use crate::position::{position_to_offset, span_to_range};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
@@ -159,8 +160,10 @@ impl ReferenceProvider {
         // re-parsed.
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
 
-        if is_component_reference_position(masked, position) && loader.is_component_name(identifier)
-        {
+        let offset = position_to_offset(text, position).unwrap_or(text.len());
+        if is_component_name_site(text, identifier, offset, || {
+            is_component_reference_position(masked, position)
+        }) {
             return find_references_in_workspace(&loader, identifier);
         }
 
@@ -176,10 +179,6 @@ impl ReferenceProvider {
                 Resolution::Bound(bound) => spans_to_locations(bound.spans, text, uri, identifier),
                 Resolution::Symbol(symbol) => self.find_references_for_symbol(&symbol, &loader),
             };
-        }
-
-        if loader.is_component_name(identifier) {
-            return find_references_in_workspace(&loader, identifier);
         }
 
         self.find_references_in_text(text, uri, identifier)
@@ -257,33 +256,59 @@ impl ReferenceProvider {
 
 /// Find all references across the workspace.
 ///
-/// A free function (it needs only the loader): every workspace component is
-/// loaded through the shared cache, so a name appearing in many files is parsed
-/// at most once.
-fn find_references_in_workspace(loader: &ComponentLoader, identifier: &str) -> Vec<Location> {
+/// A free function shared with rename: the dependency graph selects closed
+/// declaration/referrer files, current open snapshots are added to tolerate the
+/// diagnostics debounce, and the loader parses each selected file at most once.
+pub(crate) fn find_references_in_workspace(
+    loader: &ComponentLoader,
+    identifier: &str,
+) -> Vec<Location> {
     let mut locations = Vec::new();
-    let mut seen = HashSet::new();
 
-    for component_name in loader.all_component_names() {
-        if let Some(loaded) = loader.load(&component_name) {
-            // Component references use the component word boundary so a name
-            // like `ENV_C` does not match inside a sibling component `ENV_C-1`
-            // (consistent with rename's cross-file path).
-            push_unique_locations(
-                &mut locations,
-                &mut seen,
-                identifier_utils::find_whole_word_locations(
-                    loaded.text(),
+    for uri in loader.candidate_uris_for_component(identifier) {
+        if let Some(text) = loader.source_text(&uri) {
+            let occurrences = rossi::component_name_occurrences(&text);
+            if occurrences.is_empty() {
+                locations.extend(syntactic_component_reference_locations(
+                    &text, &uri, identifier,
+                ));
+            } else {
+                locations.extend(spans_to_locations(
+                    occurrences.iter().filter_map(|occurrence| {
+                        (occurrence.name == identifier)
+                            .then_some(occurrence.span)
+                            .flatten()
+                    }),
+                    &text,
+                    &uri,
                     identifier,
-                    loaded.uri(),
-                    None,
-                    identifier_utils::WordBoundary::ComponentName,
-                ),
-            );
+                ));
+            }
         }
     }
 
     locations
+}
+
+/// Structural reference locations recovered from clause context rather than a
+/// component AST. This is the narrow fallback for a temporarily headerless
+/// open document, where the parser-side occurrence scan has no component anchor.
+fn syntactic_component_reference_locations(
+    text: &str,
+    uri: &Url,
+    identifier: &str,
+) -> Vec<Location> {
+    let masked = rossi::comments::mask_comments_chars(text);
+    identifier_utils::find_whole_word_locations(
+        text,
+        identifier,
+        uri,
+        None,
+        identifier_utils::WordBoundary::ComponentName,
+    )
+    .into_iter()
+    .filter(|location| component_reference_clause(&masked, location.range.start).is_some())
+    .collect()
 }
 
 fn push_unique_locations(
@@ -350,7 +375,12 @@ fn ast_parameter_references(
 /// (or its `x'` form) in `text` — a deeper recovery bug could leave a span
 /// relative to its region, and a reference at the wrong position is worse than a
 /// missing one.
-fn spans_to_locations(spans: Vec<Span>, text: &str, uri: &Url, name: &str) -> Vec<Location> {
+fn spans_to_locations(
+    spans: impl IntoIterator<Item = Span>,
+    text: &str,
+    uri: &Url,
+    name: &str,
+) -> Vec<Location> {
     spans
         .into_iter()
         .filter(|span| formula_walk::span_matches(text, *span, name))
@@ -653,6 +683,167 @@ mod tests {
 
         assert!(refs.iter().any(|location| location.uri == context_uri));
         assert!(refs.iter().any(|location| location.uri == machine_uri));
+    }
+
+    #[test]
+    fn component_references_exclude_same_spelling_in_formulas_and_labels() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT C\nCONSTANTS\n    C\nAXIOMS\n    @C C =\nEND";
+        let machine = "MACHINE M\nSEES C\nVARIABLES\n    C\nINVARIANTS\n    @C C ∈\nEND";
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), machine);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(context_uri.clone(), 1, context.to_string());
+        dm.open(machine_uri.clone(), 1, machine.to_string());
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let refs = provider
+            .find_references(&make_params(0, 8, context_uri.clone()), context)
+            .expect("component references");
+
+        let sites: HashSet<_> = refs
+            .into_iter()
+            .map(|location| {
+                (
+                    location.uri,
+                    location.range.start.line,
+                    location.range.start.character,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sites,
+            HashSet::from([(context_uri, 0, 8), (machine_uri, 1, 5)])
+        );
+    }
+
+    #[test]
+    fn component_references_accept_the_name_trailing_edge() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT C \nEND";
+        let machine = "MACHINE M\nSEES C\nEND";
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), machine);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(context_uri.clone(), 1, context.to_string());
+        dm.open(machine_uri.clone(), 1, machine.to_string());
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let refs = provider
+            .find_references(&make_params(0, 9, context_uri.clone()), context)
+            .expect("component references from trailing edge");
+        let sites: HashSet<_> = refs
+            .into_iter()
+            .map(|location| (location.uri, location.range.start.line))
+            .collect();
+
+        assert_eq!(sites, HashSet::from([(context_uri, 0), (machine_uri, 1)]));
+    }
+
+    #[test]
+    fn component_references_include_a_repeated_dependency_clause() {
+        let context_uri = Url::parse("file:///d.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT D\nEND";
+        let machine = "MACHINE M\nSEES C\nSEES D\nEND";
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), machine);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(context_uri.clone(), 1, context.to_string());
+        dm.open(machine_uri.clone(), 1, machine.to_string());
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let refs = provider
+            .find_references(&make_params(0, 8, context_uri.clone()), context)
+            .expect("component references through repeated SEES");
+        let sites: HashSet<_> = refs
+            .into_iter()
+            .map(|location| (location.uri, location.range.start.line))
+            .collect();
+
+        assert_eq!(sites, HashSet::from([(context_uri, 0), (machine_uri, 2)]));
+    }
+
+    #[test]
+    fn component_references_cover_all_dependency_kinds_and_utf16_ranges() {
+        let sources = [
+            ("file:///c.eventb", "CONTEXT C\nEND"),
+            ("file:///d.eventb", "CONTEXT D\nEXTENDS /* 😀 */ C\nEND"),
+            ("file:///a.eventb", "MACHINE A\nEND"),
+            ("file:///m.eventb", "MACHINE M\nREFINES A\nSEES C\nEND"),
+        ];
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        for (uri, source) in sources {
+            crm.update_component(uri.to_string(), source);
+            dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
+        }
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+
+        let context_uri = Url::parse(sources[0].0).unwrap();
+        let context_refs = provider
+            .find_references(&make_params(0, 8, context_uri.clone()), sources[0].1)
+            .expect("context references");
+        let context_sites: HashSet<_> = context_refs
+            .into_iter()
+            .map(|location| {
+                (
+                    location.uri,
+                    location.range.start.line,
+                    location.range.start.character,
+                )
+            })
+            .collect();
+        let utf16_extends =
+            crate::position::offset_to_position(sources[1].1, sources[1].1.rfind('C').unwrap());
+        assert_eq!(
+            context_sites,
+            HashSet::from([
+                (context_uri, 0, 8,),
+                (
+                    Url::parse(sources[1].0).unwrap(),
+                    utf16_extends.line,
+                    utf16_extends.character,
+                ),
+                (Url::parse(sources[3].0).unwrap(), 2, 5),
+            ])
+        );
+
+        let machine_uri = Url::parse(sources[2].0).unwrap();
+        let machine_refs = provider
+            .find_references(&make_params(0, 8, machine_uri.clone()), sources[2].1)
+            .expect("machine references");
+        let machine_sites: HashSet<_> = machine_refs
+            .into_iter()
+            .map(|location| {
+                (
+                    location.uri,
+                    location.range.start.line,
+                    location.range.start.character,
+                )
+            })
+            .collect();
+        assert_eq!(
+            machine_sites,
+            HashSet::from([
+                (machine_uri, 0, 8),
+                (Url::parse(sources[3].0).unwrap(), 1, 8),
+            ])
+        );
     }
 
     #[test]

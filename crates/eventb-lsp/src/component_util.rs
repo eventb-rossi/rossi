@@ -63,6 +63,29 @@ pub fn component_at_offset(components: &[Component], offset: usize) -> Option<&C
         .or_else(|| components.first())
 }
 
+/// Whether `offset` is on a component declaration or component-level
+/// dependency operand named `name` in the source document. If recovery finds
+/// no anchored component, `headerless_dependency` supplies the narrow fallback
+/// for a temporarily headerless dependency clause.
+///
+/// The trailing edge is included because LSP identifier lookup treats the
+/// caret immediately after a name as targeting that name. The fallback is lazy
+/// so ordinary component sites do not need a second structural scan.
+pub(crate) fn is_component_name_site(
+    text: &str,
+    name: &str,
+    offset: usize,
+    headerless_dependency: impl FnOnce() -> bool,
+) -> bool {
+    let occurrences = rossi::component_name_occurrences(text);
+    occurrences.iter().any(|occurrence| {
+        occurrence.name == name
+            && occurrence
+                .span
+                .is_some_and(|span| span.contains(offset) || span.end == offset)
+    }) || (occurrences.is_empty() && headerless_dependency())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
