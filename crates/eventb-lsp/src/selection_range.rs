@@ -5,9 +5,10 @@
 //! `parent` to progressively larger ranges
 //! (token → subexpression → predicate → clause → component).
 //!
-//! The hierarchy comes from [`rossi::enclosing_spans`], which derives it from the
-//! Pest parse tree — no separate grammar, no tree-sitter.
+//! The hierarchy comes from the document's shared [`rossi::ParseSnapshot`],
+//! which owns the relevant Pest spans — no per-request parse or tree-sitter.
 
+use crate::document::ParsedDocument;
 use crate::identifier_utils::{identifier_at_position, position_to_offset, span_to_range};
 use crate::lsp_types::{Position, Range, SelectionRange};
 
@@ -20,10 +21,20 @@ impl SelectionRangeProvider {
     }
 
     /// One [`SelectionRange`] per requested position, in the same order.
-    pub fn selection_ranges(&self, text: &str, positions: &[Position]) -> Vec<SelectionRange> {
+    pub fn selection_ranges(
+        &self,
+        document: &ParsedDocument,
+        positions: &[Position],
+    ) -> Vec<SelectionRange> {
+        let offsets: Vec<usize> = positions
+            .iter()
+            .map(|&position| position_to_offset(document.text(), position).unwrap_or(usize::MAX))
+            .collect();
+        let span_chains = document.enclosing_spans(&offsets);
         positions
             .iter()
-            .map(|&pos| selection_range_at(text, pos))
+            .zip(span_chains)
+            .map(|(&position, spans)| selection_range_at(document.text(), position, &spans))
             .collect()
     }
 }
@@ -35,11 +46,11 @@ impl Default for SelectionRangeProvider {
 }
 
 /// Build the nested selection range for a single position.
-fn selection_range_at(text: &str, position: Position) -> SelectionRange {
-    let spans = position_to_offset(text, position)
-        .map(|offset| rossi::enclosing_spans(text, offset))
-        .unwrap_or_default();
-
+fn selection_range_at(
+    text: &str,
+    position: Position,
+    spans: &[rossi::ast::Span],
+) -> SelectionRange {
     // Spans are outermost → innermost; fold so each node's `parent` points one
     // level out and the returned node is the innermost range.
     let node = spans.iter().fold(None, |parent, span| {
@@ -69,6 +80,10 @@ fn fallback_range(text: &str, position: Position) -> SelectionRange {
 mod tests {
     use super::*;
 
+    fn document(text: &str) -> ParsedDocument {
+        ParsedDocument::from_text(text.to_string())
+    }
+
     fn pos(line: u32, character: u32) -> Position {
         Position::new(line, character)
     }
@@ -91,9 +106,10 @@ mod tests {
     fn expands_from_token_outward() {
         let text = "MACHINE m\nINVARIANTS\n  @inv1 x + 1 > 0\nEND\n";
         let provider = SelectionRangeProvider::new();
+        let document = document(text);
 
         // Cursor on the `x` token (line 2, col 8).
-        let result = provider.selection_ranges(text, &[pos(2, 8)]);
+        let result = provider.selection_ranges(&document, &[pos(2, 8)]);
         assert_eq!(result.len(), 1);
 
         let ranges = chain(&result[0]);
@@ -116,7 +132,8 @@ mod tests {
     fn one_result_per_position() {
         let text = "MACHINE m\nINVARIANTS\n  @inv1 x + 1 > 0\nEND\n";
         let provider = SelectionRangeProvider::new();
-        let result = provider.selection_ranges(text, &[pos(0, 0), pos(2, 8), pos(2, 12)]);
+        let document = document(text);
+        let result = provider.selection_ranges(&document, &[pos(0, 0), pos(2, 8), pos(2, 12)]);
         assert_eq!(result.len(), 3);
     }
 
@@ -125,8 +142,9 @@ mod tests {
         // `∈` is one column wide; the innermost range should cover exactly it.
         let text = "CONTEXT c\nAXIOMS\n  @axm1 a ∈ ℕ\nEND\n";
         let provider = SelectionRangeProvider::new();
+        let document = document(text);
         // "  @axm1 a ∈ ℕ" — '∈' is at column 10.
-        let result = provider.selection_ranges(text, &[pos(2, 10)]);
+        let result = provider.selection_ranges(&document, &[pos(2, 10)]);
         let inner = result[0].range;
         assert_eq!(inner, Range::new(pos(2, 10), pos(2, 11)));
     }
@@ -137,7 +155,8 @@ mod tests {
         // identifier under the cursor instead of panicking or returning nothing.
         let text = "garbage";
         let provider = SelectionRangeProvider::new();
-        let result = provider.selection_ranges(text, &[pos(0, 2)]);
+        let document = document(text);
+        let result = provider.selection_ranges(&document, &[pos(0, 2)]);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].range, Range::new(pos(0, 0), pos(0, 7)));
         assert!(result[0].parent.is_none());

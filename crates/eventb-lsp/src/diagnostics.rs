@@ -42,13 +42,13 @@ fn lsp_diagnostic(
 /// clause as both a parse error and a duplicate-name error.
 pub(crate) fn document_diagnostics(doc: &ParsedDocument) -> Vec<Diagnostic> {
     let mut diagnostics: Vec<Diagnostic> = doc
-        .parse
+        .parse()
         .errors
         .iter()
-        .map(|e| parse_error_to_diagnostic(e, &doc.text))
+        .map(|e| parse_error_to_diagnostic(e, doc.text()))
         .collect();
-    if doc.parse.errors.is_empty() {
-        diagnostics.extend(lint_diagnostics(doc.components(), &doc.text));
+    if doc.parse().errors.is_empty() {
+        diagnostics.extend(lint_diagnostics(doc.components(), doc.text()));
     }
     diagnostics
 }
@@ -577,10 +577,7 @@ mod tests {
     }
 
     fn doc_of(text: &str) -> ParsedDocument {
-        ParsedDocument {
-            text: text.to_string(),
-            parse: rossi::parse_components_with_recovery(text),
-        }
+        ParsedDocument::from_text(text.to_string())
     }
 
     fn code_of(d: &Diagnostic) -> Option<&str> {
@@ -641,7 +638,7 @@ mod tests {
         // (empty) parse errors.
         let text = "MACHINE m\nVARIABLES\n    x\n    x\nINVARIANTS\n    @inv1 x = x\nEND\n";
         let doc = doc_of(text);
-        assert!(doc.parse.errors.is_empty(), "snippet must parse cleanly");
+        assert!(doc.parse().errors.is_empty(), "snippet must parse cleanly");
         let diags = document_diagnostics(&doc);
         assert!(
             diags.iter().any(|d| code_of(d) == Some("EB021")),
@@ -658,7 +655,7 @@ mod tests {
         let text = "CONTEXT c\nSETS\n    S\nSETS\n    S\nEND\n";
         let doc = doc_of(text);
         assert!(
-            !doc.parse.errors.is_empty(),
+            !doc.parse().errors.is_empty(),
             "duplicate SETS must be a parse error"
         );
         let diags = document_diagnostics(&doc);

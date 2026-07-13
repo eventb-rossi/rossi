@@ -183,7 +183,7 @@ impl HoverProvider {
         // Both the global hover context and the parameter hover are views on
         // this one component, so it is resolved once here.
         let cursor_component = parsed.as_deref().and_then(|parsed| {
-            let offset = position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
+            let offset = position_to_offset(parsed.text(), position).unwrap_or(parsed.text().len());
             component_at_offset(parsed.components(), offset)
         });
         let hover_ctx = cursor_component
@@ -201,7 +201,7 @@ impl HoverProvider {
         // ANY-clause parameter is scoped to its event and shadows a same-named
         // global, resolved positionally next. Both share the resolver
         // find-references uses, so hover cannot drift from navigation.
-        let parse_text = parsed.as_deref().map(|parsed| parsed.text.as_str());
+        let parse_text = parsed.as_deref().map(|parsed| parsed.text());
         let mut hover = self
             .hover_keyword(&word)
             .or_else(|| self.hover_operator(&word))

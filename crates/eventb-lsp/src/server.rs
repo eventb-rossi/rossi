@@ -655,17 +655,14 @@ impl LanguageServer for RossiLanguageServer {
         let uri = params.text_document.uri;
         debug!("Selection range request for: {}", uri);
 
-        let text = match self.document_manager.get_text(&uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri);
-                return Ok(None);
-            }
+        let Some(document) = self.document_manager.parse_result(&uri) else {
+            debug!("Document not found: {}", uri);
+            return Ok(None);
         };
 
         let ranges = self
             .selection_range_provider
-            .selection_ranges(&text, &params.positions);
+            .selection_ranges(&document, &params.positions);
         Ok(Some(ranges))
     }
 
