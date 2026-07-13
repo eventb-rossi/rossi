@@ -69,6 +69,12 @@ pub enum KeywordGroup {
 /// Completion-context bitflags: the structural scopes where a keyword may be
 /// offered as a completion.
 pub mod scope {
+    /// Outside any component (offers `CONTEXT`, `MACHINE`).
+    pub const TOP_LEVEL: u8 = 1 << 4;
+    /// Inside an `INITIALISATION` event before its action clause.
+    pub const INITIALISATION: u8 = 1 << 5;
+    /// After an event's terminal action clause (offers only `END`).
+    pub const EVENT_END: u8 = 1 << 6;
     pub const CONTEXT: u8 = 1 << 0;
     pub const MACHINE: u8 = 1 << 1;
     /// The `EVENTS` section body (offers `EVENT`, `INITIALISATION`).
@@ -125,21 +131,21 @@ pub const KEYWORDS: &[Keyword] = &[
         Context,
         &["CONTEXT"],
         Grp::Component,
-        0,
+        scope::TOP_LEVEL,
         "Define a context (static properties)",
     ),
     kw(
         Machine,
         &["MACHINE"],
         Grp::Component,
-        0,
+        scope::TOP_LEVEL,
         "Define a machine (dynamic behavior)",
     ),
     kw(
         End,
         &["END"],
         Grp::Component,
-        scope::CONTEXT | scope::MACHINE | scope::EVENT,
+        scope::CONTEXT | scope::MACHINE | scope::EVENT | scope::INITIALISATION | scope::EVENT_END,
         "End the current block",
     ),
     // Context clauses
@@ -147,7 +153,7 @@ pub const KEYWORDS: &[Keyword] = &[
         Extends,
         &["EXTENDS"],
         Grp::ContextClause,
-        scope::CONTEXT | scope::EVENT,
+        scope::CONTEXT | scope::EVENT | scope::INITIALISATION,
         "Extend another context or abstract event",
     ),
     kw(
@@ -269,7 +275,7 @@ pub const KEYWORDS: &[Keyword] = &[
         Then,
         &["THEN", "BEGIN"],
         Grp::EventClause,
-        scope::EVENT,
+        scope::EVENT | scope::INITIALISATION,
         "Define event actions",
     ),
     // Status values (offered via a `STATUS`-line trigger, not a block scope)
@@ -524,13 +530,23 @@ mod tests {
 
     #[test]
     fn dual_scope_and_status_scopes() {
+        assert_eq!(keyword(Context).completion_scopes, scope::TOP_LEVEL);
+        assert_eq!(keyword(Machine).completion_scopes, scope::TOP_LEVEL);
+        assert_eq!(
+            keyword(End).completion_scopes & scope::EVENT_END,
+            scope::EVENT_END
+        );
+        assert_eq!(
+            keyword(Then).completion_scopes & scope::INITIALISATION,
+            scope::INITIALISATION
+        );
         assert_eq!(
             keyword(Refines).completion_scopes,
             scope::MACHINE | scope::EVENT
         );
         assert_eq!(
             keyword(Extends).completion_scopes,
-            scope::CONTEXT | scope::EVENT
+            scope::CONTEXT | scope::EVENT | scope::INITIALISATION
         );
         for k in iter_group(KeywordGroup::Status) {
             assert_eq!(

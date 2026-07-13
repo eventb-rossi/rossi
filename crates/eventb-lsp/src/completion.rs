@@ -16,7 +16,7 @@ use crate::component_loader::ComponentLoader;
 use crate::component_util::component_at_offset;
 use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
-use crate::position::{line_run_to_range, utf16_to_char_col};
+use crate::position::{line_run_to_range, utf16_to_byte, utf16_to_char_col};
 use crate::resolved_environment::ResolvedEnvironment;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -172,6 +172,7 @@ impl CompletionProvider {
         // Structural context detection scans the comment-masked line, so an
         // `EVENT` mentioned in a trailing comment cannot change the scope.
         let masked = lexical.mask_comments_chars(text);
+        let line_text = get_line_text(&masked, position);
 
         // Get completion context from the component under the cursor in the
         // document's shared parse (the single source of truth maintained by the
@@ -191,46 +192,59 @@ impl CompletionProvider {
         // Select the cursor's component against the stored parse's own text, so
         // the offset and the component spans index one snapshot — the handler
         // `text` is a separate copy a concurrent edit can desync from the parse.
-        let (completion_ctx, self_name) = parsed
+        let (completion_ctx, self_name, keyword_scope, offer_status_values) = parsed
             .as_deref()
             .and_then(|parsed| {
                 let offset =
                     position_to_offset(&parsed.text, position).unwrap_or(parsed.text.len());
-                component_at_offset(parsed.components(), offset).map(|component| {
-                    let mut ctx =
-                        CompletionContext::from_component_with_refs(component, loader.as_ref());
-                    // Scope the event `ANY` parameters and formula binders off the
-                    // same snapshot the component was parsed from, so the event
-                    // line ranges and binder spans line up with the cursor. When
-                    // the stored parse is the same text the handler masked (the
-                    // common case — no concurrent edit), reuse that mask instead
-                    // of scanning and allocating the whole document again.
-                    let reparsed_mask;
-                    let scope_masked = if parsed.text == text {
-                        masked.as_str()
-                    } else {
-                        reparsed_mask = rossi::comments::mask_comments_chars(&parsed.text);
-                        &reparsed_mask
-                    };
-                    ctx.add_local_scope(component, scope_masked, position, offset);
-                    (ctx, Some(rossi::deps::kind_and_name(component).1))
-                })
+                // Scope keywords, event `ANY` parameters, and formula binders
+                // against the same snapshot the component was parsed from. When
+                // it matches the handler text (the common case), reuse its mask.
+                let reparsed_mask;
+                let scope_masked = if parsed.text == text {
+                    masked.as_str()
+                } else {
+                    reparsed_mask = rossi::comments::mask_comments_chars(&parsed.text);
+                    &reparsed_mask
+                };
+                let scope_line = if parsed.text == text {
+                    line_text
+                } else {
+                    get_line_text(scope_masked, position)
+                };
+                let component = component_at_offset(parsed.components(), offset)?;
+                let keyword_scope =
+                    keyword_scope_at_offset(component, scope_masked, scope_line, offset);
+                let offer_status_values = keyword_scope & keywords::scope::EVENT != 0
+                    && status_value_trigger(scope_line, position.character as usize);
+                let mut ctx =
+                    CompletionContext::from_component_with_refs(component, loader.as_ref());
+                ctx.add_local_scope(component, scope_masked, position, offset);
+                Some((
+                    ctx,
+                    Some(rossi::deps::kind_and_name(component).1),
+                    keyword_scope,
+                    offer_status_values,
+                ))
             })
-            .unwrap_or((CompletionContext::new(), None));
+            .unwrap_or((
+                CompletionContext::new(),
+                None,
+                keywords::scope::TOP_LEVEL,
+                false,
+            ));
 
         // Determine what to complete based on context
         let mut items = Vec::new();
 
-        // Analyze the text to determine context
-        let line_text = get_line_text(&masked, position);
         // `position.character` is a UTF-16 column; `get_word_at_position` slices
         // by char, so convert first or an astral char before the cursor would
         // truncate the word.
-        let char_col = utf16_to_char_col(&line_text, position.character as usize);
-        let word_at_cursor = get_word_at_position(&line_text, char_col);
+        let char_col = utf16_to_char_col(line_text, position.character as usize);
+        let word_at_cursor = get_word_at_position(line_text, char_col);
 
         // Add keyword completions
-        items.extend(self.get_keyword_completions(&line_text, &word_at_cursor));
+        items.extend(self.get_keyword_completions(keyword_scope, offer_status_values));
 
         // Add operator completions
         items.extend(self.get_operator_completions(format_config.use_unicode));
@@ -243,7 +257,7 @@ impl CompletionProvider {
         items.extend(self.get_component_name_completions(&masked, position, self_name.as_deref()));
 
         // Add snippet completions
-        items.extend(self.get_snippet_completions(&line_text, position));
+        items.extend(self.get_snippet_completions(line_text, position));
 
         // Add built-in type completions
         items.extend(self.get_builtin_completions(&word_at_cursor));
@@ -256,42 +270,17 @@ impl CompletionProvider {
     }
 
     /// Get keyword completions based on context
-    fn get_keyword_completions(&self, line_text: &str, _word: &str) -> Vec<CompletionItem> {
-        use keywords::{KeywordGroup, KeywordId, scope};
+    fn get_keyword_completions(
+        &self,
+        keyword_scope: u8,
+        offer_status_values: bool,
+    ) -> Vec<CompletionItem> {
+        use keywords::KeywordGroup;
         let mut items = Vec::new();
 
-        // Top-level keywords
-        if line_text.trim().is_empty() || is_top_level_context(line_text) {
-            push_keyword_items(
-                &mut items,
-                [KeywordId::Context, KeywordId::Machine]
-                    .into_iter()
-                    .map(keywords::keyword),
-            );
-        }
+        push_keyword_items(&mut items, keywords::iter_completion_scope(keyword_scope));
 
-        // Context clause keywords
-        if is_inside_context(line_text) {
-            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::CONTEXT));
-        }
-
-        // Machine clause keywords
-        if is_inside_machine(line_text) {
-            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::MACHINE));
-        }
-
-        // Events section keywords
-        if is_inside_events(line_text) {
-            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::EVENTS));
-        }
-
-        // Event keywords
-        if is_inside_event(line_text) {
-            push_keyword_items(&mut items, keywords::iter_completion_scope(scope::EVENT));
-        }
-
-        // Event status values (triggered on a STATUS line)
-        if line_text.contains("STATUS") {
+        if offer_status_values {
             push_keyword_items(&mut items, keywords::iter_group(KeywordGroup::Status));
         }
 
@@ -536,11 +525,8 @@ fn create_builtin_item(name: &str, description: &str) -> CompletionItem {
     }
 }
 
-fn get_line_text(text: &str, position: Position) -> String {
-    text.lines()
-        .nth(position.line as usize)
-        .unwrap_or("")
-        .to_string()
+fn get_line_text(text: &str, position: Position) -> &str {
+    text.lines().nth(position.line as usize).unwrap_or("")
 }
 
 fn get_word_at_position(line: &str, char_pos: usize) -> String {
@@ -602,33 +588,291 @@ fn leader_token_range(line: &str, position: Position) -> Option<Range> {
         .then(|| line_run_to_range(line, position.line, start - 1, cursor))
 }
 
-// Context detection functions
+/// Structural keyword scope at `offset` in `component`'s parse snapshot.
+fn keyword_scope_at_offset(component: &Component, masked: &str, line: &str, offset: usize) -> u8 {
+    // A structural END line is already closing its block; do not suggest a new
+    // clause on top of it. The mask keeps END in comments from matching.
+    if text_utils::line_keyword_is(line, keywords::KeywordId::End) {
+        return 0;
+    }
 
-fn is_top_level_context(line_text: &str) -> bool {
-    // Callers pass comment-masked lines, so a comment-only line is blank
-    // here (and a cursor inside a comment never reaches completion at all).
-    line_text.trim().is_empty()
+    let Some(component_span) = component.span() else {
+        return keyword_scope_in_component(component, masked, offset);
+    };
+    if offset < component_span.start {
+        return keywords::scope::TOP_LEVEL;
+    }
+    if cursor_in_span(component_span, offset) {
+        return keyword_scope_in_component(component, masked, offset);
+    }
+
+    // Recovery line-tightens unfinished components, so trailing edit whitespace
+    // sits just beyond their span. With no structural component END before the
+    // cursor, retain the selected component's scope.
+    keyword_scope_after_component_span(component, masked, offset)
 }
 
-fn is_inside_context(_line_text: &str) -> bool {
-    // In a real implementation, we'd track whether we're inside a CONTEXT block
-    // For now, we'll use a simple heuristic
-    true
+fn keyword_scope_after_component_span(component: &Component, masked: &str, offset: usize) -> u8 {
+    let (closed, incomplete_events) = fallback_boundaries_before_offset(component, masked, offset);
+    if closed {
+        return keywords::scope::TOP_LEVEL;
+    }
+    match component {
+        Component::Context(_) => keywords::scope::CONTEXT,
+        Component::Machine(machine) => {
+            if incomplete_events
+                || machine
+                    .clauses
+                    .iter()
+                    .any(|clause| clause.keyword == keywords::KeywordId::Events)
+            {
+                keywords::scope::EVENTS
+            } else {
+                keywords::scope::MACHINE
+            }
+        }
+    }
 }
 
-fn is_inside_machine(_line_text: &str) -> bool {
-    // In a real implementation, we'd track whether we're inside a MACHINE block
-    true
+fn keyword_scope_in_component(component: &Component, masked: &str, offset: usize) -> u8 {
+    let in_clause = component
+        .clauses()
+        .iter()
+        .any(|clause| cursor_in_span(clause.span, offset));
+
+    match component {
+        Component::Context(_) => {
+            if in_clause {
+                0
+            } else {
+                keywords::scope::CONTEXT
+            }
+        }
+        Component::Machine(machine) => {
+            if let Some(initialisation) = machine
+                .initialisation
+                .as_ref()
+                .filter(|event| event.span.is_some_and(|span| cursor_in_span(span, offset)))
+            {
+                return keyword_scope_in_initialisation(initialisation, masked, offset);
+            }
+            if let Some(event) = machine
+                .events
+                .iter()
+                .find(|event| event.span.is_some_and(|span| cursor_in_span(span, offset)))
+            {
+                return keyword_scope_in_event(event, masked, offset);
+            }
+
+            // EVENTS is terminal in the machine grammar. Its line-tight span
+            // ends at the last event, but whitespace before the machine END is
+            // still the EVENTS body, so the clause start is the lasting bound.
+            if machine
+                .clauses
+                .iter()
+                .find(|clause| clause.keyword == keywords::KeywordId::Events)
+                .is_some_and(|events| offset >= events.span.start)
+            {
+                return keywords::scope::EVENTS;
+            }
+
+            if in_clause {
+                return 0;
+            }
+
+            if incomplete_events_scope(component, masked, offset) {
+                keywords::scope::EVENTS
+            } else {
+                keywords::scope::MACHINE
+            }
+        }
+    }
 }
 
-fn is_inside_events(line_text: &str) -> bool {
-    line_text.contains("EVENTS")
-        || line_text.contains("EVENT")
-        || line_text.contains("INITIALISATION")
+fn keyword_scope_in_initialisation(
+    event: &rossi::InitialisationEvent,
+    masked: &str,
+    offset: usize,
+) -> u8 {
+    keyword_scope_around_actions(
+        &event.actions,
+        masked,
+        offset,
+        keywords::scope::INITIALISATION,
+    )
 }
 
-fn is_inside_event(line_text: &str) -> bool {
-    line_text.contains("EVENT") && !line_text.contains("EVENTS")
+fn keyword_scope_in_event(event: &rossi::Event, masked: &str, offset: usize) -> u8 {
+    let in_member = event
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.span)
+        .chain(event.guards.iter().filter_map(|guard| guard.span))
+        .chain(event.with.iter().filter_map(|predicate| predicate.span))
+        .chain(event.witnesses.iter().filter_map(|witness| witness.span))
+        .any(|span| member_position(span, masked, offset) == MemberPosition::Inside);
+    if in_member {
+        return 0;
+    }
+    keyword_scope_around_actions(&event.actions, masked, offset, keywords::scope::EVENT)
+}
+
+fn keyword_scope_around_actions(
+    actions: &[rossi::LabeledAction],
+    masked: &str,
+    offset: usize,
+    before_actions: u8,
+) -> u8 {
+    let mut follows_action = false;
+    for span in actions.iter().filter_map(|action| action.span) {
+        match member_position(span, masked, offset) {
+            MemberPosition::Before => {}
+            MemberPosition::Inside => return 0,
+            MemberPosition::After => follows_action = true,
+        }
+    }
+    if follows_action {
+        keywords::scope::EVENT_END
+    } else {
+        before_actions
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemberPosition {
+    Before,
+    Inside,
+    After,
+}
+
+/// Classify the cursor against a member's line-tight span. Trailing whitespace
+/// on the final line remains inside the member, so completion immediately after
+/// a declaration/formula/action cannot offer a structural clause mid-line.
+fn member_position(span: rossi::ast::Span, masked: &str, offset: usize) -> MemberPosition {
+    if offset < span.start {
+        return MemberPosition::Before;
+    }
+    let end = masked
+        .get(span.start..span.end)
+        .map_or(span.end, |text| span.start + text.trim_end().len());
+    if offset <= end
+        || masked
+            .get(end..offset)
+            .is_some_and(|between| !between.contains('\n'))
+    {
+        MemberPosition::Inside
+    } else {
+        MemberPosition::After
+    }
+}
+
+fn status_value_trigger(line: &str, utf16_col: usize) -> bool {
+    let prefix_end = utf16_to_byte(line, utf16_col).unwrap_or(line.len());
+    let prefix = &line[..prefix_end];
+    if !text_utils::line_keyword_is(prefix, keywords::KeywordId::Status) {
+        return false;
+    }
+    let mut words = prefix.split_whitespace();
+    words.next();
+    let Some(partial) = words.next() else {
+        return true;
+    };
+    if words.next().is_some() {
+        return false;
+    }
+    keywords::iter_group(keywords::KeywordGroup::Status).any(|keyword| {
+        keyword.spellings.iter().any(|spelling| {
+            spelling.len() >= partial.len()
+                && spelling[..partial.len()].eq_ignore_ascii_case(partial)
+        })
+    })
+}
+
+/// Cursor containment treats the end of a line-tight structural span as part
+/// of that construct: completion is commonly requested immediately after its
+/// final token. The following newline remains outside it.
+fn cursor_in_span(span: rossi::ast::Span, offset: usize) -> bool {
+    span.start <= offset && offset <= span.end
+}
+
+/// Whether a selected machine has a bare, still-open EVENTS header before the
+/// cursor but no parsed EVENTS region. This is the only textual scope fallback.
+/// `masked` is the parse snapshot's comment-masked text, so comments and
+/// keyword-shaped identifiers inside parsed clauses cannot open the section.
+fn incomplete_events_scope(component: &Component, masked: &str, offset: usize) -> bool {
+    let Component::Machine(machine) = component else {
+        return false;
+    };
+    if machine
+        .clauses
+        .iter()
+        .any(|clause| clause.keyword == keywords::KeywordId::Events)
+    {
+        return false;
+    }
+
+    fallback_boundaries_before_offset(component, masked, offset).1
+}
+
+/// Structural component boundaries before `offset`: whether the component has
+/// closed, and whether an unparsed EVENTS header remains open. Keyword-shaped
+/// identifiers inside parsed clauses do not count as boundaries.
+fn fallback_boundaries_before_offset(
+    component: &Component,
+    masked: &str,
+    offset: usize,
+) -> (bool, bool) {
+    let Some(start) = component.span().map(|span| span.start) else {
+        return (false, false);
+    };
+    let Some(prefix) = masked.get(start..offset.min(masked.len())) else {
+        return (false, false);
+    };
+    let mut incomplete_events = false;
+    for (line_start, line) in lines_rev_with_offsets(prefix) {
+        let line_start = start + line_start;
+        if structural_line_keyword(component, line, line_start, keywords::KeywordId::End) {
+            return (true, false);
+        }
+        if structural_line_keyword(component, line, line_start, keywords::KeywordId::Events) {
+            incomplete_events = true;
+        }
+    }
+    (false, incomplete_events)
+}
+
+fn structural_line_keyword(
+    component: &Component,
+    line: &str,
+    line_start: usize,
+    keyword: keywords::KeywordId,
+) -> bool {
+    if !text_utils::line_keyword_is(line, keyword) {
+        return false;
+    }
+    let keyword_offset = line_start + line.len() - line.trim_start().len();
+    !component
+        .clauses()
+        .iter()
+        .any(|clause| cursor_in_span(clause.span, keyword_offset))
+}
+
+fn lines_rev_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut end = text.len();
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        let start = text[..end].rfind('\n').map_or(0, |index| index + 1);
+        let line = &text[start..end];
+        if start == 0 {
+            done = true;
+        } else {
+            end = start - 1;
+        }
+        Some((start, line))
+    })
 }
 
 #[cfg(test)]
@@ -638,7 +882,7 @@ mod tests {
     #[test]
     fn test_keyword_completions() {
         let provider = CompletionProvider::new();
-        let items = provider.get_keyword_completions("", "");
+        let items = provider.get_keyword_completions(keywords::scope::TOP_LEVEL, false);
 
         // Should include top-level keywords
         assert!(items.iter().any(|item| item.label == "CONTEXT"));
@@ -990,6 +1234,187 @@ mod tests {
                 items.into_iter().map(|i| (i.label, i.detail)).collect()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Run completion at the `|` marker after removing it from the source, so
+    /// scope tests stay readable while the parser sees only Event-B text.
+    fn complete_labels_at_marker(source: &str) -> Vec<(String, Option<String>)> {
+        let marker = source
+            .find('|')
+            .expect("source must contain a cursor marker");
+        assert_eq!(
+            source[marker + 1..].find('|'),
+            None,
+            "source must contain exactly one cursor marker"
+        );
+        let mut source = source.to_string();
+        source.remove(marker);
+        let position = crate::position::offset_to_position(&source, marker);
+        complete_labels(&source, position)
+    }
+
+    fn has_label(labels: &[(String, Option<String>)], expected: &str) -> bool {
+        labels.iter().any(|(label, _)| label == expected)
+    }
+
+    fn assert_keyword_scope(source: &str, present: &[&str], absent: &[&str]) {
+        let labels = complete_labels_at_marker(source);
+        for label in present {
+            assert!(has_label(&labels, label), "missing {label}; got {labels:?}");
+        }
+        for label in absent {
+            assert!(
+                !has_label(&labels, label),
+                "unexpected {label}; got {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keyword_completion_follows_structural_scope() {
+        assert_keyword_scope(
+            "CONTEXT c\n|\nEND",
+            &["SETS", "AXIOMS"],
+            &["MACHINE", "VARIABLES", "EVENTS", "EVENT", "ANY"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\n|\nEND",
+            &["VARIABLES", "EVENTS"],
+            &["CONTEXT", "SETS", "AXIOMS", "EVENT", "ANY"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nVARIABLES\n    x|\nINVARIANTS\n    @i x = x\nEND",
+            &[],
+            &["VARIABLES", "INVARIANTS", "EVENTS", "SETS", "EVENT"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nVARIABLES\n    x\n|\nEND",
+            &["INVARIANTS", "EVENTS"],
+            &["SETS", "EVENT", "ANY"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nEVENTS\n    EVENT e\n    END\n    |\nEND",
+            &["EVENT", "INITIALISATION"],
+            &["MACHINE", "VARIABLES", "EVENTS", "ANY", "THEN"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nEVENTS\n    EVENT e\n        |\n    END\nEND",
+            &["ANY", "WHERE", "THEN"],
+            &["CONTEXT", "VARIABLES", "EVENTS", "EVENT", "INITIALISATION"],
+        );
+        assert_keyword_scope(
+            "CONTEXT c\nEND\n|\nMACHINE m\nEND",
+            &["CONTEXT", "MACHINE"],
+            &["SETS", "VARIABLES", "EVENTS", "EVENT", "ANY"],
+        );
+    }
+
+    #[test]
+    fn keyword_completion_suppresses_event_clauses_inside_actions() {
+        assert_keyword_scope(
+            "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT e\n    THEN\n        @a x := x|\n    END\nEND",
+            &[],
+            &["STATUS", "ANY", "WHERE", "WITH", "WITNESS", "THEN", "END"],
+        );
+    }
+
+    #[test]
+    fn initialisation_has_its_own_keyword_scope() {
+        assert_keyword_scope(
+            "MACHINE m\nEVENTS\n    EVENT INITIALISATION\n        |\n    END\nEND",
+            &["EXTENDS", "THEN", "END"],
+            &["STATUS", "REFINES", "ANY", "WHERE", "WITH", "WITNESS"],
+        );
+    }
+
+    #[test]
+    fn only_end_is_offered_after_event_actions() {
+        assert_keyword_scope(
+            "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT e\n    THEN\n        @a x := x\n        |\n    END\nEND",
+            &["END"],
+            &[
+                "STATUS", "REFINES", "ANY", "WHERE", "WITH", "WITNESS", "THEN",
+            ],
+        );
+    }
+
+    #[test]
+    fn unfinished_component_keeps_its_structural_scope() {
+        assert_keyword_scope(
+            "MACHINE m\n|",
+            &["VARIABLES", "EVENTS"],
+            &["CONTEXT", "MACHINE", "SETS", "AXIOMS", "EVENT"],
+        );
+        assert_keyword_scope(
+            "CONTEXT c\n|",
+            &["SETS", "AXIOMS"],
+            &["CONTEXT", "MACHINE", "VARIABLES", "EVENTS", "EVENT"],
+        );
+    }
+
+    #[test]
+    fn incomplete_events_header_uses_the_narrow_scope_fallback() {
+        assert_keyword_scope(
+            "MACHINE m\nEVENTS\n    |",
+            &["EVENT", "INITIALISATION"],
+            &["CONTEXT", "VARIABLES", "EVENTS", "ANY", "THEN"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nINVARIANTS\n    @i 1 = 1\n// EVENTS\n|\nEND",
+            &["EVENTS"],
+            &["EVENT", "INITIALISATION"],
+        );
+        assert_keyword_scope(
+            "MACHINE m\nEVENTS\nEND\n|",
+            &["CONTEXT", "MACHINE"],
+            &["EVENT", "INITIALISATION"],
+        );
+    }
+
+    #[test]
+    fn events_identifier_does_not_open_the_events_section() {
+        assert_keyword_scope(
+            "MACHINE m\nVARIABLES\n    EVENTS\n    |\nEND",
+            &["INVARIANTS", "EVENTS"],
+            &["EVENT", "INITIALISATION"],
+        );
+    }
+
+    #[test]
+    fn status_values_require_a_status_clause_line() {
+        let status =
+            complete_labels_at_marker("MACHINE m\nEVENTS\n    EVENT e\n    STATUS |\n    END\nEND");
+        for value in ["ordinary", "convergent", "anticipated"] {
+            assert!(has_label(&status, value), "missing {value}; got {status:?}");
+        }
+
+        let action = complete_labels_at_marker(
+            "MACHINE m\nEVENTS\n    EVENT e\n    THEN\n        @a STATUS| := STATUS\n    END\nEND",
+        );
+        for value in ["ordinary", "convergent", "anticipated"] {
+            assert!(
+                !has_label(&action, value),
+                "STATUS as an identifier must not offer {value}; got {action:?}"
+            );
+        }
+
+        let parameter = complete_labels_at_marker(
+            "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        STATUS |\n    END\nEND",
+        );
+        let before_status = complete_labels_at_marker(
+            "MACHINE m\nEVENTS\n    EVENT e\n        |STATUS ordinary\n    END\nEND",
+        );
+        let unlabelled_action = complete_labels_at_marker(
+            "MACHINE m\nEVENTS\n    EVENT e\n    THEN\n        STATUS := |\n    END\nEND",
+        );
+        for labels in [&parameter, &before_status, &unlabelled_action] {
+            for value in ["ordinary", "convergent", "anticipated"] {
+                assert!(
+                    !has_label(labels, value),
+                    "non-clause STATUS must not offer {value}; got {labels:?}"
+                );
+            }
         }
     }
 
