@@ -177,6 +177,14 @@ impl DocumentManager {
         self.documents.get(uri).map(|doc| doc.text.to_string())
     }
 
+    /// URIs of every currently open document.
+    pub(crate) fn all_uris(&self) -> Vec<Url> {
+        self.documents
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// Convert an LSP [`Position`] to a `ropey` char index.
     ///
     /// The rope-based twin of [`crate::position::position_to_offset`]: the

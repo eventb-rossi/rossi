@@ -21,8 +21,8 @@
 //! its component names are requested. The cache lives for one request only
 //! (it holds a `!Sync` `RefCell`); it is never stored on a provider.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use rossi::Component;
@@ -66,6 +66,8 @@ pub struct ComponentLoader<'a> {
     documents: Option<&'a DocumentManager>,
     /// One parsed snapshot per file URI, built on first use.
     cache: RefCell<HashMap<Url, Arc<ParsedDocument>>>,
+    /// Components from current open-document snapshots, computed on demand.
+    open_components: OnceCell<BTreeMap<String, Url>>,
 }
 
 impl<'a> ComponentLoader<'a> {
@@ -76,6 +78,7 @@ impl<'a> ComponentLoader<'a> {
             manager,
             documents,
             cache: RefCell::new(HashMap::new()),
+            open_components: OnceCell::new(),
         }
     }
 
@@ -134,7 +137,57 @@ impl<'a> ComponentLoader<'a> {
     /// The first component of that name is chosen, matching the lookup the
     /// parser-based helpers performed before this loader existed.
     pub fn load(&self, name: &str) -> Option<LoadedComponent> {
-        let uri = Url::parse(&self.manager.find_component_uri(name)?).ok()?;
+        if let Some(uri) = self
+            .manager
+            .find_component_uri(name)
+            .and_then(|uri| Url::parse(&uri).ok())
+            && let Some(loaded) = self.load_from_uri(uri, name)
+        {
+            return Some(loaded);
+        }
+
+        // The name index follows the diagnostics debounce. Fall back to current
+        // open parses so a just-renamed component is immediately resolvable.
+        let uri = self.open_components().get(name)?.clone();
+        self.load_from_uri(uri, name)
+    }
+
+    /// Names declared by the latest snapshots of all open documents.
+    pub(crate) fn open_component_names(&self) -> impl Iterator<Item = &str> {
+        self.open_components().keys().map(String::as_str)
+    }
+
+    fn open_components(&self) -> &BTreeMap<String, Url> {
+        self.open_components.get_or_init(|| {
+            let mut components = BTreeMap::new();
+            if let Some(documents) = self.documents {
+                for uri in documents.all_uris() {
+                    if let Some(doc) = self.parsed(&uri) {
+                        for component in doc.components() {
+                            components
+                                .entry(component.name().to_string())
+                                .or_insert_with(|| uri.clone());
+                        }
+                    }
+                }
+            }
+            components
+        })
+    }
+
+    pub(crate) fn is_component_name(&self, name: &str) -> bool {
+        self.manager.find_component_uri(name).is_some() || self.open_components().contains_key(name)
+    }
+
+    pub(crate) fn all_component_names(&self) -> Vec<String> {
+        let mut names = self.manager.all_component_names();
+        names.extend(self.open_component_names().map(str::to_owned));
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    fn load_from_uri(&self, uri: Url, name: &str) -> Option<LoadedComponent> {
         let doc = self.parsed(&uri)?;
         let index = doc.components().iter().position(|c| c.name() == name)?;
         Some(LoadedComponent { uri, doc, index })
@@ -222,5 +275,26 @@ mod tests {
         let loader = ComponentLoader::new(&manager, Some(&documents));
         let c = loader.load("C").expect("C loads");
         assert_eq!(c.index, 0, "the first occurrence is chosen");
+    }
+
+    #[test]
+    fn current_open_name_resolves_before_debounced_reindexing() {
+        let manager = CrossReferenceManager::new();
+        let documents = DocumentManager::new();
+        let uri = Url::parse("file:///renamed.eventb").unwrap();
+        manager.update_component(uri.to_string(), "CONTEXT old\nEND");
+        documents.open(uri.clone(), 1, "CONTEXT old\nEND".to_string());
+        documents.change(
+            &uri,
+            2,
+            vec![crate::lsp_types::TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "CONTEXT new\nEND".to_string(),
+            }],
+        );
+
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+        assert_eq!(loader.load("new").unwrap().component().name(), "new");
     }
 }

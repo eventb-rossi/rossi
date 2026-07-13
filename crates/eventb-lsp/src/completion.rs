@@ -17,6 +17,7 @@ use crate::component_util::component_at_offset;
 use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_char_col};
+use crate::resolved_environment::ResolvedEnvironment;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -53,60 +54,46 @@ impl CompletionContext {
 
     fn from_component_with_refs(component: &Component, loader: Option<&ComponentLoader>) -> Self {
         let mut ctx = Self::new();
+        ctx.add_component(component);
 
         match component {
-            Component::Context(context) => {
-                ctx.constants
-                    .extend(context.constants.iter().map(|c| c.name.clone()));
-                ctx.sets
-                    .extend(context.sets.iter().map(|s| s.name().to_string()));
-
-                // Resolve EXTENDS chain transitively
+            Component::Context(_) => {
                 if let Some(loader) = loader {
-                    let mut visited = HashSet::new();
-                    visited.insert(context.name.clone());
-                    for parent_name in &context.extends {
-                        resolve_context_symbols(
-                            parent_name,
-                            loader,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut visited,
-                        );
+                    let environment = ResolvedEnvironment::new(component, loader);
+                    for inherited in environment.extended_contexts() {
+                        ctx.add_component(inherited);
                     }
                 }
             }
-            Component::Machine(machine) => {
-                ctx.variables
-                    .extend(machine.variables.iter().map(|v| v.name.clone()));
-
-                // Resolve SEES contexts and REFINES machines
+            Component::Machine(_) => {
                 if let Some(loader) = loader {
-                    let mut visited = HashSet::new();
-                    for ctx_name in &machine.sees {
-                        resolve_context_symbols(
-                            ctx_name,
-                            loader,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut visited,
-                        );
+                    let environment = ResolvedEnvironment::new(component, loader);
+                    for inherited in environment.refined_machines() {
+                        ctx.add_component(inherited);
                     }
-                    if let Some(ref refines_name) = machine.refines {
-                        resolve_machine_symbols(
-                            refines_name,
-                            loader,
-                            &mut ctx.variables,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut visited,
-                        );
+                    for visible in environment.visible_contexts() {
+                        ctx.add_component(visible);
                     }
                 }
             }
         }
 
         ctx
+    }
+
+    fn add_component(&mut self, component: &Component) {
+        match component {
+            Component::Context(context) => {
+                self.constants
+                    .extend(context.constants.iter().map(|c| c.name.clone()));
+                self.sets
+                    .extend(context.sets.iter().map(|s| s.name().to_string()));
+            }
+            Component::Machine(machine) => {
+                self.variables
+                    .extend(machine.variables.iter().map(|v| v.name.clone()));
+            }
+        }
     }
 
     /// Augment the context with the symbols scoped to the cursor: the enclosing
@@ -495,73 +482,6 @@ impl CompletionProvider {
 impl Default for CompletionProvider {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Cross-document resolution helpers
-
-/// Resolve constants and sets from a context (and its EXTENDS parents) transitively.
-/// Uses a visited set to prevent cycles; caps depth at 10.
-fn resolve_context_symbols(
-    context_name: &str,
-    loader: &ComponentLoader,
-    constants: &mut Vec<String>,
-    sets: &mut Vec<String>,
-    visited: &mut HashSet<String>,
-) {
-    // Cycle/depth guard
-    if visited.len() >= 10 || visited.contains(context_name) {
-        return;
-    }
-    visited.insert(context_name.to_string());
-
-    let loaded = match loader.load(context_name) {
-        Some(l) => l,
-        None => return,
-    };
-
-    if let Component::Context(ctx) = loaded.component() {
-        constants.extend(ctx.constants.iter().map(|c| c.name.clone()));
-        sets.extend(ctx.sets.iter().map(|s| s.name().to_string()));
-
-        // Recursively resolve EXTENDS parents
-        for parent_name in &ctx.extends {
-            resolve_context_symbols(parent_name, loader, constants, sets, visited);
-        }
-    }
-}
-
-/// Resolve variables from a refined machine (and its transitive REFINES/SEES dependencies).
-fn resolve_machine_symbols(
-    machine_name: &str,
-    loader: &ComponentLoader,
-    variables: &mut Vec<String>,
-    constants: &mut Vec<String>,
-    sets: &mut Vec<String>,
-    visited: &mut HashSet<String>,
-) {
-    if visited.len() >= 10 || visited.contains(machine_name) {
-        return;
-    }
-    visited.insert(machine_name.to_string());
-
-    let loaded = match loader.load(machine_name) {
-        Some(l) => l,
-        None => return,
-    };
-
-    if let Component::Machine(m) = loaded.component() {
-        variables.extend(m.variables.iter().map(|v| v.name.clone()));
-
-        // Resolve SEES contexts from the abstract machine
-        for ctx_name in &m.sees {
-            resolve_context_symbols(ctx_name, loader, constants, sets, visited);
-        }
-
-        // Recurse into further refinements
-        if let Some(ref refines_name) = m.refines {
-            resolve_machine_symbols(refines_name, loader, variables, constants, sets, visited);
-        }
     }
 }
 
@@ -976,6 +896,61 @@ mod tests {
         assert!(
             ctx.variables.contains(&"concrete_state".to_string()),
             "concrete_state should appear in completions"
+        );
+    }
+
+    #[test]
+    fn completion_includes_symbols_beyond_ten_seen_contexts() {
+        use crate::lsp_types::Url;
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        for i in 0..=10 {
+            let uri = Url::parse(&format!("file:///c{i}.eventb")).unwrap();
+            let source = format!("CONTEXT c{i}\nCONSTANTS\n    k{i}\nEND");
+            crm.update_component(uri.to_string(), &source);
+            dm.open(uri, 1, source);
+        }
+
+        let machine = format!(
+            "MACHINE m\nSEES\n{}\nINVARIANTS\n    @inv1 k10 = k10\nEND",
+            (0..=10)
+                .map(|i| format!("    c{i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let uri = Url::parse("file:///m.eventb").unwrap();
+        crm.update_component(uri.to_string(), &machine);
+        dm.open(uri.clone(), 1, machine.clone());
+
+        let mut provider = CompletionProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let position = crate::position::offset_to_position(
+            &machine,
+            machine.find("k10 =").expect("target use") + 2,
+        );
+        let params = CompletionParams {
+            text_document_position: crate::lsp_types::TextDocumentPositionParams {
+                text_document: crate::lsp_types::TextDocumentIdentifier { uri },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let Some(CompletionResponse::Array(items)) = provider.complete(
+            &params,
+            &machine,
+            &CompletionConfig::default(),
+            &FormatConfig::default(),
+        ) else {
+            panic!("expected completion items");
+        };
+        assert!(
+            items.iter().any(|item| item.label == "k10"),
+            "the eleventh seen context must remain visible"
         );
     }
 

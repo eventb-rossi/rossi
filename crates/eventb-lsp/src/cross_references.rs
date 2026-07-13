@@ -357,6 +357,16 @@ impl CrossReferenceManager {
         self.graph.read().contains(kind, name)
     }
 
+    /// Copy one indexed node into a request-scoped dependency graph.
+    pub(crate) fn copy_dependency_node(
+        &self,
+        target: &mut DependencyGraph,
+        kind: ComponentKind,
+        name: &str,
+    ) -> bool {
+        target.copy_node_from(&self.graph.read(), kind, name)
+    }
+
     /// The distinct files that define a component named `name`, as display
     /// basenames (sorted). The name → URI index keeps a single entry per name,
     /// so the URI → components map is scanned instead. Files are deduplicated by

@@ -12,7 +12,7 @@ use rossi::{
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::component_loader::ComponentLoader;
@@ -21,6 +21,7 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
+use crate::resolved_environment::ResolvedEnvironment;
 use crate::text_utils;
 
 /// Context information extracted from a parsed component
@@ -33,7 +34,7 @@ struct HoverContext {
     /// Sets with their source (context name)
     sets: Vec<(String, String)>,
     /// Constraints (axioms/invariants) keyed by identifier name
-    constraints: HashMap<String, Vec<String>>,
+    constraints: HashMap<String, HashMap<String, Vec<String>>>,
     /// Variant expressions in scope — the cursor machine's and every one down its
     /// REFINES chain. Checked against the hovered identifier to surface the
     /// variant that constrains it.
@@ -53,84 +54,73 @@ impl HoverContext {
 
     fn from_component_with_refs(component: &Component, loader: Option<&ComponentLoader>) -> Self {
         let mut ctx = Self::new();
+        ctx.add_component(component);
 
-        match component {
-            Component::Context(context) => {
-                for constant in &context.constants {
-                    ctx.constants
-                        .push((constant.name.clone(), context.name.clone()));
-                    let constraints = collect_constraints(&context.axioms, &constant.name);
-                    if !constraints.is_empty() {
-                        ctx.constraints.insert(constant.name.clone(), constraints);
+        if let Some(loader) = loader {
+            let environment = ResolvedEnvironment::new(component, loader);
+            match component {
+                Component::Context(_) => {
+                    for inherited in environment.extended_contexts() {
+                        ctx.add_component(inherited);
                     }
                 }
-                for set in &context.sets {
-                    ctx.sets
-                        .push((set.name().to_string(), context.name.clone()));
-                    let constraints = collect_constraints(&context.axioms, set.name());
-                    if !constraints.is_empty() {
-                        ctx.constraints.insert(set.name().to_string(), constraints);
+                Component::Machine(_) => {
+                    for inherited in environment.refined_machines() {
+                        ctx.add_component(inherited);
                     }
-                }
-
-                // Resolve EXTENDS chain transitively
-                if let Some(loader) = loader {
-                    let mut visited = HashSet::new();
-                    visited.insert(context.name.clone());
-                    for parent_name in &context.extends {
-                        resolve_context_symbols_with_source(
-                            parent_name,
-                            loader,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut ctx.constraints,
-                            &mut visited,
-                        );
-                    }
-                }
-            }
-            Component::Machine(machine) => {
-                for var in &machine.variables {
-                    ctx.variables.push((var.name.clone(), machine.name.clone()));
-                    let constraints = collect_constraints(&machine.invariants, &var.name);
-                    if !constraints.is_empty() {
-                        ctx.constraints.insert(var.name.clone(), constraints);
-                    }
-                }
-                if let Some(variant) = &machine.variant {
-                    ctx.variants.push(variant.clone());
-                }
-
-                // Resolve SEES contexts and REFINES machines
-                if let Some(loader) = loader {
-                    let mut visited = HashSet::new();
-                    for ctx_name in &machine.sees {
-                        resolve_context_symbols_with_source(
-                            ctx_name,
-                            loader,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut ctx.constraints,
-                            &mut visited,
-                        );
-                    }
-                    if let Some(ref refines_name) = machine.refines {
-                        resolve_machine_symbols_with_source(
-                            refines_name,
-                            loader,
-                            &mut ctx.variables,
-                            &mut ctx.constants,
-                            &mut ctx.sets,
-                            &mut ctx.constraints,
-                            &mut ctx.variants,
-                            &mut visited,
-                        );
+                    for visible in environment.visible_contexts() {
+                        ctx.add_component(visible);
                     }
                 }
             }
         }
 
         ctx
+    }
+
+    fn add_component(&mut self, component: &Component) {
+        match component {
+            Component::Context(context) => {
+                for constant in &context.constants {
+                    self.constants
+                        .push((constant.name.clone(), context.name.clone()));
+                    let constraints = collect_constraints(&context.axioms, &constant.name);
+                    if !constraints.is_empty() {
+                        self.constraints
+                            .entry(context.name.clone())
+                            .or_default()
+                            .insert(constant.name.clone(), constraints);
+                    }
+                }
+                for set in &context.sets {
+                    self.sets
+                        .push((set.name().to_string(), context.name.clone()));
+                    let constraints = collect_constraints(&context.axioms, set.name());
+                    if !constraints.is_empty() {
+                        self.constraints
+                            .entry(context.name.clone())
+                            .or_default()
+                            .insert(set.name().to_string(), constraints);
+                    }
+                }
+            }
+            Component::Machine(machine) => {
+                for variable in &machine.variables {
+                    self.variables
+                        .push((variable.name.clone(), machine.name.clone()));
+                    let constraints = collect_constraints(&machine.invariants, &variable.name);
+                    if !constraints.is_empty() {
+                        self.constraints
+                            .entry(machine.name.clone())
+                            .or_default()
+                            .insert(variable.name.clone(), constraints);
+                    }
+                }
+                if let Some(variant) = &machine.variant {
+                    self.variants.push(variant.clone());
+                }
+            }
+        }
     }
 }
 
@@ -252,7 +242,11 @@ impl HoverProvider {
                 "**Variable** from machine `{}`\n\nState variable that can be modified by events.",
                 source
             );
-            if let Some(constraints) = ctx.constraints.get(word) {
+            if let Some(constraints) = ctx
+                .constraints
+                .get(source)
+                .and_then(|by_name| by_name.get(word))
+            {
                 append_constraint_section(&mut description, "Invariants", constraints);
             }
             append_variant_section(&mut description, &ctx.variants, word);
@@ -265,7 +259,11 @@ impl HoverProvider {
                 "**Constant** from context `{}`\n\nConstant value constrained by axioms.",
                 source
             );
-            if let Some(constraints) = ctx.constraints.get(word) {
+            if let Some(constraints) = ctx
+                .constraints
+                .get(source)
+                .and_then(|by_name| by_name.get(word))
+            {
                 append_constraint_section(&mut description, "Axioms", constraints);
             }
             append_variant_section(&mut description, &ctx.variants, word);
@@ -278,7 +276,11 @@ impl HoverProvider {
                 "**Set** from context `{}`\n\nCarrier set used for typing.",
                 source
             );
-            if let Some(constraints) = ctx.constraints.get(word) {
+            if let Some(constraints) = ctx
+                .constraints
+                .get(source)
+                .and_then(|by_name| by_name.get(word))
+            {
                 append_constraint_section(&mut description, "Properties", constraints);
             }
             return Some(create_hover(&format!("Set: {}", word), &description));
@@ -325,121 +327,6 @@ impl HoverProvider {
 impl Default for HoverProvider {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Cross-document resolution helpers
-
-/// Resolve constants and sets (with source context name) from a context and its
-/// EXTENDS parents transitively. Uses a visited set to prevent cycles; caps depth at 10.
-fn resolve_context_symbols_with_source(
-    context_name: &str,
-    loader: &ComponentLoader,
-    constants: &mut Vec<(String, String)>,
-    sets: &mut Vec<(String, String)>,
-    constraints: &mut HashMap<String, Vec<String>>,
-    visited: &mut HashSet<String>,
-) {
-    if visited.len() >= 10 || visited.contains(context_name) {
-        return;
-    }
-    visited.insert(context_name.to_string());
-
-    let loaded = match loader.load(context_name) {
-        Some(l) => l,
-        None => return,
-    };
-
-    if let Component::Context(ctx) = loaded.component() {
-        for constant in &ctx.constants {
-            constants.push((constant.name.clone(), ctx.name.clone()));
-            let c = collect_constraints(&ctx.axioms, &constant.name);
-            if !c.is_empty() {
-                constraints.insert(constant.name.clone(), c);
-            }
-        }
-        for set in &ctx.sets {
-            sets.push((set.name().to_string(), ctx.name.clone()));
-            let c = collect_constraints(&ctx.axioms, set.name());
-            if !c.is_empty() {
-                constraints.insert(set.name().to_string(), c);
-            }
-        }
-
-        // Recursively resolve EXTENDS parents
-        for parent_name in &ctx.extends {
-            resolve_context_symbols_with_source(
-                parent_name,
-                loader,
-                constants,
-                sets,
-                constraints,
-                visited,
-            );
-        }
-    }
-}
-
-/// Resolve variables (with source machine name) from a refined machine and its
-/// transitive REFINES/SEES dependencies.
-#[allow(clippy::too_many_arguments)]
-fn resolve_machine_symbols_with_source(
-    machine_name: &str,
-    loader: &ComponentLoader,
-    variables: &mut Vec<(String, String)>,
-    constants: &mut Vec<(String, String)>,
-    sets: &mut Vec<(String, String)>,
-    constraints: &mut HashMap<String, Vec<String>>,
-    variants: &mut Vec<Expression>,
-    visited: &mut HashSet<String>,
-) {
-    if visited.len() >= 10 || visited.contains(machine_name) {
-        return;
-    }
-    visited.insert(machine_name.to_string());
-
-    let loaded = match loader.load(machine_name) {
-        Some(l) => l,
-        None => return,
-    };
-
-    if let Component::Machine(m) = loaded.component() {
-        for var in &m.variables {
-            variables.push((var.name.clone(), m.name.clone()));
-            let c = collect_constraints(&m.invariants, &var.name);
-            if !c.is_empty() {
-                constraints.insert(var.name.clone(), c);
-            }
-        }
-        if let Some(variant) = &m.variant {
-            variants.push(variant.clone());
-        }
-
-        // Resolve SEES contexts from the abstract machine
-        for ctx_name in &m.sees {
-            resolve_context_symbols_with_source(
-                ctx_name,
-                loader,
-                constants,
-                sets,
-                constraints,
-                visited,
-            );
-        }
-
-        // Recurse into further refinements
-        if let Some(ref refines_name) = m.refines {
-            resolve_machine_symbols_with_source(
-                refines_name,
-                loader,
-                variables,
-                constants,
-                sets,
-                constraints,
-                variants,
-                visited,
-            );
-        }
     }
 }
 
@@ -1446,6 +1333,65 @@ mod tests {
     }
 
     #[test]
+    fn hover_resolves_symbols_beyond_ten_seen_contexts() {
+        let mut owned = Vec::new();
+        for i in 0..=10 {
+            owned.push((
+                format!("file:///c{i}.eventb"),
+                format!("CONTEXT c{i}\nCONSTANTS\n    k{i}\nEND"),
+            ));
+        }
+        let machine = format!(
+            "MACHINE m\nSEES\n{}\nINVARIANTS\n    @inv1 k10 = k10\nEND",
+            (0..=10)
+                .map(|i| format!("    c{i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        owned.push(("file:///m.eventb".to_string(), machine));
+        let docs: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(uri, source)| (uri.as_str(), source.as_str()))
+            .collect();
+        let target = docs.last().unwrap().1;
+        let position =
+            crate::position::offset_to_position(target, target.find("k10 =").expect("target use"));
+
+        let value = markup(
+            hover_in_workspace(&docs, "file:///m.eventb", position.line, position.character)
+                .expect("hover on k10 from the eleventh seen context"),
+        );
+        assert!(value.contains("Constant"), "got: {value}");
+        assert!(value.contains("`c10`"), "got: {value}");
+    }
+
+    #[test]
+    fn inherited_variable_hover_keeps_its_own_constraints() {
+        let context = "CONTEXT c\nCONSTANTS\n    x\nAXIOMS\n    @axm1 x = 1\nEND";
+        let abstract_machine = "MACHINE a\nVARIABLES\n    x\nINVARIANTS\n    @inv_a x ∈ ℕ\nEND";
+        let concrete_machine =
+            "MACHINE m\nREFINES\n    a\nSEES\n    c\nINVARIANTS\n    @inv_m x > 0\nEND";
+
+        let value = markup(
+            hover_in_workspace(
+                &[
+                    ("file:///c.eventb", context),
+                    ("file:///a.eventb", abstract_machine),
+                    ("file:///m.eventb", concrete_machine),
+                ],
+                "file:///m.eventb",
+                6,
+                11,
+            )
+            .expect("hover on inherited variable x"),
+        );
+        assert!(value.contains("Variable"), "got: {value}");
+        assert!(value.contains("`a`"), "got: {value}");
+        assert!(value.contains("inv_a"), "got: {value}");
+        assert!(!value.contains("axm1"), "got: {value}");
+    }
+
+    #[test]
     fn variant_from_an_abstract_machine_shows_in_the_refinement() {
         // The abstract machine declares `VARIANT shared + 1`; the concrete
         // machine refines it and has no variant of its own. Hovering `shared` in
@@ -1839,17 +1785,23 @@ mod tests {
         let provider = HoverProvider::new();
 
         let mut constraints = HashMap::new();
-        constraints.insert(
-            "count".to_string(),
-            vec![
-                "@inv1 count ∈ ℕ".to_string(),
-                "@inv2 count ≤ max_value".to_string(),
-            ],
-        );
-        constraints.insert(
-            "max_value".to_string(),
-            vec!["@axm1 max_value ∈ ℕ".to_string()],
-        );
+        constraints
+            .entry("counter".to_string())
+            .or_insert_with(HashMap::new)
+            .insert(
+                "count".to_string(),
+                vec![
+                    "@inv1 count ∈ ℕ".to_string(),
+                    "@inv2 count ≤ max_value".to_string(),
+                ],
+            );
+        constraints
+            .entry("counter_ctx".to_string())
+            .or_insert_with(HashMap::new)
+            .insert(
+                "max_value".to_string(),
+                vec!["@axm1 max_value ∈ ℕ".to_string()],
+            );
 
         let ctx = HoverContext {
             variables: vec![("count".to_string(), "counter".to_string())],

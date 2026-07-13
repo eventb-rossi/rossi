@@ -25,6 +25,7 @@ use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
 use crate::lsp_types::{Location, Position};
 use crate::position::span_to_range;
+use crate::resolved_environment::ResolvedEnvironment;
 use crate::text_utils;
 
 /// The canonical name of the implicit initialisation event. `enumerate_symbols`
@@ -284,17 +285,12 @@ fn resolve_event_refinement_target(
         .find(|event| event.refines_span.is_some_and(|span| span.contains(offset)))
         .and_then(|event| event.refines.as_deref())?;
 
-    let manager = loader.manager();
-    manager
-        .refinement_chain(&machine.name)
+    let environment = ResolvedEnvironment::refinements(component, loader);
+    environment
+        .refined_machines()
         .into_iter()
-        .find(|ancestor| {
-            loader
-                .load(ancestor)
-                .and_then(|loaded| event_declaration_span(loaded.component(), target))
-                .is_some()
-        })
-        .map(|ancestor| SymbolIdentity::event(target, &ancestor))
+        .find(|ancestor| event_declaration_span(ancestor, target).is_some())
+        .map(|ancestor| SymbolIdentity::event(target, ancestor.name()))
 }
 
 /// Resolve `identifier` to a symbol visible from `component`: declared directly,
@@ -310,30 +306,24 @@ pub(crate) fn resolve_symbol_identity_in_component(
         return Some(local);
     }
 
-    let manager = loader.manager();
+    let environment = ResolvedEnvironment::new(component, loader);
     match component {
-        Component::Machine(machine) => {
-            for machine_name in manager.refinement_chain(&machine.name) {
-                if let Some(loaded) = loader.load(&machine_name)
-                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                {
+        Component::Machine(_) => {
+            for inherited in environment.refined_machines() {
+                if let Some(symbol) = local_symbol_identity(inherited, identifier) {
                     return Some(symbol);
                 }
             }
 
-            for context_name in manager.ordered_visible_contexts(&machine.name) {
-                if let Some(loaded) = loader.load(&context_name)
-                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                {
+            for visible in environment.visible_contexts() {
+                if let Some(symbol) = local_symbol_identity(visible, identifier) {
                     return Some(symbol);
                 }
             }
         }
-        Component::Context(context) => {
-            for context_name in manager.ordered_extends_chain(&context.name) {
-                if let Some(loaded) = loader.load(&context_name)
-                    && let Some(symbol) = local_symbol_identity(loaded.component(), identifier)
-                {
+        Component::Context(_) => {
+            for inherited in environment.extended_contexts() {
+                if let Some(symbol) = local_symbol_identity(inherited, identifier) {
                     return Some(symbol);
                 }
             }
@@ -498,4 +488,40 @@ fn event_declaration_span(component: &Component, name: &str) -> Option<Span> {
         .iter()
         .find(|event| event.name == name)
         .and_then(|event| event.name_span)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::cross_references::CrossReferenceManager;
+    use crate::document::DocumentManager;
+    use crate::lsp_types::Url;
+
+    #[test]
+    fn shared_symbol_resolution_reaches_beyond_ten_refinements() {
+        let manager = CrossReferenceManager::new();
+        let documents = DocumentManager::new();
+        for i in 1..=12 {
+            let body = if i == 12 {
+                "\nVARIABLES\n    deep\nINVARIANTS\n    @inv1 deep ∈ ℕ".to_string()
+            } else {
+                format!("\nREFINES\n    m{}", i + 1)
+            };
+            let source = format!("MACHINE m{i}{body}\nEND");
+            let uri = Url::parse(&format!("file:///m{i}.eventb")).unwrap();
+            manager.update_component(uri.to_string(), &source);
+            documents.open(uri, 1, source);
+        }
+        let root = crate::component_util::parse_all("MACHINE m0\nREFINES\n    m1\nEND")
+            .into_iter()
+            .next()
+            .unwrap();
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+
+        let symbol = resolve_symbol_identity_in_component(&root, "deep", &loader)
+            .expect("deep variable resolves through the full chain");
+        assert_eq!(symbol.kind, SymbolKind::Variable);
+        assert_eq!(symbol.owner, "m12");
+    }
 }

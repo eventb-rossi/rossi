@@ -31,6 +31,7 @@ pub mod identifier_utils;
 pub mod position;
 pub mod references;
 pub mod rename;
+mod resolved_environment;
 pub mod selection_range;
 pub mod semantic_tokens;
 pub mod signature_help;

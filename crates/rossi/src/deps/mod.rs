@@ -166,6 +166,26 @@ impl DependencyGraph {
         }
     }
 
+    /// Copy one node and its direct edges from `source`, replacing any local
+    /// node of the same kind and name. Returns whether the source node exists.
+    pub fn copy_node_from(
+        &mut self,
+        source: &DependencyGraph,
+        kind: ComponentKind,
+        name: &str,
+    ) -> bool {
+        match kind {
+            ComponentKind::Context => source.contexts.get(name).is_some_and(|node| {
+                self.contexts.insert(name.to_string(), node.clone());
+                true
+            }),
+            ComponentKind::Machine => source.machines.get(name).is_some_and(|node| {
+                self.machines.insert(name.to_string(), node.clone());
+                true
+            }),
+        }
+    }
+
     // --- Inspection ---
 
     /// Whether a node of the given kind exists.
@@ -508,19 +528,22 @@ impl DependencyGraph {
         contexts
     }
 
-    fn push_context_and_parents(
-        &self,
-        context: &str,
+    fn push_context_and_parents<'a>(
+        &'a self,
+        context: &'a str,
         contexts: &mut Vec<String>,
         seen: &mut HashSet<String>,
     ) {
-        if !seen.insert(context.to_string()) {
-            return;
-        }
-        contexts.push(context.to_string());
-        if let Some(node) = self.contexts.get(context) {
-            for parent in &node.extends {
-                self.push_context_and_parents(parent, contexts, seen);
+        let mut stack = vec![context];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current.to_string()) {
+                continue;
+            }
+            contexts.push(current.to_string());
+            if let Some(node) = self.contexts.get(current) {
+                for parent in node.extends.iter().rev() {
+                    stack.push(parent);
+                }
             }
         }
     }
@@ -782,6 +805,20 @@ mod tests {
             graph.ordered_extends_chain("a"),
             vec!["b".to_string(), "c".to_string()]
         );
+    }
+
+    #[test]
+    fn ordered_extends_chain_handles_deep_graphs_iteratively() {
+        let mut graph = DependencyGraph::new();
+        for i in 0..10_000 {
+            graph.upsert_context(&format!("c{i}"), vec![format!("c{}", i + 1)]);
+        }
+        graph.upsert_context("c10000", vec![]);
+
+        let chain = graph.ordered_extends_chain("c0");
+        assert_eq!(chain.len(), 10_000);
+        assert_eq!(chain.first().map(String::as_str), Some("c1"));
+        assert_eq!(chain.last().map(String::as_str), Some("c10000"));
     }
 
     #[test]

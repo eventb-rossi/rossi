@@ -153,14 +153,14 @@ impl ReferenceProvider {
         let Some(manager) = &self.cross_ref_manager else {
             return self.find_references_in_text(text, uri, identifier);
         };
-        let is_component_name = manager.find_component_uri(identifier).is_some();
 
         // One loader per request: every component the lookup touches is parsed
         // at most once, and open documents are read from the store, not
         // re-parsed.
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
 
-        if is_component_name && is_component_reference_position(masked, position) {
+        if is_component_reference_position(masked, position) && loader.is_component_name(identifier)
+        {
             return find_references_in_workspace(&loader, identifier);
         }
 
@@ -178,7 +178,7 @@ impl ReferenceProvider {
             };
         }
 
-        if is_component_name {
+        if loader.is_component_name(identifier) {
             return find_references_in_workspace(&loader, identifier);
         }
 
@@ -217,7 +217,12 @@ impl ReferenceProvider {
             return locations;
         }
 
-        for component_name in candidate_components_for_symbol(symbol, loader.manager()) {
+        let mut candidates = candidate_components_for_symbol(symbol, loader.manager());
+        candidates.extend(loader.open_component_names().map(str::to_owned));
+        candidates.sort();
+        candidates.dedup();
+
+        for component_name in candidates {
             let Some(loaded) = loader.load(&component_name) else {
                 continue;
             };
@@ -259,10 +264,7 @@ fn find_references_in_workspace(loader: &ComponentLoader, identifier: &str) -> V
     let mut locations = Vec::new();
     let mut seen = HashSet::new();
 
-    let mut component_names = loader.manager().all_component_names();
-    component_names.sort();
-
-    for component_name in component_names {
+    for component_name in loader.all_component_names() {
         if let Some(loaded) = loader.load(&component_name) {
             // Component references use the component word boundary so a name
             // like `ENV_C` does not match inside a sibling component `ENV_C-1`
@@ -566,6 +568,91 @@ mod tests {
             refs.iter().all(|r| r.range.start.line == 2),
             "never @inv2's r: {refs:?}"
         );
+    }
+
+    #[test]
+    fn references_include_open_dependents_before_graph_reindexing() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT c\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k ∈ ℕ\nEND";
+        let old_machine = "MACHINE m\nEND";
+        let current_machine = "MACHINE m\nSEES\n    c\nINVARIANTS\n    @inv1 k = k\nEND";
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), context);
+        crm.update_component(machine_uri.to_string(), old_machine);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(context_uri, 1, context.to_string());
+        dm.open(machine_uri.clone(), 1, old_machine.to_string());
+        dm.change(
+            &machine_uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: current_machine.to_string(),
+            }],
+        );
+        assert!(crm.ordered_visible_contexts("m").is_empty());
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let refs = provider
+            .find_references(&make_params(4, 10, machine_uri.clone()), current_machine)
+            .expect("references for current k use");
+
+        assert!(
+            refs.iter()
+                .any(|location| location.uri == machine_uri && location.range.start.line == 4),
+            "the current open machine must be included before graph reindexing: {refs:?}"
+        );
+    }
+
+    #[test]
+    fn references_find_open_component_rename_before_graph_reindexing() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let old_context = "CONTEXT old\nEND";
+        let current_context = "CONTEXT new\nEND";
+        let old_machine = "MACHINE m\nEND";
+        let current_machine = "MACHINE m\nSEES\n    new\nEND";
+
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(context_uri.to_string(), old_context);
+        crm.update_component(machine_uri.to_string(), old_machine);
+        let dm = Arc::new(DocumentManager::new());
+        dm.open(context_uri.clone(), 1, old_context.to_string());
+        dm.open(machine_uri.clone(), 1, old_machine.to_string());
+        dm.change(
+            &context_uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: current_context.to_string(),
+            }],
+        );
+        dm.change(
+            &machine_uri,
+            2,
+            vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: current_machine.to_string(),
+            }],
+        );
+        assert!(crm.find_component_uri("new").is_none());
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+        let refs = provider
+            .find_references(&make_params(2, 5, machine_uri.clone()), current_machine)
+            .expect("references for renamed component");
+
+        assert!(refs.iter().any(|location| location.uri == context_uri));
+        assert!(refs.iter().any(|location| location.uri == machine_uri));
     }
 
     #[test]
