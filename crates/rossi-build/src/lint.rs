@@ -25,13 +25,13 @@
 //! EB015–17 (proof status) are deliberately out of scope here; they need
 //! their own modules.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use rossi::ast::Span;
 use rossi::ast::predicate::{ComparisonOp, LogicalOp};
 use rossi::{
-    Component, Context, Event, ExpressionKind, InitialisationEvent, Machine, Predicate,
-    PredicateKind,
+    Component, ComponentId, Context, DependencyGraph, Event, ExpressionKind, InitialisationEvent,
+    Machine, Predicate, PredicateKind,
 };
 
 use crate::ast_util::lhs_variables;
@@ -524,33 +524,6 @@ enum ChainEnd {
     Truncated,
 }
 
-/// REFINES ancestors of the machine at `m_id`, nearest-first, cycle-guarded,
-/// together with how the walk ended. Every link must resolve to exactly one
-/// machine; see [`unique_id`].
-fn ancestor_machines(
-    m_id: MachId,
-    machs: &[&Machine],
-    mach_ids_by_name: &BTreeMap<&str, Vec<MachId>>,
-) -> (Vec<MachId>, ChainEnd) {
-    let mut out = Vec::new();
-    let mut visited: BTreeSet<MachId> = BTreeSet::new();
-    visited.insert(m_id);
-    let mut cur = machs[m_id];
-    loop {
-        let Some(parent) = cur.refines.as_deref() else {
-            return (out, ChainEnd::Root);
-        };
-        let Some(next) = unique_id(mach_ids_by_name, parent) else {
-            return (out, ChainEnd::Truncated);
-        };
-        if !visited.insert(next) {
-            return (out, ChainEnd::Truncated);
-        }
-        out.push(next);
-        cur = machs[next];
-    }
-}
-
 /// The ancestor-event chain an extended event materialises, root-first.
 ///
 /// The refinement target at each level is the explicit `refines` name or,
@@ -713,21 +686,6 @@ fn inherited_contributions(
 /// data apart.
 type MachId = usize;
 
-/// All arena ids declared under `name` (empty when the project has none).
-fn candidate_ids<'m>(by_name: &'m BTreeMap<&str, Vec<usize>>, name: &str) -> &'m [usize] {
-    by_name.get(name).map_or(&[][..], Vec::as_slice)
-}
-
-/// Resolve `name` to an arena id iff exactly one component declares it.
-/// Zero candidates (EB009's domain) and several (EB019's) are equally
-/// unresolvable.
-fn unique_id(by_name: &BTreeMap<&str, Vec<usize>>, name: &str) -> Option<usize> {
-    match candidate_ids(by_name, name) {
-        &[id] => Some(id),
-        _ => None,
-    }
-}
-
 struct ProjectIndex<'a> {
     /// Machine arena, in `project.components` encounter order.
     machs: Vec<&'a Machine>,
@@ -757,7 +715,7 @@ struct ProjectIndex<'a> {
     mach_chain_end: Vec<ChainEnd>,
     /// Per-machine, the machines that REFINE it transitively (excluding
     /// itself; empty for leaves).
-    mach_refines_descendants: Vec<BTreeSet<MachId>>,
+    mach_refines_descendants: Vec<Vec<MachId>>,
     /// Per-machine, the INIT-action LHS names an extended INITIALISATION
     /// inherits from its ancestor chain. `Some` only when every extended
     /// link resolved (see [`InitChain::fully_resolved`]); consulted by
@@ -767,19 +725,22 @@ struct ProjectIndex<'a> {
 
 impl<'a> ProjectIndex<'a> {
     fn build(project: &'a Project) -> Self {
-        // Arena pass: give every machine an id in encounter order and index
-        // the (possibly duplicated) names.
+        // Arena pass: the shared graph gives every component a stable ID and
+        // preserves duplicate names; lint keeps dense machine-only IDs for its
+        // per-machine data vectors.
+        let mut graph = DependencyGraph::new();
         let mut machs: Vec<&Machine> = Vec::new();
         let mut component_mach_ids: Vec<Option<MachId>> = Vec::new();
-        let mut mach_ids_by_name: BTreeMap<&str, Vec<MachId>> = BTreeMap::new();
+        let mut mach_graph_ids: Vec<ComponentId> = Vec::new();
+        let mut graph_to_mach: HashMap<ComponentId, MachId> = HashMap::new();
         for pc in &project.components {
+            let graph_id = graph.insert_component(&pc.component);
             match &pc.component {
                 Component::Machine(m) => {
-                    component_mach_ids.push(Some(machs.len()));
-                    mach_ids_by_name
-                        .entry(m.name.as_str())
-                        .or_default()
-                        .push(machs.len());
+                    let mach_id = machs.len();
+                    component_mach_ids.push(Some(mach_id));
+                    mach_graph_ids.push(graph_id);
+                    graph_to_mach.insert(graph_id, mach_id);
                     machs.push(m);
                 }
                 Component::Context(_) => component_mach_ids.push(None),
@@ -811,7 +772,17 @@ impl<'a> ProjectIndex<'a> {
         let mut mach_chain_end = Vec::with_capacity(machs.len());
         let mut init_inherited_assigned = Vec::with_capacity(machs.len());
         for (id, &m) in machs.iter().enumerate() {
-            let (ancestors, chain_end) = ancestor_machines(id, &machs, &mach_ids_by_name);
+            let ancestry = graph.refinement_ancestry(mach_graph_ids[id]);
+            let ancestors: Vec<MachId> = ancestry
+                .components
+                .iter()
+                .map(|component| graph_to_mach[component])
+                .collect();
+            let chain_end = if ancestry.complete {
+                ChainEnd::Root
+            } else {
+                ChainEnd::Truncated
+            };
             let (inherited_refs, init_assigned) =
                 inherited_contributions(m, &ancestors, &machs, chain_end, &mach_inv_refs);
             mach_inherited_refs.push(inherited_refs);
@@ -820,21 +791,19 @@ impl<'a> ProjectIndex<'a> {
             mach_chain_end.push(chain_end);
         }
 
-        // Downward edges. A parent name attaches the child to EVERY
-        // machine carrying that name — this data only ever suppresses
-        // warnings, so over-approximating across duplicates is conservative,
-        // while dropping a candidate would false-positive on it (see the
-        // module comment above `ChainEnd`).
-        let mut mach_children: BTreeMap<MachId, Vec<MachId>> = BTreeMap::new();
-        for (child, m) in machs.iter().enumerate() {
-            if let Some(parent_name) = &m.refines {
-                for &parent in candidate_ids(&mach_ids_by_name, parent_name) {
-                    mach_children.entry(parent).or_default().push(child);
-                }
-            }
-        }
-
-        let mach_refines_descendants = transitive_descendants(&mach_children, machs.len());
+        // Downward edges use the graph's duplicate-aware reverse traversal: a
+        // child attaches to every same-name parent candidate, conservatively
+        // suppressing warnings when EB019 makes the intended parent unclear.
+        let mach_refines_descendants = graph
+            .refinement_descendants(&mach_graph_ids)
+            .into_iter()
+            .map(|descendants| {
+                descendants
+                    .into_iter()
+                    .filter_map(|descendant| graph_to_mach.get(&descendant).copied())
+                    .collect()
+            })
+            .collect();
 
         Self {
             machs,
@@ -852,8 +821,8 @@ impl<'a> ProjectIndex<'a> {
     /// Variable names inherited by the machine at `id`: the union of the own
     /// variables of every REFINES ancestor (the machine's own variables are
     /// excluded). Empty for a root machine. Derived from the ancestor lists
-    /// [`ancestor_machines`] computed once during `build`, so this and the
-    /// upward reference/assignment pass can't drift apart.
+    /// shared graph computed once during `build`, so this and the upward
+    /// reference/assignment pass can't drift apart.
     fn inherited_vars_for_machine(&self, id: MachId) -> BTreeSet<&'a str> {
         self.mach_ancestors[id]
             .iter()
@@ -892,29 +861,6 @@ impl<'a> ProjectIndex<'a> {
         }
         out
     }
-}
-
-/// For each machine id in `0..n`, the transitive closure of `children`
-/// excluding the machine itself (empty for leaves).
-fn transitive_descendants(
-    children: &BTreeMap<MachId, Vec<MachId>>,
-    n: usize,
-) -> Vec<BTreeSet<MachId>> {
-    (0..n)
-        .map(|root| {
-            let mut descs = BTreeSet::new();
-            let mut stack: Vec<MachId> = children.get(&root).cloned().unwrap_or_default();
-            while let Some(node) = stack.pop() {
-                if !descs.insert(node) {
-                    continue;
-                }
-                if let Some(cs) = children.get(&node) {
-                    stack.extend(cs.iter().copied());
-                }
-            }
-            descs
-        })
-        .collect()
 }
 
 #[cfg(test)]

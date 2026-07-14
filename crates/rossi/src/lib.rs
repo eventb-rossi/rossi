@@ -64,7 +64,7 @@ pub use ast::{
     InitialisationEvent, LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate,
     PredicateKind, SetDeclaration, TypedIdentifier,
 };
-pub use deps::{ComponentKind, DependencyGraph, EdgeKind};
+pub use deps::{ComponentId, ComponentKind, DependencyGraph, EdgeKind, RefinementAncestry};
 pub use error::{ParseError, ParseResult, Result};
 pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{

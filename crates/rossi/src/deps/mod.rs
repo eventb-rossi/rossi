@@ -13,18 +13,17 @@
 //!   [`DependencyGraph::ordered_visible_contexts`], …) — powers cross-file
 //!   navigation, reference finding, and renaming.
 //!
-//! Nodes are keyed by `(ComponentKind, name)`. Keying by kind (rather than name
-//! alone) means a context and a machine that happen to share a name never
-//! collide, and cross-kind `SEES` edges resolve unambiguously because every
-//! [`EdgeKind`] knows its [`EdgeKind::source_kind`] / [`EdgeKind::target_kind`].
-//! Valid Rodin projects use project-unique component names, so the name-based
-//! query helpers used by the language server resolve to a single node.
+//! Nodes have stable [`ComponentId`]s and a kind-aware multimap from names to
+//! IDs. A context and a machine that happen to share a name never collide, and
+//! duplicate declarations retain separate identities until project diagnostics
+//! reject them. Name-based helpers remain convenient for valid Rodin projects,
+//! where component names are unique.
 //!
 //! [`rossi-build`]: https://docs.rs/rossi-build
 //! [`eventb-lsp`]: https://docs.rs/eventb-lsp
 
 use crate::Component;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 /// Whether a component is a context or a machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,6 +31,12 @@ pub enum ComponentKind {
     Context,
     Machine,
 }
+
+/// Stable identity of one component node in a [`DependencyGraph`].
+///
+/// IDs are never reused within a graph, including after a node is removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ComponentId(usize);
 
 /// A directed cross-component dependency edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -81,6 +86,17 @@ pub struct Cycle {
     pub components: Vec<String>,
 }
 
+/// A machine's uniquely-resolved REFINES ancestors, nearest parent first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefinementAncestry {
+    /// Resolved ancestor node IDs, nearest parent first.
+    pub components: Vec<ComponentId>,
+    /// Whether the walk reached a root machine.
+    ///
+    /// This is `false` when a parent is missing, duplicated, or circular.
+    pub complete: bool,
+}
+
 /// DFS progress for cycle detection. A node is `Active` while on the current
 /// DFS stack and `Done` once fully explored; an unvisited node is simply absent
 /// from the map (the classic "white" state).
@@ -104,12 +120,34 @@ struct MachineNode {
     sees: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+enum GraphNode {
+    Context { name: String, data: ContextNode },
+    Machine { name: String, data: MachineNode },
+}
+
+impl GraphNode {
+    fn kind(&self) -> ComponentKind {
+        match self {
+            Self::Context { .. } => ComponentKind::Context,
+            Self::Machine { .. } => ComponentKind::Machine,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Context { name, .. } | Self::Machine { name, .. } => name,
+        }
+    }
+}
+
 /// A directed graph of Event-B components and their SEES / REFINES / EXTENDS
 /// dependencies.
 #[derive(Debug, Clone, Default)]
 pub struct DependencyGraph {
-    contexts: HashMap<String, ContextNode>,
-    machines: HashMap<String, MachineNode>,
+    nodes: Vec<Option<GraphNode>>,
+    contexts: HashMap<String, Vec<ComponentId>>,
+    machines: HashMap<String, Vec<ComponentId>>,
 }
 
 impl DependencyGraph {
@@ -118,21 +156,65 @@ impl DependencyGraph {
         Self::default()
     }
 
-    /// Build a graph from an iterator of components.
+    /// Build a graph from an iterator of components, preserving every item as
+    /// a distinct node when names are duplicated.
     pub fn from_components<'a, I>(components: I) -> Self
     where
         I: IntoIterator<Item = &'a Component>,
     {
         let mut graph = Self::new();
         for component in components {
-            graph.upsert_component(component);
+            graph.insert_component(component);
         }
         graph
     }
 
     // --- Construction / incremental update ---
 
-    /// Insert or replace the node for a parsed component.
+    /// Insert a parsed component as a distinct node and return its stable ID.
+    ///
+    /// Unlike [`Self::upsert_component`], this preserves duplicate names.
+    pub fn insert_component(&mut self, component: &Component) -> ComponentId {
+        match component {
+            Component::Context(ctx) => self.insert_context(&ctx.name, ctx.extends.clone()),
+            Component::Machine(mch) => {
+                self.insert_machine(&mch.name, mch.refines.clone(), mch.sees.clone())
+            }
+        }
+    }
+
+    /// Insert a distinct context node and return its stable ID.
+    pub fn insert_context(&mut self, name: &str, extends: Vec<String>) -> ComponentId {
+        self.insert_node(GraphNode::Context {
+            name: name.to_string(),
+            data: ContextNode { extends },
+        })
+    }
+
+    /// Insert a distinct machine node and return its stable ID.
+    pub fn insert_machine(
+        &mut self,
+        name: &str,
+        refines: Option<String>,
+        sees: Vec<String>,
+    ) -> ComponentId {
+        self.insert_node(GraphNode::Machine {
+            name: name.to_string(),
+            data: MachineNode { refines, sees },
+        })
+    }
+
+    fn insert_node(&mut self, node: GraphNode) -> ComponentId {
+        let id = ComponentId(self.nodes.len());
+        let kind = node.kind();
+        let name = node.name().to_string();
+        self.nodes.push(Some(node));
+        self.name_index_mut(kind).entry(name).or_default().push(id);
+        id
+    }
+
+    /// Insert or replace the most recently inserted node for a parsed
+    /// component, retaining its stable ID.
     pub fn upsert_component(&mut self, component: &Component) {
         match component {
             Component::Context(ctx) => self.upsert_context(&ctx.name, ctx.extends.clone()),
@@ -142,26 +224,37 @@ impl DependencyGraph {
         }
     }
 
-    /// Insert or replace a context node and its EXTENDS parents.
+    /// Insert or replace the most recently inserted context node and its
+    /// EXTENDS parents, retaining its stable ID.
     pub fn upsert_context(&mut self, name: &str, extends: Vec<String>) {
-        self.contexts
-            .insert(name.to_string(), ContextNode { extends });
+        if let Some(id) = self.selected_id(ComponentKind::Context, name) {
+            self.nodes[id.0] = Some(GraphNode::Context {
+                name: name.to_string(),
+                data: ContextNode { extends },
+            });
+        } else {
+            self.insert_context(name, extends);
+        }
     }
 
-    /// Insert or replace a machine node, its REFINES parent and SEES targets.
+    /// Insert or replace the most recently inserted machine node, its REFINES
+    /// parent and SEES targets, retaining its stable ID.
     pub fn upsert_machine(&mut self, name: &str, refines: Option<String>, sees: Vec<String>) {
-        self.machines
-            .insert(name.to_string(), MachineNode { refines, sees });
+        if let Some(id) = self.selected_id(ComponentKind::Machine, name) {
+            self.nodes[id.0] = Some(GraphNode::Machine {
+                name: name.to_string(),
+                data: MachineNode { refines, sees },
+            });
+        } else {
+            self.insert_machine(name, refines, sees);
+        }
     }
 
-    /// Remove a node of the given kind.
+    /// Remove every node of the given kind and name.
     pub fn remove(&mut self, kind: ComponentKind, name: &str) {
-        match kind {
-            ComponentKind::Context => {
-                self.contexts.remove(name);
-            }
-            ComponentKind::Machine => {
-                self.machines.remove(name);
+        if let Some(ids) = self.name_index_mut(kind).remove(name) {
+            for id in ids {
+                self.nodes[id.0] = None;
             }
         }
     }
@@ -174,26 +267,82 @@ impl DependencyGraph {
         kind: ComponentKind,
         name: &str,
     ) -> bool {
-        match kind {
-            ComponentKind::Context => source.contexts.get(name).is_some_and(|node| {
-                self.contexts.insert(name.to_string(), node.clone());
+        match source.selected_node(kind, name) {
+            Some(GraphNode::Context { data, .. }) => {
+                self.upsert_context(name, data.extends.clone());
                 true
-            }),
-            ComponentKind::Machine => source.machines.get(name).is_some_and(|node| {
-                self.machines.insert(name.to_string(), node.clone());
+            }
+            Some(GraphNode::Machine { data, .. }) => {
+                self.upsert_machine(name, data.refines.clone(), data.sees.clone());
                 true
-            }),
+            }
+            None => false,
         }
     }
 
     // --- Inspection ---
 
+    fn name_index(&self, kind: ComponentKind) -> &HashMap<String, Vec<ComponentId>> {
+        match kind {
+            ComponentKind::Context => &self.contexts,
+            ComponentKind::Machine => &self.machines,
+        }
+    }
+
+    fn name_index_mut(&mut self, kind: ComponentKind) -> &mut HashMap<String, Vec<ComponentId>> {
+        match kind {
+            ComponentKind::Context => &mut self.contexts,
+            ComponentKind::Machine => &mut self.machines,
+        }
+    }
+
+    fn selected_id(&self, kind: ComponentKind, name: &str) -> Option<ComponentId> {
+        self.components_named(kind, name).last().copied()
+    }
+
+    fn selected_node(&self, kind: ComponentKind, name: &str) -> Option<&GraphNode> {
+        self.selected_id(kind, name)
+            .and_then(|id| self.nodes.get(id.0)?.as_ref())
+    }
+
+    fn context_node(&self, name: &str) -> Option<&ContextNode> {
+        match self.selected_node(ComponentKind::Context, name)? {
+            GraphNode::Context { data, .. } => Some(data),
+            GraphNode::Machine { .. } => None,
+        }
+    }
+
+    fn machine_node(&self, name: &str) -> Option<&MachineNode> {
+        match self.selected_node(ComponentKind::Machine, name)? {
+            GraphNode::Machine { data, .. } => Some(data),
+            GraphNode::Context { .. } => None,
+        }
+    }
+
+    fn machine_node_by_id(&self, id: ComponentId) -> Option<&MachineNode> {
+        match self.nodes.get(id.0)?.as_ref()? {
+            GraphNode::Machine { data, .. } => Some(data),
+            GraphNode::Context { .. } => None,
+        }
+    }
+
+    /// Inspect a node by stable ID, returning its kind and name.
+    pub fn component(&self, id: ComponentId) -> Option<(ComponentKind, &str)> {
+        let node = self.nodes.get(id.0)?.as_ref()?;
+        Some((node.kind(), node.name()))
+    }
+
+    /// All stable IDs declared with the given kind and name, in insertion
+    /// order.
+    pub fn components_named(&self, kind: ComponentKind, name: &str) -> &[ComponentId] {
+        self.name_index(kind)
+            .get(name)
+            .map_or(&[][..], Vec::as_slice)
+    }
+
     /// Whether a node of the given kind exists.
     pub fn contains(&self, kind: ComponentKind, name: &str) -> bool {
-        match kind {
-            ComponentKind::Context => self.contexts.contains_key(name),
-            ComponentKind::Machine => self.machines.contains_key(name),
-        }
+        !self.components_named(kind, name).is_empty()
     }
 
     /// The kind of the node with the given name, if any. Prefers a context
@@ -237,13 +386,13 @@ impl DependencyGraph {
         let mut refs = HashMap::new();
         match kind {
             ComponentKind::Context => {
-                let node = self.contexts.get(name)?;
+                let node = self.context_node(name)?;
                 if !node.extends.is_empty() {
                     refs.insert(EdgeKind::Extends, node.extends.clone());
                 }
             }
             ComponentKind::Machine => {
-                let node = self.machines.get(name)?;
+                let node = self.machine_node(name)?;
                 if !node.sees.is_empty() {
                     refs.insert(EdgeKind::Sees, node.sees.clone());
                 }
@@ -260,16 +409,13 @@ impl DependencyGraph {
     fn out_edges(&self, name: &str, edge: EdgeKind) -> &[String] {
         match edge {
             EdgeKind::Extends => self
-                .contexts
-                .get(name)
+                .context_node(name)
                 .map_or(&[][..], |n| n.extends.as_slice()),
             EdgeKind::Sees => self
-                .machines
-                .get(name)
+                .machine_node(name)
                 .map_or(&[][..], |n| n.sees.as_slice()),
             EdgeKind::Refines => self
-                .machines
-                .get(name)
+                .machine_node(name)
                 .map_or(&[][..], |n| n.refines.as_slice()),
         }
     }
@@ -437,7 +583,7 @@ impl DependencyGraph {
         match kind {
             ComponentKind::Context => {
                 if want(EdgeKind::Extends)
-                    && let Some(n) = self.contexts.get(name)
+                    && let Some(n) = self.context_node(name)
                 {
                     for target in &n.extends {
                         edges.push((EdgeKind::Extends, (ComponentKind::Context, target.as_str())));
@@ -445,7 +591,7 @@ impl DependencyGraph {
                 }
             }
             ComponentKind::Machine => {
-                if let Some(n) = self.machines.get(name) {
+                if let Some(n) = self.machine_node(name) {
                     if want(EdgeKind::Sees) {
                         for target in &n.sees {
                             edges.push((EdgeKind::Sees, (ComponentKind::Context, target.as_str())));
@@ -488,6 +634,101 @@ impl DependencyGraph {
         self.transitive_closure(machine, EdgeKind::Refines)
     }
 
+    /// Uniquely-resolved REFINES ancestors of a machine node.
+    ///
+    /// A missing or duplicated parent name, or a cycle, returns the resolved
+    /// prefix with [`RefinementAncestry::complete`] set to `false`.
+    pub fn refinement_ancestry(&self, machine: ComponentId) -> RefinementAncestry {
+        let Some(mut current) = self.machine_node_by_id(machine) else {
+            return RefinementAncestry {
+                components: Vec::new(),
+                complete: false,
+            };
+        };
+        let mut components = Vec::new();
+        let mut visited = HashSet::from([machine]);
+        loop {
+            let Some(parent_name) = current.refines.as_deref() else {
+                return RefinementAncestry {
+                    components,
+                    complete: true,
+                };
+            };
+            let [parent] = self.components_named(ComponentKind::Machine, parent_name) else {
+                return RefinementAncestry {
+                    components,
+                    complete: false,
+                };
+            };
+            if !visited.insert(*parent) {
+                return RefinementAncestry {
+                    components,
+                    complete: false,
+                };
+            }
+            components.push(*parent);
+            current = self
+                .machine_node_by_id(*parent)
+                .expect("machine name index contains only machine nodes");
+        }
+    }
+
+    /// All machines that transitively REFINE each requested machine, by stable
+    /// ID and in request order.
+    ///
+    /// A child whose parent name has duplicate declarations attaches to every
+    /// candidate parent. This conservative reverse lookup lets callers retain
+    /// duplicate-name diagnostics without dropping descendant relationships.
+    ///
+    /// The duplicate-aware reverse index is built once for the whole batch.
+    pub fn refinement_descendants(&self, machines: &[ComponentId]) -> Vec<BTreeSet<ComponentId>> {
+        if machines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut children: HashMap<ComponentId, Vec<ComponentId>> = HashMap::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            let Some(GraphNode::Machine { data, .. }) = node else {
+                continue;
+            };
+            let Some(parent_name) = data.refines.as_deref() else {
+                continue;
+            };
+            let child = ComponentId(index);
+            for parent in self.components_named(ComponentKind::Machine, parent_name) {
+                children.entry(*parent).or_default().push(child);
+            }
+        }
+
+        machines
+            .iter()
+            .map(|&machine| self.refinement_descendants_from(machine, &children))
+            .collect()
+    }
+
+    fn refinement_descendants_from(
+        &self,
+        machine: ComponentId,
+        children: &HashMap<ComponentId, Vec<ComponentId>>,
+    ) -> BTreeSet<ComponentId> {
+        if self.machine_node_by_id(machine).is_none() {
+            return BTreeSet::new();
+        }
+        let mut descendants = BTreeSet::new();
+        let mut visited = HashSet::from([machine]);
+        let mut stack = children.get(&machine).cloned().unwrap_or_default();
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            descendants.insert(node);
+            if let Some(next) = children.get(&node) {
+                stack.extend(next.iter().copied());
+            }
+        }
+        descendants
+    }
+
     /// Transitive EXTENDS parents of a context.
     pub fn extends_chain(&self, context: &str) -> Vec<String> {
         self.transitive_closure(context, EdgeKind::Extends)
@@ -506,7 +747,7 @@ impl DependencyGraph {
         let mut contexts = Vec::new();
         let mut seen = HashSet::new();
         for mch in &machines {
-            if let Some(node) = self.machines.get(mch) {
+            if let Some(node) = self.machine_node(mch) {
                 for ctx in &node.sees {
                     self.push_context_and_parents(ctx, &mut contexts, &mut seen);
                 }
@@ -520,7 +761,7 @@ impl DependencyGraph {
     pub fn ordered_extends_chain(&self, context: &str) -> Vec<String> {
         let mut contexts = Vec::new();
         let mut seen = HashSet::new();
-        if let Some(node) = self.contexts.get(context) {
+        if let Some(node) = self.context_node(context) {
             for parent in &node.extends {
                 self.push_context_and_parents(parent, &mut contexts, &mut seen);
             }
@@ -540,7 +781,7 @@ impl DependencyGraph {
                 continue;
             }
             contexts.push(current.to_string());
-            if let Some(node) = self.contexts.get(current) {
+            if let Some(node) = self.context_node(current) {
                 for parent in node.extends.iter().rev() {
                     stack.push(parent);
                 }
@@ -569,10 +810,10 @@ impl DependencyGraph {
 
     fn all_out_targets(&self, name: &str) -> Vec<String> {
         let mut targets = Vec::new();
-        if let Some(node) = self.contexts.get(name) {
+        if let Some(node) = self.context_node(name) {
             targets.extend(node.extends.iter().cloned());
         }
-        if let Some(node) = self.machines.get(name) {
+        if let Some(node) = self.machine_node(name) {
             targets.extend(node.sees.iter().cloned());
             if let Some(parent) = &node.refines {
                 targets.push(parent.clone());
@@ -591,12 +832,19 @@ impl DependencyGraph {
     ) -> Vec<(ComponentKind, String)> {
         let want = |e: EdgeKind| edge.is_none() || edge == Some(e);
         let mut result = Vec::new();
-        for (name, node) in &self.contexts {
-            if want(EdgeKind::Extends) && node.extends.iter().any(|t| t == target) {
+        for name in self.contexts.keys() {
+            if want(EdgeKind::Extends)
+                && self
+                    .context_node(name)
+                    .is_some_and(|node| node.extends.iter().any(|t| t == target))
+            {
                 result.push((ComponentKind::Context, name.clone()));
             }
         }
-        for (name, node) in &self.machines {
+        for name in self.machines.keys() {
+            let Some(node) = self.machine_node(name) else {
+                continue;
+            };
             let sees_hit = want(EdgeKind::Sees) && node.sees.iter().any(|t| t == target);
             let refines_hit = want(EdgeKind::Refines) && node.refines.as_deref() == Some(target);
             if sees_hit || refines_hit {
@@ -668,6 +916,78 @@ mod tests {
             refs.get(&EdgeKind::Sees).unwrap(),
             &vec!["derived".to_string()]
         );
+    }
+
+    #[test]
+    fn duplicate_names_keep_distinct_stable_ids() {
+        let first = crate::parse("MACHINE parent\nEND\n").unwrap();
+        let second = crate::parse("MACHINE parent\nEND\n").unwrap();
+        let child = crate::parse("MACHINE child\nREFINES parent\nEND\n").unwrap();
+        let graph = DependencyGraph::from_components([&first, &second, &child]);
+
+        let parents = graph.components_named(ComponentKind::Machine, "parent");
+        assert_eq!(parents.len(), 2);
+        assert_ne!(parents[0], parents[1]);
+        assert_eq!(
+            graph.component(parents[0]),
+            Some((ComponentKind::Machine, "parent"))
+        );
+
+        let child = graph.components_named(ComponentKind::Machine, "child")[0];
+        assert_eq!(
+            graph.refinement_ancestry(child),
+            RefinementAncestry {
+                components: Vec::new(),
+                complete: false,
+            }
+        );
+    }
+
+    #[test]
+    fn upsert_preserves_ids_and_removed_ids_are_not_reused() {
+        let mut graph = DependencyGraph::new();
+        let original = graph.insert_context("ctx", vec!["old".to_string()]);
+
+        graph.upsert_context("ctx", vec!["new".to_string()]);
+        assert_eq!(
+            graph.components_named(ComponentKind::Context, "ctx"),
+            &[original]
+        );
+        assert_eq!(graph.ordered_extends_chain("ctx"), ["new"]);
+
+        graph.remove(ComponentKind::Context, "ctx");
+        assert_eq!(graph.component(original), None);
+        let replacement = graph.insert_context("ctx", Vec::new());
+        assert_ne!(replacement, original);
+    }
+
+    #[test]
+    fn refinement_identity_queries_preserve_duplicate_parent_semantics() {
+        let first = crate::parse("MACHINE parent\nEND\n").unwrap();
+        let second = crate::parse("MACHINE parent\nEND\n").unwrap();
+        let child = crate::parse("MACHINE child\nREFINES parent\nEND\n").unwrap();
+        let grandchild = crate::parse("MACHINE grandchild\nREFINES child\nEND\n").unwrap();
+        let graph = DependencyGraph::from_components([&first, &second, &child, &grandchild]);
+
+        let parents = graph.components_named(ComponentKind::Machine, "parent");
+        let child = graph.components_named(ComponentKind::Machine, "child")[0];
+        let grandchild = graph.components_named(ComponentKind::Machine, "grandchild")[0];
+        assert_eq!(
+            graph.refinement_ancestry(grandchild),
+            RefinementAncestry {
+                components: vec![child],
+                complete: false,
+            }
+        );
+
+        assert_eq!(
+            graph.refinement_descendants(parents),
+            vec![
+                [child, grandchild].into_iter().collect(),
+                [child, grandchild].into_iter().collect(),
+            ]
+        );
+        assert!(graph.refinement_descendants(&[]).is_empty());
     }
 
     #[test]
