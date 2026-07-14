@@ -1015,6 +1015,102 @@ pub struct NamedProject {
     pub components: Vec<NamedComponent>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ZipComponentKind {
+    Context,
+    Machine,
+}
+
+impl ZipComponentKind {
+    fn from_filename(filename: &str) -> Option<Self> {
+        if filename.ends_with(".buc") {
+            Some(Self::Context)
+        } else if filename.ends_with(".bum") {
+            Some(Self::Machine)
+        } else {
+            None
+        }
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Context => ".buc",
+            Self::Machine => ".bum",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ZipComponentEntry {
+    index: usize,
+    kind: ZipComponentKind,
+}
+
+/// Identify component entries from the central directory before opening any
+/// of them. Keeping the classification here gives strict and recovery parsing
+/// the same basename, extension, and default-name rules.
+fn zip_component_entries<R>(archive: &zip::ZipArchive<R>) -> Vec<ZipComponentEntry>
+where
+    R: IoRead + std::io::Seek,
+{
+    archive
+        .file_names()
+        .enumerate()
+        .filter_map(|(index, path)| {
+            let filename = path.split('/').next_back().unwrap_or("");
+            let kind = ZipComponentKind::from_filename(filename)?;
+            Some(ZipComponentEntry { index, kind })
+        })
+        .collect()
+}
+
+/// Open, decode, and parse one classified Event-B component entry.
+fn parse_zip_entry<R>(
+    archive: &mut zip::ZipArchive<R>,
+    entry: ZipComponentEntry,
+) -> Result<NamedComponent>
+where
+    R: IoRead + std::io::Seek,
+{
+    let ZipComponentEntry { index, kind } = entry;
+    let filename = archive
+        .name_for_index(index)
+        .unwrap_or("")
+        .split('/')
+        .next_back()
+        .unwrap_or("")
+        .to_string();
+    let default_name = filename.strip_suffix(kind.suffix()).unwrap_or(&filename);
+    let result = (|| {
+        let mut file = archive.by_index(index).map_err(|e| {
+            ParseError::InvalidXml(format!("Failed to read zip entry {index}: {e}"))
+        })?;
+        let mut xml_content = String::new();
+        file.read_to_string(&mut xml_content)
+            .map_err(|e| ParseError::IoError(e.to_string()))?;
+
+        let component = match kind {
+            ZipComponentKind::Context => Component::Context(parse_context_xml_with_name(
+                &xml_content,
+                Some(default_name),
+                Some(&filename),
+            )?),
+            ZipComponentKind::Machine => Component::Machine(parse_machine_xml_with_name(
+                &xml_content,
+                Some(default_name),
+                Some(&filename),
+            )?),
+        };
+        Ok(component)
+    })();
+
+    let component = result.map_err(|source| wrap_file_error(&filename, source))?;
+    Ok(NamedComponent {
+        filename,
+        component,
+    })
+}
+
 /// Parses all Event-B components from a zip archive
 ///
 /// Rodin Event-B models are stored as zip archives containing .buc (context)
@@ -1051,50 +1147,10 @@ pub fn parse_zip(zip_data: &[u8]) -> Result<Vec<NamedComponent>> {
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| ParseError::InvalidXml(format!("Failed to open zip archive: {}", e)))?;
 
-    let mut components = Vec::new();
-
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| ParseError::InvalidXml(format!("Failed to read zip entry: {}", e)))?;
-
-        let filename = file.name().split('/').next_back().unwrap_or("").to_string();
-
-        // Only process .buc and .bum files
-        if filename.ends_with(".buc") || filename.ends_with(".bum") {
-            let mut xml_content = String::new();
-            file.read_to_string(&mut xml_content).map_err(|e| {
-                ParseError::InvalidXml(format!("Failed to read {}: {}", filename, e))
-            })?;
-
-            // Extract name from filename (e.g., "C0.buc" -> "C0")
-            let default_name = filename
-                .strip_suffix(".buc")
-                .or_else(|| filename.strip_suffix(".bum"))
-                .unwrap_or(&filename);
-
-            let component = if filename.ends_with(".buc") {
-                Component::Context(parse_context_xml_with_name(
-                    &xml_content,
-                    Some(default_name),
-                    Some(&filename),
-                )?)
-            } else {
-                Component::Machine(parse_machine_xml_with_name(
-                    &xml_content,
-                    Some(default_name),
-                    Some(&filename),
-                )?)
-            };
-
-            components.push(NamedComponent {
-                filename,
-                component,
-            });
-        }
-    }
-
-    Ok(components)
+    zip_component_entries(&archive)
+        .into_iter()
+        .map(|entry| parse_zip_entry(&mut archive, entry))
+        .collect()
 }
 
 /// Parses all Event-B components from a zip file on disk
@@ -1163,66 +1219,19 @@ pub fn parse_zip_with_recovery(zip_data: &[u8]) -> ParseResult<Vec<NamedComponen
         }
     };
 
-    let mut components = Vec::new();
-    let mut errors = Vec::new();
-
-    for i in 0..archive.len() {
-        let mut file = match archive.by_index(i) {
-            Ok(f) => f,
-            Err(e) => {
-                errors.push(ParseError::InvalidXml(format!(
-                    "Failed to read zip entry {}: {}",
-                    i, e
-                )));
-                continue;
-            }
-        };
-
-        let filename = file.name().split('/').next_back().unwrap_or("").to_string();
-
-        // Only process .buc and .bum files
-        if filename.ends_with(".buc") || filename.ends_with(".bum") {
-            let mut xml_content = String::new();
-            if let Err(e) = file.read_to_string(&mut xml_content) {
-                errors.push(wrap_file_error(
-                    &filename,
-                    ParseError::IoError(e.to_string()),
-                ));
-                continue;
-            }
-
-            // Extract name from filename (e.g., "C0.buc" -> "C0")
-            let default_name = filename
-                .strip_suffix(".buc")
-                .or_else(|| filename.strip_suffix(".bum"))
-                .unwrap_or(&filename);
-
-            let component = if filename.ends_with(".buc") {
-                match parse_context_xml_with_name(&xml_content, Some(default_name), Some(&filename))
-                {
-                    Ok(ctx) => Component::Context(ctx),
-                    Err(e) => {
-                        errors.push(wrap_file_error(&filename, e));
-                        continue;
-                    }
+    let (components, errors) = zip_component_entries(&archive)
+        .into_iter()
+        .map(|entry| parse_zip_entry(&mut archive, entry))
+        .fold(
+            (Vec::new(), Vec::new()),
+            |(mut components, mut errors), result| {
+                match result {
+                    Ok(component) => components.push(component),
+                    Err(error) => errors.push(error),
                 }
-            } else {
-                match parse_machine_xml_with_name(&xml_content, Some(default_name), Some(&filename))
-                {
-                    Ok(m) => Component::Machine(m),
-                    Err(e) => {
-                        errors.push(wrap_file_error(&filename, e));
-                        continue;
-                    }
-                }
-            };
-
-            components.push(NamedComponent {
-                filename,
-                component,
-            });
-        }
-    }
+                (components, errors)
+            },
+        );
 
     ParseResult::with_errors(Some(components), errors)
 }
@@ -1924,6 +1933,21 @@ fn write_action_xml(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, content) in entries {
+                writer.start_file(*name, options).unwrap();
+                std::io::Write::write_all(&mut writer, content).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes
+    }
 
     fn tempdir_unique(prefix: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -2920,6 +2944,55 @@ mod tests {
 
         assert_eq!(parsed[1].filename, "my_machine.bum");
         assert!(matches!(parsed[1].component, Component::Machine(_)));
+    }
+
+    #[test]
+    fn zip_modes_share_entry_filtering_and_default_names() {
+        let context = br#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3"/>"#;
+        let machine = br#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="3"/>"#;
+        let bytes = zip_with_entries(&[
+            ("project/notes.txt", &[0xff]),
+            ("project/DefaultContext.buc", context),
+            ("project/DefaultMachine.bum", machine),
+        ]);
+
+        let strict = parse_zip(&bytes).unwrap();
+        let recovery = parse_zip_with_recovery(&bytes);
+        assert!(recovery.errors.is_empty(), "{:?}", recovery.errors);
+        let recovered = recovery.component.unwrap();
+        assert_eq!(strict, recovered);
+        assert_eq!(strict[0].filename, "DefaultContext.buc");
+        assert_eq!(strict[0].component.name(), "DefaultContext");
+        assert_eq!(strict[1].filename, "DefaultMachine.bum");
+        assert_eq!(strict[1].component.name(), "DefaultMachine");
+    }
+
+    #[test]
+    fn zip_modes_share_filename_wrapped_utf8_errors() {
+        let machine = br#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="3"/>"#;
+        let bytes =
+            zip_with_entries(&[("project/Bad.buc", &[0xff]), ("project/Good.bum", machine)]);
+
+        let strict_error = parse_zip(&bytes).unwrap_err();
+        let ParseError::FileContext { filename, source } = &strict_error else {
+            panic!("expected filename-wrapped strict error, got {strict_error:?}");
+        };
+        assert_eq!(filename, "Bad.buc");
+        assert!(matches!(source.as_ref(), ParseError::IoError(_)));
+
+        let recovery = parse_zip_with_recovery(&bytes);
+        assert_eq!(recovery.errors.len(), 1);
+        assert_eq!(
+            recovery.errors[0].to_string(),
+            strict_error.to_string(),
+            "strict and recovery should expose the same entry error"
+        );
+        let components = recovery.component.unwrap();
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].filename, "Good.bum");
     }
 
     #[test]
