@@ -8,6 +8,7 @@ pub mod event;
 pub mod expression;
 pub mod machine;
 pub mod predicate;
+pub mod visit_mut;
 pub mod walk;
 
 pub use action::{Action, ActionKind};
@@ -18,6 +19,7 @@ pub use expression::{
 };
 pub use machine::Machine;
 pub use predicate::{BuiltinPredicate, Predicate, PredicateKind};
+pub use visit_mut::VisitMut;
 pub use walk::{Binder, IdentOccurrence, IdentRole, IdentVisitor};
 
 use crate::keywords::KeywordId;
