@@ -99,6 +99,34 @@ impl<'a> EventKind<'a> {
     }
 }
 
+/// Machine-wide state shared by every event check.
+#[derive(Clone, Copy)]
+pub(super) struct MachineCheckContext<'a> {
+    pub(super) ids: &'a RodinIds,
+    pub(super) file_root: &'a HandleUri,
+    pub(super) project_name: &'a str,
+    pub(super) base_env: &'a TypeEnv,
+    pub(super) parent: Option<&'a CheckedMachine>,
+    pub(super) abstract_only: &'a BTreeSet<String>,
+    pub(super) declared_variable_names: &'a BTreeSet<String>,
+    pub(super) variant_usable: bool,
+    pub(super) concrete_vars: &'a [String],
+    pub(super) machine_name: &'a str,
+}
+
+/// State shared by the helper passes for one event.
+struct EventCheckContext<'machine, 'event, 'diagnostics> {
+    machine: MachineCheckContext<'machine>,
+    kind: EventKind<'event>,
+    diagnostics: &'diagnostics mut Vec<Diagnostic>,
+}
+
+impl<'machine, 'event, 'diagnostics> EventCheckContext<'machine, 'event, 'diagnostics> {
+    fn label(&self) -> &'event str {
+        self.kind.label()
+    }
+}
+
 /// The two clause kinds that share an Event-B event label namespace.
 #[derive(Clone, Copy)]
 enum EventClauseKind {
@@ -162,13 +190,13 @@ impl<'a> InheritedEvent<'a> {
 /// event's `extended` attribute; Rossi deliberately keeps the actionable,
 /// label-anchored error only.
 fn report_inherited_label_conflicts(
-    kind: EventKind<'_>,
+    context: &mut EventCheckContext<'_, '_, '_>,
     inherited: &InheritedEvent<'_>,
     local_duplicate_labels: &BTreeSet<String>,
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
-    event_label: &str,
 ) {
+    let kind = context.kind;
+    let machine_name = context.machine.machine_name;
+    let event_label = context.label();
     let clauses = crate::duplicates::pred_labels(kind.guards())
         .map(|(label, span)| (label, EventClauseKind::Guard, span))
         .chain(
@@ -187,13 +215,14 @@ fn report_inherited_label_conflicts(
         if local_duplicate_labels.contains(label) {
             continue;
         }
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: crate::RuleId::DuplicateLabel.default_severity(),
             origin: clause_origin(machine_name, event_label, Some(label), local_kind.noun()),
             message: format!(
-                "{} label `{label}` conflicts with inherited {} label in extended event `{event_label}`",
+                "{} label `{label}` conflicts with inherited {} label in extended event `{}`",
                 local_kind.noun(),
                 inherited_kind.noun(),
+                event_label,
             ),
             rule_id: Some(crate::RuleId::DuplicateLabel),
             span,
@@ -342,19 +371,10 @@ fn witness_scope(
 ///
 /// `abstract_decl` is `None` for a new (non-refining) event: nothing is
 /// required, so any provided witness is not-permissible and dropped.
-#[allow(clippy::too_many_arguments)]
 fn resolve_witnesses(
-    ids: &RodinIds,
-    file_root: &HandleUri,
-    kind: EventKind<'_>,
+    context: &mut EventCheckContext<'_, '_, '_>,
     abstract_decl: Option<&EventDecl>,
     inherited_chain: Option<&EventDecl>,
-    abstract_only: &BTreeSet<String>,
-    base_env: &TypeEnv,
-    parent: Option<&CheckedMachine>,
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
-    label: &str,
 ) -> (Vec<WitnessDecl>, bool) {
     let Some(abstract_decl) = abstract_decl else {
         return (Vec::new(), true);
@@ -362,6 +382,9 @@ fn resolve_witnesses(
     // The concrete parameter set the requirements are weighed against: own
     // plus any inherited through extension (an extended event re-declares
     // nothing but inherits its abstract's parameters).
+    let kind = context.kind;
+    let machine = context.machine;
+    let label = context.label();
     let mut concrete_param_names: BTreeSet<String> =
         kind.parameters().iter().map(|p| p.name.clone()).collect();
     if let Some(ic) = inherited_chain {
@@ -369,14 +392,20 @@ fn resolve_witnesses(
             concrete_param_names.insert(p.name.clone());
         }
     }
-    let mut required = required_witness_names(abstract_decl, &concrete_param_names, abstract_only);
+    let mut required =
+        required_witness_names(abstract_decl, &concrete_param_names, machine.abstract_only);
     if required.is_empty() {
         // A refining event with nothing to witness: any provided witness is
         // not-permissible and dropped.
         return (Vec::new(), true);
     }
 
-    let wscope = witness_scope(base_env, abstract_decl, abstract_only, parent);
+    let wscope = witness_scope(
+        machine.base_env,
+        abstract_decl,
+        machine.abstract_only,
+        machine.parent,
+    );
 
     // Keep each *permissible* provided witness, in source order, and clear its
     // requirement: its label is a required name and its predicate type-checks.
@@ -394,7 +423,13 @@ fn resolve_witnesses(
             && crate::wellformed::is_well_typed_predicate(&wscope, &w.predicate)
         {
             required.remove(wl);
-            witnesses.push(build_witness_decl(ids, file_root, label, wl, w));
+            witnesses.push(build_witness_decl(
+                machine.ids,
+                machine.file_root,
+                label,
+                wl,
+                w,
+            ));
         }
     }
 
@@ -402,14 +437,19 @@ fn resolve_witnesses(
     // sorted (BTreeSet) order, and warn. The event is inaccurate iff any
     // requirement is still unmet.
     for name in &required {
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: Severity::Warning,
-            origin: format!("{machine_name}.{label}"),
+            origin: format!("{}.{}", machine.machine_name, label),
             message: format!("missing or ill-typed witness for '{name}' — event is inaccurate"),
             rule_id: None,
             span: kind.name_span(),
         });
-        witnesses.push(synthesize_witness(ids, file_root, label, name));
+        witnesses.push(synthesize_witness(
+            machine.ids,
+            machine.file_root,
+            label,
+            name,
+        ));
     }
 
     (witnesses, required.is_empty())
@@ -438,25 +478,24 @@ fn synthesize_witness(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_event_decl(
-    ids: &RodinIds,
-    file_root: &HandleUri,
-    project_name: &str,
+    machine: MachineCheckContext<'_>,
     kind: EventKind<'_>,
-    base_env: &TypeEnv,
-    parent: Option<&CheckedMachine>,
-    abstract_only: &BTreeSet<String>,
-    declared_variable_names: &BTreeSet<String>,
-    variant_usable: bool,
-    // This machine's concrete, typed variables in emission (alphabetical)
-    // order. Used by the INITIALISATION repair to find unassigned ones.
-    concrete_vars: &[String],
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<(EventDecl, bool)> {
-    let label = kind.label();
-    let source = crate::sc::file_child_source(ids, file_root, Kind::Event, in_tag::EVENT, label);
+    let mut context = EventCheckContext {
+        machine,
+        kind,
+        diagnostics,
+    };
+    let label = context.label();
+    let source = crate::sc::file_child_source(
+        context.machine.ids,
+        context.machine.file_root,
+        Kind::Event,
+        in_tag::EVENT,
+        label,
+    );
 
     // Filter duplicate parameters / labels per the SC drop semantics
     // documented in `crate::duplicates` (parameters drop every occurrence;
@@ -465,13 +504,18 @@ pub(super) fn build_event_decl(
     // `with`) so the duplicate name-set matches the occurrence the checker
     // retains.
     let event_dups = crate::duplicates::event_duplicates(
-        machine_name,
+        context.machine.machine_name,
         label,
-        kind.parameters().iter().map(|p| (p.name.as_str(), p.span)),
-        crate::duplicates::pred_labels(kind.guards())
-            .chain(crate::duplicates::action_labels(kind.actions())),
-        crate::duplicates::pred_labels(kind.witnesses_primary())
-            .chain(crate::duplicates::pred_labels(kind.witnesses_with())),
+        context
+            .kind
+            .parameters()
+            .iter()
+            .map(|p| (p.name.as_str(), p.span)),
+        crate::duplicates::pred_labels(context.kind.guards())
+            .chain(crate::duplicates::action_labels(context.kind.actions())),
+        crate::duplicates::pred_labels(context.kind.witnesses_primary()).chain(
+            crate::duplicates::pred_labels(context.kind.witnesses_with()),
+        ),
     );
     // A duplicated witness label always drops at least one witness (the
     // keep-loop in `resolve_witnesses` honours only the first per required
@@ -479,38 +523,36 @@ pub(super) fn build_event_decl(
     // longer a lossless reflection of the source.
     let witness_dup_accurate = event_dups.witness_labels.names.is_empty();
 
-    let (effective_refines, parent_event_decl) = resolve_effective_refines(kind, parent);
+    let (effective_refines, parent_event_decl) =
+        resolve_effective_refines(context.kind, context.machine.parent);
 
     // Explicit refines target missing from parent — an error in Rodin
     // (AbstractEventNotFoundError + EventRefinementError, both Error
     // markers), and the whole concrete event is dropped from the output.
     // (Implicit and INIT are already gated upstream.)
-    if let Some(refines) = kind.explicit_refines()
+    if let Some(refines) = context.kind.explicit_refines()
         && parent_event_decl.is_none()
     {
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: Severity::Error,
-            origin: format!("{machine_name}.{label}"),
+            origin: format!("{}.{}", context.machine.machine_name, label),
             message: format!("refines target '{refines}' not found in parent — event dropped"),
             rule_id: Some(crate::RuleId::CrossReferenceNotFound),
-            span: kind.name_span(),
+            span: context.kind.name_span(),
         });
         return None;
     }
 
-    let inherited_chain: Option<Rc<EventDecl>> = if kind.extended() {
+    let inherited_chain: Option<Rc<EventDecl>> = if context.kind.extended() {
         parent_event_decl.map(Rc::clone)
     } else {
         None
     };
     let inherited = InheritedEvent::new(inherited_chain.as_deref());
     report_inherited_label_conflicts(
-        kind,
+        &mut context,
         &inherited,
         &event_dups.guard_action_labels.names,
-        diags,
-        machine_name,
-        label,
     );
 
     // A local event parameter may not reuse any identifier already visible
@@ -524,7 +566,7 @@ pub(super) fn build_event_decl(
         .flat_map(EventDecl::chain_parameters)
         .map(|parameter| parameter.name.as_str())
         .collect();
-    for parameter in kind.parameters() {
+    for parameter in context.kind.parameters() {
         if invalid_parameter_names.contains(&parameter.name) {
             continue;
         }
@@ -533,8 +575,11 @@ pub(super) fn build_event_decl(
                 "parameter `{}` conflicts with an inherited parameter and was dropped",
                 parameter.name
             )
-        } else if declared_variable_names.contains(&parameter.name)
-            || base_env.contains(&parameter.name)
+        } else if context
+            .machine
+            .declared_variable_names
+            .contains(&parameter.name)
+            || context.machine.base_env.contains(&parameter.name)
         {
             format!(
                 "parameter `{}` conflicts with a visible identifier and was dropped",
@@ -543,9 +588,12 @@ pub(super) fn build_event_decl(
         } else {
             continue;
         };
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: Severity::Error,
-            origin: format!("{machine_name}.{label}.{}", parameter.name),
+            origin: format!(
+                "{}.{}.{}",
+                context.machine.machine_name, label, parameter.name
+            ),
             message,
             rule_id: Some(crate::RuleId::TypeError),
             span: parameter.span,
@@ -554,43 +602,36 @@ pub(super) fn build_event_decl(
     }
 
     let (mut scope, scope_accurate) = build_event_scope(
-        base_env,
+        &mut context,
         &inherited,
-        kind,
         &event_dups,
         &invalid_parameter_names,
-        diags,
-        machine_name,
-        label,
     );
 
     let (buckets, buckets_accurate) = build_event_buckets(
-        ids,
-        file_root,
-        kind,
+        &mut context,
         &scope,
-        abstract_only,
         &inherited,
         &event_dups,
         &invalid_parameter_names,
-        diags,
-        machine_name,
-        label,
     );
 
     scope.pop_scope();
 
-    let refines_decl = effective_refines.zip(parent).map(|(abs_label, parent_cm)| {
-        build_refines_event_decl(
-            ids,
-            file_root,
-            project_name,
-            label,
-            abs_label,
-            parent_cm,
-            kind.explicit_refines().is_some(),
-        )
-    });
+    let refines_decl =
+        effective_refines
+            .zip(context.machine.parent)
+            .map(|(abs_label, parent_cm)| {
+                build_refines_event_decl(
+                    context.machine.ids,
+                    context.machine.file_root,
+                    context.machine.project_name,
+                    label,
+                    abs_label,
+                    parent_cm,
+                    context.kind.explicit_refines().is_some(),
+                )
+            });
 
     // An extended event inherits its immediate abstract event's inaccuracy:
     // because it copies the abstract clauses verbatim, an inaccurate parent
@@ -605,15 +646,18 @@ pub(super) fn build_event_decl(
     // inaccurate. The abstract convergence comes from the refined event
     // (resolved for both plain and extended refinements).
     let abstract_cvg = parent_event_decl.map(|p| p.convergence);
-    let (convergence, downgrade_reason) =
-        resolve_convergence(kind.convergence(), abstract_cvg, variant_usable);
+    let (convergence, downgrade_reason) = resolve_convergence(
+        context.kind.convergence(),
+        abstract_cvg,
+        context.machine.variant_usable,
+    );
     if let Some(reason) = downgrade_reason {
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: Severity::Warning,
-            origin: format!("{machine_name}.{label}"),
+            origin: format!("{}.{}", context.machine.machine_name, label),
             message: reason.to_string(),
             rule_id: None,
-            span: kind.name_span(),
+            span: context.kind.name_span(),
         });
     }
     let convergence_accurate = downgrade_reason.is_none();
@@ -623,17 +667,9 @@ pub(super) fn build_event_decl(
     // event has no abstract decl, so nothing is required and any provided
     // witness is dropped).
     let (witnesses, witness_accurate) = resolve_witnesses(
-        ids,
-        file_root,
-        kind,
+        &mut context,
         parent_event_decl.map(|p| &**p),
         inherited_chain.as_deref(),
-        abstract_only,
-        base_env,
-        parent,
-        diags,
-        machine_name,
-        label,
     );
 
     // Effective actions = the inherited chain (the parent decl already
@@ -660,13 +696,15 @@ pub(super) fn build_event_decl(
     // or own) assigns is given a default `becomesSuchThat ⊤`. All such
     // variables are gathered into one combined action and the event (not the
     // machine) is marked inaccurate.
-    if matches!(kind, EventKind::Init(_)) {
+    if matches!(context.kind, EventKind::Init(_)) {
         let unassigned: Vec<Ident> = {
             let assigned: std::collections::HashSet<&str> = actions
                 .iter()
                 .flat_map(|a| lhs_variables(&a.action))
                 .collect();
-            concrete_vars
+            context
+                .machine
+                .concrete_vars
                 .iter()
                 .filter(|v| !assigned.contains(v.as_str()))
                 .map(|v| Ident::from(v.clone()))
@@ -678,7 +716,7 @@ pub(super) fn build_event_decl(
                 repair_label,
                 &source,
                 unassigned,
-                base_env,
+                context.machine.base_env,
             ));
             accurate = false;
         }
@@ -686,7 +724,7 @@ pub(super) fn build_event_decl(
     let decl = EventDecl {
         label: label.to_string(),
         convergence,
-        extended: kind.extended(),
+        extended: context.kind.extended(),
         accurate,
         source,
         refines: refines_decl,
@@ -783,18 +821,16 @@ fn resolve_effective_refines<'a, 'b>(
 /// guards. Returns the scope and an `accurate` flag (false when any
 /// parameter could not be typed). The caller is responsible for the
 /// matching `pop_scope`.
-#[allow(clippy::too_many_arguments)]
 fn build_event_scope(
-    base_env: &TypeEnv,
+    context: &mut EventCheckContext<'_, '_, '_>,
     inherited: &InheritedEvent<'_>,
-    kind: EventKind<'_>,
     dups: &crate::duplicates::EventDuplicates,
     invalid_parameter_names: &BTreeSet<String>,
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
-    label: &str,
 ) -> (TypeEnv, bool) {
-    let mut scope = base_env.clone();
+    let kind = context.kind;
+    let machine_name = context.machine.machine_name;
+    let label = context.label();
+    let mut scope = context.machine.base_env.clone();
     scope.push_scope();
     if let Some(pe) = inherited.decl {
         // The parent's full parameter chain — ancestors root-first then the
@@ -840,7 +876,7 @@ fn build_event_scope(
     let unresolved = infer_constants(&mut scope, &param_names, &axioms);
     let mut accurate = true;
     for name in &unresolved {
-        diags.push(Diagnostic {
+        context.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             origin: format!("{machine_name}.{label}.{name}"),
             message: "could not infer parameter type from guards".to_string(),
@@ -871,20 +907,16 @@ fn clause_origin(machine: &str, event: &str, clause_label: Option<&str>, fallbac
 /// running per-clause checks (abstract-only references, well-typedness,
 /// LHS-declared) and dropping any clause that fails. The returned `bool` is
 /// the `accurate` flag for the event — `false` if any clause was dropped.
-#[allow(clippy::too_many_arguments)]
 fn build_event_buckets(
-    ids: &RodinIds,
-    file_root: &HandleUri,
-    kind: EventKind<'_>,
+    context: &mut EventCheckContext<'_, '_, '_>,
     scope: &TypeEnv,
-    abstract_only: &BTreeSet<String>,
     inherited: &InheritedEvent<'_>,
     dups: &crate::duplicates::EventDuplicates,
     invalid_parameter_names: &BTreeSet<String>,
-    diags: &mut Vec<Diagnostic>,
-    machine_name: &str,
-    label: &str,
 ) -> (EventBuckets, bool) {
+    let machine = context.machine;
+    let kind = context.kind;
+    let label = context.label();
     let mut accurate = true;
 
     // Guards and actions share one label namespace, so the first-kept rule
@@ -919,10 +951,10 @@ fn build_event_buckets(
         // Error. Either way the guard is dropped and the event marked
         // `accurate=false` — see `ITERATION.bcm`'s `stepone`/`steptwo`
         // referencing `n`, `t` (Group R).
-        if !abstract_only.is_empty()
+        if !machine.abstract_only.is_empty()
             && let Some(bad) = crate::sc::identifier_walker::first_forbidden_identifier_in_predicate(
                 &g.predicate,
-                abstract_only,
+                machine.abstract_only,
             )
         {
             let (severity, message, rule) = if g.is_theorem {
@@ -941,9 +973,9 @@ fn build_event_buckets(
                     crate::RuleId::DisappearedVariable,
                 )
             };
-            diags.push(Diagnostic {
+            context.diagnostics.push(Diagnostic {
                 severity,
-                origin: clause_origin(machine_name, label, g.label.as_deref(), "grd"),
+                origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
                 message,
                 rule_id: Some(rule),
                 span: g.span,
@@ -956,9 +988,9 @@ fn build_event_buckets(
         // a set. Rodin emits the event `accurate=false` and skips the
         // guard.
         if !crate::wellformed::is_well_typed_predicate(scope, &g.predicate) {
-            diags.push(Diagnostic {
+            context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine_name, label, g.label.as_deref(), "grd"),
+                origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
                 message: "guard predicate is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
                 span: g.span,
@@ -966,10 +998,18 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        match build_guard_decl(ids, file_root, label, i, g, scope, machine_name) {
+        match build_guard_decl(
+            machine.ids,
+            machine.file_root,
+            label,
+            i,
+            g,
+            scope,
+            machine.machine_name,
+        ) {
             Ok(d) => guards.push(d),
             Err(diag) => {
-                diags.push(diag);
+                context.diagnostics.push(diag);
                 accurate = false;
             }
         }
@@ -986,7 +1026,13 @@ fn build_event_buckets(
     params_sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let mut parameters: Vec<ParameterDecl> = Vec::with_capacity(params_sorted.len());
     for p in params_sorted {
-        parameters.push(build_parameter_decl(ids, file_root, label, p, scope));
+        parameters.push(build_parameter_decl(
+            machine.ids,
+            machine.file_root,
+            label,
+            p,
+            scope,
+        ));
     }
 
     // Cascade-drop: an action whose LHS targets a variable that wasn't
@@ -1010,9 +1056,9 @@ fn build_event_buckets(
             .find(|v| !scope.contains(v))
             .map(|v| v.to_string());
         if let Some(bad) = bad_lhs {
-            diags.push(Diagnostic {
+            context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
                 message: format!("LHS variable '{bad}' is not declared"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
                 span: act.span,
@@ -1028,25 +1074,25 @@ fn build_event_buckets(
         // drops the action and marks the event `accurate=false` (Group R); we
         // mirror that and report an error. The LHS is checked first so an
         // illegal write is described as such.
-        let disappeared = if abstract_only.is_empty() {
+        let disappeared = if machine.abstract_only.is_empty() {
             None
         } else {
             lhs_variables(&act.action)
                 .into_iter()
-                .find(|v| abstract_only.contains(*v))
+                .find(|v| machine.abstract_only.contains(*v))
                 .map(|v| (v.to_string(), "assigns"))
                 .or_else(|| {
                     crate::sc::identifier_walker::first_forbidden_identifier_in_action_rhs(
                         &act.action,
-                        abstract_only,
+                        machine.abstract_only,
                     )
                     .map(|v| (v, "references"))
                 })
         };
         if let Some((bad, verb)) = disappeared {
-            diags.push(Diagnostic {
+            context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
                 message: format!(
                     "action {verb} variable '{bad}', which has disappeared in this \
                      refinement (declared in an abstract machine but not kept here)"
@@ -1062,9 +1108,9 @@ fn build_event_buckets(
         // are at different power-set levels. Rodin emits the event
         // `accurate=false` and skips the action.
         if !crate::wellformed::is_well_typed_action(scope, &act.action) {
-            diags.push(Diagnostic {
+            context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
                 message: "action is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
                 span: act.span,
@@ -1072,7 +1118,14 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        actions.push(build_action_decl(ids, file_root, label, i, act, scope));
+        actions.push(build_action_decl(
+            machine.ids,
+            machine.file_root,
+            label,
+            i,
+            act,
+            scope,
+        ));
     }
 
     (

@@ -34,7 +34,7 @@ use super::machine_record::{
 };
 use super::{CheckedContext, CheckedMachine};
 
-use self::events::{EventKind, build_event_decl};
+use self::events::{EventKind, MachineCheckContext, build_event_decl};
 
 /// Emit a `.bcm` for a single machine.
 pub fn check_machine(
@@ -291,6 +291,19 @@ pub fn check_machine(
         .map(|d| d.name.clone())
         .collect();
 
+    let event_context = MachineCheckContext {
+        ids: &pc.rodin_ids,
+        file_root: &file_root,
+        project_name: &project.name,
+        base_env: &env,
+        parent,
+        abstract_only: &abstract_only_var_names,
+        declared_variable_names: &all_var_names,
+        variant_usable,
+        concrete_vars: &concrete_typed_vars,
+        machine_name: &machine.name,
+    };
+
     // Events — build typed decls; insert each into the per-label map
     // so descendants extending it can pick up the typed parent chain.
     let mut event_decls: Vec<Rc<EventDecl>> = Vec::new();
@@ -317,20 +330,8 @@ pub fn check_machine(
     if let Some(init) = &machine.initialisation
         && !dup_event_labels.contains(crate::sc::initialisation_label())
         && !should_omit_initialisation(init, parent, &abstract_only_var_names)
-        && let Some((decl, _ok)) = build_event_decl(
-            &pc.rodin_ids,
-            &file_root,
-            &project.name,
-            EventKind::Init(init),
-            &env,
-            parent,
-            &abstract_only_var_names,
-            &all_var_names,
-            variant_usable,
-            &concrete_typed_vars,
-            &mut diags,
-            &machine.name,
-        )
+        && let Some((decl, _ok)) =
+            build_event_decl(event_context, EventKind::Init(init), &mut diags)
     {
         let rc = Rc::new(decl);
         events_by_label.insert(
@@ -343,20 +344,9 @@ pub fn check_machine(
         if dup_event_labels.contains(&event.name) {
             continue;
         }
-        if let Some((decl, _ok)) = build_event_decl(
-            &pc.rodin_ids,
-            &file_root,
-            &project.name,
-            EventKind::Ordinary(event),
-            &env,
-            parent,
-            &abstract_only_var_names,
-            &all_var_names,
-            variant_usable,
-            &concrete_typed_vars,
-            &mut diags,
-            &machine.name,
-        ) {
+        if let Some((decl, _ok)) =
+            build_event_decl(event_context, EventKind::Ordinary(event), &mut diags)
+        {
             let rc = Rc::new(decl);
             events_by_label.insert(event.name.clone(), Rc::clone(&rc));
             event_decls.push(rc);
