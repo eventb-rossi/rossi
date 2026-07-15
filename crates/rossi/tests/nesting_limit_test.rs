@@ -212,6 +212,13 @@ fn long_conjunction_of_bracketed_negations_passes() {
 }
 
 #[test]
+fn long_conjunction_of_unwrapped_negations_passes() {
+    let chain = "not (a = 0) ∧ ".repeat(MAX_NESTING_DEPTH);
+    let source = format!("context C constants a axioms @a {chain}not (a = 0) end");
+    parse(&source).expect("long conjunction of shallow negations");
+}
+
+#[test]
 fn ascii_arrows_and_subtraction_chains_pass() {
     let arrows = (0..MAX_NESTING_DEPTH * 2)
         .map(|k| format!("@t{k} f ∈ A --> B ∧ g ∈ A +-> B ∧ m = a |-> b\n"))

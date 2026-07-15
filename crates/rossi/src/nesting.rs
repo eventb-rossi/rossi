@@ -35,6 +35,7 @@
 
 use crate::ast::Span;
 use crate::error::ParseError;
+use crate::operators::{OPERATOR_SPELLINGS, OperatorCategory, OperatorId};
 
 /// Maximum combined nesting depth (bracket depth + prefix-operator chain
 /// length) a formula may have before parsing is refused.
@@ -94,6 +95,29 @@ fn is_prefix_word(word: &str) -> bool {
         || word.eq_ignore_ascii_case("inter")
 }
 
+/// Length of the logical infix operator beginning at `start`, if any.
+/// Spellings come from the same operator metadata as the grammar-facing tools.
+fn logical_infix_len(input: &str, start: usize) -> Option<usize> {
+    OPERATOR_SPELLINGS
+        .iter()
+        .filter(|op| op.category == OperatorCategory::PredicateLogical && op.id != OperatorId::Not)
+        .flat_map(|op| [op.unicode, op.ascii])
+        .filter(|spelling| input[start..].starts_with(spelling))
+        .filter(|spelling| {
+            !spelling.as_bytes().iter().all(u8::is_ascii_alphanumeric)
+                || !input
+                    .as_bytes()
+                    .get(start + spelling.len())
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        })
+        .map(str::len)
+        .max()
+}
+
+fn is_binder_word(word: &str) -> bool {
+    word.eq_ignore_ascii_case("union") || word.eq_ignore_ascii_case("inter")
+}
+
 /// Scan `input` and reject it if its worst-case parser recursion depth
 /// exceeds [`MAX_NESTING_DEPTH`]. On success, return the maximum depth
 /// metric observed, which sizes the stack red zone for the parse that
@@ -109,14 +133,13 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
 
     // Open-bracket depth so far.
     let mut bracket_depth: usize = 0;
-    // Prefix/binder operators seen in the current formula at the current
-    // bracket level. Reset at `@` labels (no grammar rule other than `label`
-    // consumes `@`, so parser recursion never persists across one) and
-    // restored at closing brackets (a prefix operator opened inside `(…)` has
-    // unwound by the time `)` is consumed).
+    // Prefix/binder operators currently open in the parser.
     let mut prefix_count: usize = 0;
-    // `prefix_count` snapshots taken at opening brackets.
-    let mut snapshots: Vec<usize> = Vec::new();
+    // Prefixes at or below this floor surround the current connective chain
+    // (through a bracket or binder) and remain open across an infix boundary.
+    let mut prefix_floor: usize = 0;
+    // Prefix state snapshots taken at opening brackets.
+    let mut snapshots: Vec<(usize, usize)> = Vec::new();
     // Whether the previous significant token ended an operand (drives the
     // unary-vs-binary minus distinction).
     let mut after_operand = false;
@@ -137,6 +160,16 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
     };
 
     while i < len {
+        if let Some(op_len) = logical_infix_len(input, i) {
+            // `connective_predicate` and `implies_equiv_predicate` parse their
+            // operand lists iteratively. Prefixes belonging to the completed
+            // operand have unwound before the next operand begins.
+            prefix_count = prefix_floor;
+            after_operand = false;
+            i += op_len;
+            continue;
+        }
+
         let b = bytes[i];
         match b {
             b' ' | b'\t' | b'\r' | b'\n' => {
@@ -174,10 +207,12 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
                     i += 1;
                 }
                 prefix_count = 0;
+                prefix_floor = 0;
                 after_operand = false;
             }
             b'(' | b'[' | b'{' => {
-                snapshots.push(prefix_count);
+                snapshots.push((prefix_count, prefix_floor));
+                prefix_floor = prefix_count;
                 bracket_depth += 1;
                 max_metric = max_metric.max(bracket_depth + prefix_count);
                 if max_metric > MAX_NESTING_DEPTH {
@@ -188,8 +223,9 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
             }
             b')' | b']' | b'}' => {
                 bracket_depth = bracket_depth.saturating_sub(1);
-                if let Some(saved) = snapshots.pop() {
-                    prefix_count = saved;
+                if let Some((saved_count, saved_floor)) = snapshots.pop() {
+                    prefix_count = saved_count;
+                    prefix_floor = saved_floor;
                 }
                 after_operand = true;
                 i += 1;
@@ -201,6 +237,7 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
                 if max_metric > MAX_NESTING_DEPTH {
                     return Err(too_deep(i));
                 }
+                prefix_floor = prefix_count;
                 after_operand = false;
                 i += 1;
             }
@@ -225,6 +262,9 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
                     if max_metric > MAX_NESTING_DEPTH {
                         return Err(too_deep(start));
                     }
+                    if is_binder_word(&input[start..i]) {
+                        prefix_floor = prefix_count;
+                    }
                     after_operand = false;
                 } else {
                     after_operand = true;
@@ -238,12 +278,22 @@ pub(crate) fn check_nesting(input: &str) -> Result<usize, ParseError> {
                 // Multi-byte char. Safe to unwrap: i is on a char boundary.
                 let c = input[i..].chars().next().unwrap();
                 match c {
-                    '¬' | '∀' | '∃' | 'λ' | '⋃' | '⋂' | 'ℙ' => {
+                    '¬' | 'ℙ' => {
                         prefix_count += 1;
                         max_metric = max_metric.max(bracket_depth + prefix_count);
                         if max_metric > MAX_NESTING_DEPTH {
                             return Err(too_deep(i));
                         }
+                        after_operand = false;
+                        i += c.len_utf8();
+                    }
+                    '∀' | '∃' | 'λ' | '⋃' | '⋂' => {
+                        prefix_count += 1;
+                        max_metric = max_metric.max(bracket_depth + prefix_count);
+                        if max_metric > MAX_NESTING_DEPTH {
+                            return Err(too_deep(i));
+                        }
+                        prefix_floor = prefix_count;
                         after_operand = false;
                         i += c.len_utf8();
                     }
@@ -346,6 +396,14 @@ mod tests {
             .map(|k| format!("∀ x{k} · "))
             .collect();
         assert!(depth_err(&format!("{s}1=1")));
+    }
+
+    #[test]
+    fn connective_keeps_surrounding_quantifiers_open() {
+        let quantifiers: String = (0..MAX_NESTING_DEPTH)
+            .map(|k| format!("∀ x{k} · "))
+            .collect();
+        assert!(depth_err(&format!("{quantifiers}1=1 ∧ ¬(1=1)")));
     }
 
     #[test]
