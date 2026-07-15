@@ -57,13 +57,12 @@ impl TypeEnv {
     /// Insert only if the name is not yet present. Returns `true` if this
     /// call inserted the entry.
     pub fn insert_if_absent(&mut self, name: impl Into<String>, ty: Type) -> bool {
-        use std::collections::btree_map::Entry;
-        match self.by_name.entry(name.into()) {
-            Entry::Vacant(e) => {
-                e.insert(ty);
-                true
-            }
-            Entry::Occupied(_) => false,
+        let name = name.into();
+        if self.by_name.contains_key(&name) {
+            false
+        } else {
+            self.insert(name, ty);
+            true
         }
     }
 
@@ -151,6 +150,16 @@ mod tests {
     // ------------------------------------------------------------------
     // Scope-stack behaviour (drives M0 task #17).
     // ------------------------------------------------------------------
+
+    #[test]
+    fn scoped_insert_if_absent_is_removed_on_pop() {
+        let mut env = TypeEnv::new();
+        env.push_scope();
+        assert!(env.insert_if_absent("p", Type::Integer));
+        assert!(env.contains("p"));
+        env.pop_scope();
+        assert!(!env.contains("p"));
+    }
 
     #[test]
     fn scope_push_and_pop_restores_outer() {
