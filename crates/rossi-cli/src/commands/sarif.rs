@@ -17,7 +17,8 @@ const INFORMATION_URI: &str = "https://github.com/eventb-rossi/rossi";
 /// Serialise `results` as a SARIF 2.1.0 document and write it to `out`.
 pub fn emit(results: &[ValidationResult], mut out: impl Write) -> io::Result<()> {
     let doc = build_document(results);
-    serde_json::to_writer_pretty(&mut out, &doc).map_err(io::Error::other)?;
+    serde_json::to_writer_pretty(&mut out, &doc)
+        .map_err(|e| io::Error::new(e.io_error_kind().unwrap_or(io::ErrorKind::Other), e))?;
     writeln!(out)?;
     Ok(())
 }

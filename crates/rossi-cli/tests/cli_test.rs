@@ -2183,6 +2183,54 @@ fn run_cli_with_stdin(args: &[&str], stdin_data: &str) -> std::process::Output {
     child.wait_with_output().expect("wait for rossi-cli")
 }
 
+/// Run structured validation after closing the read end of its stdout pipe.
+fn run_validate_with_closed_stdout(format: &str, stdin_data: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = rossi_command()
+        .args(["validate", "--format", format, "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn rossi-cli");
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(stdin_data.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for rossi-cli")
+}
+
+#[test]
+fn validate_structured_output_handles_broken_pipe_without_panicking() {
+    for format in ["json", "sarif"] {
+        let output = run_validate_with_closed_stdout(format, ASCII_CONTEXT);
+        assert!(
+            output.status.success(),
+            "valid {format} validation should ignore BrokenPipe; stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+            "{format} output must not panic on BrokenPipe"
+        );
+
+        let output = run_validate_with_closed_stdout(format, "CONTEXT");
+        assert!(
+            !output.status.success(),
+            "BrokenPipe must preserve failed {format} validation status"
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+            "failed {format} validation must not panic on BrokenPipe"
+        );
+    }
+}
+
 #[test]
 fn fmt_stdin_text_to_unicode() {
     let output = run_cli_with_stdin(&["fmt", "-"], ASCII_CONTEXT);

@@ -141,22 +141,39 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
         }
     }
 
-    match cli.format {
+    let validation_exit = if all_success {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    };
+    let output_result = match cli.format {
         OutputFormat::Text => {
             if !cli.quiet && results.len() > 1 {
                 print_summary(&results);
             }
+            return validation_exit;
         }
         OutputFormat::Json => write_json(&results, &mut io::stdout().lock()),
-        OutputFormat::Sarif => {
-            sarif::emit(&results, &mut io::stdout().lock()).expect("writing SARIF to stdout failed")
+        OutputFormat::Sarif => sarif::emit(&results, &mut io::stdout().lock()),
+    };
+
+    let mut stderr = io::stderr().lock();
+    finish_structured_output(output_result, validation_exit, &mut stderr)
+}
+
+fn finish_structured_output(
+    output_result: io::Result<()>,
+    validation_exit: ExitCode,
+    stderr: &mut impl Write,
+) -> ExitCode {
+    match output_result {
+        Ok(()) => validation_exit,
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => validation_exit,
+        Err(e) => {
+            let _ = writeln!(stderr, "rossi validate: failed to write output: {e}");
+            ExitCode::from(1)
         }
     }
-
-    if !all_success {
-        return ExitCode::from(1);
-    }
-    ExitCode::SUCCESS
 }
 
 fn validate_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
@@ -730,17 +747,78 @@ fn print_summary(results: &[ValidationResult]) {
     println!("{}", "=".repeat(50));
 }
 
-fn write_json(results: &[ValidationResult], out: &mut impl Write) {
-    if let Err(e) = serde_json::to_writer_pretty(&mut *out, results) {
-        eprintln!("failed to serialize JSON: {e}");
-        return;
-    }
-    let _ = writeln!(out);
+fn write_json(results: &[ValidationResult], out: &mut impl Write) -> io::Result<()> {
+    serde_json::to_writer_pretty(&mut *out, results)
+        .map_err(|e| io::Error::new(e.io_error_kind().unwrap_or(io::ErrorKind::Other), e))?;
+    writeln!(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ByteLimitWriter {
+        remaining: usize,
+    }
+
+    impl Write for ByteLimitWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(io::Error::other("write limit reached"));
+            }
+            let written = self.remaining.min(buf.len());
+            self.remaining -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn json_output_propagates_trailing_newline_failure() {
+        let serialized = serde_json::to_vec_pretty(&Vec::<ValidationResult>::new()).unwrap();
+        let mut out = ByteLimitWriter {
+            remaining: serialized.len(),
+        };
+
+        let error = write_json(&[], &mut out).expect_err("the newline write must fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn output_failure_is_reported_and_exits_nonzero() {
+        let mut stderr = Vec::new();
+
+        let exit = finish_structured_output(
+            Err(io::Error::other("write failed")),
+            ExitCode::SUCCESS,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, ExitCode::from(1));
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "rossi validate: failed to write output: write failed\n"
+        );
+    }
+
+    #[test]
+    fn broken_pipe_preserves_failed_validation_exit() {
+        let mut stderr = Vec::new();
+        let failed_validation = ExitCode::from(1);
+
+        let exit = finish_structured_output(
+            Err(io::Error::from(io::ErrorKind::BrokenPipe)),
+            failed_validation,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, failed_validation);
+        assert!(stderr.is_empty());
+    }
 
     #[test]
     fn parse_error_region_covers_reserved_word() {
