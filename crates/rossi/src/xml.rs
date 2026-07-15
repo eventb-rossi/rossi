@@ -211,7 +211,8 @@ fn wrap_attr_error(
     // misplaced-assignment rejection (EB026) is a property of the formula, not
     // of the XML envelope — keep the variant intact so consumers classify it by
     // its own rule and surface its precise message instead of a
-    // malformed-attribute wrapper.
+    // malformed-attribute wrapper. Other failures need the attribute context;
+    // their parser coordinates are local to `value`, not the XML document.
     if matches!(
         err,
         ParseError::NestingTooDeep { .. }
@@ -2259,8 +2260,10 @@ mod tests {
                 actions: vec![LabeledAction {
                     label: Some("act1".to_string()),
                     action: crate::ast::ActionKind::Assignment {
-                        variables: vec!["count".into()],
-                        expressions: vec![crate::ast::ExpressionKind::Integer(0).into()],
+                        assignments: vec![(
+                            "count".into(),
+                            crate::ast::ExpressionKind::Integer(0).into(),
+                        )],
                     }
                     .into(),
                     span: None,
@@ -2346,8 +2349,8 @@ mod tests {
             actions: vec![LabeledAction {
                 label: Some("act1".to_string()),
                 action: crate::ast::ActionKind::Assignment {
-                    variables: vec!["count".into()],
-                    expressions: vec![
+                    assignments: vec![(
+                        "count".into(),
                         crate::ast::ExpressionKind::Binary {
                             op: crate::ast::expression::BinaryOp::Add,
                             left: Box::new(
@@ -2356,7 +2359,7 @@ mod tests {
                             right: Box::new(crate::ast::ExpressionKind::Integer(1).into()),
                         }
                         .into(),
-                    ],
+                    )],
                 }
                 .into(),
                 span: None,
@@ -2592,8 +2595,7 @@ mod tests {
             actions: vec![LabeledAction {
                 label: None,
                 action: crate::ast::ActionKind::Assignment {
-                    variables: vec!["x".into()],
-                    expressions: vec![crate::ast::ExpressionKind::Integer(1).into()],
+                    assignments: vec![("x".into(), crate::ast::ExpressionKind::Integer(1).into())],
                 }
                 .into(),
                 span: None,

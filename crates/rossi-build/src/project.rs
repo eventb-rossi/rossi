@@ -425,6 +425,25 @@ mod tests {
     }
 
     #[test]
+    fn project_input_rejects_parallel_assignment_arity_mismatches() {
+        for (assignment, targets, expressions) in [("x, y := 1", 2, 1), ("x := 1, 2", 1, 2)] {
+            let text = format!(
+                "MACHINE M\nVARIABLES\n    x y\nEVENTS\n    EVENT evt\n    THEN\n        @act1 {assignment}\n    END\nEND\n"
+            );
+            let error = ProjectComponent::from_eventb("M.eventb", &text)
+                .expect_err("static-checker input must reject malformed assignments");
+            match error {
+                crate::Error::Parse(rossi::ParseError::AssignmentArityMismatch {
+                    targets: actual_targets,
+                    expressions: actual_expressions,
+                    ..
+                }) => assert_eq!((actual_targets, actual_expressions), (targets, expressions)),
+                other => panic!("wrong error for {assignment:?}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn eventb_project_semantic_diagnostic_is_spanned() {
         // Semantic checks run over an `.eventb`-sourced project, and the
         // resulting diagnostic anchors on the offending element. `k` has no

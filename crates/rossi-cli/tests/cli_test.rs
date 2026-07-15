@@ -629,6 +629,47 @@ fn validate_flags_assignment_operator_in_invariant() {
 }
 
 #[test]
+fn validate_reports_parallel_assignment_arity_as_eb005() {
+    for (name, assignment, targets, expressions) in
+        [("few", "x, y := 1", 2, 1), ("many", "x := 1, 2", 1, 2)]
+    {
+        let tmp = tempdir_unique(&format!("rossi-cli-validate-assignment-arity-{name}"));
+        let source = format!(
+            "MACHINE M\nVARIABLES\n    x\n    y\nEVENTS\n    EVENT evt\n    THEN\n        @act1 {assignment}\n    END\nEND\n"
+        );
+        let file = tmp.join("M.eventb");
+        std::fs::write(&file, source).unwrap();
+
+        let output = rossi_command()
+            .args(["validate", "--format", "json", file.to_str().unwrap()])
+            .output()
+            .expect("Failed to execute command");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&stdout).expect("validate JSON output should parse");
+        let errors: Vec<_> = rows
+            .iter()
+            .filter(|row| row["rule_id"] == "EB005")
+            .collect();
+        assert_eq!(errors.len(), 1, "exactly one EB005 row: {stdout}");
+        let message = errors[0]["error"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("target count ({targets})"))
+                && message.contains(&format!("expression count ({expressions})")),
+            "message must carry both counts: {stdout}"
+        );
+        assert_eq!(errors[0]["region"]["start_line"], 8);
+        assert!(
+            !rows.iter().any(|row| row["rule_id"] == "EB004"),
+            "a lone precise assignment error must not also emit EB004: {stdout}"
+        );
+        assert!(!output.status.success(), "EB005 must fail validation");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
+#[test]
 fn validate_sarif_output_is_valid() {
     let (tmp, zip_path) = lint_fixture_zip("rossi-cli-sarif");
     let output = rossi_command()

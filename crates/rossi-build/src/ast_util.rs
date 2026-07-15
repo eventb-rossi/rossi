@@ -10,9 +10,11 @@ pub(crate) fn lhs_variables(action: &rossi::Action) -> Vec<&str> {
     use rossi::{ActionKind, Ident};
     match &action.kind {
         ActionKind::Skip => Vec::new(),
-        ActionKind::Assignment { variables, .. }
-        | ActionKind::BecomesIn { variables, .. }
-        | ActionKind::BecomesSuchThat { variables, .. } => {
+        ActionKind::Assignment { assignments } => assignments
+            .iter()
+            .map(|(variable, _)| variable.as_str())
+            .collect(),
+        ActionKind::BecomesIn { variables, .. } | ActionKind::BecomesSuchThat { variables, .. } => {
             variables.iter().map(Ident::as_str).collect()
         }
     }

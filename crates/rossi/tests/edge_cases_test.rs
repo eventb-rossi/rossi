@@ -245,23 +245,20 @@ fn test_forward_composition_parenthesized_in_action() {
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
     match &event.actions[0].action.kind {
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            assert_eq!(variables, &["x"]);
-            assert_eq!(expressions.len(), 1);
+        ActionKind::Assignment { assignments } => {
+            assert_eq!(assignments.len(), 1);
+            assert_eq!(assignments[0].0, "x");
             // The parenthesized (f ; g) should parse as forward composition
             assert!(
                 matches!(
-                    &expressions[0].kind,
+                    &assignments[0].1.kind,
                     ExpressionKind::Binary {
                         op: BinaryOp::Semicolon,
                         ..
                     }
                 ),
                 "Expected Semicolon composition in parens, got {:?}",
-                expressions[0]
+                assignments[0].1
             );
         }
         other => panic!("Expected Assignment, got {:?}", other),
@@ -274,17 +271,13 @@ fn test_standalone_action_forward_composition_unparenthesized() {
     // attribute) has no following action to separate, so a bare semicolon
     // is forward composition.
     let action = rossi::parse_action_str("x ≔ f;g").expect("standalone action parses");
-    let ActionKind::Assignment {
-        variables,
-        expressions,
-    } = &action.kind
-    else {
+    let ActionKind::Assignment { assignments } = &action.kind else {
         panic!("Expected Assignment, got {:?}", action);
     };
-    assert_eq!(variables, &["x"]);
-    assert_eq!(expressions.len(), 1);
-    let ExpressionKind::Binary { op, left, right } = &expressions[0].kind else {
-        panic!("Expected Binary, got {:?}", expressions[0]);
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].0, "x");
+    let ExpressionKind::Binary { op, left, right } = &assignments[0].1.kind else {
+        panic!("Expected Binary, got {:?}", assignments[0].1);
     };
     assert_eq!(*op, BinaryOp::Semicolon);
     assert!(matches!(&left.kind, ExpressionKind::Identifier(n) if n == "f"));
@@ -296,11 +289,11 @@ fn test_standalone_action_chained_composition_with_inverse() {
     // Left-associative chain mixing inverse and a parenthesized set
     // expression: h∼;(s ∪ t);h parses as (h∼;(s ∪ t));h.
     let action = rossi::parse_action_str("x ≔ h∼;(s ∪ t);h").expect("standalone action parses");
-    let ActionKind::Assignment { expressions, .. } = &action.kind else {
+    let ActionKind::Assignment { assignments } = &action.kind else {
         panic!("Expected Assignment, got {:?}", action);
     };
-    let ExpressionKind::Binary { op, left, right } = &expressions[0].kind else {
-        panic!("Expected Binary, got {:?}", expressions[0]);
+    let ExpressionKind::Binary { op, left, right } = &assignments[0].1.kind else {
+        panic!("Expected Binary, got {:?}", assignments[0].1);
     };
     assert_eq!(*op, BinaryOp::Semicolon);
     assert!(matches!(&right.kind, ExpressionKind::Identifier(n) if n == "h"));

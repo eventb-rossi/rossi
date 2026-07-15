@@ -1214,8 +1214,7 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
         .into();
         return Ok(Action::new(
             ActionKind::Assignment {
-                variables: vec![function],
-                expressions: vec![overwrite_rhs],
+                assignments: vec![(function, overwrite_rhs)],
             },
             action_span,
         ));
@@ -1223,18 +1222,27 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Action, ParseError>
 
     match op_pair.as_rule() {
         Rule::op_becomes_equal => {
-            let mut expressions = Vec::new();
-            for rhs in rhs_pairs {
-                expressions.push(parse_expression(rhs)?);
-            }
-            if expressions.is_empty() {
+            if rhs_pairs.is_empty() {
                 return Err(ParseError::MissingValue);
             }
+            if variables.len() != rhs_pairs.len() {
+                let span = op_pair.as_span();
+                let (line, column) = span.start_pos().line_col();
+                return Err(ParseError::AssignmentArityMismatch {
+                    targets: variables.len(),
+                    expressions: rhs_pairs.len(),
+                    line,
+                    column,
+                    span: Some(Span::from_pest(span)),
+                });
+            }
+            let assignments = variables
+                .into_iter()
+                .zip(rhs_pairs)
+                .map(|(variable, rhs)| Ok((variable, parse_expression(rhs)?)))
+                .collect::<Result<Vec<_>, ParseError>>()?;
             Ok(Action::new(
-                ActionKind::Assignment {
-                    variables,
-                    expressions,
-                },
+                ActionKind::Assignment { assignments },
                 action_span,
             ))
         }
@@ -3618,6 +3626,41 @@ fn parse_machine_with_recovery(
 ///
 /// Recovery errors for predicates the strict parse never reached always survive.
 fn dedup_recovered_errors(errors: &mut Vec<ParseError>) {
+    // A strict parse and per-action recovery both see an arity mismatch. Keep
+    // the recovery envelope: its source retains the precise count error while
+    // its outer span bounds the whole malformed action for editor fallbacks.
+    if let Some(strict_span) = errors.first().and_then(|error| match error {
+        ParseError::AssignmentArityMismatch {
+            span: Some(span), ..
+        } => Some(*span),
+        _ => None,
+    }) {
+        let matching_recovery = errors.iter().skip(1).any(|error| {
+            let ParseError::RecoverableError {
+                span: Some(recovery_span),
+                source: Some(source),
+                ..
+            } = error
+            else {
+                return false;
+            };
+            matches!(
+                source.as_ref(),
+                ParseError::AssignmentArityMismatch {
+                    span: Some(span),
+                    ..
+                } if (Span {
+                        start: recovery_span.start + span.start,
+                        end: recovery_span.start + span.end,
+                    }) == strict_span
+            )
+        });
+        if matching_recovery {
+            errors.remove(0);
+            return;
+        }
+    }
+
     let Some(strict) = errors.first().and_then(ParseError::span) else {
         return;
     };
@@ -4375,7 +4418,35 @@ fn try_parse_labeled_action_from_text(text: &str) -> Result<(LabeledAction, usiz
     // `action_text` is a subslice of `text`; this is the offset of the action
     // body past any `@label ` prefix that was stripped above.
     let body_offset = subslice_offset(text, action_text);
-    let action = parse_action_str(action_text)?;
+    let action = parse_action_str(action_text).map_err(|error| {
+        // Keep recovery sources in the segment coordinate space documented by
+        // `RecoverableError::source`. Arity diagnostics need their operator
+        // span shifted past the optional label so consumers can combine it
+        // with the outer recovery span; recompute line/column from that span
+        // instead of applying a byte-only shift to every nested error.
+        if let ParseError::AssignmentArityMismatch {
+            targets,
+            expressions,
+            span: Some(span),
+            ..
+        } = error
+        {
+            let span = Span {
+                start: body_offset + span.start,
+                end: body_offset + span.end,
+            };
+            let (line, column) = offset_to_line_col(text, span.start);
+            ParseError::AssignmentArityMismatch {
+                targets,
+                expressions,
+                line,
+                column,
+                span: Some(span),
+            }
+        } else {
+            error
+        }
+    })?;
     Ok((
         LabeledAction {
             label,

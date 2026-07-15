@@ -326,14 +326,11 @@ pub fn walk_action<V: VisitMut + ?Sized>(visitor: &mut V, action: &mut Action) {
     visit_optional_span(visitor, &mut action.span);
     match &mut action.kind {
         ActionKind::Skip => {}
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            for variable in variables {
+        ActionKind::Assignment { assignments } => {
+            for (variable, _) in assignments.iter_mut() {
                 visitor.visit_ident(variable);
             }
-            for expression in expressions {
+            for (_, expression) in assignments {
                 visitor.visit_expression(expression);
             }
         }

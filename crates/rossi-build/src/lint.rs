@@ -1630,8 +1630,7 @@ mod tests {
             with: Vec::new(),
             witnesses: Vec::new(),
             actions: vec![la(ActionKind::Assignment {
-                variables: vec!["f".into()],
-                expressions: vec![overwrite_rhs],
+                assignments: vec![("f".into(), overwrite_rhs)],
             }
             .into())],
             span: None,

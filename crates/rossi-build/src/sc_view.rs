@@ -441,12 +441,11 @@ fn normalize_source(s: Option<String>) -> Option<String> {
 pub fn strip_type_ascriptions_action(a: Action) -> Action {
     match a.kind {
         ActionKind::Skip => ActionKind::Skip.into(),
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => ActionKind::Assignment {
-            variables,
-            expressions: expressions.into_iter().map(strip_expr).collect(),
+        ActionKind::Assignment { assignments } => ActionKind::Assignment {
+            assignments: assignments
+                .into_iter()
+                .map(|(variable, expression)| (variable, strip_expr(expression)))
+                .collect(),
         }
         .into(),
         ActionKind::BecomesIn { variables, set } => ActionKind::BecomesIn {

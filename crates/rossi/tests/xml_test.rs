@@ -1,7 +1,7 @@
 //! Integration tests for XML parsing (native Event-B format)
 
 use rossi::ast::expression::BinaryOp;
-use rossi::{ActionKind, Component, ExpressionKind, parse_xml};
+use rossi::{ActionKind, Component, ExpressionKind, ParseError, parse_xml};
 
 #[test]
 fn test_parse_context_xml_from_file() {
@@ -49,6 +49,36 @@ fn test_parse_machine_xml_from_file() {
         assert_eq!(m.events[1].name, "decrement");
     } else {
         panic!("Expected Machine component");
+    }
+}
+
+#[test]
+fn xml_rejects_parallel_assignment_arity_mismatches() {
+    for (assignment, targets, expressions) in [("x, y := 1", 2, 1), ("x := 1, 2", 1, 2)] {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.event name="evt">
+        <org.eventb.core.action name="a" org.eventb.core.label="act1" org.eventb.core.assignment="{assignment}"/>
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#
+        );
+        let error = parse_xml(&xml).expect_err("mismatched assignment must fail XML parsing");
+        let ParseError::MalformedAttribute {
+            origin,
+            attr_name,
+            value,
+            reason,
+            ..
+        } = error
+        else {
+            panic!("wrong error for {assignment:?}: {error:?}");
+        };
+        assert!(origin.contains("<action"), "missing XML origin: {origin}");
+        assert_eq!(attr_name, "assignment");
+        assert_eq!(value, assignment);
+        assert!(reason.contains(&format!("target count ({targets})")));
+        assert!(reason.contains(&format!("expression count ({expressions})")));
     }
 }
 
@@ -202,11 +232,11 @@ fn test_parse_action_with_forward_composition_xml() {
         let actions = &m.events[0].actions;
         assert_eq!(actions.len(), 2);
         for labeled in actions {
-            let ActionKind::Assignment { expressions, .. } = &labeled.action.kind else {
+            let ActionKind::Assignment { assignments } = &labeled.action.kind else {
                 panic!("Expected Assignment, got {:?}", labeled.action);
             };
             assert!(matches!(
-                &expressions[0].kind,
+                &assignments[0].1.kind,
                 ExpressionKind::Binary {
                     op: BinaryOp::Semicolon,
                     ..

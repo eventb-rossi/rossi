@@ -349,14 +349,10 @@ fn enrich_expression_in_with_expected(
 fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
     match action.kind {
         ActionKind::Skip => ActionKind::Skip.into(),
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => ActionKind::Assignment {
-            variables,
-            expressions: expressions
+        ActionKind::Assignment { assignments } => ActionKind::Assignment {
+            assignments: assignments
                 .into_iter()
-                .map(|e| enrich_expression_in(e, env))
+                .map(|(variable, expression)| (variable, enrich_expression_in(expression, env)))
                 .collect(),
         }
         .into(),

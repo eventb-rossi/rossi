@@ -77,6 +77,33 @@ fn commas_still_parse_inside_formulas() {
 }
 
 #[test]
+fn parallel_assignment_requires_matching_target_and_expression_counts() {
+    for (src, targets, expressions, operator) in [
+        ("x, y := 1", 2, 1, ":="),
+        ("x := 1, 2", 1, 2, ":="),
+        ("x, y ≔ 1", 2, 1, "≔"),
+        ("x ≔ 1, 2", 1, 2, "≔"),
+    ] {
+        let error = parse_action_str(src)
+            .expect_err("mismatched parallel assignment must not produce an action");
+        let (actual_targets, actual_expressions, line, column, span) = match error {
+            ParseError::AssignmentArityMismatch {
+                targets,
+                expressions,
+                line,
+                column,
+                span: Some(span),
+            } => (targets, expressions, line, column, span),
+            other => panic!("expected assignment arity error for {src:?}, got {other:?}"),
+        };
+        assert_eq!((actual_targets, actual_expressions), (targets, expressions));
+        assert_eq!(line, 1);
+        assert_eq!(column, src[..span.start].chars().count() + 1);
+        assert_eq!(&src[span.start..span.end], operator);
+    }
+}
+
+#[test]
 fn any_parameters_round_trip_without_commas() {
     let machine = parse("MACHINE m EVENTS EVENT e ANY p q r END END").unwrap();
     let printed = to_string(&machine);

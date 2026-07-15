@@ -561,7 +561,7 @@ fn test_maplet_binds_looser_than_arrow_in_action() {
     );
     let event = &m.events[0];
     match &event.actions[0].action.kind {
-        ActionKind::Assignment { expressions, .. } => match &expressions[0].kind {
+        ActionKind::Assignment { assignments } => match &assignments[0].1.kind {
             ExpressionKind::Binary { op, right, .. } => {
                 assert_eq!(*op, BinaryOp::Maplet);
                 assert!(matches!(
@@ -1435,12 +1435,9 @@ fn test_postfix_function_update_in_action() {
     let equivalent = parse_action_str("currentFloor ≔ currentFloor <+ {c ↦ f}").expect("explicit");
     assert_eq!(action, equivalent);
     match action.kind {
-        ActionKind::Assignment {
-            ref variables,
-            ref expressions,
-        } => {
-            assert_eq!(variables, &vec!["currentFloor"]);
-            assert_eq!(expressions.len(), 1);
+        ActionKind::Assignment { ref assignments } => {
+            assert_eq!(assignments.len(), 1);
+            assert_eq!(assignments[0].0, "currentFloor");
         }
         other => panic!("Expected Assignment, got {:?}", other),
     }

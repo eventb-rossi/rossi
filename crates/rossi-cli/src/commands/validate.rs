@@ -261,33 +261,35 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             }
             results
         }
-        // Loose `.eventb` text → Camille parse failure (EB004). A misplaced
-        // assignment in a predicate (EB026) is one such failure; recover
-        // per-clause to report it precisely (with the offending operator) rather
-        // than as a whole-file EB004.
+        // Loose `.eventb` text → Camille parse failure (EB004). Some formula
+        // failures carry precise, actionable variants; recover
+        // per-clause to report them rather than collapsing them into a whole-file
+        // EB004.
         Err(e) => {
             let recovered = parse_components_with_recovery(source);
             let mut results: Vec<ValidationResult> = recovered
                 .errors
                 .iter()
-                .filter(|err| matches!(err, ParseError::AssignmentInPredicate { .. }))
-                .map(|err| {
+                .filter_map(precise_formula_error)
+                .map(|(err, absolute_span)| {
                     let mut result = error_result(
                         display,
                         None,
                         format!("{err}"),
                         Some(rule_for_parse_error(err)),
                     );
-                    result.region = parse_error_region(err, source);
+                    result.region = absolute_span
+                        .map(|span| span_to_region(source, span))
+                        .or_else(|| parse_error_region(err, source));
                     result
                 })
                 .collect();
-            // Keep the whole-file EB004 unless the misplaced assignment(s) are
-            // the *only* thing recovery found: that way a co-occurring genuine
-            // parse error is never silently dropped, while a lone `:=` still
-            // reports as one precise EB026 row and not a redundant EB004.
-            let only_assignments = !results.is_empty() && results.len() == recovered.errors.len();
-            if !only_assignments {
+            // Keep the whole-file EB004 unless precise formula failures are the
+            // only errors recovery found. A co-occurring generic failure must
+            // never be silently dropped.
+            let only_precise_errors =
+                !results.is_empty() && results.len() == recovered.errors.len();
+            if !only_precise_errors {
                 let mut fallback = error_result(
                     display,
                     None,
@@ -299,6 +301,29 @@ fn validate_text_source(display: &Path, source: &str, cli: &ValidateArgs) -> Vec
             }
             results
         }
+    }
+}
+
+/// Return a precise loose-text formula error and, when it came from recovery,
+/// its source-absolute span. Recovery sources use segment-relative coordinates;
+/// the outer envelope anchors that segment in the document.
+fn precise_formula_error(err: &ParseError) -> Option<(&ParseError, Option<rossi::ast::Span>)> {
+    match err {
+        ParseError::AssignmentInPredicate { .. } | ParseError::AssignmentArityMismatch { .. } => {
+            Some((err, None))
+        }
+        ParseError::RecoverableError {
+            span: Some(recovery_span),
+            source: Some(source),
+            ..
+        } if matches!(source.as_ref(), ParseError::AssignmentArityMismatch { .. }) => {
+            let absolute_span = source.span().map_or(*recovery_span, |mut span| {
+                span.shift(recovery_span.start);
+                span
+            });
+            Some((source, Some(absolute_span)))
+        }
+        _ => None,
     }
 }
 
@@ -602,6 +627,7 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
         // Incompatible-operator rejection is a formula syntax error: the Rodin
         // formula parser folds it into the same diagnostic class.
         ParseError::IncompatibleOperators { .. } => RuleId::FormulaParseError,
+        ParseError::AssignmentArityMismatch { .. } => RuleId::FormulaParseError,
         // A predicate written as an assignment gets its own rule (EB026) rather
         // than the generic formula error.
         ParseError::AssignmentInPredicate { .. } => RuleId::AssignmentInPredicate,
@@ -946,6 +972,48 @@ mod tests {
             span: None,
         };
         assert_eq!(rule_for_parse_error(&err), RuleId::AssignmentInPredicate);
+    }
+
+    #[test]
+    fn rule_for_parse_error_maps_assignment_arity_to_eb005() {
+        let err = ParseError::AssignmentArityMismatch {
+            targets: 2,
+            expressions: 1,
+            line: 1,
+            column: 6,
+            span: None,
+        };
+        assert_eq!(rule_for_parse_error(&err), RuleId::FormulaParseError);
+    }
+
+    #[test]
+    fn recovered_assignment_arity_resolves_operator_in_later_component() {
+        let source = concat!(
+            "CONTEXT C\nEND\n",
+            "MACHINE M\nVARIABLES x y\nEVENTS\n",
+            "EVENT e\nTHEN\n",
+            "@act1 x, y := 1\n",
+            "END\nEND\n",
+        );
+        let recovered = parse_components_with_recovery(source);
+        assert_eq!(
+            recovered.errors.len(),
+            1,
+            "unexpected errors: {recovered:?}"
+        );
+
+        let (error, span) = precise_formula_error(&recovered.errors[0])
+            .expect("recovery retains the precise arity cause");
+        assert!(matches!(
+            error,
+            ParseError::AssignmentArityMismatch {
+                targets: 2,
+                expressions: 1,
+                ..
+            }
+        ));
+        let span = span.expect("recovered operator span is source-absolute");
+        assert_eq!(&source[span.start..span.end], ":=");
     }
 
     #[test]

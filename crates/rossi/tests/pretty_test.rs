@@ -319,6 +319,13 @@ END
 }
 
 #[test]
+fn test_pretty_print_parallel_assignment_keeps_all_pairs() {
+    let action = parse_action_str("x, y := 1, 2").expect("parallel assignment parses");
+    assert_eq!(PrettyPrinter::new().print_action(&action), "x, y ≔ 1, 2");
+    assert_eq!(PrettyPrinter::ascii().print_action(&action), "x, y := 1, 2");
+}
+
+#[test]
 fn test_pretty_print_sees_and_refines() {
     let source = r#"MACHINE refined
 REFINES

@@ -59,23 +59,19 @@ pub fn canonical_action_with_env(a: &Action, env: &TypeEnv) -> String {
 
 fn annotate_empty_sets(a: &Action, env: &TypeEnv) -> Action {
     match &a.kind {
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            let mut new_exprs = Vec::with_capacity(expressions.len());
-            for (var, expr) in variables.iter().zip(expressions.iter()) {
-                new_exprs.push(match (&expr.kind, env.get(var.as_str())) {
-                    (ExpressionKind::EmptySet, Some(ty)) => typed_empty_set(ty),
-                    _ => expr.clone(),
-                });
-            }
-            ActionKind::Assignment {
-                variables: variables.clone(),
-                expressions: new_exprs,
-            }
-            .into()
+        ActionKind::Assignment { assignments } => ActionKind::Assignment {
+            assignments: assignments
+                .iter()
+                .map(|(variable, expression)| {
+                    let expression = match (&expression.kind, env.get(variable.as_str())) {
+                        (ExpressionKind::EmptySet, Some(ty)) => typed_empty_set(ty),
+                        _ => expression.clone(),
+                    };
+                    (variable.clone(), expression)
+                })
+                .collect(),
         }
+        .into(),
         _ => a.clone(),
     }
 }
@@ -270,6 +266,19 @@ mod tests {
         env.insert("x", Type::pow(Type::GivenSet("USERS".into())));
         let a = parse_action_str("x ≔ ∅").unwrap();
         assert_eq!(canonical_action_with_env(&a, &env), "x ≔ ∅ ⦂ ℙ(USERS)");
+    }
+
+    #[test]
+    fn parallel_assignment_annotates_every_pair() {
+        use rossi::parse_action_str;
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::pow(Type::GivenSet("USERS".into())));
+        env.insert("y", Type::pow(Type::GivenSet("ITEMS".into())));
+        let action = parse_action_str("x, y ≔ ∅, ∅").unwrap();
+        assert_eq!(
+            canonical_action_with_env(&action, &env),
+            "x,y ≔ ∅ ⦂ ℙ(USERS),∅ ⦂ ℙ(ITEMS)"
+        );
     }
 
     #[test]

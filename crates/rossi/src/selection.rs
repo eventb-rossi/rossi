@@ -669,8 +669,12 @@ fn push_component_formulas<'a>(component: &'a Component, stack: &mut Vec<Formula
 fn push_action_formulas<'a>(kind: &'a ActionKind, stack: &mut Vec<Formula<'a>>) {
     match kind {
         ActionKind::Skip => {}
-        ActionKind::Assignment { expressions, .. } => {
-            stack.extend(expressions.iter().map(Formula::Expression));
+        ActionKind::Assignment { assignments } => {
+            stack.extend(
+                assignments
+                    .iter()
+                    .map(|(_, expression)| Formula::Expression(expression)),
+            );
         }
         ActionKind::BecomesIn { set, .. } => stack.push(Formula::Expression(set)),
         ActionKind::BecomesSuchThat { predicate, .. } => {
@@ -1263,6 +1267,28 @@ mod tests {
         );
         assert!(snapshot.syntax_at_offset(at(text, "@later") + 2).is_none());
         assert!(snapshot.syntax_at_offset(at(text, "∀z")).is_none());
+    }
+
+    #[test]
+    fn assignment_arity_recovery_bounds_multiline_signature_fallback() {
+        let text = concat!(
+            "MACHINE m\nVARIABLES x y\nEVENTS\n",
+            "EVENT e\nTHEN\n",
+            "@bad x, y :=\n",
+            "  1,\n",
+            "  (λz·z ∈ ℕ ∣ z + 1)(0),\n",
+            "  2\n",
+            "END\nEND\n",
+        );
+        let snapshot = parse_components_snapshot(text);
+
+        assert_eq!(
+            snapshot.syntax_at_offset(at(text, "z + 1")),
+            Some(SyntaxAtOffset {
+                construct: SyntaxConstruct::Lambda,
+                parameter: SyntaxParameter::Expression,
+            })
+        );
     }
 
     #[test]

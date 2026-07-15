@@ -52,10 +52,10 @@ pub enum ActionKind {
     /// Skip action (no-op): skip
     Skip,
 
-    /// Deterministic (parallel) assignment: x := E  or  x, y := E1, E2
+    /// Deterministic (parallel) assignment: x := E  or  x, y := E1, E2.
+    /// Each target is stored with its corresponding right-hand-side value.
     Assignment {
-        variables: Vec<Ident>,
-        expressions: Vec<Expression>,
+        assignments: Vec<(Ident, Expression)>,
     },
 
     /// Non-deterministic assignment (becomes member of): x :∈ S  or  x, y :∈ S
@@ -75,8 +75,7 @@ impl Action {
     /// Create a deterministic assignment action
     pub fn assignment(variable: impl Into<Ident>, expression: Expression) -> Self {
         ActionKind::Assignment {
-            variables: vec![variable.into()],
-            expressions: vec![expression],
+            assignments: vec![(variable.into(), expression)],
         }
         .into()
     }

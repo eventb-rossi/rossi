@@ -11,19 +11,15 @@ fn slice(src: &str, span: Span) -> &str {
 fn assignment_target_is_spanned() {
     let src = "count := count + 1";
     let action = parse_action_str(src).expect("parses");
-    let ActionKind::Assignment {
-        variables,
-        expressions,
-    } = &action.kind
-    else {
+    let ActionKind::Assignment { assignments } = &action.kind else {
         panic!("expected assignment, got {:?}", action.kind);
     };
     // The write target `count` carries its own exact span (offset 0), distinct
     // from the read `count` on the right-hand side.
-    let target = &variables[0];
+    let (target, expression) = &assignments[0];
     assert_eq!(slice(src, target.span.expect("target span")), "count");
     assert_eq!(target.span.unwrap().start, 0);
-    assert_eq!(slice(src, expressions[0].span.unwrap()), "count + 1");
+    assert_eq!(slice(src, expression.span.unwrap()), "count + 1");
     assert_eq!(slice(src, action.span.expect("action span")), src);
 }
 
@@ -31,12 +27,12 @@ fn assignment_target_is_spanned() {
 fn parallel_assignment_targets_each_spanned() {
     let src = "x, y := 1, 2";
     let action = parse_action_str(src).expect("parses");
-    let ActionKind::Assignment { variables, .. } = &action.kind else {
+    let ActionKind::Assignment { assignments } = &action.kind else {
         panic!("expected assignment");
     };
-    assert_eq!(slice(src, variables[0].span.unwrap()), "x");
-    assert_eq!(slice(src, variables[1].span.unwrap()), "y");
-    assert_eq!(variables[1].span.unwrap().start, 3);
+    assert_eq!(slice(src, assignments[0].0.span.unwrap()), "x");
+    assert_eq!(slice(src, assignments[1].0.span.unwrap()), "y");
+    assert_eq!(assignments[1].0.span.unwrap().start, 3);
 }
 
 #[test]
@@ -44,10 +40,10 @@ fn function_override_target_is_spanned() {
     // `f(x) := y` is lowered by the parser to `f ≔ f\u{E103}{x ↦ y}`.
     let src = "f(x) := y";
     let action = parse_action_str(src).expect("parses");
-    let ActionKind::Assignment { variables, .. } = &action.kind else {
+    let ActionKind::Assignment { assignments } = &action.kind else {
         panic!("expected assignment, got {:?}", action.kind);
     };
-    let target = &variables[0];
+    let target = &assignments[0].0;
     assert_eq!(slice(src, target.span.expect("target span")), "f");
     assert_eq!(target.span.unwrap().start, 0);
 }

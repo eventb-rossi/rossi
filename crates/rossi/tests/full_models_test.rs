@@ -639,12 +639,10 @@ fn test_multiple_parallel_assignment() {
         .expect("Should have initialisation");
     assert_eq!(init.actions.len(), 1);
     match &init.actions[0].action.kind {
-        rossi::ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            assert_eq!(variables, &["x", "y"]);
-            assert_eq!(expressions.len(), 2);
+        rossi::ActionKind::Assignment { assignments } => {
+            assert_eq!(assignments.len(), 2);
+            assert_eq!(assignments[0].0, "x");
+            assert_eq!(assignments[1].0, "y");
         }
         other => panic!("Expected Assignment, got {:?}", other),
     }
@@ -654,12 +652,10 @@ fn test_multiple_parallel_assignment() {
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
     match &event.actions[0].action.kind {
-        rossi::ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            assert_eq!(variables, &["x", "y"]);
-            assert_eq!(expressions.len(), 2);
+        rossi::ActionKind::Assignment { assignments } => {
+            assert_eq!(assignments.len(), 2);
+            assert_eq!(assignments[0].0, "x");
+            assert_eq!(assignments[1].0, "y");
         }
         other => panic!("Expected Assignment, got {:?}", other),
     }

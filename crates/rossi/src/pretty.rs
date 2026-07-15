@@ -944,14 +944,11 @@ impl PrettyPrinter {
         let assign = self.op(OperatorId::Assignment);
         match &action.kind {
             ActionKind::Skip => "skip".to_string(),
-            ActionKind::Assignment {
-                variables,
-                expressions,
-            } => {
-                let vars = join_idents(variables);
-                let exprs: Vec<String> = expressions
+            ActionKind::Assignment { assignments } => {
+                let vars = join_idents(assignments.iter().map(|(variable, _)| variable));
+                let exprs: Vec<String> = assignments
                     .iter()
-                    .map(|e| self.print_action_expr(e))
+                    .map(|(_, expression)| self.print_action_expr(expression))
                     .collect();
                 format!("{} {} {}", vars, assign, exprs.join(", "))
             }
@@ -978,8 +975,8 @@ impl PrettyPrinter {
 }
 
 /// Render a comma-separated list of identifier names (assignment / becomes LHS).
-fn join_idents(vars: &[Ident]) -> String {
-    vars.iter()
+fn join_idents<'a>(vars: impl IntoIterator<Item = &'a Ident>) -> String {
+    vars.into_iter()
         .map(Ident::as_str)
         .collect::<Vec<_>>()
         .join(", ")

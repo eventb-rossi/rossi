@@ -274,13 +274,10 @@ pub fn walk_action<V: IdentVisitor>(
 ) -> ControlFlow<()> {
     match &a.kind {
         ActionKind::Skip => ControlFlow::Continue(()),
-        ActionKind::Assignment {
-            variables,
-            expressions,
-        } => {
-            write_targets(variables, binders, v)?;
-            for e in expressions {
-                walk_expression(e, binders, v)?;
+        ActionKind::Assignment { assignments } => {
+            write_targets(assignments.iter().map(|(variable, _)| variable), binders, v)?;
+            for (_, expression) in assignments {
+                walk_expression(expression, binders, v)?;
             }
             ControlFlow::Continue(())
         }
@@ -298,8 +295,8 @@ pub fn walk_action<V: IdentVisitor>(
     }
 }
 
-fn write_targets<V: IdentVisitor>(
-    variables: &[super::Ident],
+fn write_targets<'a, V: IdentVisitor>(
+    variables: impl IntoIterator<Item = &'a super::Ident>,
     binders: &[Binder],
     v: &mut V,
 ) -> ControlFlow<()> {

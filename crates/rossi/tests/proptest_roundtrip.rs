@@ -453,8 +453,7 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
             let vars = vec![var.clone()];
             (
                 ActionKind::Assignment {
-                    variables: vec![var.into()],
-                    expressions: vec![expr],
+                    assignments: vec![(var.into(), expr)],
                 }
                 .into(),
                 vars,
@@ -472,8 +471,11 @@ fn arb_action() -> impl Strategy<Value = (Action, Vec<String>)> {
                 let vars = variables.clone();
                 (
                     ActionKind::Assignment {
-                        variables: variables.into_iter().map(Into::into).collect(),
-                        expressions,
+                        assignments: variables
+                            .into_iter()
+                            .map(Into::into)
+                            .zip(expressions)
+                            .collect(),
                     }
                     .into(),
                     vars,

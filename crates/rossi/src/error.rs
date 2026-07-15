@@ -106,6 +106,20 @@ pub enum ParseError {
     #[error("Missing value")]
     MissingValue,
 
+    /// A deterministic assignment supplied a different number of targets and
+    /// right-hand-side expressions. Rodin reports this while parsing the
+    /// assignment, before constructing its AST node.
+    #[error(
+        "parallel assignment target count ({targets}) does not match expression count ({expressions})"
+    )]
+    AssignmentArityMismatch {
+        targets: usize,
+        expressions: usize,
+        line: usize,
+        column: usize,
+        span: Option<Span>,
+    },
+
     #[error("Invalid XML: {0}")]
     InvalidXml(String),
 
@@ -258,7 +272,8 @@ impl ParseError {
             ParseError::PestError { line, span, .. }
             | ParseError::ReservedWord { line, span, .. }
             | ParseError::IncompatibleOperators { line, span, .. }
-            | ParseError::AssignmentInPredicate { line, span, .. } => {
+            | ParseError::AssignmentInPredicate { line, span, .. }
+            | ParseError::AssignmentArityMismatch { line, span, .. } => {
                 *line += line_delta;
                 shift_span(span, byte_delta);
             }
@@ -308,6 +323,7 @@ impl ParseError {
             | ParseError::ReservedWord { line, column, .. }
             | ParseError::IncompatibleOperators { line, column, .. }
             | ParseError::AssignmentInPredicate { line, column, .. }
+            | ParseError::AssignmentArityMismatch { line, column, .. }
             | ParseError::ClauseError { line, column, .. }
             | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
             ParseError::FileContext { source, .. } => source.position(),
@@ -330,6 +346,7 @@ impl ParseError {
             | ParseError::ReservedWord { span, .. }
             | ParseError::IncompatibleOperators { span, .. }
             | ParseError::AssignmentInPredicate { span, .. }
+            | ParseError::AssignmentArityMismatch { span, .. }
             | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),

@@ -52,7 +52,7 @@ pub fn is_well_typed_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
 pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
     match &action.kind {
         ActionKind::Skip => true,
-        ActionKind::Assignment { expressions, .. } => {
+        ActionKind::Assignment { assignments } => {
             // Only verify each RHS expression is itself well-typed.
             // We deliberately skip the LHS-vs-RHS type-equality check:
             // `type_of_expression` is the relaxed inference, which falls
@@ -62,7 +62,9 @@ pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
             // produces false positives. Type-class mismatches in the
             // RHS — which is what `auction` actually exhibits — are
             // already caught by `is_well_typed_expression`.
-            expressions.iter().all(|e| is_well_typed_expression(env, e))
+            assignments
+                .iter()
+                .all(|(_, expression)| is_well_typed_expression(env, expression))
         }
         ActionKind::BecomesIn { set, .. } => is_well_typed_expression(env, set),
         // Becomes-such-that uses primed forms (`x'`) the identifier
