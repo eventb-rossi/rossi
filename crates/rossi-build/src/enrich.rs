@@ -329,8 +329,20 @@ fn enrich_expression_in_with_expected(
             set: Box::new(enrich_expression_in(*set, env)),
         }
         .into(),
+        ExpressionKind::Bool(predicate) => {
+            ExpressionKind::Bool(Box::new(enrich_predicate_in(*predicate, env))).into()
+        }
         // Leaves: nothing to recurse into.
-        kind => kind.into(),
+        kind @ (ExpressionKind::Integer(_)
+        | ExpressionKind::Identifier(_)
+        | ExpressionKind::True
+        | ExpressionKind::False
+        | ExpressionKind::EmptySet
+        | ExpressionKind::Naturals
+        | ExpressionKind::Naturals1
+        | ExpressionKind::Integers
+        | ExpressionKind::BoolType
+        | ExpressionKind::AtomicBuiltin(_)) => kind.into(),
     }
 }
 
@@ -540,6 +552,23 @@ mod tests {
             }
             _ => panic!("expected Quantified"),
         }
+    }
+
+    #[test]
+    fn bool_predicate_enriches_nested_quantifier_binder() {
+        let e = parse_expression_str("bool(∀x·x∈ℤ⇒x=x)").unwrap();
+        let enriched = enrich_expression(e, &empty_env());
+        let ExpressionKind::Bool(predicate) = enriched.kind else {
+            panic!("expected Bool")
+        };
+        let PredicateKind::Quantified { identifiers, .. } = predicate.kind else {
+            panic!("expected Quantified")
+        };
+        let binder_type = identifiers[0]
+            .type_expr
+            .as_ref()
+            .and_then(|expr| parse_type_from_expression(expr));
+        assert_eq!(binder_type, Some(Type::Integer));
     }
 
     #[test]
