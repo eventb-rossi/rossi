@@ -1,16 +1,9 @@
 //! Rodin-canonical formula formatting.
 //!
-//! The rossi pretty-printer produces readable Event-B text with
-//! generous spacing. Rodin's `.bcc`/`.bcm` attribute values use a
-//! tighter canonical form — no spaces around logical operators,
-//! comparisons, function application, type ascription, quantifier
-//! separators, or commas.
-//!
-//! Rather than fork the pretty-printer, we post-process its Unicode
-//! output. The result is not guaranteed byte-exact with Rodin in every
-//! edge case (Rodin's exact rules differ subtly per operator family),
-//! but the output is always semantically equivalent — it parses back
-//! into the same AST via `parse_predicate_str` / `parse_expression_str`.
+//! Rodin's `.bcc`/`.bcm` attribute values use tighter spacing than readable
+//! Event-B text. [`PrettyPrinter`] emits that representation directly from
+//! the AST; this module adds the build-specific type annotations Rodin's
+//! static checker introduces.
 
 use rossi::ast::expression::BinaryOp;
 use rossi::pretty::PrettyPrinter;
@@ -19,30 +12,19 @@ use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate};
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
-// The canonical form must match Rodin's internal bcc/bcm spelling, which uses
-// the private-use glyphs for the relation/override operators (and tightens only
-// override — relations stay spaced). These never reach an editor buffer, so the
-// printer keeps them rather than falling back to ASCII.
-fn canonical_printer() -> PrettyPrinter {
-    PrettyPrinter::new().with_private_use_glyphs(true)
-}
-
 /// Canonicalise a predicate to Rodin's tight form.
 pub fn canonical_predicate(p: &Predicate) -> String {
-    let raw = canonical_printer().print_predicate(p);
-    tighten(&raw, TightenMode::Predicate)
+    PrettyPrinter::rodin_canonical().print_predicate(p)
 }
 
 /// Canonicalise an expression to Rodin's tight form.
 pub fn canonical_expression(e: &Expression) -> String {
-    let raw = canonical_printer().print_expression(e);
-    tighten(&raw, TightenMode::Expression)
+    PrettyPrinter::rodin_canonical().print_expression(e)
 }
 
 /// Canonicalise an action (assignment).
 pub fn canonical_action(a: &Action) -> String {
-    let raw = canonical_printer().print_action(a);
-    tighten(&raw, TightenMode::Action)
+    PrettyPrinter::rodin_canonical().print_action(a)
 }
 
 /// Canonicalise an action, injecting `⦂ T` annotations on any bare
@@ -113,110 +95,6 @@ pub(crate) fn type_to_expression(ty: &Type) -> Expression {
     }
 }
 
-/// Context for whitespace rules. Rodin's canonical form differs slightly
-/// between predicates, expressions, and actions — most visibly:
-/// - In predicates, `⦂` is tight (`∀x⦂ℤ·P`).
-/// - In actions, `⦂` is spaced (`x ≔ ∅ ⦂ ℙ(USERS)`).
-#[derive(Debug, Clone, Copy)]
-enum TightenMode {
-    Predicate,
-    Expression,
-    Action,
-}
-
-/// Operators whose Rodin bcc/bcm canonical form drops surrounding spaces:
-/// comparison, logical, multiply (∗), centre-dot (·), additive `+`, the
-/// symmetric set ops `∪`, `∩`, `×`, and the private-use overwrite glyph
-/// (`operators::RELATIONAL_OVERRIDE`, U+E103). Spaces are kept around `−`, `↦`,
-/// `‥`, and the asymmetric set ops `∖`, `⩤`, `⩥`, `◁`, `▷` — and, deliberately,
-/// the relation glyphs `↔`/U+E100..E102, which Rodin leaves spaced.
-///
-/// Every entry must be a known operator spelling — enforced by
-/// `tests::always_tight_entries_are_known_operators`.
-#[rustfmt::skip]
-const ALWAYS_TIGHT: &[&str] = &[
-    "⊆", "⊂", "⊄", "⊈", "∉", "∈", "≠", "≤", "≥", "=", "<", ">", "∧", "∨", "⇒", "⇔", "¬", "·", "∗",
-    "+", "∪", "∩", "×", rossi::operators::RELATIONAL_OVERRIDE,
-];
-
-fn tighten(input: &str, mode: TightenMode) -> String {
-    // Collapse runs of internal whitespace to single spaces first.
-    let mut s = collapse_spaces(input);
-
-    // Strip spaces around the always-tight operators (see `ALWAYS_TIGHT`).
-    for op in ALWAYS_TIGHT {
-        s = strip_space_around(&s, op);
-    }
-    // `⦂` — tight in predicates (inside quantifier binders), spaced in
-    // actions and standalone expressions.
-    if matches!(mode, TightenMode::Predicate) {
-        s = strip_space_around(&s, "⦂");
-    }
-    // Comma is tight in predicates (quantifier binders, finite).
-    // Expressions use spaced commas inside set enumerations (e.g.
-    // Rodin's `LAMP_STATUS = {0,100}` — actually no, samples show no
-    // space; treat as tight.)
-    s = strip_space_around(&s, ",");
-    s.trim().to_string()
-}
-
-fn collapse_spaces(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut prev_space = false;
-    for c in input.chars() {
-        if c == ' ' || c == '\t' || c == '\n' {
-            if !prev_space {
-                out.push(' ');
-                prev_space = true;
-            }
-        } else {
-            out.push(c);
-            prev_space = false;
-        }
-    }
-    out
-}
-
-/// Remove a single space immediately before or after each occurrence of
-/// `op` in `s`.
-fn strip_space_around(s: &str, op: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    let bytes = s.as_bytes();
-    let op_bytes = op.as_bytes();
-    while i < bytes.len() {
-        if bytes[i..].starts_with(op_bytes) {
-            // Strip trailing space in `out`.
-            if out.ends_with(' ') {
-                out.pop();
-            }
-            out.push_str(op);
-            i += op_bytes.len();
-            // Skip one leading space after.
-            if i < bytes.len() && bytes[i] == b' ' {
-                i += 1;
-            }
-        } else {
-            // Advance by one char (handle multi-byte).
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&s[i..i + ch_len]);
-            i += ch_len;
-        }
-    }
-    out
-}
-
-fn utf8_char_len(first_byte: u8) -> usize {
-    // Continuation bytes (0x80..0xC0) shouldn't appear as a leading byte
-    // in well-formed UTF-8; the `< 0xC0` branch is paranoia for robustness.
-    match first_byte {
-        0..=0xBF => 1,
-        0xC0..=0xDF => 2,
-        0xE0..=0xEF => 3,
-        _ => 4,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,19 +103,6 @@ mod tests {
     fn canonical_from_str(src: &str) -> String {
         let p = parse_predicate_str(src).unwrap();
         canonical_predicate(&p)
-    }
-
-    /// SSOT guard: every `ALWAYS_TIGHT` glyph is a real operator spelling, so
-    /// the spacing table cannot drift to a string that the parser/operator
-    /// tables don't recognise.
-    #[test]
-    fn always_tight_entries_are_known_operators() {
-        for op in ALWAYS_TIGHT {
-            assert!(
-                rossi::operators::lookup_token(op).is_some(),
-                "ALWAYS_TIGHT entry {op:?} is not a known operator spelling"
-            );
-        }
     }
 
     #[test]
@@ -315,7 +180,7 @@ mod tests {
         use rossi::parse_action_str;
         let env = TypeEnv::new();
         // The parser lowers `f(x) ≔ E` to `f ≔ f\u{E103}{x ↦ E}` directly.
-        // canonical_action_with_env tightens the pretty-printed Assignment.
+        // canonical_action_with_env emits the lowered Assignment canonically.
         let a = parse_action_str("currentFloor(c) ≔ f").unwrap();
         assert_eq!(
             canonical_action_with_env(&a, &env),
@@ -337,10 +202,8 @@ mod tests {
         );
     }
 
-    /// The relation operators are absent from `ALWAYS_TIGHT`, so Rodin (and the
-    /// canonical form) keeps them spaced and spelled with the private-use glyph
-    /// — not tightened, and not the ASCII `<<->` whose `<`/`>` would be caught
-    /// by the comparison-operator spacing rules.
+    /// Rodin keeps relation operators spaced and spells them with private-use
+    /// glyphs, while relational override uses a tight private-use glyph.
     #[test]
     fn relation_operators_stay_spaced_with_their_glyph() {
         use rossi::parse_predicate_str;
