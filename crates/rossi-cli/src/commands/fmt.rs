@@ -16,7 +16,7 @@
 //! writes elsewhere. With none of these, a single text input is printed to stdout.
 
 use clap::Args;
-use rossi::{PrettyPrinter, format_str, parse_xml, to_xml};
+use rossi::{FormulaSpacing, PrettyPrinter, format_str, parse_xml, to_xml};
 use std::collections::{HashMap, hash_map::Entry};
 use std::fs;
 use std::io::{Read, Write};
@@ -102,6 +102,7 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
         indent: cli.indent.clone().unwrap_or_else(|| "    ".to_string()),
         // Emitted text stays portable: never the private-use glyphs.
         private_use_glyphs: false,
+        formula_spacing: FormulaSpacing::Readable,
     };
 
     // `-` reads one Event-B text stream from stdin (the lone input). It has no

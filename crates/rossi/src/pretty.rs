@@ -71,6 +71,25 @@ fn renders_comment(comment: Option<&str>) -> bool {
     comment.and_then(comments::normalize_comment).is_some()
 }
 
+/// Whitespace convention for formulas emitted by [`PrettyPrinter`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FormulaSpacing {
+    /// Readable Event-B text with spaces around operators and after commas.
+    #[default]
+    Readable,
+    /// Rodin's compact canonical form used in static-checker XML attributes.
+    RodinCanonical,
+}
+
+/// The top-level formula being rendered. Rodin formats binary type
+/// ascriptions differently in predicates than in expressions and actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaContext {
+    Predicate,
+    Expression,
+    Action,
+}
+
 /// Configuration for the pretty printer
 #[derive(Debug, Clone)]
 pub struct PrettyPrinter {
@@ -85,6 +104,8 @@ pub struct PrettyPrinter {
     /// static checker's `canonical` form) turns this on to match Rodin's
     /// internal bcc/bcm spelling exactly; see `OperatorSpelling::emit_text`.
     pub private_use_glyphs: bool,
+    /// Whitespace convention for formulas.
+    pub formula_spacing: FormulaSpacing,
 }
 
 impl Default for PrettyPrinter {
@@ -93,6 +114,7 @@ impl Default for PrettyPrinter {
             use_unicode: true,
             indent: "    ".to_string(),
             private_use_glyphs: false,
+            formula_spacing: FormulaSpacing::Readable,
         }
     }
 }
@@ -109,6 +131,16 @@ impl PrettyPrinter {
             use_unicode: false,
             private_use_glyphs: false,
             indent: "    ".to_string(),
+            formula_spacing: FormulaSpacing::Readable,
+        }
+    }
+
+    /// Create a printer for Rodin's compact static-checker formula form.
+    pub fn rodin_canonical() -> Self {
+        Self {
+            private_use_glyphs: true,
+            formula_spacing: FormulaSpacing::RodinCanonical,
+            ..Self::default()
         }
     }
 
@@ -122,6 +154,12 @@ impl PrettyPrinter {
     /// operators (see [`PrettyPrinter::private_use_glyphs`]).
     pub fn with_private_use_glyphs(mut self, yes: bool) -> Self {
         self.private_use_glyphs = yes;
+        self
+    }
+
+    /// Set the whitespace convention used for formulas.
+    pub fn with_formula_spacing(mut self, formula_spacing: FormulaSpacing) -> Self {
+        self.formula_spacing = formula_spacing;
         self
     }
 
@@ -465,6 +503,10 @@ impl PrettyPrinter {
 
     /// Convert an Expression to text
     pub fn print_expression(&self, expr: &Expression) -> String {
+        self.print_expression_with_context(expr, FormulaContext::Expression)
+    }
+
+    fn print_expression_with_context(&self, expr: &Expression, context: FormulaContext) -> String {
         match &expr.kind {
             ExpressionKind::Integer(n) => n.to_string(),
             ExpressionKind::Identifier(name) => name.clone(),
@@ -480,9 +522,11 @@ impl PrettyPrinter {
             ExpressionKind::BoolType => "BOOL".to_string(),
 
             ExpressionKind::SetEnumeration(elements) => {
-                let elems: Vec<String> =
-                    elements.iter().map(|e| self.print_expression(e)).collect();
-                format!("{{{}}}", elems.join(", "))
+                let elems: Vec<String> = elements
+                    .iter()
+                    .map(|e| self.print_expression_with_context(e, context))
+                    .collect();
+                format!("{{{}}}", elems.join(self.comma_separator()))
             }
 
             ExpressionKind::SetComprehension {
@@ -490,7 +534,7 @@ impl PrettyPrinter {
                 predicate,
                 expression,
             } => {
-                let ids_str = self.format_typed_identifiers(identifiers);
+                let ids_str = self.format_typed_identifiers(identifiers, context);
                 if let Some(expr) = expression {
                     // Extended form: {x · P | E}
                     let mid = self.op(OperatorId::Dot);
@@ -499,14 +543,19 @@ impl PrettyPrinter {
                         "{{{}{}{}{}{}}}",
                         ids_str,
                         mid,
-                        self.print_predicate(predicate),
+                        self.print_predicate_with_context(predicate, context),
                         bar,
-                        self.print_expression(expr)
+                        self.print_expression_with_context(expr, context)
                     )
                 } else {
                     // Basic form: {x | P}
                     let bar = self.op(OperatorId::Bar);
-                    format!("{{{}{}{}}}", ids_str, bar, self.print_predicate(predicate))
+                    format!(
+                        "{{{}{}{}}}",
+                        ids_str,
+                        bar,
+                        self.print_predicate_with_context(predicate, context)
+                    )
                 }
             }
 
@@ -517,9 +566,9 @@ impl PrettyPrinter {
                 let bar = self.op(OperatorId::Bar);
                 format!(
                     "{{{}{}{}}}",
-                    self.print_expression(member_expression),
+                    self.print_expression_with_context(member_expression, context),
                     bar,
-                    self.print_predicate(predicate)
+                    self.print_predicate_with_context(predicate, context)
                 )
             }
 
@@ -528,11 +577,18 @@ impl PrettyPrinter {
                 // and unary expressions as the relation need parentheses to
                 // avoid `a + b[S]` being parsed as `a + (b[S])`.
                 let relation_str = if Self::needs_parens_for_relational_image(relation) {
-                    format!("({})", self.print_expression(relation))
+                    format!(
+                        "({})",
+                        self.print_expression_with_context(relation, context)
+                    )
                 } else {
-                    self.print_expression(relation)
+                    self.print_expression_with_context(relation, context)
                 };
-                format!("{}[{}]", relation_str, self.print_expression(set))
+                format!(
+                    "{}[{}]",
+                    relation_str,
+                    self.print_expression_with_context(set, context)
+                )
             }
 
             ExpressionKind::QuantifiedUnion {
@@ -541,7 +597,7 @@ impl PrettyPrinter {
                 expression,
             } => {
                 let op = self.op(OperatorId::QuantifiedUnion);
-                self.format_quantified_expr(op, identifiers, predicate, expression)
+                self.format_quantified_expr(op, identifiers, predicate, expression, context)
             }
 
             ExpressionKind::QuantifiedInter {
@@ -550,7 +606,7 @@ impl PrettyPrinter {
                 expression,
             } => {
                 let op = self.op(OperatorId::QuantifiedIntersection);
-                self.format_quantified_expr(op, identifiers, predicate, expression)
+                self.format_quantified_expr(op, identifiers, predicate, expression, context)
             }
 
             ExpressionKind::Lambda {
@@ -564,19 +620,20 @@ impl PrettyPrinter {
                 format!(
                     "{} {}{}{}{}{}",
                     lambda,
-                    self.print_ident_pattern(pattern),
+                    self.print_ident_pattern(pattern, context),
                     mid,
-                    self.print_predicate(predicate),
+                    self.print_predicate_with_context(predicate, context),
                     bar,
-                    self.print_expression(expression)
+                    self.print_expression_with_context(expression, context)
                 )
             }
 
             ExpressionKind::Binary { op, left, right } => {
                 let op_str = self.print_binary_op(*op);
-                let left_str = self.print_child_expr(left, *op, false);
-                let right_str = self.print_child_expr(right, *op, true);
-                format!("{} {} {}", left_str, op_str, right_str)
+                let left_str = self.print_child_expr(left, *op, false, context);
+                let right_str = self.print_child_expr(right, *op, true, context);
+                let separator = self.binary_separator(*op, context);
+                format!("{left_str}{separator}{op_str}{separator}{right_str}")
             }
 
             ExpressionKind::Unary { op, operand } => {
@@ -596,53 +653,73 @@ impl PrettyPrinter {
                                 ..
                             }
                     );
-                    let operand_str = self.print_expression(operand);
+                    let operand_str = self.print_expression_with_context(operand, context);
                     if needs_parens {
                         format!("({}){}", operand_str, op_str)
                     } else {
                         format!("{}{}", operand_str, op_str)
                     }
                 } else {
-                    let operand_str = self.print_expression(operand);
+                    let operand_str = self.print_expression_with_context(operand, context);
                     format!("{}({})", op_str, operand_str)
                 }
             }
 
             ExpressionKind::FunctionApplication { function, argument } => {
-                let mut func_str = self.print_expression(function);
+                let mut func_str = self.print_expression_with_context(function, context);
                 if Self::needs_parens_for_relational_image(function) {
                     func_str = format!("({})", func_str);
                 }
-                format!("{}({})", func_str, self.print_expression(argument))
+                format!(
+                    "{}({})",
+                    func_str,
+                    self.print_expression_with_context(argument, context)
+                )
             }
 
             ExpressionKind::BuiltinApplication { function, argument } => {
-                format!("{}({})", function.name(), self.print_expression(argument))
+                format!(
+                    "{}({})",
+                    function.name(),
+                    self.print_expression_with_context(argument, context)
+                )
             }
 
             // Generic relational atom (`id`, `prj1`, …): a bare word.
             ExpressionKind::AtomicBuiltin(kind) => kind.name().to_string(),
 
             ExpressionKind::Bool(predicate) => {
-                format!("bool({})", self.print_predicate(predicate))
+                format!(
+                    "bool({})",
+                    self.print_predicate_with_context(predicate, context)
+                )
             }
         }
     }
 
     /// Format a list of typed identifiers, rendering type annotations with ⦂/oftype
-    fn format_typed_identifiers(&self, identifiers: &[TypedIdentifier]) -> String {
+    fn format_typed_identifiers(
+        &self,
+        identifiers: &[TypedIdentifier],
+        context: FormulaContext,
+    ) -> String {
         identifiers
             .iter()
             .map(|id| {
                 if let Some(ref type_expr) = id.type_expr {
                     let oftype = self.oftype_annotation();
-                    format!("{}{}{}", id.name, oftype, self.print_expression(type_expr))
+                    format!(
+                        "{}{}{}",
+                        id.name,
+                        oftype,
+                        self.print_expression_with_context(type_expr, context)
+                    )
                 } else {
                     id.name.clone()
                 }
             })
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(self.comma_separator())
     }
 
     /// Format a quantified expression (QuantifiedUnion, QuantifiedInter)
@@ -652,40 +729,46 @@ impl PrettyPrinter {
         identifiers: &[TypedIdentifier],
         predicate: &Predicate,
         expression: &Expression,
+        context: FormulaContext,
     ) -> String {
         let mid = self.op(OperatorId::Dot);
         let bar = self.op(OperatorId::Bar);
-        let ids_str = self.format_typed_identifiers(identifiers);
+        let ids_str = self.format_typed_identifiers(identifiers, context);
         format!(
             "{} {}{}{}{}{}",
             keyword,
             ids_str,
             mid,
-            self.print_predicate(predicate),
+            self.print_predicate_with_context(predicate, context),
             bar,
-            self.print_expression(expression)
+            self.print_expression_with_context(expression, context)
         )
     }
 
     /// Print a lambda ident-pattern
-    fn print_ident_pattern(&self, pattern: &IdentPattern) -> String {
+    fn print_ident_pattern(&self, pattern: &IdentPattern, context: FormulaContext) -> String {
         match pattern {
             IdentPattern::Identifier(t) => match &t.type_expr {
                 Some(ty) => {
                     let oftype = self.oftype_annotation();
-                    format!("{}{}{}", t.name, oftype, self.print_expression(ty))
+                    format!(
+                        "{}{}{}",
+                        t.name,
+                        oftype,
+                        self.print_expression_with_context(ty, context)
+                    )
                 }
                 None => t.name.clone(),
             },
             IdentPattern::Maplet(left, right) => {
                 let maplet = self.op(OperatorId::Maplet);
-                let left_str = self.print_ident_pattern(left);
+                let left_str = self.print_ident_pattern(left, context);
                 // Right child needs parens only if it's a Maplet (since maplet is left-assoc)
                 let right_str = match right.as_ref() {
                     IdentPattern::Maplet(_, _) => {
-                        format!("({})", self.print_ident_pattern(right))
+                        format!("({})", self.print_ident_pattern(right, context))
                     }
-                    _ => self.print_ident_pattern(right),
+                    _ => self.print_ident_pattern(right, context),
                 };
                 format!("{} {} {}", left_str, maplet, right_str)
             }
@@ -693,7 +776,13 @@ impl PrettyPrinter {
     }
 
     /// Print a child of a binary expression, adding parentheses only when needed
-    fn print_child_expr(&self, child: &Expression, parent_op: BinaryOp, is_right: bool) -> String {
+    fn print_child_expr(
+        &self,
+        child: &Expression,
+        parent_op: BinaryOp,
+        is_right: bool,
+        context: FormulaContext,
+    ) -> String {
         // Quantified/lambda expressions sit above binary operators in the grammar
         // hierarchy, so they must be parenthesized when appearing as operands.
         if matches!(
@@ -702,7 +791,7 @@ impl PrettyPrinter {
                 | ExpressionKind::QuantifiedUnion { .. }
                 | ExpressionKind::QuantifiedInter { .. }
         ) {
-            return format!("({})", self.print_expression(child));
+            return format!("({})", self.print_expression_with_context(child, context));
         }
         if let ExpressionKind::Binary { op: child_op, .. } = &child.kind {
             let child_prec = op_info::binary_precedence(*child_op);
@@ -720,10 +809,10 @@ impl PrettyPrinter {
             };
 
             if needs_parens {
-                return format!("({})", self.print_expression(child));
+                return format!("({})", self.print_expression_with_context(child, context));
             }
         }
-        self.print_expression(child)
+        self.print_expression_with_context(child, context)
     }
 
     /// Check if an expression needs parentheses when used as the relation of
@@ -744,16 +833,90 @@ impl PrettyPrinter {
     /// Print an expression in a context where only a `pair-expression` (or lower)
     /// is valid. Lambda, quantified union, and quantified intersection expressions
     /// sit above `pair-expression` in the grammar and must be parenthesized.
-    fn print_expr_as_pair(&self, expr: &Expression) -> String {
+    fn print_expr_as_pair(&self, expr: &Expression, context: FormulaContext) -> String {
         if matches!(
             expr.kind,
             ExpressionKind::Lambda { .. }
                 | ExpressionKind::QuantifiedUnion { .. }
                 | ExpressionKind::QuantifiedInter { .. }
         ) {
-            format!("({})", self.print_expression(expr))
+            format!("({})", self.print_expression_with_context(expr, context))
         } else {
-            self.print_expression(expr)
+            self.print_expression_with_context(expr, context)
+        }
+    }
+
+    #[inline]
+    fn comma_separator(&self) -> &'static str {
+        match self.formula_spacing {
+            FormulaSpacing::Readable => ", ",
+            FormulaSpacing::RodinCanonical => ",",
+        }
+    }
+
+    #[inline]
+    fn tight_operator_separator(&self, id: OperatorId) -> &'static str {
+        if self.formula_spacing == FormulaSpacing::RodinCanonical
+            && (self.use_unicode || operators::spelling(id).is_symbolic())
+        {
+            ""
+        } else {
+            " "
+        }
+    }
+
+    #[inline]
+    fn binary_separator(&self, op: BinaryOp, context: FormulaContext) -> &'static str {
+        if self.formula_spacing == FormulaSpacing::RodinCanonical
+            && self.rodin_binary_is_tight(op, context)
+        {
+            ""
+        } else {
+            " "
+        }
+    }
+
+    /// Whether Rodin removes whitespace around this binary expression
+    /// operator. Keep this match exhaustive so a new AST operator cannot gain
+    /// an accidental default spacing policy.
+    fn rodin_binary_is_tight(&self, op: BinaryOp, context: FormulaContext) -> bool {
+        match op {
+            BinaryOp::Add
+            | BinaryOp::Multiply
+            | BinaryOp::Union
+            | BinaryOp::Intersection
+            | BinaryOp::CartesianProduct
+            | BinaryOp::Overwrite => true,
+            // Rodin tightens a binary type ascription in a predicate, while
+            // standalone expressions and assignments retain spaces. ASCII
+            // `oftype` needs word-separating whitespace in every context.
+            BinaryOp::OfType => self.use_unicode && context == FormulaContext::Predicate,
+            BinaryOp::Subtract
+            | BinaryOp::Divide
+            | BinaryOp::Modulo
+            | BinaryOp::Exponent
+            | BinaryOp::Range
+            | BinaryOp::Difference
+            | BinaryOp::Relation
+            | BinaryOp::TotalRelation
+            | BinaryOp::SurjectiveRelation
+            | BinaryOp::TotalSurjectiveRelation
+            | BinaryOp::TotalFunction
+            | BinaryOp::PartialFunction
+            | BinaryOp::TotalInjection
+            | BinaryOp::PartialInjection
+            | BinaryOp::TotalSurjection
+            | BinaryOp::PartialSurjection
+            | BinaryOp::Bijection
+            | BinaryOp::Composition
+            | BinaryOp::Semicolon
+            | BinaryOp::DomainRestriction
+            | BinaryOp::DomainSubtraction
+            | BinaryOp::RangeRestriction
+            | BinaryOp::RangeSubtraction
+            | BinaryOp::DirectProduct
+            | BinaryOp::ParallelProduct
+            | BinaryOp::Maplet => false,
         }
     }
 
@@ -797,27 +960,33 @@ impl PrettyPrinter {
 
     /// Convert a Predicate to text
     pub fn print_predicate(&self, pred: &Predicate) -> String {
+        self.print_predicate_with_context(pred, FormulaContext::Predicate)
+    }
+
+    fn print_predicate_with_context(&self, pred: &Predicate, context: FormulaContext) -> String {
         match &pred.kind {
             PredicateKind::True => self.sym("⊤", "true").to_string(),
             PredicateKind::False => self.sym("⊥", "false").to_string(),
 
             PredicateKind::Comparison { op, left, right } => {
                 let op_str = self.print_comparison_op(*op);
-                let left_str = self.print_expr_as_pair(left);
-                let right_str = self.print_expr_as_pair(right);
-                format!("{} {} {}", left_str, op_str, right_str)
+                let left_str = self.print_expr_as_pair(left, context);
+                let right_str = self.print_expr_as_pair(right, context);
+                let separator = self.tight_operator_separator(operators::comparison_op_id(*op));
+                format!("{left_str}{separator}{op_str}{separator}{right_str}")
             }
 
             PredicateKind::Not(p) => {
                 let not = self.op(OperatorId::Not);
-                format!("{}({})", not, self.print_predicate(p))
+                format!("{}({})", not, self.print_predicate_with_context(p, context))
             }
 
             PredicateKind::Logical { op, left, right } => {
                 let op_str = self.print_logical_op(*op);
-                let left_str = self.print_predicate_child(left, *op, false);
-                let right_str = self.print_predicate_child(right, *op, true);
-                format!("{} {} {}", left_str, op_str, right_str)
+                let left_str = self.print_predicate_child(left, *op, false, context);
+                let right_str = self.print_predicate_child(right, *op, true, context);
+                let separator = self.tight_operator_separator(operators::logical_op_id(*op));
+                format!("{left_str}{separator}{op_str}{separator}{right_str}")
             }
 
             PredicateKind::Quantified {
@@ -827,13 +996,13 @@ impl PrettyPrinter {
             } => {
                 let quant_str = self.op(operators::quantifier_id(*quantifier));
                 let mid = self.op(OperatorId::Dot);
-                let ids_str = self.format_typed_identifiers(identifiers);
+                let ids_str = self.format_typed_identifiers(identifiers, context);
                 format!(
                     "{}{}{}{}",
                     quant_str,
                     ids_str,
                     mid,
-                    self.print_predicate(predicate)
+                    self.print_predicate_with_context(predicate, context)
                 )
             }
 
@@ -841,18 +1010,30 @@ impl PrettyPrinter {
                 function,
                 arguments,
             } => {
-                let args: Vec<String> =
-                    arguments.iter().map(|a| self.print_expression(a)).collect();
-                format!("{}({})", function.as_str(), args.join(", "))
+                let args: Vec<String> = arguments
+                    .iter()
+                    .map(|a| self.print_expression_with_context(a, context))
+                    .collect();
+                format!(
+                    "{}({})",
+                    function.as_str(),
+                    args.join(self.comma_separator())
+                )
             }
 
             PredicateKind::BuiltinApplication {
                 predicate,
                 arguments,
             } => {
-                let args: Vec<String> =
-                    arguments.iter().map(|a| self.print_expression(a)).collect();
-                format!("{}({})", predicate.name(), args.join(", "))
+                let args: Vec<String> = arguments
+                    .iter()
+                    .map(|a| self.print_expression_with_context(a, context))
+                    .collect();
+                format!(
+                    "{}({})",
+                    predicate.name(),
+                    args.join(self.comma_separator())
+                )
             }
         }
     }
@@ -864,6 +1045,7 @@ impl PrettyPrinter {
         child: &Predicate,
         parent_op: LogicalOp,
         is_right: bool,
+        context: FormulaContext,
     ) -> String {
         let needs_parens = match &child.kind {
             // Quantifiers are below all logical connectives in the grammar
@@ -890,9 +1072,9 @@ impl PrettyPrinter {
             _ => false,
         };
         if needs_parens {
-            format!("({})", self.print_predicate(child))
+            format!("({})", self.print_predicate_with_context(child, context))
         } else {
-            self.print_predicate(child)
+            self.print_predicate_with_context(child, context)
         }
     }
 
@@ -935,39 +1117,43 @@ impl PrettyPrinter {
     }
 
     /// Print an expression in an action position, guarding bare `;`.
-    fn print_action_expr(&self, expr: &Expression) -> String {
-        Self::guard_action_part(self.print_expression(expr))
+    fn print_action_expr(&self, expr: &Expression, context: FormulaContext) -> String {
+        Self::guard_action_part(self.print_expression_with_context(expr, context))
     }
 
     /// Convert an Action to text
     pub fn print_action(&self, action: &Action) -> String {
+        let context = FormulaContext::Action;
         let assign = self.op(OperatorId::Assignment);
         match &action.kind {
             ActionKind::Skip => "skip".to_string(),
             ActionKind::Assignment { assignments } => {
-                let vars = join_idents(assignments.iter().map(|(variable, _)| variable));
+                let vars = join_idents(
+                    assignments.iter().map(|(variable, _)| variable),
+                    self.comma_separator(),
+                );
                 let exprs: Vec<String> = assignments
                     .iter()
-                    .map(|(_, expression)| self.print_action_expr(expression))
+                    .map(|(_, expression)| self.print_action_expr(expression, context))
                     .collect();
-                format!("{} {} {}", vars, assign, exprs.join(", "))
+                format!("{} {} {}", vars, assign, exprs.join(self.comma_separator()))
             }
             ActionKind::BecomesIn { variables, set } => {
-                let vars = join_idents(variables);
+                let vars = join_idents(variables, self.comma_separator());
                 let op = self.op(OperatorId::BecomesIn);
-                format!("{} {} {}", vars, op, self.print_action_expr(set))
+                format!("{} {} {}", vars, op, self.print_action_expr(set, context))
             }
             ActionKind::BecomesSuchThat {
                 variables,
                 predicate,
             } => {
-                let vars = join_idents(variables);
+                let vars = join_idents(variables, self.comma_separator());
                 let op = self.op(OperatorId::BecomesSuchThat);
                 format!(
                     "{} {} {}",
                     vars,
                     op,
-                    Self::guard_action_part(self.print_predicate(predicate))
+                    Self::guard_action_part(self.print_predicate_with_context(predicate, context))
                 )
             }
         }
@@ -975,11 +1161,11 @@ impl PrettyPrinter {
 }
 
 /// Render a comma-separated list of identifier names (assignment / becomes LHS).
-fn join_idents<'a>(vars: impl IntoIterator<Item = &'a Ident>) -> String {
+fn join_idents<'a>(vars: impl IntoIterator<Item = &'a Ident>, separator: &str) -> String {
     vars.into_iter()
         .map(Ident::as_str)
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(separator)
 }
 
 /// Convenience function to convert a Component to text with default settings

@@ -7,7 +7,7 @@ use crate::lsp_types::{Position, Range, TextEdit};
 
 /// Format a document using the supplied server configuration.
 pub fn format(text: &str, config: &FormatConfig) -> Result<Vec<TextEdit>, String> {
-    use rossi::{PrettyPrinter, format_str};
+    use rossi::{FormulaSpacing, PrettyPrinter, format_str};
 
     // Delegate to the shared formatting core so editor and `rossi fmt`
     // formatting never diverge.
@@ -16,6 +16,7 @@ pub fn format(text: &str, config: &FormatConfig) -> Result<Vec<TextEdit>, String
         indent: config.indentation.clone(),
         // Editor output stays portable: never emit the private-use glyphs.
         private_use_glyphs: false,
+        formula_spacing: FormulaSpacing::Readable,
     };
     let formatted = format_str(text, &printer).map_err(|e| format!("Parse error: {}", e))?;
 

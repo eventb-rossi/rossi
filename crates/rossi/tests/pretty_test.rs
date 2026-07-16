@@ -326,6 +326,173 @@ fn test_pretty_print_parallel_assignment_keeps_all_pairs() {
 }
 
 #[test]
+fn rodin_canonical_binary_spacing_is_exhaustive() {
+    use rossi::ast::expression::BinaryOp;
+
+    let cases = [
+        (BinaryOp::Add, true),
+        (BinaryOp::Subtract, false),
+        (BinaryOp::Multiply, true),
+        (BinaryOp::Divide, false),
+        (BinaryOp::Modulo, false),
+        (BinaryOp::Exponent, false),
+        (BinaryOp::Range, false),
+        (BinaryOp::Union, true),
+        (BinaryOp::Intersection, true),
+        (BinaryOp::Difference, false),
+        (BinaryOp::CartesianProduct, true),
+        (BinaryOp::Relation, false),
+        (BinaryOp::TotalRelation, false),
+        (BinaryOp::SurjectiveRelation, false),
+        (BinaryOp::TotalSurjectiveRelation, false),
+        (BinaryOp::TotalFunction, false),
+        (BinaryOp::PartialFunction, false),
+        (BinaryOp::TotalInjection, false),
+        (BinaryOp::PartialInjection, false),
+        (BinaryOp::TotalSurjection, false),
+        (BinaryOp::PartialSurjection, false),
+        (BinaryOp::Bijection, false),
+        (BinaryOp::Composition, false),
+        (BinaryOp::Semicolon, false),
+        (BinaryOp::DomainRestriction, false),
+        (BinaryOp::DomainSubtraction, false),
+        (BinaryOp::RangeRestriction, false),
+        (BinaryOp::RangeSubtraction, false),
+        (BinaryOp::Overwrite, true),
+        (BinaryOp::DirectProduct, false),
+        (BinaryOp::ParallelProduct, false),
+        (BinaryOp::OfType, false),
+        (BinaryOp::Maplet, false),
+    ];
+    let printer = PrettyPrinter::rodin_canonical();
+
+    for (op, tight) in cases {
+        let expression: Expression = ExpressionKind::Binary {
+            op,
+            left: Box::new(ExpressionKind::Identifier("a".into()).into()),
+            right: Box::new(ExpressionKind::Identifier("b".into()).into()),
+        }
+        .into();
+        let operator = operators::spell(operators::binary_op_id(op), true);
+        let separator = if tight { "" } else { " " };
+        assert_eq!(
+            printer.print_expression(&expression),
+            format!("a{separator}{operator}{separator}b"),
+            "wrong Rodin spacing for {op:?}"
+        );
+    }
+}
+
+#[test]
+fn rodin_canonical_tightens_comparisons_and_logical_operators() {
+    use rossi::ast::predicate::{ComparisonOp, LogicalOp};
+
+    let comparison_ops = [
+        ComparisonOp::Equal,
+        ComparisonOp::NotEqual,
+        ComparisonOp::LessThan,
+        ComparisonOp::LessEqual,
+        ComparisonOp::GreaterThan,
+        ComparisonOp::GreaterEqual,
+        ComparisonOp::In,
+        ComparisonOp::NotIn,
+        ComparisonOp::Subset,
+        ComparisonOp::SubsetStrict,
+        ComparisonOp::NotSubset,
+        ComparisonOp::NotSubsetStrict,
+    ];
+    let printer = PrettyPrinter::rodin_canonical();
+
+    for op in comparison_ops {
+        let predicate: Predicate = PredicateKind::Comparison {
+            op,
+            left: ExpressionKind::Identifier("a".into()).into(),
+            right: ExpressionKind::Identifier("b".into()).into(),
+        }
+        .into();
+        let operator = operators::spell(operators::comparison_op_id(op), true);
+        assert_eq!(
+            printer.print_predicate(&predicate),
+            format!("a{operator}b"),
+            "wrong Rodin spacing for {op:?}"
+        );
+    }
+
+    let comparison = |left: &str, right: &str| -> Predicate {
+        PredicateKind::Comparison {
+            op: ComparisonOp::Equal,
+            left: ExpressionKind::Identifier(left.into()).into(),
+            right: ExpressionKind::Identifier(right.into()).into(),
+        }
+        .into()
+    };
+    for op in [
+        LogicalOp::And,
+        LogicalOp::Or,
+        LogicalOp::Implies,
+        LogicalOp::Equivalent,
+    ] {
+        let predicate: Predicate = PredicateKind::Logical {
+            op,
+            left: Box::new(comparison("a", "b")),
+            right: Box::new(comparison("c", "d")),
+        }
+        .into();
+        let operator = operators::spell(operators::logical_op_id(op), true);
+        assert_eq!(
+            printer.print_predicate(&predicate),
+            format!("a=b{operator}c=d"),
+            "wrong Rodin spacing for {op:?}"
+        );
+    }
+}
+
+#[test]
+fn rodin_canonical_ascii_keeps_word_operator_boundaries() {
+    let predicate = parse_predicate_str("a = b or c = d").expect("predicate parses");
+    let printer = PrettyPrinter::ascii().with_formula_spacing(FormulaSpacing::RodinCanonical);
+    let printed = printer.print_predicate(&predicate);
+
+    assert_eq!(printed, "a=b or c=d");
+    assert_eq!(
+        parse_predicate_str(&printed).expect("printed predicate reparses"),
+        predicate
+    );
+}
+
+#[test]
+fn rodin_canonical_preserves_root_specific_type_ascription_spacing() {
+    let printer = PrettyPrinter::rodin_canonical();
+    let expression = parse_expression_str("a ⦂ b").expect("expression parses");
+    let predicate = parse_predicate_str("a ⦂ b = c").expect("predicate parses");
+    let bool_expression = parse_expression_str("bool(a ⦂ b = c)").expect("bool parses");
+    let action = parse_action_str("x ≔ a ⦂ b").expect("action parses");
+
+    assert_eq!(printer.print_expression(&expression), "a ⦂ b");
+    assert_eq!(printer.print_predicate(&predicate), "a⦂b=c");
+    assert_eq!(printer.print_expression(&bool_expression), "bool(a ⦂ b=c)");
+    assert_eq!(printer.print_action(&action), "x ≔ a ⦂ b");
+}
+
+#[test]
+fn rodin_canonical_tightens_comma_separated_formula_lists() {
+    let printer = PrettyPrinter::rodin_canonical();
+    let expression = parse_expression_str("{1, 2, 3}").expect("enumeration parses");
+    let predicate = parse_predicate_str("∀x⦂ℤ, y⦂ℤ · p(x, y)").expect("predicate parses");
+    let action = parse_action_str("x, y ≔ 1, 2").expect("action parses");
+
+    assert_eq!(printer.print_expression(&expression), "{1,2,3}");
+    assert_eq!(printer.print_predicate(&predicate), "∀x⦂ℤ,y⦂ℤ·p(x,y)");
+    assert_eq!(printer.print_action(&action), "x,y ≔ 1,2");
+
+    assert_eq!(
+        PrettyPrinter::new().print_expression(&expression),
+        "{1, 2, 3}"
+    );
+    assert_eq!(PrettyPrinter::new().print_action(&action), "x, y ≔ 1, 2");
+}
+
+#[test]
 fn test_pretty_print_sees_and_refines() {
     let source = r#"MACHINE refined
 REFINES

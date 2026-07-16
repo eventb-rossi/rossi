@@ -12,7 +12,7 @@
 //! the flat output unchanged.
 
 use clap::Args;
-use rossi::{NamedComponent, NamedProject, PrettyPrinter};
+use rossi::{FormulaSpacing, NamedComponent, NamedProject, PrettyPrinter};
 use rossi_build::project::discover_projects;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,6 +75,7 @@ fn run_inner(cli: &ImportArgs) -> CmdResult<()> {
         indent: cli.indent.clone().unwrap_or_else(|| "    ".to_string()),
         // Emitted text stays portable: never the private-use glyphs.
         private_use_glyphs: false,
+        formula_spacing: FormulaSpacing::Readable,
     };
 
     // Multiple projects (a multi-project archive, or several inputs) are kept
