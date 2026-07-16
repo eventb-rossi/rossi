@@ -17,6 +17,7 @@
 
 use clap::Args;
 use rossi::{PrettyPrinter, format_str, parse_xml, to_xml};
+use std::collections::{HashMap, hash_map::Entry};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -147,6 +148,27 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
     }
 
     let multi = items.len() > 1;
+    if let Mode::Output(out) = &mode {
+        let mut inputs_by_destination: HashMap<PathBuf, &PathBuf> =
+            HashMap::with_capacity(items.len());
+        for (path, _) in &items {
+            let dest = output_destination(out, path, multi)?;
+            match inputs_by_destination.entry(dest) {
+                Entry::Occupied(entry) => {
+                    return Err(format!(
+                        "duplicate output destination {} for inputs {} and {}",
+                        entry.key().display(),
+                        entry.get().display(),
+                        path.display()
+                    )
+                    .into());
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(path);
+                }
+            }
+        }
+    }
     let mut any_unformatted = false;
 
     for (path, kind) in &items {
@@ -178,15 +200,7 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
                 }
             }
             Mode::Output(out) => {
-                let dest = if multi {
-                    fs::create_dir_all(out)?;
-                    let name = path
-                        .file_name()
-                        .ok_or_else(|| format!("input has no file name: {}", path.display()))?;
-                    out.join(name)
-                } else {
-                    out.clone()
-                };
+                let dest = output_destination(out, path, multi)?;
                 formatted.write_to(&dest)?;
                 if cli.verbose {
                     eprintln!("wrote {}", dest.display());
@@ -199,6 +213,16 @@ fn run_inner(cli: &FmtArgs) -> CmdResult<ExitCode> {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn output_destination(output: &Path, input: &Path, multi: bool) -> CmdResult<PathBuf> {
+    if !multi {
+        return Ok(output.to_path_buf());
+    }
+    let name = input
+        .file_name()
+        .ok_or_else(|| format!("input has no file name: {}", input.display()))?;
+    Ok(output.join(name))
 }
 
 /// Format a single Event-B text stream read from stdin (the `-` input).

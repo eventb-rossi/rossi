@@ -1398,6 +1398,75 @@ fn fmt_check_then_in_place() {
 }
 
 #[test]
+fn fmt_multiple_outputs_are_flat() {
+    let tmp = tempdir_unique("rossi-cli-fmt-multiple-output");
+    let first = tmp.join("first");
+    let second = tmp.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let a = first.join("a.eventb");
+    let b = second.join("b.eventb");
+    std::fs::write(&a, ASCII_CONTEXT).unwrap();
+    std::fs::write(&b, ASCII_CONTEXT).unwrap();
+    let out = tmp.join("out");
+
+    let output = rossi_command()
+        .arg("fmt")
+        .arg(&a)
+        .arg(&b)
+        .args(["-o", out.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "fmt should write unique basenames; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for name in ["a.eventb", "b.eventb"] {
+        let text = std::fs::read_to_string(out.join(name)).unwrap();
+        assert!(text.contains('∈'), "expected formatted output in {name}");
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn fmt_rejects_colliding_output_basenames_before_writing() {
+    let tmp = tempdir_unique("rossi-cli-fmt-output-collision");
+    let first = tmp.join("first");
+    let second = tmp.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let first_model = first.join("model.eventb");
+    let second_model = second.join("model.eventb");
+    std::fs::write(&first_model, "CONTEXT first\nEND\n").unwrap();
+    std::fs::write(&second_model, "CONTEXT second\nEND\n").unwrap();
+    let out = tmp.join("out");
+
+    let output = rossi_command()
+        .arg("fmt")
+        .arg(&first_model)
+        .arg(&second_model)
+        .args(["-o", out.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(!output.status.success(), "colliding outputs must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("duplicate output destination") && stderr.contains("model.eventb"),
+        "expected collision error; stderr={stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "collision preflight must not create the output directory"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn fmt_ascii_on_rodin_zip_is_rejected() {
     let output = rossi_command()
         .args(["fmt", "--ascii", "../rossi/examples/traffic-light.zip"])
