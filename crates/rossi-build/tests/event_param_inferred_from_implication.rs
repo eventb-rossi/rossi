@@ -26,7 +26,7 @@ const MACHINE_BUM: &str = r#"<?xml version="1.0"?>
 <org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="proc ∈ PROCESSES"/>
 <org.eventb.core.guard name="_g2" org.eventb.core.label="grd2" org.eventb.core.predicate="flag ∈ BOOL"/>
 <org.eventb.core.guard name="_g3" org.eventb.core.label="grd49" org.eventb.core.predicate="(flag = TRUE ⇒ trigs = {proc}) ∧ (flag = FALSE ⇒ trigs = ∅)"/>
-<org.eventb.core.action name="_a1" org.eventb.core.assignment="timeout_trigger ≔ trigs ⩤ timeout_trigger" org.eventb.core.label="act1"/>
+<org.eventb.core.action name="_a1" org.eventb.core.assignment="timeout_trigger ≔ timeout_trigger ∖ trigs" org.eventb.core.label="act1"/>
 </org.eventb.core.event>
 </org.eventb.core.machineFile>
 "#;

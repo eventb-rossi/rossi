@@ -13,9 +13,9 @@
 //! Without this pass, our output would diverge from Rodin on any source
 //! that uses untyped binders.
 //!
-//! Inference reuses `crate::infer::collect_binder_types` (private),
-//! which already recognises the `x ∈ T` and `x = expr` shapes and
-//! descends through `∧` and `⇒`-antecedents.
+//! Inference reuses `crate::infer::infer_binder_types`, which combines
+//! direct typing shapes with unification and fixed-point propagation through
+//! logical connectives.
 
 use std::collections::BTreeMap;
 
@@ -28,7 +28,7 @@ use rossi::{
 
 use crate::ast_util::left_assoc_maplet;
 use crate::infer::{
-    collect_binder_types, collect_free_identifiers, parse_type_from_expression,
+    collect_free_identifiers, infer_binder_types, parse_type_from_expression,
     pattern_to_binder_types, type_of_expression,
 };
 use crate::normalize::type_to_expression;
@@ -352,7 +352,13 @@ fn enrich_action_in(action: Action, env: &mut TypeEnv) -> Action {
         ActionKind::Assignment { assignments } => ActionKind::Assignment {
             assignments: assignments
                 .into_iter()
-                .map(|(variable, expression)| (variable, enrich_expression_in(expression, env)))
+                .map(|(variable, expression)| {
+                    let expected = env.get(variable.as_str()).cloned();
+                    (
+                        variable,
+                        enrich_expression_in_with_expected(expression, env, expected.as_ref()),
+                    )
+                })
                 .collect(),
         }
         .into(),
@@ -419,8 +425,7 @@ fn enrich_typed_identifiers(
     if untyped_names.is_empty() {
         return identifiers.to_vec();
     }
-    let mut bound: BTreeMap<String, Type> = BTreeMap::new();
-    collect_binder_types(env, body, &untyped_names, &mut bound);
+    let bound = infer_binder_types(env, body, &untyped_names);
     for (name, ty) in &bound {
         env.insert(name.clone(), ty.clone());
     }
@@ -449,8 +454,7 @@ fn enrich_ident_pattern(
     if untyped_names.is_empty() {
         return pattern;
     }
-    let mut bound: BTreeMap<String, Type> = BTreeMap::new();
-    collect_binder_types(env, body, &untyped_names, &mut bound);
+    let mut bound = infer_binder_types(env, body, &untyped_names);
     if let Some(dom) = expected_domain
         && let Some(extra) = pattern_to_binder_types(&pattern, dom)
     {

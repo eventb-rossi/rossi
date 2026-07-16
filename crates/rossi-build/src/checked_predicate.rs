@@ -15,9 +15,7 @@
 //! here is designed to absorb that change without touching call sites.
 //!
 //! Action checking is split:
-//! - [`crate::normalize::canonical_action`] always returns a string (matches today's
-//!   behaviour — actions are never dropped on a free-ident error;
-//!   the diagnostic surfaces but the row still emits).
+//! - [`crate::normalize::canonical_action`] always returns a string.
 //! - [`check_action`] additionally surfaces the first free identifier
 //!   on the action's read side (RHS of `:=`, set of `:∈`, predicate
 //!   of `:|`, arguments + RHS of `f(x) := …`) for callers that want
@@ -28,6 +26,7 @@
 use rossi::{Action, Expression, LabeledPredicate, Predicate};
 
 use crate::enrich::{enrich_action, enrich_expression, enrich_predicate};
+use crate::infer::check_predicate_type;
 use crate::normalize::{canonical_action_with_env, canonical_expression, canonical_predicate};
 use crate::sc::identifier_walker::{
     free_identifier_in_action_rhs, free_identifier_in_expression, free_identifier_in_predicate,
@@ -57,6 +56,7 @@ pub struct PredicateCheck {
 /// the variant). Same shape as [`PredicateCheck`].
 #[derive(Debug, Clone)]
 pub struct ExpressionCheck {
+    pub expression: Expression,
     pub canonical: String,
     pub free_identifier: Option<String>,
 }
@@ -102,6 +102,7 @@ pub fn check_expression(e: &Expression, env: &TypeEnv) -> ExpressionCheck {
     ExpressionCheck {
         free_identifier: free_identifier_in_expression(&enriched, env),
         canonical: canonical_expression(&enriched),
+        expression: enriched,
     }
 }
 
@@ -157,6 +158,15 @@ pub fn check_labeled_predicate(
             message: format!("unknown identifier '{bad}' in {kind_name} predicate"),
             rule_id: Some(crate::RuleId::UndeclaredIdentifier),
             span,
+        });
+    }
+    if check_predicate_type(env, &pc.predicate).is_err() {
+        return Err(Diagnostic {
+            severity: Severity::Error,
+            origin: origin(&label),
+            message: format!("{kind_name} predicate is ill-typed"),
+            rule_id: Some(crate::RuleId::TypeError),
+            span: raw.span,
         });
     }
     Ok((label, pc))
@@ -220,5 +230,23 @@ mod tests {
         let a = parse_action_str("x ≔ y + 1").unwrap();
         let ac = check_action(&a, &env);
         assert_eq!(ac.free_identifier.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn action_check_flags_unknown_type_ascription_identifier() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let a = parse_action_str("x ≔ card(∅ ⦂ ℙ(UNKNOWN))").unwrap();
+        let ac = check_action(&a, &env);
+        assert_eq!(ac.free_identifier.as_deref(), Some("UNKNOWN"));
+    }
+
+    #[test]
+    fn action_check_binds_primed_becomes_such_that_targets() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+        let a = parse_action_str("x :∣ x' = x").unwrap();
+        let ac = check_action(&a, &env);
+        assert_eq!(ac.free_identifier, None);
     }
 }

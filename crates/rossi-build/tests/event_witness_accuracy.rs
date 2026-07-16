@@ -179,9 +179,9 @@ fn over_witness_for_non_required_name_is_dropped() {
 }
 
 #[test]
-fn missing_local_parameter_witness_is_inaccurate() {
+fn local_parameter_witness_can_reference_concrete_parameter() {
     // The concrete event refines an abstract `op` whose parameter `p` it
-    // renames to `q` and never witnesses, so `p` is an unmet local witness.
+    // renames to `q`; the witness relates both event-local parameters.
     let p0 = r#"<?xml version="1.0"?>
 <org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
 <org.eventb.core.variable name="_v" org.eventb.core.identifier="v"/>
@@ -208,6 +208,7 @@ fn missing_local_parameter_witness_is_inaccurate() {
 <org.eventb.core.parameter name="_q" org.eventb.core.identifier="q"/>
 <org.eventb.core.guard name="_g" org.eventb.core.label="grd1" org.eventb.core.predicate="q ∈ ℕ"/>
 <org.eventb.core.action name="_a" org.eventb.core.assignment="v ≔ q" org.eventb.core.label="act1"/>
+<org.eventb.core.witness name="_w" org.eventb.core.label="p" org.eventb.core.predicate="p = q"/>
 </org.eventb.core.event>
 </org.eventb.core.machineFile>"#;
     let project = Project::new(
@@ -222,13 +223,15 @@ fn missing_local_parameter_witness_is_inaccurate() {
     let v = ScView::from_xml(&bcm.contents).unwrap();
     let op = v.events.get("op").expect("op");
     assert!(
-        !op.accurate,
-        "renamed abstract parameter `p` is an unmet local witness"
+        op.accurate,
+        "the concrete parameter must be in scope for its witness"
     );
     assert!(bcm.accurate, "the machine root stays accurate");
-    // The unmet `p` is emitted as a synthesized `⊤` placeholder.
     assert_eq!(op.witnesses.len(), 1, "{:?}", op.witnesses);
-    assert_eq!(witness(op, "p").predicate, top());
+    assert_eq!(
+        witness(op, "p").predicate,
+        rossi::parse_predicate_str("p = q").unwrap()
+    );
 }
 
 #[test]

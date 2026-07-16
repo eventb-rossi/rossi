@@ -878,6 +878,58 @@ fn build_fails_on_error_diagnostics_but_still_writes_output() {
 }
 
 #[test]
+fn validate_directory_reports_ill_typed_action_as_eb006() {
+    let tmp = tempdir_unique("rossi-cli-validate-type-error");
+    std::fs::write(
+        tmp.join("M.eventb"),
+        r#"MACHINE M
+VARIABLES
+    x
+INVARIANTS
+    @typing x ∈ ℤ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 x ≔ 0
+    END
+
+    EVENT bad
+    THEN
+        @act1 x ≔ TRUE + FALSE
+    END
+END
+"#,
+    )
+    .unwrap();
+
+    let output = rossi_command()
+        .args(["validate", "--format", "json", tmp.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "ill-typed action must fail validation; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let diagnostic = rows
+        .iter()
+        .find(|row| row["rule_id"] == "EB006")
+        .unwrap_or_else(|| panic!("missing EB006 diagnostic: {stdout}"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["origin"], "M.bad.act1");
+    assert_eq!(diagnostic["inner_filename"], "M.eventb");
+    assert!(
+        diagnostic["region"].is_object(),
+        "the error must be positioned on the invalid action: {diagnostic}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_directory_reports_inherited_event_label_as_eb022_error() {
     let tmp = extended_label_fixture("rossi-cli-validate-inherited-label");
     let output = rossi_command()

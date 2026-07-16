@@ -59,6 +59,15 @@ enum ITy {
     Var(u32),
 }
 
+/// Why a formula failed the complete type-checking gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TypeError {
+    /// At least one identifier or formula application could not be typed.
+    Unverified,
+    /// The synthesized type constraints are inconsistent.
+    Mismatch,
+}
+
 impl ITy {
     fn pow(t: ITy) -> ITy {
         ITy::PowerSet(Box::new(t))
@@ -99,6 +108,12 @@ struct Unifier {
     /// every existing caller are unaffected; only
     /// [`infer_ident_via_unification`] sets it.
     target: Option<(String, u32)>,
+    /// Set when synthesis encounters a construct whose type cannot be
+    /// established. Relaxed inference may still recover a sibling's type,
+    /// but the complete well-typedness gate must reject the formula.
+    unverified: bool,
+    /// Set when two structural type constraints clash.
+    invalid: bool,
 }
 
 impl Unifier {
@@ -106,6 +121,8 @@ impl Unifier {
         Unifier {
             slots: Vec::new(),
             target: None,
+            unverified: false,
+            invalid: false,
         }
     }
 
@@ -156,6 +173,7 @@ impl Unifier {
             (ITy::Var(i), ITy::Var(j)) if i == j => Ok(()),
             (ITy::Var(i), other) | (other, ITy::Var(i)) => {
                 if self.occurs(i, &other) {
+                    self.invalid = true;
                     return Err(());
                 }
                 self.slots[i as usize] = Some(other);
@@ -169,7 +187,10 @@ impl Unifier {
             (ITy::Integer, ITy::Integer) => Ok(()),
             (ITy::Boolean, ITy::Boolean) => Ok(()),
             (ITy::GivenSet(n1), ITy::GivenSet(n2)) if n1 == n2 => Ok(()),
-            _ => Err(()),
+            _ => {
+                self.invalid = true;
+                Err(())
+            }
         }
     }
 
@@ -198,7 +219,7 @@ impl Unifier {
                     self.unify(&inner, &ITy::prod(l.clone(), r.clone())).ok()?;
                     Some((l, r))
                 }
-                _ => None,
+                _ => self.mismatch(),
             },
             v @ ITy::Var(_) => {
                 let l = self.fresh();
@@ -206,8 +227,17 @@ impl Unifier {
                 self.unify(&v, &ITy::relation(l.clone(), r.clone())).ok()?;
                 Some((l, r))
             }
-            _ => None,
+            _ => self.mismatch(),
         }
+    }
+
+    fn mismatch<T>(&mut self) -> Option<T> {
+        self.invalid = true;
+        None
+    }
+
+    fn has_unresolved(&self) -> bool {
+        self.slots.iter().any(Option::is_none)
     }
 }
 
@@ -234,6 +264,51 @@ pub fn type_of_expression(env: &TypeEnv, expr: &Expression) -> Option<Type> {
     let mut u = Unifier::new();
     let t = synth(env, expr, &mut u)?;
     ground(&u, &t)
+}
+
+/// Check every type constraint in an expression, optionally constraining its
+/// result to `expected`. Unlike [`type_of_expression`], an unresolved operand
+/// is distinct from a verified polymorphic type and is rejected.
+pub(crate) fn check_expression_type(
+    env: &TypeEnv,
+    expr: &Expression,
+    expected: Option<&Type>,
+) -> Result<(), TypeError> {
+    let mut u = Unifier::new();
+    let Some(t) = synth(env, expr, &mut u) else {
+        return Err(synthesis_error(&u));
+    };
+    if let Some(expected) = expected {
+        u.unify(&t, &ITy::from(expected)).ok();
+    }
+    finish_type_check(&u)
+}
+
+/// Check every type constraint in a predicate.
+pub(crate) fn check_predicate_type(env: &TypeEnv, pred: &Predicate) -> Result<(), TypeError> {
+    let mut u = Unifier::new();
+    if synth_predicate(env, pred, &mut u).is_none() {
+        return Err(synthesis_error(&u));
+    }
+    finish_type_check(&u)
+}
+
+fn finish_type_check(u: &Unifier) -> Result<(), TypeError> {
+    if u.invalid {
+        Err(TypeError::Mismatch)
+    } else if u.unverified || u.has_unresolved() {
+        Err(TypeError::Unverified)
+    } else {
+        Ok(())
+    }
+}
+
+fn synthesis_error(u: &Unifier) -> TypeError {
+    if u.unverified && !u.invalid {
+        TypeError::Unverified
+    } else {
+        TypeError::Mismatch
+    }
 }
 
 /// The type of a generic relational atom (`id`, `prj1`, `prj2`, `pred`,
@@ -285,12 +360,13 @@ fn synth_two_relations(
 /// Constrain one side of a relation (its domain or range) to the element type
 /// of a restricting `set`. Used by `◁`/`▷`/`⩤`/`⩥` and relational image; a
 /// `None` set (a sibling still resolving in the fixpoint) is simply skipped.
-fn constrain_with_set(u: &mut Unifier, side: &ITy, set: Option<ITy>) {
+fn constrain_with_set(u: &mut Unifier, side: &ITy, set: Option<ITy>) -> Option<()> {
     if let Some(set_t) = set {
         let elem = u.fresh();
-        u.unify(&set_t, &ITy::pow(elem.clone())).ok();
-        u.unify(side, &elem).ok();
+        u.unify(&set_t, &ITy::pow(elem.clone())).ok()?;
+        u.unify(side, &elem).ok()?;
     }
+    Some(())
 }
 
 /// Combine two operands that must share a type: unify them when both type,
@@ -330,7 +406,13 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         // `env`, so a free occurrence still falls through to its variable.
         ExpressionKind::Identifier(name) => match env.get(name) {
             Some(t) => Some(ITy::from(t)),
-            None => u.target_var(name),
+            None => match u.target_var(name) {
+                some @ Some(_) => some,
+                None => {
+                    u.unverified = true;
+                    None
+                }
+            },
         },
         ExpressionKind::AtomicBuiltin(kind) => Some(atomic_builtin_type(*kind, u)),
         // `∅` is the generic empty set (Rodin's EMPTYSET): ℙ(α). Bare it
@@ -340,13 +422,14 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         ExpressionKind::Unary { op, operand } => {
             let inner = synth(env, operand, u)?;
             match op {
-                UnaryOp::Minus => Some(ITy::Integer),
+                UnaryOp::Minus => {
+                    u.unify(&inner, &ITy::Integer).ok()?;
+                    Some(ITy::Integer)
+                }
                 UnaryOp::PowerSet | UnaryOp::PowerSet1 => {
-                    // POW(X) : ℙ(ℙ(elem))
-                    match u.resolve(&inner) {
-                        ITy::PowerSet(t) => Some(ITy::pow(ITy::pow(*t))),
-                        _ => None,
-                    }
+                    let elem = u.fresh();
+                    u.unify(&inner, &ITy::pow(elem.clone())).ok()?;
+                    Some(ITy::pow(ITy::pow(elem)))
                 }
                 UnaryOp::Domain => {
                     let (l, _) = u.as_relation(&inner)?;
@@ -385,19 +468,38 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             | BinaryOp::Multiply
             | BinaryOp::Divide
             | BinaryOp::Modulo
-            | BinaryOp::Exponent => Some(ITy::Integer),
-            BinaryOp::Range => Some(ITy::pow(ITy::Integer)),
+            | BinaryOp::Exponent => {
+                let lt = synth(env, left, u)?;
+                let rt = synth(env, right, u)?;
+                u.unify(&lt, &ITy::Integer).ok()?;
+                u.unify(&rt, &ITy::Integer).ok()?;
+                Some(ITy::Integer)
+            }
+            BinaryOp::Range => {
+                let lt = synth(env, left, u)?;
+                let rt = synth(env, right, u)?;
+                u.unify(&lt, &ITy::Integer).ok()?;
+                u.unify(&rt, &ITy::Integer).ok()?;
+                Some(ITy::pow(ITy::Integer))
+            }
             // Set/relation-preserving binary ops: both operands share a
             // type, so unify them — that lets a polymorphic operand (`∅`,
             // `id`) be pinned by its sibling. One legitimately-untyped side
             // (a constant not yet resolved in the fixpoint) is tolerated.
-            BinaryOp::Union
-            | BinaryOp::Intersection
-            | BinaryOp::Difference
-            | BinaryOp::Overwrite => {
+            BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference => {
                 let lt = synth(env, left, u);
                 let rt = synth(env, right, u);
-                unify_or_either(u, lt, rt)
+                let result = unify_or_either(u, lt, rt)?;
+                let elem = u.fresh();
+                u.unify(&result, &ITy::pow(elem)).ok()?;
+                Some(result)
+            }
+            BinaryOp::Overwrite => {
+                let lt = synth(env, left, u);
+                let rt = synth(env, right, u);
+                let result = unify_or_either(u, lt, rt)?;
+                u.as_relation(&result)?;
+                Some(result)
             }
             // `S ◁ r` / `S ⩤ r`: the set restricts the relation's domain;
             // the result keeps the relation's type. Unifying the set's
@@ -407,7 +509,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
                 let rel = synth(env, right, u)?;
                 let (dom, _) = u.as_relation(&rel)?;
                 let set = synth(env, left, u);
-                constrain_with_set(u, &dom, set);
+                constrain_with_set(u, &dom, set)?;
                 Some(rel)
             }
             // `r ▷ S` / `r ⩥ S`: the set restricts the relation's range.
@@ -415,7 +517,7 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
                 let rel = synth(env, left, u)?;
                 let (_, ran) = u.as_relation(&rel)?;
                 let set = synth(env, right, u);
-                constrain_with_set(u, &ran, set);
+                constrain_with_set(u, &ran, set)?;
                 Some(rel)
             }
             // Forward / backward composition, unifying the shared middle
@@ -447,10 +549,11 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             BinaryOp::CartesianProduct => {
                 let lt = synth(env, left, u)?;
                 let rt = synth(env, right, u)?;
-                match (u.resolve(&lt), u.resolve(&rt)) {
-                    (ITy::PowerSet(l), ITy::PowerSet(r)) => Some(ITy::relation(*l, *r)),
-                    _ => None,
-                }
+                let left_elem = u.fresh();
+                let right_elem = u.fresh();
+                u.unify(&lt, &ITy::pow(left_elem.clone())).ok()?;
+                u.unify(&rt, &ITy::pow(right_elem.clone())).ok()?;
+                Some(ITy::relation(left_elem, right_elem))
             }
             BinaryOp::Maplet => {
                 let lt = synth(env, left, u)?;
@@ -472,15 +575,24 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             | BinaryOp::Bijection => {
                 let lt = synth(env, left, u)?;
                 let rt = synth(env, right, u)?;
-                match (u.resolve(&lt), u.resolve(&rt)) {
-                    (ITy::PowerSet(l), ITy::PowerSet(r)) => Some(ITy::pow(ITy::relation(*l, *r))),
-                    _ => None,
-                }
+                let left_elem = u.fresh();
+                let right_elem = u.fresh();
+                u.unify(&lt, &ITy::pow(left_elem.clone())).ok()?;
+                u.unify(&rt, &ITy::pow(right_elem.clone())).ok()?;
+                Some(ITy::pow(ITy::relation(left_elem, right_elem)))
             }
             // `e ⦂ T` — type ascription. The RHS is itself a type
             // expression (`ℤ`, `ℙ(USERS)`, `T × U`); interpret it as a
             // [`Type`] rather than as a set value.
-            BinaryOp::OfType => parse_type_from_expression(right).map(|t| ITy::from(&t)),
+            BinaryOp::OfType => {
+                let Some(expected) = parse_type_from_expression(right).map(|t| ITy::from(&t))
+                else {
+                    return u.mismatch();
+                };
+                let actual = synth(env, left, u)?;
+                u.unify(&actual, &expected).ok()?;
+                Some(expected)
+            }
         },
         ExpressionKind::FunctionApplication { function, argument } => {
             // `f(x)`: when `f : ℙ(α × β)`, the application has type `β`. A pair
@@ -490,24 +602,30 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             // gets pinned; return the codomain.
             let f = synth(env, function, u)?;
             let (dom, codomain) = u.as_relation(&f)?;
-            if let Some(arg_t) = synth(env, argument, u) {
-                u.unify(&dom, &arg_t).ok();
-            }
+            let arg_t = synth(env, argument, u)?;
+            u.unify(&dom, &arg_t).ok()?;
             Some(codomain)
         }
         ExpressionKind::BuiltinApplication { function, argument } => match function {
-            // Cardinality / min / max of any set return integers.
-            BuiltinFunction::Card | BuiltinFunction::Min | BuiltinFunction::Max => {
+            BuiltinFunction::Card => {
+                let arg = synth(env, argument, u)?;
+                let elem = u.fresh();
+                u.unify(&arg, &ITy::pow(elem)).ok()?;
+                Some(ITy::Integer)
+            }
+            BuiltinFunction::Min | BuiltinFunction::Max => {
+                let arg = synth(env, argument, u)?;
+                u.unify(&arg, &ITy::pow(ITy::Integer)).ok()?;
                 Some(ITy::Integer)
             }
             // Generalized union/intersection collapses one power-set level:
             // union(S)/inter(S) : ℙ(α) when S : ℙ(ℙ(α)).
             BuiltinFunction::Union | BuiltinFunction::Inter => {
                 let arg = synth(env, argument, u)?;
-                match u.resolve(&arg) {
-                    ITy::PowerSet(inner) if matches!(*inner, ITy::PowerSet(_)) => Some(*inner),
-                    _ => None,
-                }
+                let elem = u.fresh();
+                let result = ITy::pow(elem);
+                u.unify(&arg, &ITy::pow(result.clone())).ok()?;
+                Some(result)
             }
         },
         // `r[A]` — relational image: `r : ℙ(α × β)`, `A : ℙ(α)` ⇒ `ℙ(β)`.
@@ -517,11 +635,14 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             let rel = synth(env, relation, u)?;
             let (dom, ran) = u.as_relation(&rel)?;
             let set_t = synth(env, set, u);
-            constrain_with_set(u, &dom, set_t);
+            constrain_with_set(u, &dom, set_t)?;
             Some(ITy::pow(ran))
         }
         // `bool(P)` — promotes a predicate to a Boolean value.
-        ExpressionKind::Bool(_) => Some(ITy::Boolean),
+        ExpressionKind::Bool(predicate) => {
+            synth_predicate(env, predicate, u)?;
+            Some(ITy::Boolean)
+        }
         // λ pattern · P ∣ E. Bind the pattern names from explicit type
         // ascriptions or from `P`, then return ℙ(dom × typeof(E)).
         ExpressionKind::Lambda {
@@ -533,11 +654,11 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             let mut identifiers = Vec::new();
             collect_pattern_identifiers(pattern, &mut identifiers);
             let mut local = env.clone();
-            let bound = bind_names(&mut local, &names, &identifiers, predicate);
-            if !names.iter().all(|n| bound.contains_key(*n)) {
-                return None;
-            }
-            let dom = pattern_to_type(pattern, &bound)?;
+            let bound = bind_all_names(&mut local, &names, &identifiers, predicate, u)?;
+            synth_predicate(&local, predicate, u)?;
+            let Some(dom) = pattern_to_type(pattern, &bound) else {
+                return u.mismatch();
+            };
             let body_ty = synth(&local, expression, u)?;
             Some(ITy::relation(ITy::from(&dom), body_ty))
         }
@@ -552,10 +673,8 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         } => {
             let names: Vec<&str> = identifiers.iter().map(|i| i.name.as_str()).collect();
             let mut local = env.clone();
-            let bound = bind_names(&mut local, &names, identifiers, predicate);
-            if !names.iter().all(|n| bound.contains_key(*n)) {
-                return None;
-            }
+            let bound = bind_all_names(&mut local, &names, identifiers, predicate, u)?;
+            synth_predicate(&local, predicate, u)?;
             let body_ty = match expression {
                 Some(e) => synth(&local, e, u)?,
                 None => ITy::from(&binder_left_assoc_product(&names, &bound)?),
@@ -573,10 +692,8 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
             let bound_names: Vec<&str> =
                 free.iter().filter(|n| !env.contains(n)).copied().collect();
             let mut local = env.clone();
-            let bound = bind_names(&mut local, &bound_names, &[], predicate);
-            if !bound_names.iter().all(|n| bound.contains_key(*n)) {
-                return None;
-            }
+            bind_all_names(&mut local, &bound_names, &[], predicate, u)?;
+            synth_predicate(&local, predicate, u)?;
             let body_ty = synth(&local, member_expression, u)?;
             Some(ITy::pow(body_ty))
         }
@@ -594,11 +711,78 @@ fn synth(env: &TypeEnv, expr: &Expression, u: &mut Unifier) -> Option<ITy> {
         } => {
             let names: Vec<&str> = identifiers.iter().map(|i| i.name.as_str()).collect();
             let mut local = env.clone();
-            let bound = bind_names(&mut local, &names, identifiers, predicate);
-            if !names.iter().all(|n| bound.contains_key(*n)) {
-                return None;
+            bind_all_names(&mut local, &names, identifiers, predicate, u)?;
+            synth_predicate(&local, predicate, u)?;
+            let body = synth(&local, expression, u)?;
+            let elem = u.fresh();
+            u.unify(&body, &ITy::pow(elem)).ok()?;
+            Some(body)
+        }
+    }
+}
+
+/// Register every expression constraint imposed by `pred` in the same
+/// unifier used by an enclosing expression. This mirrors Rodin's recursive
+/// formula type checker, including scope extension for quantified binders.
+fn synth_predicate(env: &TypeEnv, pred: &Predicate, u: &mut Unifier) -> Option<()> {
+    match &pred.kind {
+        PredicateKind::True | PredicateKind::False => Some(()),
+        PredicateKind::Not(inner) => synth_predicate(env, inner, u),
+        PredicateKind::Logical { left, right, .. } => {
+            synth_predicate(env, left, u)?;
+            synth_predicate(env, right, u)
+        }
+        PredicateKind::Quantified {
+            identifiers,
+            predicate,
+            ..
+        } => {
+            let names: Vec<&str> = identifiers.iter().map(|i| i.name.as_str()).collect();
+            let mut local = env.clone();
+            bind_all_names(&mut local, &names, identifiers, predicate, u)?;
+            synth_predicate(&local, predicate, u)
+        }
+        PredicateKind::Comparison { op, left, right } => {
+            let lt = synth(env, left, u)?;
+            let rt = synth(env, right, u)?;
+            apply_relational_equation(u, op, &lt, &rt);
+            (!u.invalid).then_some(())
+        }
+        // Rossi does not yet carry signatures for user-defined predicate
+        // applications. Their arguments are still checked, but the call is
+        // explicitly unverified rather than accepted as well typed.
+        PredicateKind::Application { arguments, .. } => {
+            for argument in arguments {
+                synth(env, argument, u)?;
             }
-            synth(&local, expression, u)
+            u.unverified = true;
+            Some(())
+        }
+        PredicateKind::BuiltinApplication {
+            predicate,
+            arguments,
+        } => {
+            let alpha = u.fresh();
+            let set_type = ITy::pow(alpha);
+            match predicate {
+                BuiltinPredicate::Finite => {
+                    let [argument] = arguments.as_slice() else {
+                        return u.mismatch();
+                    };
+                    let ty = synth(env, argument, u)?;
+                    u.unify(&ty, &set_type).ok()?;
+                }
+                BuiltinPredicate::Partition => {
+                    if arguments.len() < 2 {
+                        return u.mismatch();
+                    }
+                    for argument in arguments {
+                        let ty = synth(env, argument, u)?;
+                        u.unify(&ty, &set_type).ok()?;
+                    }
+                }
+            }
+            Some(())
         }
     }
 }
@@ -652,11 +836,60 @@ fn bind_names(
         .filter(|n| !found.contains_key(*n))
         .collect();
     if !missing.is_empty() {
-        let mut from_pred: BTreeMap<String, Type> = BTreeMap::new();
-        collect_binder_types(local, predicate, &missing, &mut from_pred);
+        let from_pred = infer_binder_types(local, predicate, &missing);
         for (n, t) in from_pred {
             local.insert(n.clone(), t.clone());
             found.insert(n, t);
+        }
+    }
+    found
+}
+
+/// Bind every requested name, marking the enclosing formula unverified when
+/// any binder remains unresolved.
+fn bind_all_names(
+    local: &mut TypeEnv,
+    names: &[&str],
+    idents: &[TypedIdentifier],
+    predicate: &Predicate,
+    u: &mut Unifier,
+) -> Option<BTreeMap<String, Type>> {
+    let bound = bind_names(local, names, idents, predicate);
+    if names.iter().all(|name| bound.contains_key(*name)) {
+        Some(bound)
+    } else {
+        u.unverified = true;
+        None
+    }
+}
+
+/// Infer binder types to a fixed point from every constraint in `predicate`.
+///
+/// The direct collector handles common typing shapes cheaply. The unification
+/// fallback covers buried occurrences such as `x + 1`, and repeated passes
+/// propagate chains such as `x = y ∧ y = z ∧ z = 1`.
+pub(crate) fn infer_binder_types(
+    env: &TypeEnv,
+    predicate: &Predicate,
+    names: &[&str],
+) -> BTreeMap<String, Type> {
+    let mut local = env.clone();
+    let mut found = BTreeMap::new();
+    loop {
+        let before = found.len();
+        collect_binder_types(&local, predicate, names, &mut found);
+        for name in names {
+            if !found.contains_key(*name)
+                && let Some(ty) = infer_ident_via_unification(&local, predicate, name)
+            {
+                found.insert((*name).to_string(), ty);
+            }
+        }
+        for (name, ty) in &found {
+            local.insert(name.clone(), ty.clone());
+        }
+        if found.len() == before {
+            break;
         }
     }
     found
@@ -749,8 +982,8 @@ fn fill_pattern_binder_types(
 /// fill `out` (only adding entries that aren't already present).
 ///
 /// Recognises the same shapes as [`infer_constant_from_predicate`]
-/// (membership, maplet membership, equality), descends through `∧`,
-/// and into universal/existential bodies. Bound variables from inner
+/// (membership, maplet membership, equality), descends through every logical
+/// connective, and into universal/existential bodies. Bound variables from inner
 /// quantifiers shadow same-named entries in `names` for that subtree.
 /// The caller must ensure each candidate name is absent from `env` or bound
 /// there to the fresh binder, never inherited from an outer declaration.
@@ -822,28 +1055,7 @@ pub(crate) fn collect_binder_types(
             }
         }
         PredicateKind::Logical {
-            op: LogicalOp::And,
-            left,
-            right,
-        } => {
-            collect_binder_types(env, left, names, out);
-            collect_binder_types(env, right, names, out);
-        }
-        // Implication: typing constraints in the antecedent carry over
-        // to the binder. (Common shape: `∀x · x∈ℤ ⇒ P`.)
-        PredicateKind::Logical {
-            op: LogicalOp::Implies,
-            left,
-            ..
-        } => {
-            collect_binder_types(env, left, names, out);
-        }
-        // Equivalence: typing carries from either side. (Common shape:
-        // `∀a,t · a ∈ policies(t) ⇔ a ∈ POLICYSETS` — the left
-        // typing predicate types `a`, which the right side then uses to
-        // type `POLICYSETS`.)
-        PredicateKind::Logical {
-            op: LogicalOp::Equivalent,
+            op: LogicalOp::And | LogicalOp::Or | LogicalOp::Implies | LogicalOp::Equivalent,
             left,
             right,
         } => {
@@ -1262,7 +1474,10 @@ fn infer_ident_via_unification(env: &TypeEnv, pred: &Predicate, target: &str) ->
             predicate: body,
             ..
         } if !identifiers.iter().any(|t| t.name == target) => {
-            infer_ident_via_unification(env, body, target)
+            let names: Vec<&str> = identifiers.iter().map(|t| t.name.as_str()).collect();
+            let mut local = env.clone();
+            bind_names(&mut local, &names, identifiers, body);
+            infer_ident_via_unification(&local, body, target)
         }
         _ => None,
     }
@@ -1307,6 +1522,9 @@ fn infer_ident_from_comparison(
     let lt = synth(env, left, &mut u)?;
     let rt = synth(env, right, &mut u)?;
     apply_relational_equation(&mut u, op, &lt, &rt);
+    if u.invalid {
+        return None;
+    }
     ground(&u, &ITy::Var(tv))
 }
 
@@ -1325,6 +1543,9 @@ fn target_unifier(name: &str) -> (Unifier, u32) {
 fn synth_ident_in_expr(env: &TypeEnv, expr: &Expression, target: &str) -> Option<Type> {
     let (mut u, tv) = target_unifier(target);
     synth(env, expr, &mut u)?;
+    if u.invalid {
+        return None;
+    }
     ground(&u, &ITy::Var(tv))
 }
 
@@ -1578,17 +1799,43 @@ pub fn infer_constants<'a>(
     constants: &'a [String],
     axioms: &[Predicate],
 ) -> Vec<&'a str> {
-    let mut remaining: Vec<&str> = constants
+    let candidates: Vec<&str> = constants
         .iter()
         .map(String::as_str)
         .filter(|c| !env.contains(c))
         .collect();
+    let mut remaining = infer_constants_from(env, &candidates, axioms);
 
+    // Inference is tentative until the contributing predicate itself passes
+    // type checking. Re-run from the original environment using only valid
+    // predicates so a dropped axiom/guard cannot leave declarations behind.
+    let valid_axioms: Vec<&Predicate> = axioms
+        .iter()
+        .filter(|axiom| {
+            let enriched = crate::enrich::enrich_predicate((*axiom).clone(), env);
+            check_predicate_type(env, &enriched).is_ok()
+        })
+        .collect();
+    if valid_axioms.len() != axioms.len() {
+        for candidate in &candidates {
+            env.remove(candidate);
+        }
+        remaining = infer_constants_from(env, &candidates, &valid_axioms);
+    }
+    remaining
+}
+
+fn infer_constants_from<'a>(
+    env: &mut TypeEnv,
+    constants: &[&'a str],
+    axioms: &[impl std::borrow::Borrow<Predicate>],
+) -> Vec<&'a str> {
+    let mut remaining = constants.to_vec();
     loop {
         let mut progress = false;
         remaining.retain(|c| {
             for ax in axioms {
-                if let Some(ty) = infer_constant_from_predicate(env, ax, c) {
+                if let Some(ty) = infer_constant_from_predicate(env, ax.borrow(), c) {
                     env.insert(*c, ty);
                     progress = true;
                     return false; // drop from remaining
@@ -1977,6 +2224,35 @@ mod tests {
             env.get("admins"),
             Some(&Type::pow(Type::GivenSet("USERS".into())))
         );
+    }
+
+    #[test]
+    fn fixed_point_bootstraps_mutually_constrained_constants() {
+        let mut env = TypeEnv::new();
+        let axioms = vec![parse_predicate_str("0 ∈ x ∪ y").unwrap()];
+        let constants = vec!["x".to_string(), "y".to_string()];
+
+        let unresolved = infer_constants(&mut env, &constants, &axioms);
+
+        assert!(unresolved.is_empty());
+        assert_eq!(env.get("x"), Some(&Type::pow(Type::Integer)));
+        assert_eq!(env.get("y"), Some(&Type::pow(Type::Integer)));
+    }
+
+    #[test]
+    fn invalid_predicates_do_not_seed_constant_types() {
+        let mut env = TypeEnv::new();
+        let axioms = vec![
+            parse_predicate_str("c < TRUE").unwrap(),
+            parse_predicate_str("d ∈ ℤ ∧ TRUE + FALSE = 0").unwrap(),
+        ];
+        let constants = vec!["c".to_string(), "d".to_string()];
+
+        let unresolved = infer_constants(&mut env, &constants, &axioms);
+
+        assert_eq!(unresolved, ["c", "d"]);
+        assert!(!env.contains("c"));
+        assert!(!env.contains("d"));
     }
 
     // ===== relation-preserving binary ops =====

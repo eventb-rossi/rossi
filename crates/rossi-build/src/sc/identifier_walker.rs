@@ -78,8 +78,18 @@ pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option
 /// First free identifier on an action's read side, considering `env`
 /// plus locally-bound quantifier variables.
 pub fn free_identifier_in_action_rhs(a: &Action, env: &TypeEnv) -> Option<String> {
+    let mut binders = match &a.kind {
+        rossi::ActionKind::BecomesSuchThat { variables, .. } => variables
+            .iter()
+            .map(|variable| Binder {
+                name: format!("{}'", variable.as_str()),
+                span: variable.span,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let mut v = FreeFinder { env, found: None };
-    let _ = walk::walk_action(a, &mut Vec::new(), &mut v);
+    let _ = walk::walk_action(a, &mut binders, &mut v);
     v.found
 }
 

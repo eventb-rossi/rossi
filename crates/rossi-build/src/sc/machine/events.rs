@@ -13,7 +13,7 @@ use rossi::{
     NamedElement, PredicateKind,
 };
 
-use crate::checked_predicate::{check_action, check_labeled_predicate};
+use crate::checked_predicate::{ActionCheck, check_action, check_labeled_predicate};
 use crate::handles::HandleUri;
 use crate::infer::infer_constants;
 use crate::rodin_ids::{Kind, RodinIds, Scope};
@@ -333,17 +333,21 @@ fn required_witness_names(
 }
 
 /// Type-check scope for witness predicates: the concrete environment plus the
-/// abstract parameters and the disappearing variables (and their primed forms)
-/// the witnesses are about. Identifiers left untyped are accepted by the
-/// conservative well-typedness check.
+/// abstract parameters, concrete after-values, and the disappearing variables
+/// (and their primed forms) the witnesses are about.
 fn witness_scope(
-    base_env: &TypeEnv,
+    event_env: &TypeEnv,
     abstract_decl: &EventDecl,
     abstract_only: &BTreeSet<String>,
+    concrete_vars: &[String],
     parent: Option<&CheckedMachine>,
 ) -> TypeEnv {
-    let mut wscope = base_env.clone();
-    wscope.push_scope();
+    let mut wscope = event_env.clone();
+    for variable in concrete_vars {
+        if let Some(ty) = event_env.get(variable) {
+            wscope.insert(format!("{variable}'"), ty.clone());
+        }
+    }
     for p in &abstract_decl.chain_parameters() {
         wscope.insert(p.name.clone(), p.ty.clone());
     }
@@ -373,6 +377,7 @@ fn witness_scope(
 /// required, so any provided witness is not-permissible and dropped.
 fn resolve_witnesses(
     context: &mut EventCheckContext<'_, '_, '_>,
+    event_env: &TypeEnv,
     abstract_decl: Option<&EventDecl>,
     inherited_chain: Option<&EventDecl>,
 ) -> (Vec<WitnessDecl>, bool) {
@@ -401,9 +406,10 @@ fn resolve_witnesses(
     }
 
     let wscope = witness_scope(
-        machine.base_env,
+        event_env,
         abstract_decl,
         machine.abstract_only,
+        machine.concrete_vars,
         machine.parent,
     );
 
@@ -601,7 +607,7 @@ pub(super) fn build_event_decl(
         invalid_parameter_names.insert(parameter.name.clone());
     }
 
-    let (mut scope, scope_accurate) = build_event_scope(
+    let (scope, scope_accurate) = build_event_scope(
         &mut context,
         &inherited,
         &event_dups,
@@ -615,8 +621,6 @@ pub(super) fn build_event_decl(
         &event_dups,
         &invalid_parameter_names,
     );
-
-    scope.pop_scope();
 
     let refines_decl =
         effective_refines
@@ -668,6 +672,7 @@ pub(super) fn build_event_decl(
     // witness is dropped).
     let (witnesses, witness_accurate) = resolve_witnesses(
         &mut context,
+        &scope,
         parent_event_decl.map(|p| &**p),
         inherited_chain.as_deref(),
     );
@@ -819,8 +824,7 @@ fn resolve_effective_refines<'a, 'b>(
 /// Build the event-local type scope: outer env + inherited parameter
 /// types (when extended) + own-parameter inference from inherited+own
 /// guards. Returns the scope and an `accurate` flag (false when any
-/// parameter could not be typed). The caller is responsible for the
-/// matching `pop_scope`.
+/// parameter could not be typed).
 fn build_event_scope(
     context: &mut EventCheckContext<'_, '_, '_>,
     inherited: &InheritedEvent<'_>,
@@ -983,21 +987,6 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
-        // Per-clause well-typedness drop: catches things like
-        // `a ∈ AUCTIONS ↦ item` where `AUCTIONS ↦ item` is a pair, not
-        // a set. Rodin emits the event `accurate=false` and skips the
-        // guard.
-        if !crate::wellformed::is_well_typed_predicate(scope, &g.predicate) {
-            context.diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
-                message: "guard predicate is ill-typed".to_string(),
-                rule_id: Some(crate::RuleId::TypeError),
-                span: g.span,
-            });
-            accurate = false;
-            continue;
-        }
         match build_guard_decl(
             machine.ids,
             machine.file_root,
@@ -1103,11 +1092,23 @@ fn build_event_buckets(
             accurate = false;
             continue;
         }
+        let checked = check_action(&act.action, scope);
+        if let Some(bad) = &checked.free_identifier {
+            context.diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
+                message: format!("unknown identifier '{bad}' in action"),
+                rule_id: Some(crate::RuleId::UndeclaredIdentifier),
+                span: act.span,
+            });
+            accurate = false;
+            continue;
+        }
         // Per-clause well-typedness drop: catches things like
         // `auctions ≔ auctions ∪ {a ↦ i}` where the two operands of `∪`
         // are at different power-set levels. Rodin emits the event
         // `accurate=false` and skips the action.
-        if !crate::wellformed::is_well_typed_action(scope, &act.action) {
+        if !crate::wellformed::is_well_typed_enriched_action(scope, &checked.action) {
             context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
@@ -1124,7 +1125,7 @@ fn build_event_buckets(
             label,
             i,
             act,
-            scope,
+            checked,
         ));
     }
 
@@ -1221,17 +1222,9 @@ fn build_action_decl(
     event_label: &str,
     source_index: usize,
     act: &LabeledAction,
-    env: &TypeEnv,
+    checked: ActionCheck,
 ) -> ActionDecl {
     let label = act.label.clone().unwrap_or_else(|| "act".to_string());
-    // `check_action` returns a free-ident slot we intentionally drop:
-    // emitting it would fire false positives for `:|` (becomes-such-
-    // that) actions, whose predicates reference primed forms (`x'`)
-    // that the identifier walker doesn't yet recognise as bound.
-    // Wiring up primed-name handling and switching this to a real
-    // diagnostic is a separate task.
-    let ac = check_action(&act.action, env);
-    let _ = ac.free_identifier;
     let source = build_event_child_source(
         ids,
         file_root,
@@ -1243,8 +1236,8 @@ fn build_action_decl(
     ActionDecl {
         label,
         source_index,
-        action: ac.action,
-        canonical: ac.canonical,
+        action: checked.action,
+        canonical: checked.canonical,
         source,
     }
 }

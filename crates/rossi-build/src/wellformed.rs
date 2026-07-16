@@ -1,177 +1,72 @@
-//! Well-typedness checks for guards and actions.
+//! Complete well-typedness gates for guards and actions.
 //!
-//! Rodin's static checker drops guards / actions whose types don't line
-//! up (e.g. `a ∈ AUCTIONS ↦ item` — RHS of `∈` is a pair, not a set —
-//! or `auctions ≔ auctions ∪ {a ↦ i}` where the two sides of `∪` have
-//! different power-set types). The enclosing event is then marked
-//! `accurate=false`. We mirror that for the cases that show up in the
-//! corpus.
-//!
-//! The check is conservative: it only flags an element as ill-typed
-//! when both sides have a known type that disagrees. Anything we can't
-//! resolve is accepted. That keeps us from regressing on under-typed
-//! sources where Rodin's full inference would do better than ours.
+//! Rodin drops a guard or action when any expression constraint fails and
+//! marks the enclosing event inaccurate. Unknown forms are not accepted as
+//! well typed: the inference engine reports them as unverified.
 
-use rossi::ast::expression::BinaryOp;
-use rossi::ast::predicate::ComparisonOp;
-use rossi::{Action, ActionKind, Expression, ExpressionKind, Predicate, PredicateKind};
+use rossi::{Action, ActionKind, Expression, Predicate};
 
-use crate::infer::type_of_expression;
+use crate::infer::{check_expression_type, check_predicate_type};
 use crate::type_env::TypeEnv;
 use crate::types::Type;
 
-/// `true` if every comparison and every set operation in `pred` has
-/// matching types on both sides (modulo the conservative "accept on
-/// missing type" rule). Recurses through logical connectives,
-/// quantifiers, and into the embedded expressions.
+/// `true` if every predicate and embedded expression constraint is verified.
 pub fn is_well_typed_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
-    match &pred.kind {
-        PredicateKind::True | PredicateKind::False => true,
-        PredicateKind::Not(inner) => is_well_typed_predicate(env, inner),
-        PredicateKind::Logical { left, right, .. } => {
-            is_well_typed_predicate(env, left) && is_well_typed_predicate(env, right)
-        }
-        // Quantifier bodies may reference binders that aren't in env;
-        // a strict check would need to plumb the binder types through,
-        // and the corpus doesn't depend on it yet.
-        PredicateKind::Quantified { .. } => true,
-        PredicateKind::Comparison { op, left, right } => {
-            is_well_typed_expression(env, left)
-                && is_well_typed_expression(env, right)
-                && check_comparison(env, *op, left, right)
-        }
-        PredicateKind::Application { arguments, .. }
-        | PredicateKind::BuiltinApplication { arguments, .. } => {
-            arguments.iter().all(|a| is_well_typed_expression(env, a))
-        }
-    }
+    let enriched = crate::enrich::enrich_predicate(pred.clone(), env);
+    check_predicate_type(env, &enriched).is_ok()
 }
 
-/// `true` if every assignment's LHS variable type matches its RHS, and
-/// every set-op operand pair agrees, etc.
+/// `true` if every assignment target and RHS satisfy Rodin's constraints.
 pub fn is_well_typed_action(env: &TypeEnv, action: &Action) -> bool {
+    let enriched = crate::enrich::enrich_action(action.clone(), env);
+    is_well_typed_enriched_action(env, &enriched)
+}
+
+pub(crate) fn is_well_typed_enriched_action(env: &TypeEnv, action: &Action) -> bool {
     match &action.kind {
         ActionKind::Skip => true,
-        ActionKind::Assignment { assignments } => {
-            // Only verify each RHS expression is itself well-typed.
-            // We deliberately skip the LHS-vs-RHS type-equality check:
-            // `type_of_expression` is the relaxed inference, which falls
-            // back to one side's type when the other isn't in the env
-            // (e.g. `mapping ◁ prj1` where `prj1` isn't a user-declared
-            // identifier — seen in a real-world corpus model). That
-            // produces false positives. Type-class mismatches in the
-            // RHS — which is what `auction` actually exhibits — are
-            // already caught by `is_well_typed_expression`.
-            assignments
-                .iter()
-                .all(|(_, expression)| is_well_typed_expression(env, expression))
-        }
-        ActionKind::BecomesIn { set, .. } => is_well_typed_expression(env, set),
-        // Becomes-such-that uses primed forms (`x'`) the identifier
-        // walker doesn't yet recognise; skip rather than flag false.
-        ActionKind::BecomesSuchThat { .. } => true,
-    }
-}
-
-/// Recurse through an expression checking that every operand of
-/// `Union`/`Intersection`/`Difference` (the symmetric set ops, where
-/// both sides should share the same power-set type) actually agrees.
-pub fn is_well_typed_expression(env: &TypeEnv, expr: &Expression) -> bool {
-    match &expr.kind {
-        ExpressionKind::Binary {
-            op: BinaryOp::Union | BinaryOp::Intersection | BinaryOp::Difference,
-            left,
-            right,
+        ActionKind::Assignment { assignments } => assignments.iter().all(|(target, rhs)| {
+            env.get(target.as_str())
+                .is_some_and(|expected| check_expression_type(env, rhs, Some(expected)).is_ok())
+        }),
+        ActionKind::BecomesIn { variables, set } => assignment_product_type(env, variables)
+            .map(Type::pow)
+            .is_some_and(|expected| check_expression_type(env, set, Some(&expected)).is_ok()),
+        ActionKind::BecomesSuchThat {
+            variables,
+            predicate,
         } => {
-            if !is_well_typed_expression(env, left) || !is_well_typed_expression(env, right) {
-                return false;
+            let mut local = env.clone();
+            for variable in variables {
+                let Some(ty) = env.get(variable.as_str()) else {
+                    return false;
+                };
+                local.insert(format!("{}'", variable.as_str()), ty.clone());
             }
-            match (
-                type_of_expression(env, left),
-                type_of_expression(env, right),
-            ) {
-                (Some(lt), Some(rt)) => lt == rt,
-                _ => true,
-            }
+            check_predicate_type(&local, predicate).is_ok()
         }
-        ExpressionKind::Binary { left, right, .. } => {
-            is_well_typed_expression(env, left) && is_well_typed_expression(env, right)
-        }
-        ExpressionKind::Unary { operand, .. } => is_well_typed_expression(env, operand),
-        ExpressionKind::FunctionApplication { function, argument } => {
-            is_well_typed_expression(env, function) && is_well_typed_expression(env, argument)
-        }
-        ExpressionKind::BuiltinApplication { argument, .. } => {
-            is_well_typed_expression(env, argument)
-        }
-        ExpressionKind::SetEnumeration(items) => {
-            items.iter().all(|i| is_well_typed_expression(env, i))
-        }
-        ExpressionKind::RelationalImage { relation, set } => {
-            is_well_typed_expression(env, relation) && is_well_typed_expression(env, set)
-        }
-        // Lambda / set-comp / quantifier-union/inter — bodies reference
-        // binders not in env, would need a richer check. Skip for now.
-        _ => true,
     }
 }
 
-/// Comparison-specific shape check (called after both sides are known
-/// to be well-typed expressions).
-fn check_comparison(
-    env: &TypeEnv,
-    op: ComparisonOp,
-    left: &Expression,
-    right: &Expression,
-) -> bool {
-    use ComparisonOp::*;
-    match op {
-        // `e ∈ S` and `e ∉ S` require S : ℙ(τ) with typeof(e) = τ.
-        // Catches `a ∈ AUCTIONS ↦ item` (RHS is a pair, not a set).
-        In | NotIn => match type_of_expression(env, right) {
-            Some(Type::PowerSet(elem)) => match type_of_expression(env, left) {
-                Some(t) => t == *elem,
-                None => true,
-            },
-            Some(_) => false,
-            None => true,
-        },
-        // `S ⊆ T`, `S ⊂ T` etc.: both sides must be ℙ(τ) for the same τ.
-        Subset | SubsetStrict | NotSubset | NotSubsetStrict => {
-            match (
-                type_of_expression(env, left),
-                type_of_expression(env, right),
-            ) {
-                (Some(lt), Some(rt)) => lt == rt && matches!(lt, Type::PowerSet(_)),
-                _ => true,
-            }
-        }
-        // `e₁ = e₂` and `e₁ ≠ e₂`: both sides must have the same type.
-        Equal | NotEqual => match (
-            type_of_expression(env, left),
-            type_of_expression(env, right),
-        ) {
-            (Some(lt), Some(rt)) => lt == rt,
-            _ => true,
-        },
-        // `e₁ < e₂` etc. require both sides to be ℤ.
-        LessThan | LessEqual | GreaterThan | GreaterEqual => {
-            match (
-                type_of_expression(env, left),
-                type_of_expression(env, right),
-            ) {
-                (Some(Type::Integer), Some(Type::Integer)) => true,
-                (Some(_), Some(_)) => false,
-                _ => true,
-            }
-        }
-    }
+fn assignment_product_type(env: &TypeEnv, variables: &[rossi::ast::Ident]) -> Option<Type> {
+    let mut variables = variables.iter();
+    let first = env.get(variables.next()?.as_str())?.clone();
+    variables.try_fold(first, |product, variable| {
+        Some(Type::prod(product, env.get(variable.as_str())?.clone()))
+    })
+}
+
+/// `true` if every expression constraint is verified.
+pub fn is_well_typed_expression(env: &TypeEnv, expr: &Expression) -> bool {
+    let enriched = crate::enrich::enrich_expression(expr.clone(), env);
+    check_expression_type(env, &enriched, None).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rossi::{parse_action_str, parse_predicate_str};
+    use rossi::ast::expression::{BinaryOp, UnaryOp};
+    use rossi::{parse_action_str, parse_expression_str, parse_predicate_str};
 
     fn auction_env() -> TypeEnv {
         let mut env = TypeEnv::new();
@@ -222,5 +117,271 @@ mod tests {
         let env = auction_env();
         let a = parse_action_str("auctions ≔ auctions ∪ {a}").unwrap();
         assert!(is_well_typed_action(&env, &a));
+    }
+
+    #[test]
+    fn rejects_non_integer_arithmetic_operands() {
+        let env = TypeEnv::new();
+        for source in [
+            "TRUE + FALSE",
+            "TRUE − FALSE",
+            "TRUE ∗ FALSE",
+            "TRUE ÷ FALSE",
+            "TRUE mod FALSE",
+            "TRUE ^ FALSE",
+            "TRUE ‥ FALSE",
+            "−TRUE",
+        ] {
+            let expression = parse_expression_str(source).unwrap();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted ill-typed arithmetic expression: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_set_and_relation_operands() {
+        let env = TypeEnv::new();
+        for op in [
+            BinaryOp::Union,
+            BinaryOp::Intersection,
+            BinaryOp::Difference,
+            BinaryOp::CartesianProduct,
+            BinaryOp::Relation,
+            BinaryOp::TotalRelation,
+            BinaryOp::SurjectiveRelation,
+            BinaryOp::TotalSurjectiveRelation,
+            BinaryOp::TotalFunction,
+            BinaryOp::PartialFunction,
+            BinaryOp::TotalInjection,
+            BinaryOp::PartialInjection,
+            BinaryOp::TotalSurjection,
+            BinaryOp::PartialSurjection,
+            BinaryOp::Bijection,
+            BinaryOp::Composition,
+            BinaryOp::Semicolon,
+            BinaryOp::DomainRestriction,
+            BinaryOp::DomainSubtraction,
+            BinaryOp::RangeRestriction,
+            BinaryOp::RangeSubtraction,
+            BinaryOp::Overwrite,
+            BinaryOp::DirectProduct,
+            BinaryOp::ParallelProduct,
+        ] {
+            let expression = rossi::ExpressionKind::Binary {
+                op,
+                left: Box::new(rossi::ExpressionKind::True.into()),
+                right: Box::new(rossi::ExpressionKind::False.into()),
+            }
+            .into();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted ill-typed set/relation operator: {op:?}"
+            );
+        }
+
+        for op in [
+            UnaryOp::PowerSet,
+            UnaryOp::PowerSet1,
+            UnaryOp::Domain,
+            UnaryOp::Range,
+            UnaryOp::Inverse,
+        ] {
+            let expression = rossi::ExpressionKind::Unary {
+                op,
+                operand: Box::new(rossi::ExpressionKind::True.into()),
+            }
+            .into();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted ill-typed unary operator: {op:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nested_structural_operand_failures() {
+        let mut env = TypeEnv::new();
+        env.insert("S", Type::pow(Type::Integer));
+        env.insert("r", Type::relation(Type::Integer, Type::Integer));
+
+        for source in ["S ∪ dom(TRUE)", "dom(TRUE) ◁ r"] {
+            let expression = parse_expression_str(source).unwrap();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted nested ill-typed expression: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_comparison_operands() {
+        let env = TypeEnv::new();
+        for source in [
+            "TRUE = 0",
+            "TRUE ≠ 0",
+            "TRUE < FALSE",
+            "TRUE ≤ FALSE",
+            "TRUE > FALSE",
+            "TRUE ≥ FALSE",
+            "0 ∈ BOOL",
+            "0 ∉ BOOL",
+            "BOOL ⊆ ℤ",
+            "BOOL ⊂ ℤ",
+            "BOOL ⊈ ℤ",
+            "BOOL ⊄ ℤ",
+            "finite(TRUE)",
+            "partition(BOOL, {0})",
+        ] {
+            let predicate = parse_predicate_str(source).unwrap();
+            assert!(
+                !is_well_typed_predicate(&env, &predicate),
+                "accepted ill-typed predicate: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_function_applications() {
+        let mut env = TypeEnv::new();
+        env.insert("f", Type::relation(Type::Integer, Type::Boolean));
+        for source in [
+            "f(TRUE)",
+            "TRUE(0)",
+            "f[{TRUE}]",
+            "card(TRUE)",
+            "min({TRUE})",
+            "max({TRUE})",
+            "union({TRUE})",
+            "inter({TRUE})",
+        ] {
+            let expression = parse_expression_str(source).unwrap();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted ill-typed application: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_assignment_type_mismatches() {
+        let mut env = TypeEnv::new();
+        env.insert("x", Type::Integer);
+
+        for source in ["x ≔ TRUE", "x :∈ BOOL", "x :∣ x' = TRUE"] {
+            let action = parse_action_str(source).unwrap();
+            assert!(
+                !is_well_typed_action(&env, &action),
+                "accepted ill-typed assignment: {source}"
+            );
+        }
+
+        for source in ["x ≔ 0", "x :∈ ℤ", "x :∣ x' = x"] {
+            let action = parse_action_str(source).unwrap();
+            assert!(
+                is_well_typed_action(&env, &action),
+                "rejected well-typed assignment: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_quantified_and_binder_bodies() {
+        let env = TypeEnv::new();
+        let predicate = parse_predicate_str("∀x⦂ℤ · x + TRUE = 0").unwrap();
+        assert!(!is_well_typed_predicate(&env, &predicate));
+
+        for source in [
+            "λx⦂ℤ·x = x ∣ x + TRUE",
+            "{x⦂ℤ·x = x ∣ x + TRUE}",
+            "{x⦂ℤ ∣ x + TRUE = 0}",
+            "{bool(x ∈ ℤ) ∣ x ∈ ℤ ∧ x + TRUE = 0}",
+            "⋃x⦂ℤ·x = x ∣ x + TRUE",
+            "⋂x⦂ℤ·x = x ∣ x + TRUE",
+            "bool(TRUE + FALSE = 0)",
+            "{TRUE, 0}",
+            "TRUE ⦂ ℤ",
+        ] {
+            let expression = parse_expression_str(source).unwrap();
+            assert!(
+                !is_well_typed_expression(&env, &expression),
+                "accepted ill-typed binder expression: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_valid_quantified_binders_and_function_applications() {
+        let mut env = TypeEnv::new();
+        env.insert("f", Type::relation(Type::Integer, Type::Boolean));
+
+        let predicate = parse_predicate_str("∀x⦂ℤ · x + 1 > x").unwrap();
+        assert!(is_well_typed_predicate(&env, &predicate));
+
+        for source in [
+            "f(0)",
+            "λx⦂ℤ·x = x ∣ x + 1",
+            "{x⦂ℤ·x = x ∣ x + 1}",
+            "⋃x⦂ℤ·x = x ∣ {x}",
+        ] {
+            let expression = parse_expression_str(source).unwrap();
+            assert!(
+                is_well_typed_expression(&env, &expression),
+                "rejected well-typed binder expression: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_binder_types_from_buried_and_chained_constraints() {
+        let env = TypeEnv::new();
+        for source in [
+            "∀x·x + 1 > 0",
+            "∀x·⊤ ⇒ x + 1 > 0",
+            "∀x·⊥ ∨ x + 1 > 0",
+            "∀x,y,z·x = y ∧ y = z ∧ z = 1",
+        ] {
+            let predicate = parse_predicate_str(source).unwrap();
+            assert!(
+                is_well_typed_predicate(&env, &predicate),
+                "rejected well-typed binder predicate: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn assignment_expected_type_resolves_polymorphic_rhs() {
+        let mut env = TypeEnv::new();
+        env.insert("f", Type::relation(Type::Integer, Type::Integer));
+        env.insert("S", Type::pow(Type::Integer));
+
+        for source in ["f ≔ λx·1 = 1 ∣ x + 1", "S ≔ union(∅)"] {
+            let action = parse_action_str(source).unwrap();
+            assert!(
+                is_well_typed_action(&env, &action),
+                "rejected contextually typed assignment: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_polymorphic_predicates_are_not_reported_as_checked() {
+        let env = TypeEnv::new();
+        for source in ["∅ = ∅", "id = id", "finite(∅)"] {
+            let predicate = parse_predicate_str(source).unwrap();
+            assert!(
+                !is_well_typed_predicate(&env, &predicate),
+                "accepted predicate with unresolved types: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_operands_are_not_reported_as_checked() {
+        let mut env = TypeEnv::new();
+        env.insert("S", Type::pow(Type::Integer));
+        let expression = parse_expression_str("S ∪ unknown").unwrap();
+        assert!(!is_well_typed_expression(&env, &expression));
     }
 }

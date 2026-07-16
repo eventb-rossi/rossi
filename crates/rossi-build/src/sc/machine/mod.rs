@@ -20,7 +20,7 @@ use rossi::{LabeledPredicate, Machine};
 
 use crate::checked_predicate::{check_expression, check_labeled_predicate};
 use crate::handles::HandleUri;
-use crate::infer::infer_constants;
+use crate::infer::{check_expression_type, infer_constants};
 use crate::project::{Project, ProjectComponent};
 use crate::rodin_ids::{Kind, RodinIds};
 use crate::type_env::TypeEnv;
@@ -274,8 +274,14 @@ pub fn check_machine(
     // is the single machine-wide flag that feeds every event's convergence.
     let (variant_decl, variant_usable) = match &machine.variant {
         Some(expr) => {
-            let (decl, usable) = build_variant_decl(&pc.rodin_ids, &file_root, expr, &env);
-            (Some(decl), usable)
+            match build_variant_decl(&pc.rodin_ids, &file_root, expr, &env, &machine.name) {
+                Ok((decl, usable)) => (Some(decl), usable),
+                Err(diag) => {
+                    diags.push(diag);
+                    accurate = false;
+                    (None, false)
+                }
+            }
         }
         None => (None, false),
     };
@@ -308,19 +314,12 @@ pub fn check_machine(
     // so descendants extending it can pick up the typed parent chain.
     let mut event_decls: Vec<Rc<EventDecl>> = Vec::new();
     let mut events_by_label: HashMap<String, Rc<EventDecl>> = HashMap::new();
-    // Per-event accuracy stays inside `EventDecl::accurate`; it doesn't
-    // bubble up to the file-level flag. (Rodin emits the file as
-    // `accurate="true"` even when individual events are inaccurate —
-    // see `auction/AuctionMachine.bcm`.) File-level inaccuracy is
-    // reserved for failures of the file's own clauses or structural
-    // references: an ill-typed invariant / variant, a missing SEES
-    // context, a missing REFINES parent. An untyped variable, by
-    // itself, is not a file-level signal — Rodin keeps the file
-    // `accurate="true"` and lets each event that references the
-    // variable mark itself `accurate="false"` (confirmed on a
-    // corpus tutorial model). An event whose
-    // explicit refines target is absent from the parent is dropped with
-    // an error (Rodin parity), not a file-inaccuracy signal.
+    // Per-event accuracy stays inside `EventDecl::accurate`; it doesn't bubble
+    // up to the file-level flag. An untyped variable, by itself, is likewise
+    // not a file-level signal; each event that references it is marked
+    // inaccurate instead. An event whose explicit refines target is absent
+    // from the parent is dropped with an error (Rodin parity), not a
+    // file-inaccuracy signal.
     // A duplicated event label drops every conflicting event — Rodin's
     // event-label-conflict rule (both symbols error out, no scEvent is
     // committed for either; the machine root stays accurate). A descendant
@@ -602,36 +601,42 @@ fn build_variable_decls(
 }
 
 /// Build the variant decl and report whether it is *usable* for the
-/// convergence rule: present, referencing only in-scope identifiers, and
-/// internally well-typed. An unusable variant (e.g. one naming an event
-/// parameter that is out of machine scope) downgrades the machine's
-/// convergent events (see [`events::build_event_decl`]). rossi does not
-/// additionally enforce Rodin's "variant is an integer or a finite set"
-/// requirement; an in-scope, internally-consistent expression counts as
-/// usable.
+/// convergence rule. A variant naming an out-of-scope identifier is emitted
+/// but unusable, matching Rodin's convergence behavior. A closed, ill-typed
+/// variant is rejected. rossi does not additionally enforce Rodin's "variant
+/// is an integer or a finite set" requirement; an in-scope,
+/// internally-consistent expression counts as usable.
 fn build_variant_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     expr: &rossi::Expression,
     env: &TypeEnv,
-) -> (VariantDecl, bool) {
+    machine_name: &str,
+) -> std::result::Result<(VariantDecl, bool), Diagnostic> {
     // Rodin's default variant label is "vrn"; our parser drops any
     // non-default label from the .bum (only Expression is preserved).
     let label = "vrn";
+    let ec = check_expression(expr, env);
+    let usable = ec.free_identifier.is_none();
+    if usable && check_expression_type(env, &ec.expression, None).is_err() {
+        return Err(Diagnostic {
+            severity: Severity::Error,
+            origin: format!("{machine_name}.{label}"),
+            message: "variant expression is ill-typed".to_string(),
+            rule_id: Some(crate::RuleId::TypeError),
+            span: expr.span,
+        });
+    }
     let source =
         crate::sc::file_child_source(ids, file_root, Kind::Variant, in_tag::VARIANT, label);
-    let ec = check_expression(expr, env);
-    // Usable when it references only in-scope identifiers and is internally
-    // well-typed; a free identifier or an internal type mismatch leaves it
-    // unusable for the convergence rule.
-    let usable =
-        ec.free_identifier.is_none() && crate::wellformed::is_well_typed_expression(env, expr);
-    let decl = VariantDecl {
-        label,
-        expression_canonical: ec.canonical,
-        source,
-    };
-    (decl, usable)
+    Ok((
+        VariantDecl {
+            label,
+            expression_canonical: ec.canonical,
+            source,
+        },
+        usable,
+    ))
 }
 
 // =====================================================================
