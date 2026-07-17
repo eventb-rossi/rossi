@@ -25,11 +25,23 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use rossi::Component;
+use rossi::{Component, ComponentNameSite};
 
+use crate::component_util::component_reference_clause;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
-use crate::lsp_types::Url;
+use crate::identifier_utils::{self, WordBoundary};
+use crate::lsp_types::{Range, Url};
+use crate::position::span_to_range;
+
+/// One component declaration or dependency occurrence in the workspace.
+///
+/// Providers map this neutral record to their own LSP response shapes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkspaceComponentOccurrence {
+    pub(crate) uri: Url,
+    pub(crate) range: Range,
+}
 
 /// One component resolved for the current request: the parsed snapshot of the
 /// file it lives in, plus the index of the component within that file. Holding
@@ -128,7 +140,7 @@ impl<'a> ComponentLoader<'a> {
     /// Component occurrence queries need only the recovery scanner's exact
     /// source locations. Open documents come directly from the document store;
     /// closed documents incur one disk read and no otherwise-unused full parse.
-    pub(crate) fn source_text(&self, uri: &Url) -> Option<String> {
+    fn source_text(&self, uri: &Url) -> Option<String> {
         if let Some(documents) = self.documents {
             if let Some(text) = documents.get_text(uri) {
                 return Some(text);
@@ -216,7 +228,7 @@ impl<'a> ComponentLoader<'a> {
     /// Files that can contain a declaration or direct structural reference to
     /// `target`, plus every open document whose graph overlay may still be
     /// waiting for the diagnostics debounce.
-    pub(crate) fn candidate_uris_for_component(&self, target: &str) -> Vec<Url> {
+    fn candidate_uris_for_component(&self, target: &str) -> Vec<Url> {
         let mut names = HashSet::from([target.to_string()]);
         names.extend(
             self.manager
@@ -239,11 +251,84 @@ impl<'a> ComponentLoader<'a> {
         uris
     }
 
+    /// Find every declaration and direct structural reference to `target` in
+    /// the current workspace snapshots.
+    ///
+    /// The graph selects closed candidate files, while all open documents are
+    /// included to tolerate diagnostics debounce. Open source text wins over
+    /// disk, and every selected URI is loaded and scanned at most once.
+    pub(crate) fn component_occurrences(&self, target: &str) -> Vec<WorkspaceComponentOccurrence> {
+        let mut occurrences = Vec::new();
+        for uri in self.candidate_uris_for_component(target) {
+            if let Some(text) = self.source_text(&uri) {
+                occurrences.extend(component_occurrences_in_source(&text, &uri, target));
+            }
+        }
+        occurrences
+    }
+
     fn load_from_uri(&self, uri: Url, name: &str) -> Option<LoadedComponent> {
         let doc = self.parsed(&uri)?;
         let index = doc.components().iter().position(|c| c.name() == name)?;
         Some(LoadedComponent { uri, doc, index })
     }
+}
+
+/// Exact declaration/dependency occurrences for component `name` in one
+/// source. Headerless prefixes use the shared clause classifier as a narrow
+/// fallback; ordinary parsed components stay on the recovery scanner alone.
+fn component_occurrences_in_source(
+    text: &str,
+    uri: &Url,
+    name: &str,
+) -> Vec<WorkspaceComponentOccurrence> {
+    let occurrences = rossi::component_name_occurrences_with_sites(text);
+    let fallback_end_line = occurrences
+        .iter()
+        .filter_map(|occurrence| match (occurrence.site, occurrence.span) {
+            (ComponentNameSite::Declaration(_), Some(span)) => {
+                Some(text[..span.start.min(text.len())].matches('\n').count())
+            }
+            _ => None,
+        })
+        .min();
+    let mut workspace_occurrences: Vec<_> = occurrences
+        .into_iter()
+        .filter(|occurrence| occurrence.name == name)
+        .filter_map(|occurrence| occurrence.span)
+        .filter(|span| text.get(span.start..span.end) == Some(name))
+        .map(|span| WorkspaceComponentOccurrence {
+            uri: uri.clone(),
+            range: span_to_range(&span, text),
+        })
+        .collect();
+
+    // The exact scanner covers everything from the first anchored declaration
+    // onward. Only a headerless prefix needs the syntactic fallback; ordinary
+    // documents start on line zero and skip both extra full-document masks.
+    if fallback_end_line != Some(0) {
+        let fallback_line_range = fallback_end_line.map(|end| (0, end - 1));
+        let masked = rossi::comments::mask_comments_chars(text);
+        for location in identifier_utils::find_whole_word_locations(
+            text,
+            name,
+            uri,
+            fallback_line_range,
+            WordBoundary::ComponentName,
+        )
+        .into_iter()
+        .filter(|location| component_reference_clause(&masked, location.range.start).is_some())
+        {
+            let occurrence = WorkspaceComponentOccurrence {
+                uri: location.uri,
+                range: location.range,
+            };
+            if !workspace_occurrences.contains(&occurrence) {
+                workspace_occurrences.push(occurrence);
+            }
+        }
+    }
+    workspace_occurrences
 }
 
 fn read_source_file(uri: &Url) -> Option<String> {
@@ -369,5 +454,37 @@ mod tests {
             .collect();
 
         assert_eq!(uris, ["file:///c.eventb", "file:///m.eventb"]);
+    }
+
+    #[test]
+    fn component_occurrences_prefer_headerless_open_text_and_use_utf16_ranges() {
+        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context = "CONTEXT C\nEND";
+        let indexed_machine = "MACHINE M\nSEES C\nEND";
+        let current_machine = "SEES /* 😀 */ C\nVARIABLES\n    C\n";
+
+        let manager = CrossReferenceManager::new();
+        manager.update_component(context_uri.to_string(), context);
+        manager.update_component(machine_uri.to_string(), indexed_machine);
+        let documents = DocumentManager::new();
+        documents.open(context_uri.clone(), 1, context.to_string());
+        documents.open(machine_uri.clone(), 2, current_machine.to_string());
+
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+        let occurrences = loader.component_occurrences("C");
+        assert_eq!(occurrences.len(), 2);
+        assert!(occurrences.iter().any(|occurrence| {
+            occurrence.uri == context_uri
+                && occurrence.range.start == crate::lsp_types::Position::new(0, 8)
+        }));
+        assert!(occurrences.iter().any(|occurrence| {
+            occurrence.uri == machine_uri
+                && occurrence.range.start
+                    == crate::position::offset_to_position(
+                        current_machine,
+                        current_machine.find("C\n").unwrap(),
+                    )
+        }));
     }
 }

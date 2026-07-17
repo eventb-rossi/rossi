@@ -20,7 +20,6 @@ use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
-use crate::references::find_references_in_workspace;
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -186,9 +185,9 @@ impl RenameProvider {
         };
 
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
-        for location in find_references_in_workspace(&loader, old_name) {
-            changes.entry(location.uri).or_default().push(TextEdit {
-                range: location.range,
+        for occurrence in loader.component_occurrences(old_name) {
+            changes.entry(occurrence.uri).or_default().push(TextEdit {
+                range: occurrence.range,
                 new_text: new_name.to_string(),
             });
         }

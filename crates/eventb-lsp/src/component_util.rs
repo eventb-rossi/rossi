@@ -12,9 +12,8 @@ use rossi::deps::{ComponentKind, EdgeKind};
 use rossi::keywords::KeywordId;
 use rossi::{Component, ComponentNameSite};
 
-use crate::identifier_utils::{self, WordBoundary};
-use crate::lsp_types::{Location, Position, Url};
-use crate::position::{position_to_offset, span_to_range};
+use crate::lsp_types::Position;
+use crate::position::position_to_offset;
 use crate::text_utils;
 
 /// Provider-neutral identity of a component name under the cursor.
@@ -147,52 +146,6 @@ fn component_keyword_before_position(masked: &str, position: Position) -> bool {
                     | KeywordId::Refines
             )
         })
-}
-
-/// Exact declaration/dependency locations for component `name` in one source.
-/// Headerless documents use the same clause classifier as cursor resolution;
-/// no provider owns a separate recovery rule.
-pub(crate) fn component_name_locations(text: &str, uri: &Url, name: &str) -> Vec<Location> {
-    let occurrences = rossi::component_name_occurrences_with_sites(text);
-    let fallback_end_line = occurrences
-        .iter()
-        .filter_map(|occurrence| match (occurrence.site, occurrence.span) {
-            (ComponentNameSite::Declaration(_), Some(span)) => {
-                Some(text[..span.start.min(text.len())].matches('\n').count())
-            }
-            _ => None,
-        })
-        .min();
-    let mut locations: Vec<_> = occurrences
-        .into_iter()
-        .filter(|occurrence| occurrence.name == name)
-        .filter_map(|occurrence| occurrence.span)
-        .filter(|span| text.get(span.start..span.end) == Some(name))
-        .map(|span| Location::new(uri.clone(), span_to_range(&span, text)))
-        .collect();
-
-    // The exact scanner covers everything from the first anchored declaration
-    // onward. Only a headerless prefix needs the syntactic fallback; ordinary
-    // documents start on line zero and skip both extra full-document masks.
-    if fallback_end_line != Some(0) {
-        let fallback_line_range = fallback_end_line.map(|end| (0, end - 1));
-        let masked = rossi::comments::mask_comments_chars(text);
-        for location in identifier_utils::find_whole_word_locations(
-            text,
-            name,
-            uri,
-            fallback_line_range,
-            WordBoundary::ComponentName,
-        )
-        .into_iter()
-        .filter(|location| component_reference_clause(&masked, location.range.start).is_some())
-        {
-            if !locations.iter().any(|existing| existing == &location) {
-                locations.push(location);
-            }
-        }
-    }
-    locations
 }
 
 /// The component-level SEES/REFINES/EXTENDS clause `position` sits in, if any.
@@ -393,14 +346,6 @@ mod tests {
                 site: ComponentNameSite::Dependency(EdgeKind::Sees),
             })
         );
-
-        let uri = Url::parse("file:///partial.eventb").unwrap();
-        let locations = component_name_locations(partial, &uri, "Base");
-        assert_eq!(locations.len(), 1);
-        assert_eq!(
-            locations[0].range.start,
-            offset_to_position(partial, partial.find("Base").unwrap())
-        );
     }
 
     #[test]
@@ -434,14 +379,6 @@ mod tests {
 
         let formula_offset = source.rfind("Base").unwrap();
         assert_eq!(resolve_at(source, formula_offset), None);
-
-        let uri = Url::parse("file:///headerless.eventb").unwrap();
-        let locations = component_name_locations(source, &uri, "Base");
-        assert_eq!(locations.len(), 1);
-        assert_eq!(
-            locations[0].range.start,
-            offset_to_position(source, source.find("Base ").unwrap())
-        );
     }
 
     #[test]

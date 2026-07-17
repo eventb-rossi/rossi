@@ -9,7 +9,7 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::{component_name_locations, component_reference_clause};
+use crate::component_util::component_reference_clause;
 use crate::formula_walk;
 use crate::position::span_to_range;
 use std::collections::HashSet;
@@ -162,9 +162,11 @@ impl ReferenceProvider {
             resolve_cursor(text, masked, position, identifier, &loader, cursor)
         {
             return match resolution {
-                Resolution::Component(component) => {
-                    find_references_in_workspace(&loader, &component.name)
-                }
+                Resolution::Component(component) => loader
+                    .component_occurrences(&component.name)
+                    .into_iter()
+                    .map(|occurrence| Location::new(occurrence.uri, occurrence.range))
+                    .collect(),
                 // A formula binder local to this component: its declaration and
                 // the uses it binds, all in the cursor document. Resolved before
                 // the document-wide text scan below, so a purely local binder
@@ -246,26 +248,6 @@ impl ReferenceProvider {
 
         locations
     }
-}
-
-/// Find all references across the workspace.
-///
-/// A free function shared with rename: the dependency graph selects closed
-/// declaration/referrer files, current open snapshots are added to tolerate the
-/// diagnostics debounce, and the loader parses each selected file at most once.
-pub(crate) fn find_references_in_workspace(
-    loader: &ComponentLoader,
-    identifier: &str,
-) -> Vec<Location> {
-    let mut locations = Vec::new();
-
-    for uri in loader.candidate_uris_for_component(identifier) {
-        if let Some(text) = loader.source_text(&uri) {
-            locations.extend(component_name_locations(&text, &uri, identifier));
-        }
-    }
-
-    locations
 }
 
 fn push_unique_locations(
