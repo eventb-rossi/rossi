@@ -245,11 +245,30 @@ fn benchmark_complete_requests(
         &rename_source.text,
         fixture.component_name_offset(&fixture.spec.rename_component),
     );
-    let rename_workspace =
+    let component_workspace =
         workspace_with_open(fixture, Arc::clone(manager), &fixture.spec.rename_component);
+
+    let mut component_reference_provider = ReferenceProvider::new();
+    component_reference_provider
+        .set_cross_reference_manager(Arc::clone(&component_workspace.manager));
+    component_reference_provider.set_document_manager(Arc::clone(&component_workspace.documents));
+    let component_reference_params = support::reference_params(rename_uri.clone(), rename_position);
+    results.push(measure_case(
+        &fixture.spec.slug,
+        "component_references_request",
+        "not_applicable",
+        warmups,
+        samples,
+        || {
+            component_reference_provider
+                .find_references(&component_reference_params, &rename_source.text)
+                .map_or(0, |locations| locations.len())
+        },
+    ));
+
     let mut rename_provider = RenameProvider::new();
-    rename_provider.set_cross_reference_manager(Arc::clone(&rename_workspace.manager));
-    rename_provider.set_document_manager(Arc::clone(&rename_workspace.documents));
+    rename_provider.set_cross_reference_manager(Arc::clone(&component_workspace.manager));
+    rename_provider.set_document_manager(Arc::clone(&component_workspace.documents));
     let rename_params = support::rename_params(rename_uri, rename_position);
     results.push(measure_case(
         &fixture.spec.slug,
@@ -406,13 +425,15 @@ fn write_report(path: &std::path::Path, results: &[CaseResult]) -> std::io::Resu
         "model\toperation\tcache_state\tsamples\tmedian_ns\tp95_ns\tresult_items\t\
          environments\tqueue_pops\tunique_nodes\tloaded_nodes\tindexed_fallback_nodes\t\
          unavailable_nodes\tdirect_edge_queries\tdirect_edges\tloader_cache_hits\t\
-         loader_cache_misses\tdocument_parse_reuses\tdisk_parses"
+         loader_cache_misses\tdocument_parse_reuses\tdisk_parses\t\
+         component_candidate_uris\tcomponent_source_bytes\tcomponent_occurrence_scans\t\
+         component_occurrences"
     )?;
     for result in results {
         let metrics = result.metrics;
         writeln!(
             report,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             result.model,
             result.operation,
             result.cache_state,
@@ -432,6 +453,10 @@ fn write_report(path: &std::path::Path, results: &[CaseResult]) -> std::io::Resu
             metrics.loader_cache_misses,
             metrics.document_parse_reuses,
             metrics.disk_parses,
+            metrics.component_candidate_uris,
+            metrics.component_source_bytes,
+            metrics.component_occurrence_scans,
+            metrics.component_occurrences,
         )?;
     }
     report.flush()

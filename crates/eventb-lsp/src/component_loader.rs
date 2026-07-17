@@ -259,11 +259,18 @@ impl<'a> ComponentLoader<'a> {
     /// disk, and every selected URI is loaded and scanned at most once.
     pub(crate) fn component_occurrences(&self, target: &str) -> Vec<WorkspaceComponentOccurrence> {
         let mut occurrences = Vec::new();
-        for uri in self.candidate_uris_for_component(target) {
+        let candidates = self.candidate_uris_for_component(target);
+        #[cfg(test)]
+        crate::benchmark_metrics::component_candidate_uris(candidates.len());
+        for uri in candidates {
             if let Some(text) = self.source_text(&uri) {
+                #[cfg(test)]
+                crate::benchmark_metrics::component_source_scanned(text.len());
                 occurrences.extend(component_occurrences_in_source(&text, &uri, target));
             }
         }
+        #[cfg(test)]
+        crate::benchmark_metrics::component_occurrences(occurrences.len());
         occurrences
     }
 

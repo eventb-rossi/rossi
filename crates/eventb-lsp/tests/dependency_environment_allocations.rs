@@ -190,14 +190,31 @@ fn benchmark_model(
         &rename_source.text,
         fixture.component_name_offset(&fixture.spec.rename_component),
     );
-    let rename_workspace = workspace_with_open(
+    let component_workspace = workspace_with_open(
         fixture,
         Arc::clone(&manager),
         &fixture.spec.rename_component,
     );
+
+    let mut component_reference_provider = ReferenceProvider::new();
+    component_reference_provider
+        .set_cross_reference_manager(Arc::clone(&component_workspace.manager));
+    component_reference_provider.set_document_manager(Arc::clone(&component_workspace.documents));
+    let component_reference_params = support::reference_params(rename_uri.clone(), rename_position);
+    results.push(measure_allocations(
+        &fixture.spec.slug,
+        "component_references_request",
+        samples,
+        || {
+            component_reference_provider
+                .find_references(&component_reference_params, &rename_source.text)
+                .map_or(0, |locations| locations.len())
+        },
+    ));
+
     let mut rename_provider = RenameProvider::new();
-    rename_provider.set_cross_reference_manager(Arc::clone(&rename_workspace.manager));
-    rename_provider.set_document_manager(Arc::clone(&rename_workspace.documents));
+    rename_provider.set_cross_reference_manager(Arc::clone(&component_workspace.manager));
+    rename_provider.set_document_manager(Arc::clone(&component_workspace.documents));
     let rename_params = support::rename_params(rename_uri, rename_position);
     results.push(measure_allocations(
         &fixture.spec.slug,

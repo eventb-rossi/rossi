@@ -16,6 +16,10 @@ pub(crate) struct BenchmarkMetrics {
     pub(crate) loader_cache_misses: u64,
     pub(crate) document_parse_reuses: u64,
     pub(crate) disk_parses: u64,
+    pub(crate) component_candidate_uris: u64,
+    pub(crate) component_source_bytes: u64,
+    pub(crate) component_occurrence_scans: u64,
+    pub(crate) component_occurrences: u64,
 }
 
 thread_local! {
@@ -85,4 +89,19 @@ pub(crate) fn document_parse_reuse() {
 
 pub(crate) fn disk_parse() {
     update(|metrics| metrics.disk_parses += 1);
+}
+
+pub(crate) fn component_candidate_uris(count: usize) {
+    update(|metrics| metrics.component_candidate_uris += count as u64);
+}
+
+pub(crate) fn component_source_scanned(bytes: usize) {
+    update(|metrics| {
+        metrics.component_source_bytes += bytes as u64;
+        metrics.component_occurrence_scans += 1;
+    });
+}
+
+pub(crate) fn component_occurrences(count: usize) {
+    update(|metrics| metrics.component_occurrences += count as u64);
 }
