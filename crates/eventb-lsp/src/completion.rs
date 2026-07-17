@@ -122,6 +122,16 @@ impl CompletionContext {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn benchmark_environment_construction(
+    component: &Component,
+    loader: &ComponentLoader<'_>,
+) -> usize {
+    let context = CompletionContext::from_component_with_refs(component, Some(loader));
+    std::hint::black_box(&context);
+    context.variables.len() + context.constants.len() + context.sets.len()
+}
+
 /// Provides code completion for Event-B documents
 pub struct CompletionProvider {
     /// Cross-reference manager for workspace-wide navigation

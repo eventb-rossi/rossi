@@ -35,6 +35,8 @@ impl ResolvedEnvironment {
     }
 
     fn with_scope(root: &Component, loader: &ComponentLoader, scope: DependencyScope) -> Self {
+        #[cfg(test)]
+        crate::benchmark_metrics::environment_started();
         let root_key = kind_and_name(root);
         let mut graph = DependencyGraph::new();
         graph.upsert_component(root);
@@ -44,12 +46,18 @@ impl ResolvedEnvironment {
         let mut components = HashMap::new();
 
         while let Some(expected) = pending.pop_front() {
+            #[cfg(test)]
+            crate::benchmark_metrics::queue_popped();
             if !seen.insert(expected.clone()) {
                 continue;
             }
+            #[cfg(test)]
+            crate::benchmark_metrics::unique_node();
 
             match loader.load(&expected.1) {
                 Some(loaded) if kind_and_name(loaded.component()) == expected => {
+                    #[cfg(test)]
+                    crate::benchmark_metrics::loaded_node();
                     graph.upsert_component(loaded.component());
                     components.insert(expected.clone(), loaded);
                 }
@@ -57,8 +65,16 @@ impl ResolvedEnvironment {
                 // current source is temporarily unavailable.
                 _ if loader
                     .manager()
-                    .copy_dependency_node(&mut graph, expected.0, &expected.1) => {}
-                _ => continue,
+                    .copy_dependency_node(&mut graph, expected.0, &expected.1) =>
+                {
+                    #[cfg(test)]
+                    crate::benchmark_metrics::indexed_fallback_node();
+                }
+                _ => {
+                    #[cfg(test)]
+                    crate::benchmark_metrics::unavailable_node();
+                    continue;
+                }
             }
             pending.extend(direct_dependencies(&graph, &expected, scope));
         }
@@ -113,6 +129,30 @@ impl ResolvedEnvironment {
             })
             .collect()
     }
+
+    #[cfg(test)]
+    pub(crate) fn benchmark_cardinality(&self) -> usize {
+        std::hint::black_box(self);
+        self.components.len() + 1
+    }
+
+    #[cfg(test)]
+    pub(crate) fn benchmark_direct_edges(&self) -> usize {
+        let mut components = self.graph.component_names();
+        components.sort();
+        components
+            .into_iter()
+            .filter_map(|name| {
+                let kind = self.graph.kind_of(&name)?;
+                Some(direct_dependencies(
+                    &self.graph,
+                    &(kind, name),
+                    DependencyScope::All,
+                ))
+            })
+            .map(|dependencies| dependencies.len())
+            .sum()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -126,7 +166,7 @@ fn direct_dependencies(
     component: &(ComponentKind, String),
     scope: DependencyScope,
 ) -> Vec<(ComponentKind, String)> {
-    graph
+    let dependencies = graph
         .references_of_kind(component.0, &component.1)
         .into_iter()
         .flatten()
@@ -136,7 +176,10 @@ fn direct_dependencies(
                 .into_iter()
                 .map(move |name| (edge.target_kind(), name))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    #[cfg(test)]
+    crate::benchmark_metrics::direct_edges(dependencies.len());
+    dependencies
 }
 
 #[cfg(test)]

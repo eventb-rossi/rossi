@@ -39,6 +39,11 @@ pub mod symbols;
 pub mod text_utils;
 pub mod workspace;
 
+#[cfg(test)]
+mod benchmark_metrics;
+#[cfg(test)]
+mod dependency_benchmark;
+
 // Re-export the server implementation
 pub mod server;
 

@@ -59,3 +59,5 @@ tower = { version = "0.5", features = ["util"] }
 # `StreamExt::next` for reading server-to-client notifications (the
 # `ClientSocket` stream) in the debounce wire-level test.
 futures = "0.3"
+# Allocation counts for the isolated dependency benchmark integration test.
+stats_alloc = "0.1"

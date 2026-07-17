@@ -110,8 +110,12 @@ impl<'a> ComponentLoader<'a> {
         // cache mutably).
         let cached = self.cache.borrow().get(uri).cloned();
         if let Some(doc) = cached {
+            #[cfg(test)]
+            crate::benchmark_metrics::loader_cache_hit();
             return Some(doc);
         }
+        #[cfg(test)]
+        crate::benchmark_metrics::loader_cache_miss();
         let doc = self.build(uri)?;
         self.cache
             .borrow_mut()
@@ -143,16 +147,25 @@ impl<'a> ComponentLoader<'a> {
     fn build(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
         if let Some(documents) = self.documents {
             if let Some(doc) = documents.parse_result(uri) {
+                #[cfg(test)]
+                crate::benchmark_metrics::document_parse_reuse();
                 return Some(doc);
             }
             // A concurrent edit can supersede the parse that just completed.
             // Retry the current open revision once, but never fall through to
             // stale disk text for a URI that is still open.
             if documents.version(uri).is_some() {
-                return documents.parse_result(uri);
+                let doc = documents.parse_result(uri);
+                #[cfg(test)]
+                if doc.is_some() {
+                    crate::benchmark_metrics::document_parse_reuse();
+                }
+                return doc;
             }
         }
         let text = read_source_file(uri)?;
+        #[cfg(test)]
+        crate::benchmark_metrics::disk_parse();
         Some(Arc::new(ParsedDocument::from_text(text)))
     }
 

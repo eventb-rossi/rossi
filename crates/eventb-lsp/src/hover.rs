@@ -124,6 +124,20 @@ impl HoverContext {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn benchmark_environment_construction(
+    component: &Component,
+    loader: &ComponentLoader<'_>,
+) -> usize {
+    let context = HoverContext::from_component_with_refs(component, Some(loader));
+    std::hint::black_box(&context);
+    context.variables.len()
+        + context.constants.len()
+        + context.sets.len()
+        + context.constraints.len()
+        + context.variants.len()
+}
+
 /// Provides hover documentation for Event-B documents
 pub struct HoverProvider {
     /// Cross-reference manager for workspace-wide navigation
