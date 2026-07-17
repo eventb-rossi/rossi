@@ -8,7 +8,30 @@
 //! [`ComponentLoader`](crate::component_loader::ComponentLoader), which parses
 //! each file at most once per request.
 
-use rossi::Component;
+use rossi::deps::{ComponentKind, EdgeKind};
+use rossi::keywords::KeywordId;
+use rossi::{Component, ComponentNameSite};
+
+use crate::identifier_utils::{self, WordBoundary};
+use crate::lsp_types::{Location, Position, Url};
+use crate::position::{position_to_offset, span_to_range};
+use crate::text_utils;
+
+/// Provider-neutral identity of a component name under the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComponentIdentity {
+    pub(crate) name: String,
+    pub(crate) site: ComponentNameSite,
+}
+
+impl ComponentIdentity {
+    pub(crate) fn kind(&self) -> ComponentKind {
+        match self.site {
+            ComponentNameSite::Declaration(kind) => kind,
+            ComponentNameSite::Dependency(edge) => edge.target_kind(),
+        }
+    }
+}
 
 /// Parse every component in `text`, recovering a partial AST from local syntax
 /// errors. A single broken predicate no longer blanks out the whole document:
@@ -63,32 +86,158 @@ pub fn component_at_offset(components: &[Component], offset: usize) -> Option<&C
         .or_else(|| components.first())
 }
 
-/// Whether `offset` is on a component declaration or component-level
-/// dependency operand named `name` in the source document. If recovery finds
-/// no anchored component, `headerless_dependency` supplies the narrow fallback
-/// for a temporarily headerless dependency clause.
+/// Resolve a component declaration or component-level dependency operand at
+/// `position`. Exact recovery-scanner occurrences win; the clause scanner is
+/// used by itself only when no component header could be recovered, preserving
+/// support for a temporarily headerless dependency clause.
 ///
 /// The trailing edge is included because LSP identifier lookup treats the
-/// caret immediately after a name as targeting that name. The fallback is lazy
-/// so ordinary component sites do not need a second structural scan.
-pub(crate) fn is_component_name_site(
+/// caret immediately after a name as targeting that name.
+pub(crate) fn resolve_component_at_position(
     text: &str,
+    masked: &str,
+    position: Position,
     name: &str,
-    offset: usize,
-    headerless_dependency: impl FnOnce() -> bool,
-) -> bool {
-    let occurrences = rossi::component_name_occurrences(text);
-    occurrences.iter().any(|occurrence| {
-        occurrence.name == name
-            && occurrence
-                .span
-                .is_some_and(|span| span.contains(offset) || span.end == offset)
-    }) || (occurrences.is_empty() && headerless_dependency())
+) -> Option<ComponentIdentity> {
+    if !rossi::names::is_valid_component_name(name) {
+        return None;
+    }
+
+    let offset = position_to_offset(text, position)?;
+    let fallback_dependency = component_reference_clause(masked, position);
+    if fallback_dependency.is_none() && !component_keyword_before_position(masked, position) {
+        return None;
+    }
+
+    let site = rossi::component_name_occurrences_with_sites(text)
+        .iter()
+        .find(|occurrence| {
+            occurrence.name == name
+                && occurrence
+                    .span
+                    .is_some_and(|span| span.contains(offset) || span.end == offset)
+        })
+        .map(|occurrence| occurrence.site)
+        .or_else(|| fallback_dependency.map(ComponentNameSite::Dependency))?;
+
+    Some(ComponentIdentity {
+        name: name.to_string(),
+        site,
+    })
+}
+
+/// Whether a structural component keyword precedes the cursor on its line.
+/// This cheap gate keeps ordinary formula requests away from the full recovery
+/// occurrence scan while still admitting compact one-line components.
+fn component_keyword_before_position(masked: &str, position: Position) -> bool {
+    let Some(offset) = position_to_offset(masked, position) else {
+        return false;
+    };
+    let line_start = masked[..offset].rfind('\n').map_or(0, |index| index + 1);
+    text_utils::identifier_words(&masked[line_start..offset])
+        .into_iter()
+        .filter_map(|word| rossi::keywords::lookup(&word))
+        .any(|keyword| {
+            matches!(
+                keyword.id,
+                KeywordId::Context
+                    | KeywordId::Machine
+                    | KeywordId::Extends
+                    | KeywordId::Sees
+                    | KeywordId::Refines
+            )
+        })
+}
+
+/// Exact declaration/dependency locations for component `name` in one source.
+/// Headerless documents use the same clause classifier as cursor resolution;
+/// no provider owns a separate recovery rule.
+pub(crate) fn component_name_locations(text: &str, uri: &Url, name: &str) -> Vec<Location> {
+    let occurrences = rossi::component_name_occurrences_with_sites(text);
+    let fallback_end_line = occurrences
+        .iter()
+        .filter_map(|occurrence| match (occurrence.site, occurrence.span) {
+            (ComponentNameSite::Declaration(_), Some(span)) => {
+                Some(text[..span.start.min(text.len())].matches('\n').count())
+            }
+            _ => None,
+        })
+        .min();
+    let mut locations: Vec<_> = occurrences
+        .into_iter()
+        .filter(|occurrence| occurrence.name == name)
+        .filter_map(|occurrence| occurrence.span)
+        .filter(|span| text.get(span.start..span.end) == Some(name))
+        .map(|span| Location::new(uri.clone(), span_to_range(&span, text)))
+        .collect();
+
+    // The exact scanner covers everything from the first anchored declaration
+    // onward. Only a headerless prefix needs the syntactic fallback; ordinary
+    // documents start on line zero and skip both extra full-document masks.
+    if fallback_end_line != Some(0) {
+        let fallback_line_range = fallback_end_line.map(|end| (0, end - 1));
+        let masked = rossi::comments::mask_comments_chars(text);
+        for location in identifier_utils::find_whole_word_locations(
+            text,
+            name,
+            uri,
+            fallback_line_range,
+            WordBoundary::ComponentName,
+        )
+        .into_iter()
+        .filter(|location| component_reference_clause(&masked, location.range.start).is_some())
+        {
+            if !locations.iter().any(|existing| existing == &location) {
+                locations.push(location);
+            }
+        }
+    }
+    locations
+}
+
+/// The component-level SEES/REFINES/EXTENDS clause `position` sits in, if any.
+/// `masked` must be comment-masked text so keywords in prose cannot open or
+/// close structural regions.
+pub(crate) fn component_reference_clause(masked: &str, position: Position) -> Option<EdgeKind> {
+    let mut current_clause = None;
+    let mut in_event = false;
+    let mut reached = false;
+
+    for (idx, line) in masked.lines().enumerate() {
+        if idx > position.line as usize {
+            break;
+        }
+        reached |= idx == position.line as usize;
+
+        if text_utils::event_name_from_line(line).is_some() {
+            in_event = true;
+            current_clause = None;
+            continue;
+        }
+
+        if text_utils::line_keyword_is(line, KeywordId::End) && in_event {
+            in_event = false;
+            current_clause = None;
+        } else if text_utils::line_keyword_is(line, KeywordId::Sees) && !in_event {
+            current_clause = Some(EdgeKind::Sees);
+        } else if text_utils::line_keyword_is(line, KeywordId::Extends) && !in_event {
+            current_clause = Some(EdgeKind::Extends);
+        } else if text_utils::line_keyword_is(line, KeywordId::Refines) && !in_event {
+            current_clause = Some(EdgeKind::Refines);
+        } else if text_utils::is_declaration_scan_boundary(line) {
+            current_clause = None;
+        }
+    }
+
+    reached.then_some(current_clause).flatten()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::identifier_utils::identifier_at_position;
+    use crate::position::offset_to_position;
 
     const TWO_COMPONENTS: &str = "CONTEXT C0\nEND\n\nMACHINE M0\nVARIABLES\n    x\nEND\n";
 
@@ -146,5 +295,167 @@ mod tests {
         let components = vec![Component::Context(rossi::Context::new("c".into()))];
         assert_eq!(component_at_offset(&components, 42).unwrap().name(), "c");
         assert!(component_at_offset(&[], 0).is_none());
+    }
+
+    fn resolve_at(source: &str, offset: usize) -> Option<ComponentIdentity> {
+        let masked = rossi::comments::mask_comments_chars(source);
+        let position = offset_to_position(source, offset);
+        let (name, _) = identifier_at_position(source, position)?;
+        resolve_component_at_position(source, &masked, position, &name)
+    }
+
+    #[test]
+    fn component_resolution_classifies_declarations_dependencies_and_trailing_edges() {
+        let source = "CONTEXT Base \nEND\n\nCONTEXT Derived\nEXTENDS Base \nEND\n\nMACHINE Abstract \nEND\n\nMACHINE Concrete\nREFINES Abstract \nSEES Base \nEND";
+        let cases = [
+            (
+                "CONTEXT Base",
+                ComponentIdentity {
+                    name: "Base".into(),
+                    site: ComponentNameSite::Declaration(ComponentKind::Context),
+                },
+            ),
+            (
+                "EXTENDS Base",
+                ComponentIdentity {
+                    name: "Base".into(),
+                    site: ComponentNameSite::Dependency(EdgeKind::Extends),
+                },
+            ),
+            (
+                "MACHINE Abstract",
+                ComponentIdentity {
+                    name: "Abstract".into(),
+                    site: ComponentNameSite::Declaration(ComponentKind::Machine),
+                },
+            ),
+            (
+                "REFINES Abstract",
+                ComponentIdentity {
+                    name: "Abstract".into(),
+                    site: ComponentNameSite::Dependency(EdgeKind::Refines),
+                },
+            ),
+            (
+                "SEES Base",
+                ComponentIdentity {
+                    name: "Base".into(),
+                    site: ComponentNameSite::Dependency(EdgeKind::Sees),
+                },
+            ),
+        ];
+
+        for (marker, expected) in cases {
+            let offset = source.find(marker).unwrap() + marker.len();
+            assert_eq!(resolve_at(source, offset), Some(expected), "{marker}");
+        }
+    }
+
+    #[test]
+    fn component_resolution_classifies_compact_inline_dependencies() {
+        let source = "MACHINE Concrete REFINES Abstract SEES Base END";
+
+        let refines = source.find("Abstract").unwrap();
+        assert_eq!(
+            resolve_at(source, refines),
+            Some(ComponentIdentity {
+                name: "Abstract".into(),
+                site: ComponentNameSite::Dependency(EdgeKind::Refines),
+            })
+        );
+
+        let sees = source.find("Base").unwrap();
+        assert_eq!(
+            resolve_at(source, sees),
+            Some(ComponentIdentity {
+                name: "Base".into(),
+                site: ComponentNameSite::Dependency(EdgeKind::Sees),
+            })
+        );
+    }
+
+    #[test]
+    fn headerless_dependency_recovery_accepts_keywords_and_partial_documents() {
+        let keyword = "SEES MACHINE";
+        assert_eq!(
+            resolve_at(keyword, keyword.find("MACHINE").unwrap()),
+            Some(ComponentIdentity {
+                name: "MACHINE".into(),
+                site: ComponentNameSite::Dependency(EdgeKind::Sees),
+            })
+        );
+
+        let partial = "SEES Base\nEND\n\nMACHINE M\nEND";
+        assert_eq!(
+            resolve_at(partial, partial.find("Base").unwrap()),
+            Some(ComponentIdentity {
+                name: "Base".into(),
+                site: ComponentNameSite::Dependency(EdgeKind::Sees),
+            })
+        );
+
+        let uri = Url::parse("file:///partial.eventb").unwrap();
+        let locations = component_name_locations(partial, &uri, "Base");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(
+            locations[0].range.start,
+            offset_to_position(partial, partial.find("Base").unwrap())
+        );
+    }
+
+    #[test]
+    fn declaration_resolution_survives_an_ast_wide_depth_error() {
+        let source = format!(
+            "CONTEXT Deep\nAXIOMS\n    @a {}(1 = 1)\nEND",
+            "¬".repeat(rossi::MAX_NESTING_DEPTH + 1)
+        );
+        assert!(parse_all(&source).is_empty());
+
+        assert_eq!(
+            resolve_at(&source, source.find("Deep").unwrap()),
+            Some(ComponentIdentity {
+                name: "Deep".into(),
+                site: ComponentNameSite::Declaration(ComponentKind::Context),
+            })
+        );
+    }
+
+    #[test]
+    fn headerless_dependency_recovery_is_utf16_aware_and_stays_structural() {
+        let source = "SEES /* 😀 */ Base \nVARIABLES\n    Base\n";
+        let dependency_offset = source.find("Base ").unwrap() + "Base".len();
+        assert_eq!(
+            resolve_at(source, dependency_offset),
+            Some(ComponentIdentity {
+                name: "Base".into(),
+                site: ComponentNameSite::Dependency(EdgeKind::Sees),
+            })
+        );
+
+        let formula_offset = source.rfind("Base").unwrap();
+        assert_eq!(resolve_at(source, formula_offset), None);
+
+        let uri = Url::parse("file:///headerless.eventb").unwrap();
+        let locations = component_name_locations(source, &uri, "Base");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(
+            locations[0].range.start,
+            offset_to_position(source, source.find("Base ").unwrap())
+        );
+    }
+
+    #[test]
+    fn event_refinement_and_formula_collisions_are_not_components() {
+        let source = "MACHINE Base\nVARIABLES\n    Base\nEVENTS\n    EVENT Base extends Base\n    THEN\n        Base := Base\n    END\nEND";
+
+        for marker in [
+            "VARIABLES\n    Base",
+            "EVENT Base",
+            "extends Base",
+            ":= Base",
+        ] {
+            let offset = source.find(marker).unwrap() + marker.rfind("Base").unwrap();
+            assert_eq!(resolve_at(source, offset), None, "{marker}");
+        }
     }
 }

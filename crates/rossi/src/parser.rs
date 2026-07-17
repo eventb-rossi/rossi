@@ -6,6 +6,7 @@ use pest::Parser;
 use pest_derive::Parser;
 
 use crate::ast::*;
+use crate::deps::{ComponentKind, EdgeKind};
 use crate::error::{ParseError, ParseResult};
 use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
 use crate::selection::SyntaxSnapshot;
@@ -3357,40 +3358,85 @@ fn component_header_starts(text: &RecoveryText) -> Vec<usize> {
     starts
 }
 
+/// The structural role of one component-name occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentNameSite {
+    /// A `CONTEXT` or `MACHINE` declaration name.
+    Declaration(ComponentKind),
+    /// An `EXTENDS`, `SEES`, or `REFINES` target.
+    Dependency(EdgeKind),
+}
+
+/// One exact component declaration or dependency operand in source text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentNameOccurrence {
+    pub name: String,
+    pub span: Option<Span>,
+    pub site: ComponentNameSite,
+}
+
+impl ComponentNameOccurrence {
+    fn new(name: String, span: Option<Span>, site: ComponentNameSite) -> Self {
+        Self { name, span, site }
+    }
+}
+
 /// Locate component declarations and component-level dependency operands.
+///
+/// This compatibility view retains the original [`Ident`] result. Consumers
+/// that need each occurrence's structural role use
+/// [`component_name_occurrences_with_sites`].
+pub fn component_name_occurrences(input: &str) -> Vec<Ident> {
+    component_name_occurrences_with_sites(input)
+        .into_iter()
+        .map(|occurrence| Ident::new(occurrence.name, occurrence.span))
+        .collect()
+}
+
+/// Locate component declarations and component-level dependency operands,
+/// retaining whether each name is a declaration or dependency target.
 ///
 /// The result contains the names after `CONTEXT` / `MACHINE` headers and every
 /// target in context `EXTENDS` or machine `REFINES` / `SEES` clauses. Event
 /// refinement targets are excluded. The recovery scanner is used directly, so
 /// locations remain available in syntactically broken components and repeated
 /// structural clauses without adding source-only fields to the public AST.
-pub fn component_name_occurrences(input: &str) -> Vec<Ident> {
+pub fn component_name_occurrences_with_sites(input: &str) -> Vec<ComponentNameOccurrence> {
     let text = RecoveryText::new(input);
     let headers = component_header_starts(&text);
     let mut occurrences = Vec::new();
 
     for (index, &header) in headers.iter().enumerate() {
         let end = headers.get(index + 1).copied().unwrap_or(input.len());
-        let (keyword, scope, dependencies) = if text.masked_upper[header..]
+        let (keyword, scope, kind, dependencies) = if text.masked_upper[header..]
             .starts_with(crate::keywords::spell(KeywordId::Context))
         {
             (
                 KeywordId::Context,
                 crate::keywords::scope::CONTEXT,
-                &[KeywordId::Extends][..],
+                ComponentKind::Context,
+                &[(KeywordId::Extends, EdgeKind::Extends)][..],
             )
         } else {
             (
                 KeywordId::Machine,
                 crate::keywords::scope::MACHINE,
-                &[KeywordId::Refines, KeywordId::Sees][..],
+                ComponentKind::Machine,
+                &[
+                    (KeywordId::Refines, EdgeKind::Refines),
+                    (KeywordId::Sees, EdgeKind::Sees),
+                ][..],
             )
         };
 
         if let Some((name, span)) = component_name_after(&text, header, keyword)
             && span.end <= end
         {
-            occurrences.push(Ident::new(name, Some(span)));
+            occurrences.push(ComponentNameOccurrence::new(
+                name,
+                Some(span),
+                ComponentNameSite::Declaration(kind),
+            ));
         }
 
         let positions = recovery_clause_positions(&text, scope, header, end);
@@ -3399,10 +3445,18 @@ pub fn component_name_occurrences(input: &str) -> Vec<Ident> {
         } else {
             end
         };
-        for &dependency in dependencies {
-            occurrences.extend(recover_all_component_references(
-                &text, dependency, bound, &positions,
-            ));
+        for &(dependency, edge) in dependencies {
+            occurrences.extend(
+                recover_all_component_references(&text, dependency, bound, &positions)
+                    .into_iter()
+                    .map(|occurrence| {
+                        ComponentNameOccurrence::new(
+                            occurrence.name,
+                            occurrence.span,
+                            ComponentNameSite::Dependency(edge),
+                        )
+                    }),
+            );
         }
     }
 
@@ -4794,7 +4848,7 @@ mod tests {
     #[test]
     fn component_name_occurrences_cover_exact_structural_targets() {
         let source = "CONTEXT Derived\nEXTENDS Base ENV-C\nEND\n\nMACHINE Concrete\nREFINES Abstract-M\nSEES Base ENV-C\nEND";
-        let occurrences = component_name_occurrences(source);
+        let occurrences = component_name_occurrences_with_sites(source);
         let names: Vec<_> = occurrences
             .iter()
             .map(|occurrence| occurrence.name.as_str())
@@ -4810,6 +4864,21 @@ mod tests {
                 "Abstract-M",
                 "Base",
                 "ENV-C"
+            ]
+        );
+        assert_eq!(
+            occurrences
+                .iter()
+                .map(|occurrence| occurrence.site)
+                .collect::<Vec<_>>(),
+            [
+                ComponentNameSite::Declaration(ComponentKind::Context),
+                ComponentNameSite::Dependency(EdgeKind::Extends),
+                ComponentNameSite::Dependency(EdgeKind::Extends),
+                ComponentNameSite::Declaration(ComponentKind::Machine),
+                ComponentNameSite::Dependency(EdgeKind::Refines),
+                ComponentNameSite::Dependency(EdgeKind::Sees),
+                ComponentNameSite::Dependency(EdgeKind::Sees),
             ]
         );
         for occurrence in occurrences {

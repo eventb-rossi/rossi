@@ -7,7 +7,7 @@
 use rossi::keywords::{self, KeywordId};
 
 use crate::lsp_types::{Location, Position, Range, Url};
-use crate::position::{line_run_to_range, utf16_to_char_col};
+use crate::position::{line_run_to_range, utf16_to_char_col, utf16_to_char_col_checked};
 use crate::text_utils;
 
 /// Return the identifier that contains `position`, together with its range.
@@ -22,12 +22,8 @@ use crate::text_utils;
 /// identifier character.
 pub fn identifier_at_position(text: &str, position: Position) -> Option<(String, Range)> {
     let line = text.lines().nth(position.line as usize)?;
+    let char_pos = utf16_to_char_col_checked(line, position.character as usize)?;
     let chars: Vec<char> = line.chars().collect();
-    let char_pos = utf16_to_char_col(line, position.character as usize);
-
-    if char_pos >= chars.len() {
-        return None;
-    }
 
     let mut start = char_pos;
     while start > 0 && text_utils::is_identifier_char(chars[start - 1]) {
@@ -275,7 +271,7 @@ pub fn find_whole_word_locations(
     }
     let masked = rossi::comments::mask_comments_chars(text);
 
-    for (line_idx, line) in masked.lines().enumerate() {
+    for (line_idx, (line, source_line)) in masked.lines().zip(text.lines()).enumerate() {
         if let Some((start_line, end_line)) = line_range
             && (line_idx < start_line || line_idx > end_line)
         {
@@ -293,7 +289,7 @@ pub fn find_whole_word_locations(
             if before_ok && after_ok {
                 locations.push(Location::new(
                     uri.clone(),
-                    line_run_to_range(line, line_idx as u32, col, col + id_chars.len()),
+                    line_run_to_range(source_line, line_idx as u32, col, col + id_chars.len()),
                 ));
             }
         }
@@ -364,6 +360,13 @@ mod tests {
         // Cursor on the space right after `count` — no operator there, so
         // the trailing-edge rule keeps the identifier.
         assert_eq!(word_at("count := 0", pos(0, 5)).as_deref(), Some("count"));
+    }
+
+    #[test]
+    fn end_of_line_trailing_edge_resolves_identifier() {
+        let (word, range) = identifier_at_position("count", pos(0, 5)).unwrap();
+        assert_eq!(word, "count");
+        assert_eq!(range, Range::new(pos(0, 0), pos(0, 5)));
     }
 
     #[test]
@@ -489,5 +492,19 @@ mod tests {
         // 2 spaces + `𝔹` (2 units) + 1 space = start col 5; +5 for "count" = 10.
         assert_eq!(locs[0].range.start, pos(2, 5));
         assert_eq!(locs[0].range.end, pos(2, 10));
+    }
+
+    #[test]
+    fn locations_keep_utf16_columns_when_an_astral_char_is_masked() {
+        let uri = Url::parse("file:///test.eventb").unwrap();
+        let text = "/* 😀 */ C";
+        let locations =
+            find_whole_word_locations(text, "C", &uri, None, WordBoundary::ComponentName);
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(
+            locations[0].range.start,
+            crate::position::offset_to_position(text, text.find('C').unwrap())
+        );
     }
 }

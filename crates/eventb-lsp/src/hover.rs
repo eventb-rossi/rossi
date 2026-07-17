@@ -8,7 +8,8 @@
 
 use crate::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position};
 use rossi::{
-    Component, Event, Expression, LabeledPredicate, PrettyPrinter,
+    Component, ComponentNameSite, Event, Expression, LabeledPredicate, PrettyPrinter,
+    deps::{ComponentKind, EdgeKind},
     keywords::{self, KeywordId},
     operators::{self, OperatorId},
 };
@@ -16,7 +17,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::component_at_offset;
+use crate::component_util::{
+    ComponentIdentity, component_at_offset, parse_all, resolve_component_at_position,
+};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::formula_walk;
@@ -169,6 +172,14 @@ impl HoverProvider {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
+        // Prefer the shared parsed snapshot so token lookup, structural
+        // resolution, and AST spans all index the same source revision.
+        let parsed = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let text = parsed.as_deref().map_or(text, |parsed| parsed.text());
+
         // No hover inside comments: `:=` or a keyword in prose is not the
         // operator/keyword it spells.
         if let Some(offset) = position_to_offset(text, position)
@@ -177,36 +188,50 @@ impl HoverProvider {
             return None;
         }
 
-        // Hover context from the component under the cursor, read from the
-        // document's shared parse (the single source of truth maintained by the
-        // document manager). Keywords and operators still hover without it.
-        let parsed = self
-            .document_manager
-            .as_ref()
-            .and_then(|dm| dm.parse_result(uri));
+        // Get the token at cursor — an identifier or a whole (possibly
+        // multi-character) operator like `:=`.
+        let (word, range) = word_at_position(text, position)?;
+        let masked = rossi::comments::mask_comments_chars(text);
+        if let Some(component) = resolve_component_at_position(text, &masked, position, &word) {
+            let mut hover = hover_component(&component);
+            hover.range = Some(range);
+            return Some(hover);
+        }
+
+        // Static documentation needs no AST or dependency environment. Keep it
+        // ahead of fallback parsing for bare-provider and closed-document hovers.
+        if let Some(mut hover) = self
+            .hover_keyword(&word)
+            .or_else(|| self.hover_operator(&word))
+            .or_else(|| self.hover_builtin(&word))
+        {
+            hover.range = Some(range);
+            return Some(hover);
+        }
+
+        // Select the cursor's component against the stored parse's own text, or
+        // recover from the same served text when no document snapshot exists.
+        let owned;
+        let components: &[Component] = match parsed.as_deref() {
+            Some(parsed) => parsed.components(),
+            None => {
+                owned = parse_all(text);
+                &owned
+            }
+        };
+        let offset = position_to_offset(text, position).unwrap_or(text.len());
+        let cursor_component = component_at_offset(components, offset);
+
         // One loader per request: each visible context/machine in the SEES /
         // EXTENDS / REFINES walk is parsed at most once, reusing open documents'
-        // stored parses.
+        // stored parses. Component and static hovers returned before this work.
         let loader = ComponentLoader::optional(
             self.cross_ref_manager.as_deref(),
             self.document_manager.as_deref(),
         );
-        // Select the cursor's component against the stored parse's own text, so
-        // the offset and the component spans index one snapshot — the handler
-        // `text` is a separate copy a concurrent edit can desync from the parse.
-        // Both the global hover context and the parameter hover are views on
-        // this one component, so it is resolved once here.
-        let cursor_component = parsed.as_deref().and_then(|parsed| {
-            let offset = position_to_offset(parsed.text(), position).unwrap_or(parsed.text().len());
-            component_at_offset(parsed.components(), offset)
-        });
         let hover_ctx = cursor_component
             .map(|component| HoverContext::from_component_with_refs(component, loader.as_ref()))
             .unwrap_or_else(HoverContext::new);
-
-        // Get the token at cursor — an identifier or a whole (possibly
-        // multi-character) operator like `:=`.
-        let (word, range) = word_at_position(text, position)?;
 
         // Try different hover providers in order, most-local scope first. A
         // formula binder the cursor sits on or is bound by (a quantifier / lambda
@@ -215,14 +240,9 @@ impl HoverProvider {
         // ANY-clause parameter is scoped to its event and shadows a same-named
         // global, resolved positionally next. Both share the resolver
         // find-references uses, so hover cannot drift from navigation.
-        let parse_text = parsed.as_deref().map(|parsed| parsed.text());
-        let mut hover = self
-            .hover_keyword(&word)
-            .or_else(|| self.hover_operator(&word))
-            .or_else(|| hover_bound(&word, cursor_component, parse_text, position))
-            .or_else(|| hover_parameter(&word, cursor_component, parse_text, position))
-            .or_else(|| self.hover_identifier(&word, &hover_ctx))
-            .or_else(|| self.hover_builtin(&word))?;
+        let mut hover = hover_bound(&word, cursor_component, text, position)
+            .or_else(|| hover_parameter(&word, cursor_component, text, position))
+            .or_else(|| self.hover_identifier(&word, &hover_ctx))?;
 
         // Report the token's span so the client highlights all of `:=`, not
         // whatever its own word pattern guesses.
@@ -409,18 +429,17 @@ fn append_constraint_section(description: &mut String, header: &str, constraints
 
 /// Hover for a formula binder under the cursor — a quantifier (`∀`/`∃`), `λ`,
 /// set comprehension, or quantified `⋃`/`⋂` bound variable, whether the cursor
-/// is on the binder declaration or a use it binds. `component` and `text` are the
-/// cursor's component and the stored parse's own text (the snapshot its spans
-/// index into), already resolved by `hover`. Returns `None` when the document is
-/// not open or the cursor is not on (or bound by) a formula binder; an event
-/// `ANY` parameter is left to the richer [`hover_parameter`] card.
+/// is on the binder declaration or a use it binds. `component` and `text` are
+/// selected from one source snapshot by `hover`. Returns `None` when the cursor
+/// is not on (or bound by) a formula binder; an event `ANY` parameter is left to
+/// the richer [`hover_parameter`] card.
 fn hover_bound(
     word: &str,
     component: Option<&Component>,
-    text: Option<&str>,
+    text: &str,
     position: Position,
 ) -> Option<Hover> {
-    let offset = position_to_offset(text?, position)?;
+    let offset = position_to_offset(text, position)?;
     let bound = formula_walk::resolve_bound_at_offset(component?, word, offset)?;
     if bound.is_event_parameter {
         return None;
@@ -433,20 +452,19 @@ fn hover_bound(
 }
 
 /// Hover for an event `ANY`-clause parameter under the cursor. `component` and
-/// `text` are the cursor's component and the stored parse's own text (the
-/// snapshot its spans index into), already resolved by `hover`. Returns `None`
-/// when the document is not open, the cursor is not inside a machine event, or
-/// `word` is not one of that event's parameters.
+/// `text` are selected from one source snapshot by `hover`. Returns `None` when
+/// the cursor is not inside a machine event, or `word` is not one of that
+/// event's parameters.
 fn hover_parameter(
     word: &str,
     component: Option<&Component>,
-    text: Option<&str>,
+    text: &str,
     position: Position,
 ) -> Option<Hover> {
     let Component::Machine(machine) = component? else {
         return None;
     };
-    let masked = rossi::comments::mask_comments_chars(text?);
+    let masked = rossi::comments::mask_comments_chars(text);
     text_utils::event_parameter_at_position(machine, &masked, position, word)
         .map(|event| build_param_hover(word, &machine.name, event))
 }
@@ -470,6 +488,27 @@ fn build_param_hover(word: &str, machine_name: &str, event: &Event) -> Hover {
 }
 
 // Helper functions
+
+fn hover_component(component: &ComponentIdentity) -> Hover {
+    let kind = match component.kind() {
+        ComponentKind::Context => "Context",
+        ComponentKind::Machine => "Machine",
+    };
+    let description = match component.site {
+        ComponentNameSite::Declaration(_) => {
+            format!("**{kind} component**\n\nComponent declaration.")
+        }
+        ComponentNameSite::Dependency(edge) => {
+            let clause = match edge {
+                EdgeKind::Extends => "EXTENDS",
+                EdgeKind::Sees => "SEES",
+                EdgeKind::Refines => "REFINES",
+            };
+            format!("**{kind} component**\n\n`{clause}` target.")
+        }
+    };
+    create_hover(&format!("{kind}: {}", component.name), &description)
+}
 
 fn create_hover(title: &str, description: &str) -> Hover {
     let content = format!("# {}\n\n{}", title, description);
@@ -1132,6 +1171,40 @@ mod tests {
         assert!(content.value.contains("Constant"));
     }
 
+    #[test]
+    fn component_sites_hover_as_components_despite_formula_collisions() {
+        let source = "CONTEXT C\nCONSTANTS\n    C\nEND\n\nMACHINE M\nSEES C\nVARIABLES\n    C\nEND";
+
+        let declaration =
+            markup(hover_with_doc(source, 0, 8).expect("hover on component declaration"));
+        assert!(declaration.contains("# Context: C"), "got: {declaration}");
+        assert!(
+            declaration.contains("Component declaration"),
+            "got: {declaration}"
+        );
+
+        let dependency = markup(hover_with_doc(source, 6, 5).expect("hover on SEES target"));
+        assert!(dependency.contains("# Context: C"), "got: {dependency}");
+        assert!(dependency.contains("`SEES` target"), "got: {dependency}");
+
+        let formula = markup(hover_with_doc(source, 8, 4).expect("hover on variable"));
+        assert!(formula.contains("# Variable: C"), "got: {formula}");
+    }
+
+    #[test]
+    fn keyword_spelled_dependency_hovers_as_a_component() {
+        let source = "CONTEXT MACHINE\nEND\n\nMACHINE M\nSEES MACHINE\nEND";
+        let dependency = markup(
+            hover_with_doc(source, 4, 5).expect("hover on keyword-spelled component target"),
+        );
+
+        assert!(
+            dependency.contains("# Context: MACHINE"),
+            "got: {dependency}"
+        );
+        assert!(dependency.contains("`SEES` target"), "got: {dependency}");
+    }
+
     // A machine where the event parameter `p` shadows a same-named state
     // variable, `q` is a plain parameter, and `v` is a global used inside the
     // event body. Event `e` spans lines 7..=16.
@@ -1183,6 +1256,18 @@ mod tests {
     }
 
     #[test]
+    fn fallback_parse_keeps_bound_variable_scope() {
+        let provider = HoverProvider::new();
+        let value = markup(
+            hover_at(&provider, SHADOWING_BINDER, 5, 16)
+                .expect("hover on bound variable without a document manager"),
+        );
+
+        assert!(value.contains("**Bound variable**"), "got: {value}");
+        assert!(!value.contains("**Variable**"), "got: {value}");
+    }
+
+    #[test]
     fn hover_on_the_binder_declaration_names_it_local() {
         // A cursor on the binder `x` itself is also a bound variable.
         let value = markup(hover_with_doc(SHADOWING_BINDER, 5, 12).expect("hover on binder x"));
@@ -1231,6 +1316,18 @@ mod tests {
             !value.contains("Variable"),
             "the parameter shadows the global variable inside its event, got: {value}"
         );
+    }
+
+    #[test]
+    fn fallback_parse_keeps_parameter_scope() {
+        let provider = HoverProvider::new();
+        let value = markup(
+            hover_at(&provider, PARAM_MACHINE, 13, 10)
+                .expect("hover on parameter without a document manager"),
+        );
+
+        assert!(value.contains("Parameter"), "got: {value}");
+        assert!(!value.contains("Variable"), "got: {value}");
     }
 
     #[test]

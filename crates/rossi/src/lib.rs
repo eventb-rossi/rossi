@@ -68,7 +68,8 @@ pub use deps::{ComponentId, ComponentKind, DependencyGraph, EdgeKind, Refinement
 pub use error::{ParseError, ParseResult, Result};
 pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{
-    ParseSnapshot, component_name_occurrences, parse, parse_action_str, parse_components,
+    ComponentNameOccurrence, ComponentNameSite, ParseSnapshot, component_name_occurrences,
+    component_name_occurrences_with_sites, parse, parse_action_str, parse_components,
     parse_components_snapshot, parse_components_with_recovery, parse_expression_str,
     parse_predicate_str, parse_with_recovery,
 };

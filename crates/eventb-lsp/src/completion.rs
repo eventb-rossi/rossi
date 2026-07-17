@@ -13,7 +13,7 @@ use crate::lsp_types::{
 use rossi::{Component, keywords, operators};
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::component_at_offset;
+use crate::component_util::{component_at_offset, component_reference_clause};
 use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_byte, utf16_to_char_col};
@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::references::component_reference_clause;
 use crate::text_utils;
 
 /// Completion context - tracks what's available at the cursor position
@@ -1589,6 +1588,26 @@ mod tests {
         assert!(
             items.is_empty(),
             "component names must not be offered outside REFINES/SEES/EXTENDS, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn dependency_completion_keeps_component_and_general_suggestions() {
+        let labels = complete_labels_at_marker(
+            "CONTEXT C\nEND\n\nMACHINE M\nSEES C|\nVARIABLES\n    x\nEND",
+        );
+
+        assert!(
+            labels
+                .iter()
+                .any(|(label, detail)| label == "C" && detail.as_deref() == Some("Component")),
+            "the compatible component must be offered, got {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|(label, detail)| label == "x" && detail.as_deref() == Some("Variable")),
+            "existing general suggestions must remain, got {labels:?}"
         );
     }
 }

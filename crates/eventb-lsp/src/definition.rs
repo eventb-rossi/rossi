@@ -22,7 +22,7 @@
 //! shares one resolver with find-references, so the two cannot drift on what a
 //! name resolves to.
 
-use crate::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Position};
+use crate::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location};
 use std::sync::Arc;
 
 use crate::component_loader::ComponentLoader;
@@ -30,7 +30,6 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::identifier_utils::identifier_at_position;
 use crate::position::span_to_range;
-use crate::references::component_reference_clause;
 use crate::symbols::{Resolution, declaration_location, resolve_cursor};
 
 /// Provides go-to-definition functionality.
@@ -88,17 +87,18 @@ impl DefinitionProvider {
         let manager = self.cross_ref_manager.as_ref()?;
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
 
-        // Stage 1: a cursor in a SEES / REFINES / EXTENDS clause navigates to the
-        // referenced component's own name.
-        if let Some(location) = find_cross_file_reference(&masked, position, &word, &loader) {
-            return Some(GotoDefinitionResponse::Scalar(location));
-        }
-
-        // Stage 2: resolve the identifier to what it names (scope-aware) and jump
-        // to its declaration site — a formula binder to its own binder (always in
-        // this document), a symbol to its declaring component.
+        // Resolve the identifier once, then map its provider-neutral identity to
+        // a declaration location.
         let location =
             match resolve_cursor(text, &masked, position, &word, &loader, cursor.as_deref())? {
+                Resolution::Component(component) => {
+                    let loaded = loader.load(&component.name)?;
+                    let name_span = loaded.component().name_span()?;
+                    Location::new(
+                        loaded.uri().clone(),
+                        span_to_range(&name_span, loaded.text()),
+                    )
+                }
                 Resolution::Bound(bound) => Location {
                     uri: uri.clone(),
                     range: span_to_range(&bound.declaration?, text),
@@ -115,32 +115,12 @@ impl Default for DefinitionProvider {
     }
 }
 
-/// Resolve a cursor sitting in a SEES / REFINES / EXTENDS clause to the
-/// referenced component's own name. `masked` is the comment-masked document, so
-/// a keyword spelled inside a comment cannot be mistaken for a clause boundary.
-/// The component's name span is read from the parser (the source of truth), so
-/// the target is exact for any casing or spacing.
-fn find_cross_file_reference(
-    masked: &str,
-    position: Position,
-    word: &str,
-    loader: &ComponentLoader,
-) -> Option<Location> {
-    // Reuses the references provider's detector: case-insensitive and
-    // in-event-aware, so a `sees` spelled any way resolves and one mentioned
-    // inside an event never misfires.
-    component_reference_clause(masked, position)?;
-
-    let loaded = loader.load(word)?;
-    let name_span = loaded.component().name_span()?;
-    let range = span_to_range(&name_span, loaded.text());
-    Some(Location::new(loaded.uri().clone(), range))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp_types::{Range, TextDocumentIdentifier, TextDocumentPositionParams, Url};
+    use crate::lsp_types::{
+        Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+    };
 
     /// Register every component in both managers and open each in the document
     /// manager, returning a provider wired to them. On-demand resolution reads
@@ -222,6 +202,17 @@ mod tests {
 
         // `count` used in @inv1 (line 4) → its declaration (line 2).
         assert_goto(&provider, uri, source, 4, 12, uri, range(2, 4, 9));
+    }
+
+    #[test]
+    fn component_declaration_wins_over_a_same_named_formula_symbol() {
+        let uri = "file:///c.eventb";
+        let source = "CONTEXT C\nCONSTANTS\n    C\nEND";
+        let provider = setup(&[(uri, source)]);
+
+        // The end-of-line trailing edge of the header name resolves to the
+        // component's own declaration, never the same-named constant below it.
+        assert_goto(&provider, uri, source, 0, 9, uri, range(0, 8, 9));
     }
 
     // Issue #100 — a formula binder shadowing a same-named machine variable.

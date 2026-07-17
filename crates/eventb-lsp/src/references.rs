@@ -7,23 +7,23 @@
 use crate::lsp_types::*;
 use rossi::Component;
 use rossi::ast::Span;
-use rossi::keywords::KeywordId;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::is_component_name_site;
+use crate::component_util::{component_name_locations, component_reference_clause};
 use crate::formula_walk;
-use crate::position::{position_to_offset, span_to_range};
+use crate::position::span_to_range;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::cross_references::{CrossReferenceManager, ReferenceKind};
+use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{
     Resolution, SymbolIdentity, SymbolKind, candidate_components_for_symbol, resolve_cursor,
     resolve_symbol_identity_in_component,
 };
+#[cfg(test)]
 use crate::text_utils;
 
 /// Provider for finding all references to symbols
@@ -158,17 +158,13 @@ impl ReferenceProvider {
         // re-parsed.
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
 
-        let offset = position_to_offset(text, position).unwrap_or(text.len());
-        if is_component_name_site(text, identifier, offset, || {
-            is_component_reference_position(masked, position)
-        }) {
-            return find_references_in_workspace(&loader, identifier);
-        }
-
         if let Some(resolution) =
             resolve_cursor(text, masked, position, identifier, &loader, cursor)
         {
             return match resolution {
+                Resolution::Component(component) => {
+                    find_references_in_workspace(&loader, &component.name)
+                }
                 // A formula binder local to this component: its declaration and
                 // the uses it binds, all in the cursor document. Resolved before
                 // the document-wide text scan below, so a purely local binder
@@ -265,48 +261,11 @@ pub(crate) fn find_references_in_workspace(
 
     for uri in loader.candidate_uris_for_component(identifier) {
         if let Some(text) = loader.source_text(&uri) {
-            let occurrences = rossi::component_name_occurrences(&text);
-            if occurrences.is_empty() {
-                locations.extend(syntactic_component_reference_locations(
-                    &text, &uri, identifier,
-                ));
-            } else {
-                locations.extend(spans_to_locations(
-                    occurrences.iter().filter_map(|occurrence| {
-                        (occurrence.name == identifier)
-                            .then_some(occurrence.span)
-                            .flatten()
-                    }),
-                    &text,
-                    &uri,
-                    identifier,
-                ));
-            }
+            locations.extend(component_name_locations(&text, &uri, identifier));
         }
     }
 
     locations
-}
-
-/// Structural reference locations recovered from clause context rather than a
-/// component AST. This is the narrow fallback for a temporarily headerless
-/// open document, where the parser-side occurrence scan has no component anchor.
-fn syntactic_component_reference_locations(
-    text: &str,
-    uri: &Url,
-    identifier: &str,
-) -> Vec<Location> {
-    let masked = rossi::comments::mask_comments_chars(text);
-    identifier_utils::find_whole_word_locations(
-        text,
-        identifier,
-        uri,
-        None,
-        identifier_utils::WordBoundary::ComponentName,
-    )
-    .into_iter()
-    .filter(|location| component_reference_clause(&masked, location.range.start).is_some())
-    .collect()
 }
 
 fn push_unique_locations(
@@ -405,53 +364,6 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     // action whose label spells a keyword (`@end x := 0`) is not read as `END`.
     let masked = rossi::comments::mask_comments_chars(text);
     text_utils::event_line_range_in(&masked, event_name)
-}
-
-/// The SEES/REFINES/EXTENDS clause `position` sits in, if any, as the dependency
-/// edge it introduces (`ReferenceKind::target_kind` then says whether the target
-/// is a machine or a context). `masked` is the comment-masked document text, so
-/// keywords spelled inside comments are already blanked out and cannot be
-/// mistaken for clause boundaries.
-pub(crate) fn component_reference_clause(
-    masked: &str,
-    position: Position,
-) -> Option<ReferenceKind> {
-    let mut current_clause = None;
-    let mut in_event = false;
-    let mut reached = false;
-
-    for (idx, line) in masked.lines().enumerate() {
-        if idx > position.line as usize {
-            break;
-        }
-        reached |= idx == position.line as usize;
-
-        if text_utils::event_name_from_line(line).is_some() {
-            in_event = true;
-            current_clause = None;
-            continue;
-        }
-
-        // Each line's leading keyword is resolved through the keyword table
-        // ([`text_utils::line_keyword_is`] / [`is_declaration_scan_boundary`]),
-        // not a `@`-stripped first word: a labelled clause line such as
-        // `@end x := 0` or `@sees y` must not be read as the keyword it spells.
-        if text_utils::line_keyword_is(line, KeywordId::End) && in_event {
-            in_event = false;
-            current_clause = None;
-        } else if text_utils::line_keyword_is(line, KeywordId::Sees) && !in_event {
-            current_clause = Some(ReferenceKind::Sees);
-        } else if text_utils::line_keyword_is(line, KeywordId::Extends) && !in_event {
-            current_clause = Some(ReferenceKind::Extends);
-        } else if text_utils::line_keyword_is(line, KeywordId::Refines) && !in_event {
-            current_clause = Some(ReferenceKind::Refines);
-        } else if text_utils::is_declaration_scan_boundary(line) {
-            current_clause = None;
-        }
-    }
-
-    // A position past the last line isn't in any clause.
-    reached.then_some(current_clause).flatten()
 }
 
 /// Whether `position` sits in a SEES/REFINES/EXTENDS clause.

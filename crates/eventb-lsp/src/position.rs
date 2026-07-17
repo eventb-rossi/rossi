@@ -45,14 +45,22 @@ pub fn char_col_to_utf16(line: &str, char_col: usize) -> u32 {
 /// Char index on `line` for an incoming UTF-16 column; clamps to the char count
 /// when the column is past the end.
 pub fn utf16_to_char_col(line: &str, utf16_col: usize) -> usize {
+    utf16_to_char_col_checked(line, utf16_col).unwrap_or_else(|| line.chars().count())
+}
+
+/// Char index on `line` for an incoming UTF-16 column; `None` when the column
+/// is past the end. A column inside a surrogate pair clamps forward.
+pub(crate) fn utf16_to_char_col_checked(line: &str, utf16_col: usize) -> Option<usize> {
     let mut units = 0usize;
-    for (char_idx, ch) in line.chars().enumerate() {
+    let mut char_idx = 0usize;
+    for ch in line.chars() {
         if units >= utf16_col {
-            return char_idx;
+            return Some(char_idx);
         }
         units += ch.len_utf16();
+        char_idx += 1;
     }
-    line.chars().count()
+    (units >= utf16_col).then_some(char_idx)
 }
 
 /// Byte offset on `line` for an incoming UTF-16 column; `None` when the column
@@ -200,6 +208,8 @@ mod tests {
         // ASCII: char/UTF-16/byte all coincide.
         assert_eq!(char_col_to_utf16("hello", 3), 3);
         assert_eq!(utf16_to_char_col("hello", 3), 3);
+        assert_eq!(utf16_to_char_col_checked("hello", 5), Some(5));
+        assert_eq!(utf16_to_char_col_checked("hello", 6), None);
         assert_eq!(utf16_to_byte("hello", 3), Some(3));
         assert_eq!(utf16_to_byte("hello", 5), Some(5));
         assert_eq!(utf16_to_byte("hello", 6), None); // past end
@@ -213,6 +223,7 @@ mod tests {
         assert_eq!(char_col_to_utf16("𝔹x", 1), 2); // one char past 𝔹 = 2 units
         assert_eq!(utf16_to_char_col("𝔹x", 2), 1); // column 2 is 'x' (char 1)
         assert_eq!(utf16_to_char_col("𝔹x", 1), 1); // mid-surrogate clamps forward
+        assert_eq!(utf16_to_char_col_checked("𝔹x", 1), Some(1));
         assert_eq!(utf16_to_byte("𝔹x", 2), Some(4)); // byte of 'x'
     }
 

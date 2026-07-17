@@ -13,14 +13,14 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::{component_at_offset, is_component_name_site, parse_all};
+use crate::component_util::{component_at_offset, parse_all, resolve_component_at_position};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
-use crate::references::{component_reference_clause, find_references_in_workspace};
+use crate::references::find_references_in_workspace;
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -67,10 +67,14 @@ impl RenameProvider {
             identifier, position
         );
 
-        // Check if this identifier is a keyword (keywords cannot be renamed)
+        // Structural component names are labels and may spell a language
+        // keyword. Ordinary keyword tokens still cannot be renamed.
         if is_keyword(&identifier) {
-            debug!("Cannot rename keyword '{}'", identifier);
-            return None;
+            let masked = rossi::comments::mask_comments_chars(text);
+            if resolve_component_at_position(text, &masked, position, &identifier).is_none() {
+                debug!("Cannot rename keyword '{}'", identifier);
+                return None;
+            }
         }
 
         Some(range)
@@ -100,15 +104,9 @@ impl RenameProvider {
             identifier, new_name, position
         );
 
-        // A spelling is a component name only at its declaration or in a
-        // component-level EXTENDS/SEES/REFINES operand. A same-named formula
-        // symbol must stay on the local, scope-aware path.
-        let offset = position_to_offset(text, position)?;
+        let masked = rossi::comments::mask_comments_chars(text);
         let is_component = self.cross_ref_manager.is_some()
-            && is_component_name_site(text, &identifier, offset, || {
-                let masked = rossi::comments::mask_comments_chars(text);
-                component_reference_clause(&masked, position).is_some()
-            });
+            && resolve_component_at_position(text, &masked, position, &identifier).is_some();
 
         // A structural name may be hyphenated (Rodin labels/file names);
         // mathematical symbols may not (kernel_lang §2.2). Beyond tracked
@@ -138,9 +136,11 @@ impl RenameProvider {
             // Rename only in the current document. A hyphenated symbol (an
             // event name) gets the component boundary; a math symbol the math one.
             debug!("Renaming symbol '{}' in current document", identifier);
-            // Reuse the open document's components when we have them; otherwise
-            // recover them from the served text. `text` and these components are
-            // the same snapshot, so the cursor and every semantic span agree.
+            // Resolve the rename from the AST: a binder of the same name keeps
+            // its own scope, and the after-state form `x'` is renamed at its
+            // base. Fall back to a whole-word scan when the document doesn't
+            // parse far enough to resolve the cursor.
+            //
             let owned;
             let components: &[Component] = match cursor.as_deref() {
                 Some(parsed) => parsed.components(),
@@ -149,11 +149,6 @@ impl RenameProvider {
                     &owned
                 }
             };
-            // Resolve the rename from the AST: a binder of the same name keeps
-            // its own scope, and the after-state form `x'` is renamed at its
-            // base. Fall back to a whole-word scan when the document doesn't
-            // parse far enough to resolve the cursor.
-            //
             let edits = ast_rename_edits(text, components, position, &identifier, new_name)
                 .or_else(|| text_rename_edits(text, &identifier, uri, new_name))?;
 
@@ -820,6 +815,34 @@ END
         assert_eq!(
             apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
             "MACHINE M\nSEES D\nVARIABLES\n    C\nINVARIANTS\n    @C C ∈\nEND"
+        );
+    }
+
+    #[test]
+    fn keyword_spelled_component_can_be_prepared_and_renamed() {
+        let context = "CONTEXT MACHINE\nEND";
+        let machine = "MACHINE M\nSEES MACHINE\nEND";
+        let (provider, context_uri, machine_uri) = collision_provider(context, machine);
+        let prepare = make_position_params(1, 5, machine_uri.clone());
+        assert_eq!(
+            provider.prepare_rename(&prepare, machine),
+            Some(Range::new(Position::new(1, 5), Position::new(1, 12)))
+        );
+
+        let params = make_rename_params(1, 5, machine_uri.clone(), "C".to_string());
+        let mut changes = provider
+            .rename(&params, machine)
+            .expect("keyword-spelled component rename")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            "CONTEXT C\nEND"
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            "MACHINE M\nSEES C\nEND"
         );
     }
 

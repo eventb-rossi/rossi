@@ -1,15 +1,14 @@
 //! Shared Event-B symbol model and cursor-to-symbol resolution for LSP providers.
 //!
-//! `SymbolKind` classifies the five kinds of named symbols, and
+//! `SymbolKind` classifies the five kinds of named formula/event symbols, and
 //! `enumerate_symbols` walks a parsed `Component` to list them. On top of that
 //! taxonomy, `SymbolIdentity` names a *resolved* symbol (its declaring
 //! component, and the event for a parameter). `resolve_cursor` turns a cursor
-//! position into a `Resolution`, scope-aware and most-local first: a formula
-//! binder the cursor sits on or is bound by (a quantifier / lambda /
-//! comprehension binder) resolves to its own local scope; an event `ANY`
-//! parameter to its own event; a cursor on an event's `refines`/`extends` target
-//! to the abstract event it names; and a global symbol to the component that
-//! declares it by walking the refinement / sees / extends chains.
+//! position into a `Resolution`: component declarations and component-level
+//! dependencies resolve structurally before same-spelled symbols; a formula
+//! binder resolves to its own local scope; an event `ANY` parameter to its own
+//! event; an event's `refines`/`extends` target to its abstract event; and a
+//! global symbol to its declaring component through the dependency chains.
 //! Go-to-definition, find-references, and rename build on this one resolver (and
 //! the shared binder walk it delegates to) so the features cannot drift on what
 //! a name means.
@@ -18,7 +17,9 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::{component_at_offset, parse_all};
+use crate::component_util::{
+    ComponentIdentity, component_at_offset, parse_all, resolve_component_at_position,
+};
 use crate::cross_references::{ComponentKind, CrossReferenceManager};
 use crate::document::ParsedDocument;
 use crate::formula_walk;
@@ -170,14 +171,12 @@ impl From<SymbolRef> for SymbolIdentity {
 
 /// What the identifier at a cursor position resolves to.
 ///
-/// Either a named component-level symbol (a variable / constant / set / event,
-/// or an event `ANY` parameter) — the identity find-references groups its hits
-/// by and go-to-definition maps to a declaration site — or a formula binder
-/// local to one component, carrying its declaration and in-scope occurrences
-/// inline (its `is_event_parameter` flag is always `false` here, since event
-/// parameters resolve to a `Symbol`). Definition, references, and hover all
-/// resolve through this one enum so they cannot disagree on what a name means.
+/// A structural component site, a named formula/event symbol, or a formula
+/// binder local to one component. Definition and references consume this enum;
+/// hover, completion, and rename share its component identity and classifier.
 pub(crate) enum Resolution {
+    /// A component declaration or component-level dependency operand.
+    Component(ComponentIdentity),
     /// A component-level / inherited symbol, or an event parameter.
     Symbol(SymbolIdentity),
     /// A formula binder (a quantifier / lambda / comprehension binder) local to
@@ -189,11 +188,11 @@ pub(crate) enum Resolution {
 /// Resolve the identifier at `position` to what it names, scope-aware and
 /// most-local first.
 ///
-/// A formula binder the cursor sits on or is bound by is the most local scope and
-/// resolves to a [`Resolution::Bound`]; a cursor on an event's `refines`/`extends`
-/// target, an event `ANY` parameter, and a component-level / inherited symbol all
-/// resolve to a [`Resolution::Symbol`] — the target to the abstract event it
-/// names, never the local same-named event.
+/// A component declaration or component-level dependency resolves first to
+/// [`Resolution::Component`]. Otherwise, a formula binder the cursor sits on or
+/// is bound by resolves to [`Resolution::Bound`]; an event's `refines`/`extends`
+/// target, an event `ANY` parameter, and a component-level/inherited symbol all
+/// resolve to [`Resolution::Symbol`].
 ///
 /// `text` is the document the offsets index into and `masked` its comment-masked
 /// form; `cursor` is the document's stored parse when it is open (its components
@@ -208,8 +207,14 @@ pub(crate) fn resolve_cursor(
     loader: &ComponentLoader,
     cursor: Option<&ParsedDocument>,
 ) -> Option<Resolution> {
-    let offset = position_to_offset(text, position).unwrap_or(text.len());
+    // Structural component sites outrank every same-spelled event, formula
+    // binder, parameter, or component-level symbol. This also runs before
+    // selecting a parsed component so a headerless dependency still resolves.
+    if let Some(component) = resolve_component_at_position(text, masked, position, identifier) {
+        return Some(Resolution::Component(component));
+    }
 
+    let offset = position_to_offset(text, position).unwrap_or(text.len());
     let owned;
     let components: &[Component] = match cursor {
         Some(parsed) => parsed.components(),
