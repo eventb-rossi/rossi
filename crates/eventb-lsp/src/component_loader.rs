@@ -261,16 +261,28 @@ impl<'a> ComponentLoader<'a> {
         let mut occurrences = Vec::new();
         let candidates = self.candidate_uris_for_component(target);
         #[cfg(test)]
-        crate::benchmark_metrics::component_candidate_uris(candidates.len());
+        let candidate_count = candidates.len();
+        #[cfg(test)]
+        let mut source_bytes = 0u64;
+        #[cfg(test)]
+        let mut occurrence_scans = 0;
         for uri in candidates {
             if let Some(text) = self.source_text(&uri) {
                 #[cfg(test)]
-                crate::benchmark_metrics::component_source_scanned(text.len());
+                {
+                    source_bytes += text.len() as u64;
+                    occurrence_scans += 1;
+                }
                 occurrences.extend(component_occurrences_in_source(&text, &uri, target));
             }
         }
         #[cfg(test)]
-        crate::benchmark_metrics::component_occurrences(occurrences.len());
+        crate::benchmark_metrics::component_occurrence_query(
+            candidate_count,
+            source_bytes,
+            occurrence_scans,
+            occurrences.len(),
+        );
         occurrences
     }
 
@@ -469,7 +481,7 @@ mod tests {
         let machine_uri = Url::parse("file:///m.eventb").unwrap();
         let context = "CONTEXT C\nEND";
         let indexed_machine = "MACHINE M\nSEES C\nEND";
-        let current_machine = "SEES /* 😀 */ C\nVARIABLES\n    C\n";
+        let current_machine = "SEES /* 😀 */ C\nVARIABLES\n    C\nEND\n\nMACHINE N\nEND";
 
         let manager = CrossReferenceManager::new();
         manager.update_component(context_uri.to_string(), context);
@@ -479,8 +491,17 @@ mod tests {
         documents.open(machine_uri.clone(), 2, current_machine.to_string());
 
         let loader = ComponentLoader::new(&manager, Some(&documents));
+        crate::benchmark_metrics::start();
         let occurrences = loader.component_occurrences("C");
+        let metrics = crate::benchmark_metrics::stop();
         assert_eq!(occurrences.len(), 2);
+        assert_eq!(metrics.component_candidate_uris, 2);
+        assert_eq!(
+            metrics.component_source_bytes,
+            (context.len() + current_machine.len()) as u64
+        );
+        assert_eq!(metrics.component_occurrence_scans, 2);
+        assert_eq!(metrics.component_occurrences, 2);
         assert!(occurrences.iter().any(|occurrence| {
             occurrence.uri == context_uri
                 && occurrence.range.start == crate::lsp_types::Position::new(0, 8)

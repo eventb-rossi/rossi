@@ -91,17 +91,32 @@ pub(crate) fn disk_parse() {
     update(|metrics| metrics.disk_parses += 1);
 }
 
-pub(crate) fn component_candidate_uris(count: usize) {
-    update(|metrics| metrics.component_candidate_uris += count as u64);
-}
-
-pub(crate) fn component_source_scanned(bytes: usize) {
+pub(crate) fn component_occurrence_query(
+    candidate_uris: usize,
+    source_bytes: u64,
+    occurrence_scans: usize,
+    occurrences: usize,
+) {
     update(|metrics| {
-        metrics.component_source_bytes += bytes as u64;
-        metrics.component_occurrence_scans += 1;
+        metrics.component_candidate_uris += candidate_uris as u64;
+        metrics.component_source_bytes += source_bytes;
+        metrics.component_occurrence_scans += occurrence_scans as u64;
+        metrics.component_occurrences += occurrences as u64;
     });
 }
 
-pub(crate) fn component_occurrences(count: usize) {
-    update(|metrics| metrics.component_occurrences += count as u64);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn occurrence_metrics_accept_byte_totals_beyond_u32() {
+        let source_bytes = u64::from(u32::MAX) + 1;
+
+        start();
+        component_occurrence_query(0, source_bytes, 0, 0);
+        let metrics = stop();
+
+        assert_eq!(metrics.component_source_bytes, source_bytes);
+    }
 }
