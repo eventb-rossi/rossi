@@ -1,10 +1,10 @@
-//! Request-scoped, ordered views of a component's dependency environment.
+//! Request-scoped, ordered views of component dependency environments.
 //!
 //! The workspace dependency graph is updated on the diagnostics debounce, while
 //! language features must reflect the latest open-document snapshots immediately.
-//! [`ResolvedEnvironment`] therefore discovers dependencies through the shared
-//! [`ComponentLoader`], builds a graph from those exact parsed components, and
-//! delegates ordering and cycle handling to [`DependencyGraph`].
+//! [`ResolvedEnvironments`] therefore discovers dependencies through the shared
+//! [`ComponentLoader`], incrementally builds one graph from those exact parsed
+//! components, and delegates ordering and cycle handling to [`DependencyGraph`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -13,42 +13,88 @@ use rossi::deps::{ComponentKind, DependencyGraph, EdgeKind, kind_and_name};
 
 use crate::component_loader::{ComponentLoader, LoadedComponent};
 
-/// The loadable dependency environment of one parsed component.
+/// The loadable dependency environments resolved during one request.
 ///
-/// The root component is not returned by the query methods. Callers already
-/// hold it and combine its declarations with the inherited components below.
-pub(crate) struct ResolvedEnvironment {
-    root: (ComponentKind, String),
+/// Every root extends the same graph and loaded-component map. Nodes already
+/// expanded for an earlier root are reused, while each returned
+/// [`ResolvedEnvironment`] keeps its own root-specific ordered views.
+pub(crate) struct ResolvedEnvironments {
     graph: DependencyGraph,
     components: HashMap<(ComponentKind, String), LoadedComponent>,
+    expanded: HashSet<(ComponentKind, String)>,
+    roots: HashSet<(ComponentKind, String)>,
+    scope: DependencyScope,
 }
 
-impl ResolvedEnvironment {
-    /// Discover every loadable dependency reachable from `root`.
-    pub(crate) fn new(root: &Component, loader: &ComponentLoader) -> Self {
-        Self::with_scope(root, loader, DependencyScope::All)
+impl ResolvedEnvironments {
+    /// Create an empty request-scoped environment for all dependency kinds.
+    pub(crate) fn new() -> Self {
+        Self::with_scope(DependencyScope::All)
     }
 
-    /// Discover only the root machine's REFINES chain.
-    pub(crate) fn refinements(root: &Component, loader: &ComponentLoader) -> Self {
-        Self::with_scope(root, loader, DependencyScope::Refinements)
+    /// Create an empty request-scoped environment for REFINES edges only.
+    pub(crate) fn refinements() -> Self {
+        Self::with_scope(DependencyScope::Refinements)
     }
 
-    fn with_scope(root: &Component, loader: &ComponentLoader, scope: DependencyScope) -> Self {
+    fn with_scope(scope: DependencyScope) -> Self {
+        Self {
+            graph: DependencyGraph::new(),
+            components: HashMap::new(),
+            expanded: HashSet::new(),
+            roots: HashSet::new(),
+            scope,
+        }
+    }
+
+    /// Incorporate the loadable closure of `root` and return its ordered view.
+    pub(crate) fn resolve<'a>(
+        &'a mut self,
+        root: &Component,
+        loader: &ComponentLoader,
+    ) -> ResolvedEnvironment<'a> {
         #[cfg(test)]
-        crate::benchmark_metrics::environment_started();
-        let root_key = kind_and_name(root);
-        let mut graph = DependencyGraph::new();
-        graph.upsert_component(root);
+        if self.roots.is_empty() {
+            crate::benchmark_metrics::environment_started();
+        }
 
-        let mut pending = VecDeque::from(direct_dependencies(&graph, &root_key, scope));
-        let mut seen = HashSet::from([root_key.clone()]);
-        let mut components = HashMap::new();
+        let root_key = kind_and_name(root);
+        self.graph.upsert_component(root);
+        self.roots.insert(root_key.clone());
+        self.expanded.insert(root_key.clone());
+        self.components.remove(&root_key);
+
+        // Always read the root's current edges. A root may have appeared first
+        // as an indexed fallback, then be supplied here from a newer open
+        // snapshot whose edges must win for this request.
+        let mut pending = VecDeque::from(direct_dependencies(&self.graph, &root_key, self.scope));
 
         while let Some(expected) = pending.pop_front() {
             #[cfg(test)]
             crate::benchmark_metrics::queue_popped();
-            if !seen.insert(expected.clone()) {
+            if !self.expanded.insert(expected.clone()) {
+                // Roots are normally held by their caller rather than duplicated
+                // in `components`. If a later root depends on an earlier one,
+                // retain that earlier root now so it can appear in the later
+                // root's inherited view without rebuilding its closure.
+                if expected != root_key
+                    && self.roots.contains(&expected)
+                    && !self.components.contains_key(&expected)
+                    && let Some(loaded) = loader.load(&expected.1)
+                    && kind_and_name(loaded.component()) == expected
+                {
+                    self.graph.upsert_component(loaded.component());
+                    self.components.insert(expected.clone(), loaded);
+                    pending.extend(
+                        direct_dependencies(&self.graph, &expected, self.scope)
+                            .into_iter()
+                            .filter(|dependency| {
+                                !self.expanded.contains(dependency)
+                                    || (self.roots.contains(dependency)
+                                        && !self.components.contains_key(dependency))
+                            }),
+                    );
+                }
                 continue;
             }
             #[cfg(test)]
@@ -58,14 +104,16 @@ impl ResolvedEnvironment {
                 Some(loaded) if kind_and_name(loaded.component()) == expected => {
                     #[cfg(test)]
                     crate::benchmark_metrics::loaded_node();
-                    graph.upsert_component(loaded.component());
-                    components.insert(expected.clone(), loaded);
+                    self.graph.upsert_component(loaded.component());
+                    self.components.insert(expected.clone(), loaded);
                 }
                 // Preserve indexed descendants even when this component's
                 // current source is temporarily unavailable.
-                _ if loader
-                    .manager()
-                    .copy_dependency_node(&mut graph, expected.0, &expected.1) =>
+                _ if loader.manager().copy_dependency_node(
+                    &mut self.graph,
+                    expected.0,
+                    &expected.1,
+                ) =>
                 {
                     #[cfg(test)]
                     crate::benchmark_metrics::indexed_fallback_node();
@@ -76,16 +124,28 @@ impl ResolvedEnvironment {
                     continue;
                 }
             }
-            pending.extend(direct_dependencies(&graph, &expected, scope));
+            pending.extend(direct_dependencies(&self.graph, &expected, self.scope));
         }
 
-        Self {
+        ResolvedEnvironment {
             root: root_key,
-            graph,
-            components,
+            graph: &self.graph,
+            components: &self.components,
         }
     }
+}
 
+/// One root-specific view over a request's resolved dependency union.
+///
+/// The root component is not returned by the query methods. Callers already
+/// hold it and combine its declarations with the inherited components below.
+pub(crate) struct ResolvedEnvironment<'a> {
+    root: (ComponentKind, String),
+    graph: &'a DependencyGraph,
+    components: &'a HashMap<(ComponentKind, String), LoadedComponent>,
+}
+
+impl ResolvedEnvironment<'_> {
     /// Machines inherited through the root machine's REFINES chain.
     pub(crate) fn refined_machines(&self) -> Vec<&Component> {
         if self.root.0 != ComponentKind::Machine {
@@ -145,7 +205,7 @@ impl ResolvedEnvironment {
             .filter_map(|name| {
                 let kind = self.graph.kind_of(&name)?;
                 Some(direct_dependencies(
-                    &self.graph,
+                    self.graph,
                     &(kind, name),
                     DependencyScope::All,
                 ))
@@ -224,7 +284,8 @@ mod tests {
         }
         let root_context = parse_one("CONTEXT c0\nEXTENDS\n    c1\nEND");
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root_context, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root_context, &loader);
         assert_eq!(
             environment
                 .extended_contexts()
@@ -249,7 +310,8 @@ mod tests {
         }
         let root_machine = parse_one("MACHINE m0\nREFINES\n    m1\nEND");
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root_machine, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root_machine, &loader);
         assert_eq!(
             environment
                 .refined_machines()
@@ -286,7 +348,8 @@ mod tests {
                 .join("\n")
         ));
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root, &loader);
 
         assert_eq!(environment.visible_contexts().len(), 10);
         assert_eq!(
@@ -300,9 +363,127 @@ mod tests {
     }
 
     #[test]
+    fn shared_roots_expand_overlapping_dependencies_once() {
+        let manager = CrossReferenceManager::new();
+        let documents = DocumentManager::new();
+        let sources = [
+            ("common", "CONTEXT common\nEND"),
+            ("c1", "CONTEXT c1\nEND"),
+            ("c2", "CONTEXT c2\nEND"),
+            ("base", "MACHINE base\nSEES\n    common\nEND"),
+            ("left", "MACHINE left\nREFINES\n    base\nSEES\n    c1\nEND"),
+            (
+                "right",
+                "MACHINE right\nREFINES\n    left\nSEES\n    c2\nEND",
+            ),
+        ];
+        for (name, source) in sources {
+            register(
+                &manager,
+                &documents,
+                &format!("file:///{name}.eventb"),
+                source,
+            );
+        }
+
+        let left = parse_one(sources[4].1);
+        let right = parse_one(sources[5].1);
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+        let mut environments = ResolvedEnvironments::new();
+
+        crate::benchmark_metrics::start();
+        let left_environment = environments.resolve(&left, &loader);
+        let left_refinements = left_environment
+            .refined_machines()
+            .into_iter()
+            .map(|component| component.name().to_string())
+            .collect::<Vec<_>>();
+        let left_contexts = left_environment
+            .visible_contexts()
+            .into_iter()
+            .map(|component| component.name().to_string())
+            .collect::<Vec<_>>();
+
+        let right_environment = environments.resolve(&right, &loader);
+        let right_refinements = right_environment
+            .refined_machines()
+            .into_iter()
+            .map(|component| component.name().to_string())
+            .collect::<Vec<_>>();
+        let right_contexts = right_environment
+            .visible_contexts()
+            .into_iter()
+            .map(|component| component.name().to_string())
+            .collect::<Vec<_>>();
+        let metrics = crate::benchmark_metrics::stop();
+
+        assert_eq!(left_refinements, ["base"]);
+        assert_eq!(left_contexts, ["c1", "common"]);
+        assert_eq!(right_refinements, ["left", "base"]);
+        assert_eq!(right_contexts, ["c2", "c1", "common"]);
+        assert_eq!(metrics.environments, 1);
+        assert_eq!(metrics.unique_nodes, 4);
+        assert_eq!(metrics.loaded_nodes, 4);
+    }
+
+    #[test]
+    fn later_root_refreshes_an_earlier_root_dependency_snapshot() {
+        let manager = CrossReferenceManager::new();
+        let documents = DocumentManager::new();
+        let old_root = "CONTEXT root\nEXTENDS\n    old_parent\nEND";
+        let new_root = "CONTEXT root\nEXTENDS\n    new_parent\nEND";
+        register(
+            &manager,
+            &documents,
+            "file:///old_parent.eventb",
+            "CONTEXT old_parent\nEND",
+        );
+        register(
+            &manager,
+            &documents,
+            "file:///new_parent.eventb",
+            "CONTEXT new_parent\nEND",
+        );
+        register(&manager, &documents, "file:///root.eventb", old_root);
+
+        let root = parse_one(old_root);
+        let later = parse_one("CONTEXT later\nEXTENDS\n    root\nEND");
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+        let mut environments = ResolvedEnvironments::new();
+
+        let first = environments.resolve(&root, &loader);
+        assert_eq!(
+            first
+                .extended_contexts()
+                .into_iter()
+                .map(|component| component.name().to_string())
+                .collect::<Vec<_>>(),
+            ["old_parent"]
+        );
+
+        documents.open(
+            Url::parse("file:///root.eventb").unwrap(),
+            2,
+            new_root.to_string(),
+        );
+        let later = environments.resolve(&later, &loader);
+
+        assert_eq!(
+            later
+                .extended_contexts()
+                .into_iter()
+                .map(|component| component.name().to_string())
+                .collect::<Vec<_>>(),
+            ["root", "new_parent"]
+        );
+    }
+
+    #[test]
     fn contexts_are_ordered_depth_first_and_cycles_are_deduplicated() {
         let manager = CrossReferenceManager::new();
         let documents = DocumentManager::new();
+        let root_source = "CONTEXT root\nEXTENDS\n    b\n    c\nEND";
+        register(&manager, &documents, "file:///root.eventb", root_source);
         register(
             &manager,
             &documents,
@@ -322,17 +503,23 @@ mod tests {
             "CONTEXT d\nEXTENDS\n    root\nEND",
         );
         register(&manager, &documents, "file:///e.eventb", "CONTEXT e\nEND");
-        let root = parse_one("CONTEXT root\nEXTENDS\n    b\n    c\nEND");
+        let root = parse_one(root_source);
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root, &loader);
+        let mut environments = ResolvedEnvironments::new();
 
+        crate::benchmark_metrics::start();
+        let environment = environments.resolve(&root, &loader);
+        let contexts = environment
+            .extended_contexts()
+            .into_iter()
+            .map(Component::name)
+            .collect::<Vec<_>>();
+        let metrics = crate::benchmark_metrics::stop();
+
+        assert_eq!(contexts, ["b", "d", "c", "e"]);
         assert_eq!(
-            environment
-                .extended_contexts()
-                .into_iter()
-                .map(Component::name)
-                .collect::<Vec<_>>(),
-            ["b", "d", "c", "e"]
+            metrics.loader_cache_misses, 4,
+            "the root supplied by the caller must not be loaded again through the cycle"
         );
     }
 
@@ -348,7 +535,8 @@ mod tests {
         );
         let root = parse_one("CONTEXT root\nEXTENDS\n    missing\n    present\nEND");
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root, &loader);
 
         assert_eq!(
             environment
@@ -371,7 +559,8 @@ mod tests {
         register(&manager, &documents, "file:///m2.eventb", "MACHINE m2\nEND");
         let root = parse_one("MACHINE m0\nREFINES\n    m1\nEND");
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root, &loader);
 
         assert_eq!(
             environment
@@ -404,7 +593,8 @@ mod tests {
 
         let current = documents.parse_result(&uri).unwrap();
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&current.components()[0], &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&current.components()[0], &loader);
         assert_eq!(
             environment
                 .visible_contexts()
@@ -451,7 +641,8 @@ mod tests {
 
         let root = parse_one("CONTEXT root\nEXTENDS\n    mid\nEND");
         let loader = ComponentLoader::new(&manager, Some(&documents));
-        let environment = ResolvedEnvironment::new(&root, &loader);
+        let mut environments = ResolvedEnvironments::new();
+        let environment = environments.resolve(&root, &loader);
         assert_eq!(
             environment
                 .extended_contexts()

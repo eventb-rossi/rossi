@@ -26,7 +26,7 @@ use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
 use crate::lsp_types::{Location, Position};
 use crate::position::span_to_range;
-use crate::resolved_environment::ResolvedEnvironment;
+use crate::resolved_environment::{ResolvedEnvironment, ResolvedEnvironments};
 use crate::text_utils;
 
 /// The canonical name of the implicit initialisation event. `enumerate_symbols`
@@ -207,6 +207,41 @@ pub(crate) fn resolve_cursor(
     loader: &ComponentLoader,
     cursor: Option<&ParsedDocument>,
 ) -> Option<Resolution> {
+    resolve_cursor_impl(text, masked, position, identifier, loader, cursor, None)
+}
+
+/// Resolve a cursor while retaining dependency closures for later roots in the
+/// same request. Find References uses this for the cursor and candidate phases;
+/// single-root providers use [`resolve_cursor`] instead.
+pub(crate) fn resolve_cursor_with_environments(
+    text: &str,
+    masked: &str,
+    position: Position,
+    identifier: &str,
+    loader: &ComponentLoader,
+    cursor: Option<&ParsedDocument>,
+    environments: &mut ResolvedEnvironments,
+) -> Option<Resolution> {
+    resolve_cursor_impl(
+        text,
+        masked,
+        position,
+        identifier,
+        loader,
+        cursor,
+        Some(environments),
+    )
+}
+
+fn resolve_cursor_impl(
+    text: &str,
+    masked: &str,
+    position: Position,
+    identifier: &str,
+    loader: &ComponentLoader,
+    cursor: Option<&ParsedDocument>,
+    environments: Option<&mut ResolvedEnvironments>,
+) -> Option<Resolution> {
     // Structural component sites outrank every same-spelled event, formula
     // binder, parameter, or component-level symbol. This also runs before
     // selecting a parsed component so a headerless dependency still resolves.
@@ -243,8 +278,15 @@ pub(crate) fn resolve_cursor(
         return Some(Resolution::Bound(bound));
     }
 
-    resolve_symbol_identity_at_position(component, masked, position, identifier, loader)
-        .map(Resolution::Symbol)
+    resolve_symbol_identity_at_position(
+        component,
+        masked,
+        position,
+        identifier,
+        loader,
+        environments,
+    )
+    .map(Resolution::Symbol)
 }
 
 /// Resolve `identifier` within the component the cursor sits in. An event `ANY`
@@ -256,6 +298,7 @@ fn resolve_symbol_identity_at_position(
     position: Position,
     identifier: &str,
     loader: &ComponentLoader,
+    environments: Option<&mut ResolvedEnvironments>,
 ) -> Option<SymbolIdentity> {
     if let Component::Machine(machine) = component
         && let Some(parameter) =
@@ -264,7 +307,7 @@ fn resolve_symbol_identity_at_position(
         return Some(parameter);
     }
 
-    resolve_symbol_identity_in_component(component, identifier, loader)
+    resolve_symbol_identity_in_component_impl(component, identifier, loader, environments)
 }
 
 /// Resolve a cursor on an event's `refines`/`extends` TARGET name to the abstract
@@ -290,8 +333,9 @@ fn resolve_event_refinement_target(
         .find(|event| event.refines_span.is_some_and(|span| span.contains(offset)))
         .and_then(|event| event.refines.as_deref())?;
 
-    let environment = ResolvedEnvironment::refinements(component, loader);
-    environment
+    let mut environments = ResolvedEnvironments::refinements();
+    environments
+        .resolve(component, loader)
         .refined_machines()
         .into_iter()
         .find(|ancestor| event_declaration_span(ancestor, target).is_some())
@@ -302,16 +346,54 @@ fn resolve_event_refinement_target(
 /// or inherited through the refinement chain (machines), the visible contexts
 /// (machines), or the extends chain (contexts). The local component is checked
 /// first, so a local declaration shadows a same-named inherited one.
+#[cfg(test)]
 pub(crate) fn resolve_symbol_identity_in_component(
     component: &Component,
     identifier: &str,
     loader: &ComponentLoader,
 ) -> Option<SymbolIdentity> {
+    resolve_symbol_identity_in_component_impl(component, identifier, loader, None)
+}
+
+/// Resolve a symbol while reusing dependency closures populated by earlier
+/// roots in the same request.
+pub(crate) fn resolve_symbol_identity_in_component_with_environments(
+    component: &Component,
+    identifier: &str,
+    loader: &ComponentLoader,
+    environments: &mut ResolvedEnvironments,
+) -> Option<SymbolIdentity> {
+    resolve_symbol_identity_in_component_impl(component, identifier, loader, Some(environments))
+}
+
+fn resolve_symbol_identity_in_component_impl(
+    component: &Component,
+    identifier: &str,
+    loader: &ComponentLoader,
+    environments: Option<&mut ResolvedEnvironments>,
+) -> Option<SymbolIdentity> {
     if let Some(local) = local_symbol_identity(component, identifier) {
         return Some(local);
     }
 
-    let environment = ResolvedEnvironment::new(component, loader);
+    match environments {
+        Some(environments) => {
+            let environment = environments.resolve(component, loader);
+            resolve_symbol_identity_in_environment(component, identifier, &environment)
+        }
+        None => {
+            let mut environments = ResolvedEnvironments::new();
+            let environment = environments.resolve(component, loader);
+            resolve_symbol_identity_in_environment(component, identifier, &environment)
+        }
+    }
+}
+
+fn resolve_symbol_identity_in_environment(
+    component: &Component,
+    identifier: &str,
+    environment: &ResolvedEnvironment<'_>,
+) -> Option<SymbolIdentity> {
     match component {
         Component::Machine(_) => {
             for inherited in environment.refined_machines() {
@@ -528,5 +610,49 @@ mod tests {
             .expect("deep variable resolves through the full chain");
         assert_eq!(symbol.kind, SymbolKind::Variable);
         assert_eq!(symbol.owner, "m12");
+    }
+
+    #[test]
+    fn shared_event_target_resolution_only_loads_refinements() {
+        let manager = CrossReferenceManager::new();
+        let documents = DocumentManager::new();
+        let sources = [
+            (
+                "file:///abstract.eventb",
+                "MACHINE abstract\nVARIABLES\n    state\nEVENTS\n    EVENT step\n    THEN\n        state ≔ state\n    END\nEND",
+            ),
+            ("file:///parent.eventb", "CONTEXT parent\nEND"),
+            (
+                "file:///seen.eventb",
+                "CONTEXT seen\nEXTENDS\n    parent\nEND",
+            ),
+        ];
+        for (uri, source) in sources {
+            manager.update_component(uri.to_string(), source);
+            documents.open(Url::parse(uri).unwrap(), 1, source.to_string());
+        }
+        let concrete = "MACHINE concrete\nREFINES\n    abstract\nSEES\n    seen\nEVENTS\n    EVENT step extends step\n    THEN\n        skip\n    END\nEND";
+        let loader = ComponentLoader::new(&manager, Some(&documents));
+        let mut environments = ResolvedEnvironments::new();
+
+        crate::benchmark_metrics::start();
+        let resolution = resolve_cursor_with_environments(
+            concrete,
+            concrete,
+            Position::new(6, 24),
+            "step",
+            &loader,
+            None,
+            &mut environments,
+        );
+        let metrics = crate::benchmark_metrics::stop();
+
+        let Some(Resolution::Symbol(symbol)) = resolution else {
+            panic!("event target should resolve to a symbol");
+        };
+        assert_eq!(symbol, SymbolIdentity::event("step", "abstract"));
+        assert_eq!(metrics.environments, 1);
+        assert_eq!(metrics.unique_nodes, 1);
+        assert_eq!(metrics.loaded_nodes, 1);
     }
 }

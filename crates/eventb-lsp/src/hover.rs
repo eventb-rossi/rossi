@@ -24,7 +24,7 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::formula_walk;
 use crate::identifier_utils::position_to_offset;
-use crate::resolved_environment::ResolvedEnvironment;
+use crate::resolved_environment::ResolvedEnvironments;
 use crate::text_utils;
 
 /// Context information extracted from a parsed component
@@ -60,7 +60,8 @@ impl HoverContext {
         ctx.add_component(component);
 
         if let Some(loader) = loader {
-            let environment = ResolvedEnvironment::new(component, loader);
+            let mut environments = ResolvedEnvironments::new();
+            let environment = environments.resolve(component, loader);
             match component {
                 Component::Context(_) => {
                     for inherited in environment.extended_contexts() {

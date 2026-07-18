@@ -17,7 +17,7 @@ use crate::component_util::{component_at_offset, component_reference_clause};
 use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
 use crate::position::{line_run_to_range, utf16_to_byte, utf16_to_char_col};
-use crate::resolved_environment::ResolvedEnvironment;
+use crate::resolved_environment::ResolvedEnvironments;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -55,18 +55,16 @@ impl CompletionContext {
         let mut ctx = Self::new();
         ctx.add_component(component);
 
-        match component {
-            Component::Context(_) => {
-                if let Some(loader) = loader {
-                    let environment = ResolvedEnvironment::new(component, loader);
+        if let Some(loader) = loader {
+            let mut environments = ResolvedEnvironments::new();
+            let environment = environments.resolve(component, loader);
+            match component {
+                Component::Context(_) => {
                     for inherited in environment.extended_contexts() {
                         ctx.add_component(inherited);
                     }
                 }
-            }
-            Component::Machine(_) => {
-                if let Some(loader) = loader {
-                    let environment = ResolvedEnvironment::new(component, loader);
+                Component::Machine(_) => {
                     for inherited in environment.refined_machines() {
                         ctx.add_component(inherited);
                     }

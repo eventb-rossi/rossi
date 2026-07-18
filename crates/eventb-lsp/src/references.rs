@@ -12,6 +12,7 @@ use crate::component_loader::ComponentLoader;
 use crate::component_util::component_reference_clause;
 use crate::formula_walk;
 use crate::position::span_to_range;
+use crate::resolved_environment::ResolvedEnvironments;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::debug;
@@ -20,8 +21,8 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{
-    Resolution, SymbolIdentity, SymbolKind, candidate_components_for_symbol, resolve_cursor,
-    resolve_symbol_identity_in_component,
+    Resolution, SymbolIdentity, SymbolKind, candidate_components_for_symbol,
+    resolve_cursor_with_environments, resolve_symbol_identity_in_component_with_environments,
 };
 #[cfg(test)]
 use crate::text_utils;
@@ -157,10 +158,17 @@ impl ReferenceProvider {
         // at most once, and open documents are read from the store, not
         // re-parsed.
         let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+        let mut environments = ResolvedEnvironments::new();
 
-        if let Some(resolution) =
-            resolve_cursor(text, masked, position, identifier, &loader, cursor)
-        {
+        if let Some(resolution) = resolve_cursor_with_environments(
+            text,
+            masked,
+            position,
+            identifier,
+            &loader,
+            cursor,
+            &mut environments,
+        ) {
             return match resolution {
                 Resolution::Component(component) => loader
                     .component_occurrences(&component.name)
@@ -173,7 +181,9 @@ impl ReferenceProvider {
                 // (e.g. `r` in `∀ r · …`) is no longer over-reported across
                 // unrelated scopes.
                 Resolution::Bound(bound) => spans_to_locations(bound.spans, text, uri, identifier),
-                Resolution::Symbol(symbol) => self.find_references_for_symbol(&symbol, &loader),
+                Resolution::Symbol(symbol) => {
+                    self.find_references_for_symbol(&symbol, &loader, &mut environments)
+                }
             };
         }
 
@@ -184,6 +194,7 @@ impl ReferenceProvider {
         &self,
         symbol: &SymbolIdentity,
         loader: &ComponentLoader,
+        environments: &mut ResolvedEnvironments,
     ) -> Vec<Location> {
         let mut locations = Vec::new();
         let mut seen = HashSet::new();
@@ -222,8 +233,12 @@ impl ReferenceProvider {
                 continue;
             };
 
-            if resolve_symbol_identity_in_component(loaded.component(), &symbol.name, loader)
-                == Some(symbol.clone())
+            if resolve_symbol_identity_in_component_with_environments(
+                loaded.component(),
+                &symbol.name,
+                loader,
+                environments,
+            ) == Some(symbol.clone())
             {
                 // Event names are not formula identifiers, so they stay on the
                 // text scan; variables / constants / sets resolve from the AST.
@@ -529,6 +544,61 @@ mod tests {
                 .any(|location| location.uri == machine_uri && location.range.start.line == 4),
             "the current open machine must be included before graph reindexing: {refs:?}"
         );
+    }
+
+    #[test]
+    fn references_share_one_environment_across_candidate_roots() {
+        let sources = [
+            (
+                "file:///base.eventb",
+                "CONTEXT base\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k ∈ ℕ\nEND",
+            ),
+            (
+                "file:///child.eventb",
+                "CONTEXT child\nEXTENDS\n    base\nAXIOMS\n    @axm1 k ∈ ℕ\nEND",
+            ),
+            (
+                "file:///m.eventb",
+                "MACHINE m\nSEES\n    child\nINVARIANTS\n    @inv1 k ∈ ℕ\nEND",
+            ),
+            (
+                "file:///n.eventb",
+                "MACHINE n\nREFINES\n    m\nINVARIANTS\n    @inv1 k ∈ ℕ\nEND",
+            ),
+        ];
+        let crm = Arc::new(CrossReferenceManager::new());
+        let dm = Arc::new(DocumentManager::new());
+        for (uri, source) in sources {
+            crm.update_component(uri.to_string(), source);
+            dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
+        }
+
+        let mut provider = ReferenceProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(dm);
+
+        crate::benchmark_metrics::start();
+        let refs = provider
+            .find_references(
+                &make_params(2, 4, Url::parse(sources[0].0).unwrap()),
+                sources[0].1,
+            )
+            .expect("references for inherited k");
+        let metrics = crate::benchmark_metrics::stop();
+
+        let uris = refs
+            .into_iter()
+            .map(|location| location.uri)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            uris,
+            sources
+                .into_iter()
+                .map(|(uri, _)| Url::parse(uri).unwrap())
+                .collect()
+        );
+        assert_eq!(metrics.environments, 1);
+        assert!(metrics.unique_nodes <= sources.len() as u64);
     }
 
     #[test]

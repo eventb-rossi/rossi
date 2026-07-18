@@ -18,9 +18,10 @@ use crate::hover::{self, HoverProvider};
 use crate::lsp_types::Position;
 use crate::references::ReferenceProvider;
 use crate::rename::RenameProvider;
-use crate::resolved_environment::ResolvedEnvironment;
+use crate::resolved_environment::ResolvedEnvironments;
 use crate::symbols::{
     SymbolIdentity, candidate_components_for_symbol, resolve_symbol_identity_in_component,
+    resolve_symbol_identity_in_component_with_environments,
 };
 
 struct IndexedWorkspace {
@@ -75,11 +76,16 @@ fn benchmark_model(
         warmups,
         samples,
         results,
-        |loader| ResolvedEnvironment::new(&root, loader).benchmark_cardinality(),
+        |loader| {
+            ResolvedEnvironments::new()
+                .resolve(&root, loader)
+                .benchmark_cardinality()
+        },
     );
 
     let warm_loader = ComponentLoader::new(&manager, None);
-    let direct_environment = ResolvedEnvironment::new(&root, &warm_loader);
+    let mut direct_environments = ResolvedEnvironments::new();
+    let direct_environment = direct_environments.resolve(&root, &warm_loader);
     results.push(measure_case(
         &fixture.spec.slug,
         "direct_edge_enumeration",
@@ -318,12 +324,17 @@ fn resolve_candidates(
     symbol: &SymbolIdentity,
     loader: &ComponentLoader<'_>,
 ) -> usize {
+    let mut environments = ResolvedEnvironments::new();
     candidates
         .iter()
         .filter_map(|name| loader.load(name))
         .filter(|loaded| {
-            resolve_symbol_identity_in_component(loaded.component(), &symbol.name, loader)
-                == Some(symbol.clone())
+            resolve_symbol_identity_in_component_with_environments(
+                loaded.component(),
+                &symbol.name,
+                loader,
+                &mut environments,
+            ) == Some(symbol.clone())
         })
         .count()
 }
