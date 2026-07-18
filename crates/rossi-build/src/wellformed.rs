@@ -13,7 +13,11 @@ use crate::types::Type;
 /// `true` if every predicate and embedded expression constraint is verified.
 pub fn is_well_typed_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
     let enriched = crate::enrich::enrich_predicate(pred.clone(), env);
-    check_predicate_type(env, &enriched).is_ok()
+    is_well_typed_enriched_predicate(env, &enriched)
+}
+
+pub(crate) fn is_well_typed_enriched_predicate(env: &TypeEnv, pred: &Predicate) -> bool {
+    check_predicate_type(env, pred).is_ok()
 }
 
 /// `true` if every assignment target and RHS satisfy Rodin's constraints.

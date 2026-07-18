@@ -537,6 +537,7 @@ fn build_invariant_decl(
     Ok(InvariantDecl {
         label,
         source_index,
+        predicate: pc.predicate,
         predicate_canonical: pc.canonical,
         is_theorem: inv.is_theorem,
         source,
@@ -632,6 +633,7 @@ fn build_variant_decl(
     Ok((
         VariantDecl {
             label,
+            expression: ec.expression,
             expression_canonical: ec.canonical,
             source,
         },

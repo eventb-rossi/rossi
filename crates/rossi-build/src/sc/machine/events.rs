@@ -13,7 +13,9 @@ use rossi::{
     NamedElement, PredicateKind,
 };
 
-use crate::checked_predicate::{ActionCheck, check_action, check_labeled_predicate};
+use crate::checked_predicate::{
+    ActionCheck, PredicateCheck, check_action, check_labeled_predicate, check_predicate,
+};
 use crate::handles::HandleUri;
 use crate::infer::infer_constants;
 use crate::rodin_ids::{Kind, RodinIds, Scope};
@@ -424,17 +426,21 @@ fn resolve_witnesses(
         .iter()
         .chain(kind.witnesses_with().iter())
     {
-        if let Some(wl) = w.label.as_deref()
-            && required.contains(wl)
-            && crate::wellformed::is_well_typed_predicate(&wscope, &w.predicate)
-        {
+        let Some(wl) = w.label.as_deref() else {
+            continue;
+        };
+        if !required.contains(wl) {
+            continue;
+        }
+        let checked = check_predicate(&w.predicate, &wscope);
+        if crate::wellformed::is_well_typed_enriched_predicate(&wscope, &checked.predicate) {
             required.remove(wl);
             witnesses.push(build_witness_decl(
                 machine.ids,
                 machine.file_root,
                 label,
                 wl,
-                w,
+                checked,
             ));
         }
     }
@@ -471,9 +477,11 @@ fn synthesize_witness(
     event_label: &str,
     name: &str,
 ) -> WitnessDecl {
+    let predicate = PredicateKind::True.into();
     WitnessDecl {
         label: name.to_string(),
-        predicate_canonical: crate::normalize::canonical_predicate(&PredicateKind::True.into()),
+        predicate_canonical: crate::normalize::canonical_predicate(&predicate),
+        predicate,
         source: crate::sc::file_child_source(
             ids,
             file_root,
@@ -1247,15 +1255,8 @@ fn build_witness_decl(
     file_root: &HandleUri,
     event_label: &str,
     witness_label: &str,
-    w: &LabeledPredicate,
+    checked: PredicateCheck,
 ) -> WitnessDecl {
-    // Witnesses reference dropped abstract names that aren't in env;
-    // skip the free-ident check and only canonicalise. Enrich with an
-    // empty env first so structural lowerings (e.g. SetComprehension
-    // short → long form) still fire — binder-type stamping degrades to
-    // best-effort, which is pre-existing behaviour for this path.
-    let enriched = crate::enrich::enrich_predicate(w.predicate.clone(), &TypeEnv::new());
-    let canonical = crate::normalize::canonical_predicate(&enriched);
     let source = build_event_child_source(
         ids,
         file_root,
@@ -1266,7 +1267,8 @@ fn build_witness_decl(
     );
     WitnessDecl {
         label: witness_label.to_string(),
-        predicate_canonical: canonical,
+        predicate: checked.predicate,
+        predicate_canonical: checked.canonical,
         source,
     }
 }

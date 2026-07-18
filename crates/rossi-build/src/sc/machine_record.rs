@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use rossi::{Action, EventStatus, Predicate};
+use rossi::{Action, EventStatus, Expression, Predicate};
 
 use crate::handles::HandleUri;
 use crate::type_env::TypeEnv;
@@ -98,6 +98,10 @@ pub struct InvariantDecl {
     /// Position of this invariant in the *raw* machine's `invariants`
     /// list — see [`super::context_record::AxiomDecl::source_index`].
     pub source_index: usize,
+    /// Enriched predicate AST — the form `predicate_canonical` was rendered
+    /// from. Retained so downstream passes do not need to re-parse the XML
+    /// representation.
+    pub predicate: Predicate,
     pub predicate_canonical: String,
     pub is_theorem: bool,
     pub source: HandleUri,
@@ -115,6 +119,10 @@ pub struct VariableDecl {
 #[derive(Debug, Clone)]
 pub struct VariantDecl {
     pub label: &'static str,
+    /// Enriched expression AST — the form `expression_canonical` was rendered
+    /// from. Retained so downstream passes do not need to re-parse the XML
+    /// representation.
+    pub expression: Expression,
     pub expression_canonical: String,
     pub source: HandleUri,
 }
@@ -233,6 +241,10 @@ pub struct ActionDecl {
 #[derive(Debug, Clone)]
 pub struct WitnessDecl {
     pub label: String,
+    /// Enriched predicate AST — the form `predicate_canonical` was rendered
+    /// from. Retained so downstream passes do not need to re-parse the XML
+    /// representation.
+    pub predicate: Predicate,
     pub predicate_canonical: String,
     pub source: HandleUri,
 }
@@ -564,6 +576,7 @@ mod tests {
         r.invariants.push(InvariantDecl {
             label: "inv1".into(),
             source_index: 0,
+            predicate: rossi::PredicateKind::True.into(),
             predicate_canonical: "⊤".into(),
             is_theorem: false,
             source: mk_uri().child("org.eventb.core.invariant", "inv1"),
