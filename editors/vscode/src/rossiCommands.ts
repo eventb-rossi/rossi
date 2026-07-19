@@ -19,6 +19,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { resolveCommandCwd } from './commandCwd';
 import { regionToZeroIndexed, ValidationRegion } from './validationRegion';
 
 interface RossiRunResult {
@@ -29,7 +30,8 @@ interface RossiRunResult {
 
 interface RossiRunOptions {
     title: string;
-    cwd?: string;
+    /** `null` runs independently of the workspace from a stable temp directory. */
+    cwd?: string | null;
     allowNonZeroExit?: boolean;
     /** Text piped to the child's standard input (for `-` / stdin inputs). */
     stdin?: string;
@@ -374,12 +376,20 @@ export class RossiCommandController {
                 ['fmt', '-', ascii ? '--ascii' : '--unicode'],
                 {
                     title: ascii ? 'Converting to ASCII' : 'Converting to Unicode',
-                    cwd: path.dirname(input),
+                    cwd: null,
                     stdin: buffer,
                 }
             );
-            await this.replaceDocumentText(input, result.stdout);
-            window.showInformationMessage(`Converted ${path.basename(input)} to ${ascii ? 'ASCII' : 'Unicode'}.`);
+            const saved = await this.replaceDocumentText(input, result.stdout);
+            const style = ascii ? 'ASCII' : 'Unicode';
+            if (!saved) {
+                window.showWarningMessage(
+                    `Converted ${path.basename(input)} to ${style} in the editor, but it could not be saved. ` +
+                    'Use Save As to preserve the result.'
+                );
+            } else {
+                window.showInformationMessage(`Converted ${path.basename(input)} to ${style}.`);
+            }
         } catch (error) {
             this.showCommandError(error);
         }
@@ -570,7 +580,7 @@ export class RossiCommandController {
 
     private async runRossi(args: string[], options: RossiRunOptions): Promise<RossiRunResult> {
         const toolPath = this.resolveToolPath();
-        const cwd = options.cwd ?? workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const cwd = resolveCommandCwd(options.cwd, workspace.workspaceFolders?.[0]?.uri.fsPath);
         const commandLine = formatCommand(toolPath, args);
 
         this.output.appendLine(`> ${commandLine}`);
@@ -836,7 +846,7 @@ export class RossiCommandController {
         }
     }
 
-    private async replaceDocumentText(filePath: string, text: string): Promise<void> {
+    private async replaceDocumentText(filePath: string, text: string): Promise<boolean> {
         const document = await workspace.openTextDocument(Uri.file(filePath));
         const editor = window.visibleTextEditors.find((item) => item.document.uri.fsPath === filePath)
             ?? await window.showTextDocument(document, { preview: false });
@@ -850,7 +860,7 @@ export class RossiCommandController {
         if (!applied) {
             throw new Error(`Failed to update ${filePath}`);
         }
-        await document.save();
+        return document.save();
     }
 }
 
