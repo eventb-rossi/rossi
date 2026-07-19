@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.1.5](https://github.com/eventb-rossi/rossi/compare/v0.1.4...v0.1.5) - 2026-07-19
+
+### Added
+- *(parse)* Add Rodin-canonical formula spacing
+- *(parse)* Expose shared syntax snapshot queries
+
+### Changed
+- *(lsp)* Unify component cursor resolution
+- *(lint)* Reuse dependency graph identities
+- *(parse)* Shift spans through AST visitors
+- *(xml)* Share ZIP entry parsing
+- *(parse)* Encode single-argument applications
+- Remove dead code
+- *(build)* Emit canonical formulas during printing
+- *(build)* Group event check state
+- *(lsp)* Share candidate dependency environments
+- *(lsp)* Extract component occurrence service
+
+### Fixed
+- *(build)* Reject ill-typed expressions before emission
+- *(cli)* Reject colliding fmt output paths
+- *(parse)* Enforce parallel assignment arity
+- *(cli)* Handle structured output failures
+- *(cli)* Show errors in quiet continue mode
+- *(cli)* Raw-copy retained formatted ZIP entries
+- *(cli)* Contain loose build output paths
+- *(cli)* Propagate recursive input scan errors
+- *(build)* Reject inherited event label conflicts
+- *(parse)* Reset prefix depth across connective operands
+- *(lsp)* Make component rename and references syntax-aware
+- *(parse)* Shift sliced errors to absolute locations
+- *(lsp)* Scope keyword completions structurally
+- *(lsp)* Centralize dependency environments
+- *(parse)* Align recovery identifier validation
+- *(xml)* Parse project names with quick-xml
+- *(xml)* Emit Rodin operator glyphs in source files
+- *(build)* Retain enriched machine formula ASTs
+- *(build)* Journal insert-if-absent bindings
+- *(build)* Enrich predicates inside bool expressions
+- *(build)* Raw-copy retained ZIP entries
+- *(build)* Propagate project directory scan errors
+- *(build)* Reject conflicting event parameters
+- *(build)* Mask outer types during binder inference
+- *(build)* Preserve Rodin checked element identities
+- *(lsp)* Derive signature help from shared syntax
+- *(lsp)* Batch selection ranges on shared syntax
+- *(lsp)* Index workspace symbols from disk
+- *(lsp)* Make document analysis snapshots atomic
+- *(lsp)* Offload blocking workspace operations
+- *(lsp)* Keep failed workspace scans incomplete
+
 ## [0.1.4](https://github.com/eventb-rossi/rossi/compare/v0.1.3...v0.1.4) - 2026-07-06
 
 ### Added

@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "eventb-lsp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "rossi"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "indoc",
  "pest",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "rossi-build"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proptest",
  "quick-xml",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "rossi-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2209,7 +2209,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "rossi",
