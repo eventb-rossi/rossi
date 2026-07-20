@@ -39,7 +39,7 @@ jobs:
       # Node 22 LTS: node-tree-sitter (`tree-sitter` dev dependency) compiles
       # with -std=c++17, which Node 23+'s C++20-requiring V8 headers reject.
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

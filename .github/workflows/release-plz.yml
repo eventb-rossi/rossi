@@ -88,7 +88,7 @@ jobs:
           ref: ${{ steps.release_pr.outputs.branch }}
           token: ${{ secrets.VERSION_BUMP_TOKEN }}
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: steps.release_pr.outputs.branch != ''
         with:
           node-version: 24
