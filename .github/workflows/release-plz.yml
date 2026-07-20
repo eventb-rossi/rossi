@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: release-plz/action@v0.5.130
+      - uses: release-plz/action@v0.5.131
         with:
           command: release-pr
         env:
@@ -148,7 +148,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: release-plz/action@v0.5.130
+      - uses: release-plz/action@v0.5.131
         with:
           command: release
         env:
