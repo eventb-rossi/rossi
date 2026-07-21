@@ -277,6 +277,22 @@ impl DiscoveredProject {
     }
 }
 
+enum ProjectDiscoveryEntry {
+    Source,
+    Descriptor,
+    Checked,
+}
+
+/// Whether project discovery may read an archive entry's contents.
+///
+/// Rodin source and checked components may occur anywhere in a project group.
+/// A `.project` descriptor is read only at the archive root or directly below
+/// a group's top-level directory.
+#[must_use]
+pub fn is_project_discovery_entry(name: &str) -> bool {
+    classify_project_discovery_entry(name).is_some()
+}
+
 /// Split a Rodin archive into its constituent projects.
 ///
 /// A Rodin `.zip` may bundle several top-level project directories, each with
@@ -311,36 +327,37 @@ pub fn discover_projects(zip_bytes: &[u8], fallback_name: &str) -> Result<Vec<Di
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
-        let prefix = match name.find('/') {
-            Some(slash) => name[..=slash].to_string(),
-            None => String::new(),
+        let Some(entry_kind) = classify_project_discovery_entry(&name) else {
+            continue;
         };
+        let prefix = archive_prefix(&name).to_string();
 
-        if is_xml_input(&name) {
-            let mut xml = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut xml)?;
-            let component = ProjectComponent::from_xml(name, &xml)?;
-            groups.entry(prefix).or_default().components.push(component);
-        } else if name == format!("{prefix}.project") {
-            // Only the descriptor at this group's top level marks the project;
-            // a deeper `sub/.project` belongs to a nested resource, not here.
-            // A non-UTF-8 descriptor only costs us the name (a fallback covers
-            // it), so a read error is skipped rather than failing the build.
-            let group = groups.entry(prefix).or_default();
-            group.has_project = true;
-            let mut xml = String::new();
-            if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
-                group.project_name = rossi::read_project_name(&xml);
+        match entry_kind {
+            ProjectDiscoveryEntry::Source => {
+                let mut xml = String::new();
+                std::io::Read::read_to_string(&mut entry, &mut xml)?;
+                let component = ProjectComponent::from_xml(name, &xml)?;
+                groups.entry(prefix).or_default().components.push(component);
             }
-        } else if name.ends_with(".bcc") || name.ends_with(".bcm") {
-            // Only the first readable checked file per group is needed for the
-            // name; a stale/non-UTF-8 one is skipped (we never built from these
-            // before, so a read error must not abort an otherwise-valid build).
-            let group = groups.entry(prefix).or_default();
-            if group.checked_name.is_none() {
+            ProjectDiscoveryEntry::Descriptor => {
+                // A non-UTF-8 descriptor only costs us the name (a fallback
+                // covers it), so a read error is skipped rather than failing.
+                let group = groups.entry(prefix).or_default();
+                group.has_project = true;
                 let mut xml = String::new();
                 if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
-                    group.checked_name = infer_project_name_from_checked_xml(&xml);
+                    group.project_name = rossi::read_project_name(&xml);
+                }
+            }
+            ProjectDiscoveryEntry::Checked => {
+                // Only the first readable checked file per group is needed for
+                // the name; stale or non-UTF-8 files do not abort discovery.
+                let group = groups.entry(prefix).or_default();
+                if group.checked_name.is_none() {
+                    let mut xml = String::new();
+                    if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
+                        group.checked_name = infer_project_name_from_checked_xml(&xml);
+                    }
                 }
             }
         }
@@ -367,6 +384,22 @@ pub fn discover_projects(zip_bytes: &[u8], fallback_name: &str) -> Result<Vec<Di
     }
 
     Ok(projects)
+}
+
+fn classify_project_discovery_entry(name: &str) -> Option<ProjectDiscoveryEntry> {
+    if is_xml_input(name) {
+        Some(ProjectDiscoveryEntry::Source)
+    } else if name.ends_with(".bcc") || name.ends_with(".bcm") {
+        Some(ProjectDiscoveryEntry::Checked)
+    } else if name.strip_prefix(archive_prefix(name)) == Some(".project") {
+        Some(ProjectDiscoveryEntry::Descriptor)
+    } else {
+        None
+    }
+}
+
+fn archive_prefix(name: &str) -> &str {
+    name.find('/').map_or("", |slash| &name[..=slash])
 }
 
 /// A Rodin XML component file (`.buc` context / `.bum` machine).
@@ -496,6 +529,35 @@ mod tests {
         }
         w.finish().unwrap();
         cursor.into_inner()
+    }
+
+    #[test]
+    fn project_discovery_entry_classification_matches_archive_reads() {
+        for name in [
+            "M.bum",
+            "project/C.buc",
+            "project/generated/M.bcm",
+            "project/generated/C.bcc",
+            ".project",
+            "project/.project",
+        ] {
+            assert!(
+                is_project_discovery_entry(name),
+                "expected {name} to be read"
+            );
+        }
+        for name in [
+            "project/sub/.project",
+            "project/M.bpo",
+            "project/M.bps",
+            "project/M.bum/notes.txt",
+            "project/M.BUM",
+        ] {
+            assert!(
+                !is_project_discovery_entry(name),
+                "expected {name} to be ignored"
+            );
+        }
     }
 
     #[test]
