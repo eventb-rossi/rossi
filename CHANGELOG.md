@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.6](https://github.com/eventb-rossi/rossi/compare/v0.1.5...v0.1.6) - 2026-07-21
+
+### Added
+- *(build)* Expose project archive entry classification
+
+### Fixed
+- *(build)* Decode checked project names
+
 ## [0.1.5](https://github.com/eventb-rossi/rossi/compare/v0.1.4...v0.1.5) - 2026-07-19
 
 ### Added
