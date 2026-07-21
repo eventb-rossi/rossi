@@ -2,7 +2,7 @@
   "name": "event-b",
   "displayName": "Event-B (Rossi)",
   "description": "Event-B language support: syntax highlighting, diagnostics, formatting, navigation, and Rodin import/export, powered by the Rossi toolchain.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "rossi",
   "license": "MIT OR Apache-2.0",
   "icon": "icons/rossi-icon.png",
