@@ -427,7 +427,13 @@ pub fn infer_project_name_from_checked_xml(xml: &str) -> Option<String> {
     let i = xml.find(marker)?;
     let rest = &xml[i + marker.len()..];
     let slash = rest.find('/')?;
-    Some(rest[..slash].to_string())
+    let name = &rest[..slash];
+    if name.is_empty() {
+        return None;
+    }
+    quick_xml::escape::unescape(name)
+        .ok()
+        .map(|name| name.into_owned())
 }
 
 fn basename(path: &str) -> &str {
@@ -558,6 +564,23 @@ mod tests {
                 "expected {name} to be ignored"
             );
         }
+    }
+
+    #[test]
+    fn checked_project_name_is_non_empty_and_xml_decoded() {
+        assert_eq!(
+            infer_project_name_from_checked_xml(
+                r#"<x org.eventb.core.source="/A&amp;B/M.bum|machine#M"/>"#
+            )
+            .as_deref(),
+            Some("A&B")
+        );
+        assert_eq!(
+            infer_project_name_from_checked_xml(
+                r#"<x org.eventb.core.source="//M.bum|machine#M"/>"#
+            ),
+            None
+        );
     }
 
     #[test]
