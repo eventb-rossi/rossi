@@ -776,6 +776,37 @@ mod tests {
 </org.eventb.core.machineFile>"#;
 
     #[test]
+    fn event_inherited_refines_rendered_parent_identity() {
+        let project = Project::new(
+            "identity",
+            vec![
+                ProjectComponent::from_xml("M0.bum", PARENT).unwrap(),
+                ProjectComponent::from_xml("M1.bum", CHILD).unwrap(),
+            ],
+        );
+        let (result, model) = crate::build_with_model(&project);
+        assert!(result.is_ok(), "diagnostics: {:?}", result.diagnostics);
+
+        let parent_event_name = model.machines["M0"]
+            .event_internal_name("abstract_step")
+            .expect("abstract_step rendered");
+        let refines_target = model.machines["M1"].events_by_label["concrete_step"]
+            .refines
+            .as_ref()
+            .expect("concrete_step refines abstract_step")
+            .sc_target
+            .as_str();
+        assert!(refines_target.ends_with(&format!("|org.eventb.core.scEvent#{parent_event_name}")));
+        assert!(
+            result
+                .file("M1.bcm")
+                .expect("M1.bcm")
+                .contents
+                .contains(&format!("org.eventb.core.scTarget=\"{refines_target}\""))
+        );
+    }
+
+    #[test]
     fn event_inherited_missing_render_state_is_diagnosed() {
         let parent_project = Project::new(
             "missing",
