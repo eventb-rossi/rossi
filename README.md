@@ -290,7 +290,7 @@ IDE features for Event-B development:
 ## Development
 
 ```bash
-# Enable the pre-commit hook (runs cargo fmt, clippy, doc, and tests)
+# Enable the pre-commit hook (runs cargo fmt, clippy, and doc)
 git config core.hooksPath .githooks
 
 # Build
