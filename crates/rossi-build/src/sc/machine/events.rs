@@ -557,6 +557,33 @@ pub(super) fn build_event_decl(
         return None;
     }
 
+    let parent_event_internal_name = effective_refines.and_then(|abstract_label| {
+        context
+            .machine
+            .parent
+            .and_then(|parent| parent.event_internal_name(abstract_label))
+    });
+    let inherited_render_state_missing =
+        parent_event_decl.is_some() && parent_event_internal_name.is_none();
+    if let Some(abstract_label) = effective_refines
+        && inherited_render_state_missing
+    {
+        context.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            origin: format!("{}.{}", context.machine.machine_name, label),
+            message: format!(
+                "inherited event '{abstract_label}' has no rendered parent state — event is inaccurate"
+            ),
+            rule_id: None,
+            span: context.kind.name_span(),
+        });
+    }
+    let parent_event_decl = if inherited_render_state_missing {
+        None
+    } else {
+        parent_event_decl
+    };
+
     let inherited_chain: Option<Rc<EventDecl>> = if context.kind.extended() {
         parent_event_decl.map(Rc::clone)
     } else {
@@ -630,20 +657,20 @@ pub(super) fn build_event_decl(
         &invalid_parameter_names,
     );
 
-    let refines_decl =
-        effective_refines
-            .zip(context.machine.parent)
-            .map(|(abs_label, parent_cm)| {
-                build_refines_event_decl(
-                    context.machine.ids,
-                    context.machine.file_root,
-                    context.machine.project_name,
-                    label,
-                    abs_label,
-                    parent_cm,
-                    context.kind.explicit_refines().is_some(),
-                )
-            });
+    let refines_decl = effective_refines
+        .zip(context.machine.parent)
+        .zip(parent_event_internal_name)
+        .map(|((abs_label, parent_cm), abstract_event_internal_name)| {
+            build_refines_event_decl(
+                context.machine.ids,
+                context.machine.file_root,
+                context.machine.project_name,
+                label,
+                abs_label,
+                (parent_cm, abstract_event_internal_name),
+                context.kind.explicit_refines().is_some(),
+            )
+        });
 
     // An extended event inherits its immediate abstract event's inaccuracy:
     // because it copies the abstract clauses verbatim, an inaccurate parent
@@ -700,6 +727,7 @@ pub(super) fn build_event_decl(
     let mut accurate = scope_accurate
         && buckets_accurate
         && inherited_accurate
+        && !inherited_render_state_missing
         && convergence_accurate
         && witness_accurate
         && witness_dup_accurate;
@@ -1279,9 +1307,10 @@ fn build_refines_event_decl(
     project_name: &str,
     own_event_label: &str,
     abstract_event_label: &str,
-    parent: &CheckedMachine,
+    rendered_parent: (&CheckedMachine, &str),
     has_explicit_refines_child: bool,
 ) -> RefinesEventDecl {
+    let (parent, abstract_event_internal_name) = rendered_parent;
     let event_source =
         crate::sc::file_child_source(ids, file_root, Kind::Event, in_tag::EVENT, own_event_label);
     let re_source = if has_explicit_refines_child {
@@ -1296,16 +1325,13 @@ fn build_refines_event_decl(
     } else {
         event_source
     };
-    let abstract_internal_name = parent
-        .event_internal_name(abstract_event_label)
-        .expect("resolved parent event has an internal name");
     let sc_target = HandleUri::root(
         project_name,
         parent.output_filename(),
         crate::xml_out::tag::SC_MACHINE_FILE,
         parent.name(),
     )
-    .child(crate::xml_out::tag::SC_EVENT, abstract_internal_name)
+    .child(crate::xml_out::tag::SC_EVENT, abstract_event_internal_name)
     .into();
     RefinesEventDecl {
         abstract_label: abstract_event_label.to_string(),

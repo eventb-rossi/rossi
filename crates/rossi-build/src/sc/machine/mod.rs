@@ -750,3 +750,76 @@ fn build_internal_context_elements(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use rossi::Component;
+
+    use super::*;
+    use crate::sc_view::ScView;
+
+    const PARENT: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.event name="_init0" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION"/>
+<org.eventb.core.event name="_event0" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="abstract_step"/>
+</org.eventb.core.machineFile>"#;
+
+    const CHILD: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.refinesMachine name="_ref1" org.eventb.core.target="M0"/>
+<org.eventb.core.event name="_init1" org.eventb.core.convergence="0" org.eventb.core.extended="true" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.refinesEvent name="_init_ref1" org.eventb.core.target="INITIALISATION"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_event1" org.eventb.core.convergence="0" org.eventb.core.extended="true" org.eventb.core.label="concrete_step">
+<org.eventb.core.refinesEvent name="_event_ref1" org.eventb.core.target="abstract_step"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    #[test]
+    fn event_inherited_missing_render_state_is_diagnosed() {
+        let parent_project = Project::new(
+            "missing",
+            vec![ProjectComponent::from_xml("M0.bum", PARENT).unwrap()],
+        );
+        let (_, mut parent_model) = crate::build_with_model(&parent_project);
+        let mut parent = parent_model.machines.remove("M0").expect("M0 checked");
+        parent.event_elems.remove("abstract_step");
+
+        let child_project = Project::new(
+            "missing",
+            vec![ProjectComponent::from_xml("M1.bum", CHILD).unwrap()],
+        );
+        let child = &child_project.components[0];
+        let Component::Machine(machine) = &child.component else {
+            panic!("M1 is a machine");
+        };
+        let checked_machines = HashMap::from([("M0".to_string(), parent)]);
+        let (file, checked, diagnostics) = check_machine(
+            &child_project,
+            child,
+            machine,
+            &HashMap::new(),
+            &checked_machines,
+        );
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.origin == "M1.concrete_step"
+                && diagnostic.message
+                    == "inherited event 'abstract_step' has no rendered parent state — event is inaccurate"
+        }));
+        let event = checked
+            .events_by_label
+            .get("concrete_step")
+            .expect("concrete_step checked");
+        assert!(!event.accurate);
+        assert!(event.inherited.is_none());
+
+        let view = ScView::from_xml(&file.contents).unwrap();
+        let event = view
+            .events
+            .get("concrete_step")
+            .expect("concrete_step rendered");
+        assert!(!event.accurate);
+        assert!(event.refines_events.is_empty());
+    }
+}

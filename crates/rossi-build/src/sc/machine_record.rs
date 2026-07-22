@@ -373,12 +373,10 @@ pub(crate) fn render_machine_root(
         root.push(names.generated(|name| render_variant(va, name)));
     }
     for e in &record.events {
-        let inherited_event = e.inherited.as_ref().map(|_| {
-            inherited_events
-                .and_then(|events| events.get(&e.label))
-                .expect("inherited event has rendered parent")
-                .as_ref()
-        });
+        let inherited_event = e
+            .inherited
+            .as_deref()
+            .and_then(|parent| inherited_events?.get(&parent.label).map(Rc::as_ref));
         let element = names.generated(|name| render_event(e, name, inherited_event));
         event_elems.insert(e.label.clone(), Rc::clone(&element));
         root.push(element);

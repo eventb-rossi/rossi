@@ -49,6 +49,16 @@ const M1_PLAIN_BUM: &str = r#"<?xml version="1.0"?>
 </org.eventb.core.event>
 </org.eventb.core.machineFile>"#;
 
+const M2_EXTENDED_BUM: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.refinesMachine name="_ref" org.eventb.core.target="M1"/>
+<org.eventb.core.variable name="_v_x2" org.eventb.core.identifier="x"/>
+<org.eventb.core.invariant name="_i0" org.eventb.core.label="inv1" org.eventb.core.predicate="x ∈ ℤ"/>
+<org.eventb.core.event name="_init2" org.eventb.core.convergence="0" org.eventb.core.extended="true" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.refinesEvent name="_re_init" org.eventb.core.target="INITIALISATION"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
 fn extended_project() -> Project {
     Project::new(
         "ext",
@@ -65,6 +75,17 @@ fn plain_project() -> Project {
         vec![
             ProjectComponent::from_xml("M0.bum", M0_BUM).unwrap(),
             ProjectComponent::from_xml("M1.bum", M1_PLAIN_BUM).unwrap(),
+        ],
+    )
+}
+
+fn transitive_extended_project() -> Project {
+    Project::new(
+        "transitive",
+        vec![
+            ProjectComponent::from_xml("M0.bum", M0_BUM).unwrap(),
+            ProjectComponent::from_xml("M1.bum", M1_EXTENDED_BUM).unwrap(),
+            ProjectComponent::from_xml("M2.bum", M2_EXTENDED_BUM).unwrap(),
         ],
     )
 }
@@ -104,6 +125,22 @@ fn extended_event_inherits_abstract_inaccuracy() {
     assert!(
         !init.accurate,
         "extended INITIALISATION must inherit M0's inaccuracy; {:?}",
+        r.diagnostics
+    );
+}
+
+#[test]
+fn extended_event_inherits_transitive_abstract_inaccuracy() {
+    let r = build(&transitive_extended_project());
+    let m2 = r.file("M2.bcm").expect("M2.bcm");
+    let v = ScView::from_xml(&m2.contents).unwrap();
+    let init = v
+        .events
+        .get("INITIALISATION")
+        .expect("INITIALISATION present");
+    assert!(
+        !init.accurate,
+        "extended INITIALISATION must inherit transitive inaccuracy; {:?}",
         r.diagnostics
     );
 }
