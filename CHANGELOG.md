@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.7](https://github.com/eventb-rossi/rossi/compare/v0.1.6...v0.1.7) - 2026-07-24
+
+### Fixed
+- *(build)* Validate inherited event render state
+
 ## [0.1.6](https://github.com/eventb-rossi/rossi/compare/v0.1.5...v0.1.6) - 2026-07-21
 
 ### Added
