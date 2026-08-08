@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.8](https://github.com/eventb-rossi/rossi/compare/v0.1.7...v0.1.8) - 2026-08-08
+
+### Added
+- *(validate)* Expose joined path in JSON output
+
+### Fixed
+- *(validate)* Retain ruleless failures in SARIF
+- *(validate)* Reject directories without components
+
 ## [0.1.7](https://github.com/eventb-rossi/rossi/compare/v0.1.6...v0.1.7) - 2026-07-27
 
 ### Added
