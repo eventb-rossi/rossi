@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.0](https://github.com/eventb-rossi/rossi/compare/v0.1.9...v0.2.0) - 2026-08-22
+
+### Added
+- *(cli)* Wrap at 120 columns by default
+- *(fmt)* Wrap formulas at a configurable maximum line width
+- *(fmt)* Make camille the default formatting style
+- *(cli)* Expose the formatter style preset and toggles
+- *(fmt)* Add the camille formatting style to the pretty printer
+- *(build)* Expose a static-check-only entry point with the typed model
+- *(lsp)* Mark well-definedness conditions with inlay hints
+- *(lsp)* Serve declaration type inlay hints
+- *(lsp)* Map rossi.format.maxLineWidth to the formatter
+- *(lsp)* Map rossi.format style settings to the formatter
+
+### Changed
+- *(build)* Return structured well-definedness conditions
+- *(lsp)* Collect document-link source lines once
+
+### Fixed
+- *(cli)* End formatted text with exactly one newline
+
 ## [0.1.9](https://github.com/eventb-rossi/rossi/compare/v0.1.8...v0.1.9) - 2026-08-18
 
 ### Added
