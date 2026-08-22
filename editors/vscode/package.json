@@ -2,7 +2,7 @@
   "name": "event-b",
   "displayName": "Event-B (Rossi)",
   "description": "Event-B language support: syntax highlighting, diagnostics, formatting, navigation, and Rodin import/export, powered by the Rossi toolchain.",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "publisher": "rossi",
   "license": "MIT OR Apache-2.0",
   "icon": "icons/rossi-icon.png",
@@ -289,7 +289,11 @@
         },
         "rossi.format.style": {
           "type": "string",
-          "enum": ["", "camille", "rossi"],
+          "enum": [
+            "",
+            "camille",
+            "rossi"
+          ],
           "default": "",
           "description": "Formatting style preset: 'camille' (lowercase keywords, inline declaration lists, 2-space indent) or 'rossi' (uppercase keywords, one-per-line lists, 4-space indent). Empty follows the language server's default preset."
         },
@@ -305,18 +309,29 @@
         },
         "rossi.format.keywordCase": {
           "type": "string",
-          "enum": ["", "lower", "upper"],
+          "enum": [
+            "",
+            "lower",
+            "upper"
+          ],
           "default": "",
           "description": "Keyword-case override ('lower' or 'upper'). Empty follows the style preset."
         },
         "rossi.format.declLists": {
           "type": "string",
-          "enum": ["", "inline", "one-per-line"],
+          "enum": [
+            "",
+            "inline",
+            "one-per-line"
+          ],
           "default": "",
           "description": "Declaration-list layout override for variables/sets/constants/any ('inline' or 'one-per-line'). Empty follows the style preset."
         },
         "rossi.format.blankBetweenClauses": {
-          "type": ["boolean", "null"],
+          "type": [
+            "boolean",
+            "null"
+          ],
           "default": null,
           "description": "Emit one blank line before each top-level clause keyword. Unset follows the style preset."
         },
