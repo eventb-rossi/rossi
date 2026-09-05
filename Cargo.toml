@@ -19,7 +19,7 @@ members = [
 exclude = ["editors/zed", "editors/tree-sitter-eventb", "crates/tree-sitter-parity"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 # Minimum supported Rust version: the edition-2024 floor. Verified by building
 # the whole workspace with `--all-features` on 1.85.0.
@@ -75,10 +75,10 @@ test-case = "3.3"
 proptest = "1.6"
 
 # Workspace crates
-rossi = { version = "0.2.1", path = "crates/rossi" }
-rossi-build = { version = "0.2.1", path = "crates/rossi-build" }
-rossi-prove = { version = "0.2.1", path = "crates/rossi-prove" }
-eventb-lsp = { version = "0.2.1", path = "crates/eventb-lsp" }
+rossi = { version = "0.2.2", path = "crates/rossi" }
+rossi-build = { version = "0.2.2", path = "crates/rossi-build" }
+rossi-prove = { version = "0.2.2", path = "crates/rossi-prove" }
+eventb-lsp = { version = "0.2.2", path = "crates/eventb-lsp" }
 
 [profile.release]
 opt-level = 3

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.2](https://github.com/eventb-rossi/rossi/compare/v0.2.1...v0.2.2) - 2026-09-05
+
+### Added
+- *(cli)* Clean orphaned and broken proofs from a project
+- *(build)* Locate WD conditions by source
+- *(ast)* Identify the source a span indexes
+- *(formula)* Enumerate a predicate's propositional leaves
+- *(prove)* Rewrite a proof file's entries in place
+- *(lsp)* Filter operator completions on word aliases
+
+### Changed
+- *(cli)* Share the prove command's obligation classification
+
+### Fixed
+- *(lsp)* Mask names by the grammar's own list and whitespace rules
+- *(lsp)* Keep component and event names out of the operator rewrite
+- *(parse)* Treat bool as the closed operator word it is
+- *(parse)* Reject a math keyword as a predicate-application head
+
+### Documentation
+- Correct the subcommand tables
+- Describe rossi clean in the READMEs
+
 ## [0.2.1](https://github.com/eventb-rossi/rossi/compare/v0.2.0...v0.2.1) - 2026-09-03
 
 ### Added
