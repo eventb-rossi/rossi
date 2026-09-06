@@ -163,6 +163,54 @@ For the full list of settings (formatting, diagnostics, completion, symbol
 input) and a complete example configuration, see the
 [README](README.md#extension-settings).
 
+### The Rodin math font
+
+Four Event-B operators have no standard Unicode code point, so Rodin encodes
+them in the Unicode Private Use Area: `<<->` (U+E100), `<->>` (U+E101),
+`<<->>` (U+E102) and `<+` (U+E103). Rossi writes them in ASCII, which renders
+in any font, so **you do not need this font for normal use**. Install it only
+if you turn on `rossi.format.privateUseGlyphs` to exchange files with a tool
+that reads no other spelling, such as Rodin's own editors.
+
+The font is Brave Sans Mono Roman, shipped with the extension at
+`fonts/bravesansmono_roman.ttf` inside the installed extension directory:
+
+- macOS: `~/.vscode/extensions/rossi.event-b-<version>/fonts/`
+- Linux: `~/.vscode/extensions/rossi.event-b-<version>/fonts/`
+- Windows: `%USERPROFILE%\.vscode\extensions\rossi.event-b-<version>\fonts\`
+
+**VS Code cannot install or load a font for you** — `editor.fontFamily`
+resolves only against fonts installed in the operating system — so install the
+file yourself:
+
+- macOS: double-click the `.ttf` and press *Install Font*.
+- Windows: right-click the `.ttf` and choose *Install*.
+- Linux: `mkdir -p ~/.local/share/fonts && cp bravesansmono_roman.ttf
+  ~/.local/share/fonts/ && fc-cache -f`
+
+Restart VS Code afterwards, then name the font as a fallback for Event-B files
+in `settings.json`. The extension does not set your editor font: a
+language-specific default contributed by an extension outranks your own
+`editor.fontFamily`, so shipping one would replace the font of everyone who
+never enables `rossi.format.privateUseGlyphs`.
+
+```json
+{
+  "[eventb]": {
+    "editor.fontFamily": "'Your Font', 'Brave Sans Mono', monospace"
+  }
+}
+```
+
+Order matters. A font stack resolves per glyph, first match wins, so listing
+the math font after your own keeps your font everywhere it has a glyph and
+falls back to Brave Sans Mono only for the four private-use code points it
+does not.
+
+The font is a Bitstream Vera Sans Mono derivative by ETH Zurich, redistributed
+unmodified under the Bitstream Vera Fonts License; see
+[LICENSE-BraveSansMono.txt](LICENSE-BraveSansMono.txt).
+
 ## Troubleshooting
 
 ### Extension Not Working

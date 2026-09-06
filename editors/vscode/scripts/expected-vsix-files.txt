@@ -1,10 +1,12 @@
 [Content_Types].xml
 extension.vsixmanifest
 extension/INSTALL.md
+extension/LICENSE-BraveSansMono.txt
 extension/LICENSE-MIT
 extension/LICENSE.txt
 extension/changelog.md
 extension/dist/extension.js
+extension/fonts/bravesansmono_roman.ttf
 extension/icons/eventb-icon.svg
 extension/icons/rossi-icon.png
 extension/language-configuration.json
