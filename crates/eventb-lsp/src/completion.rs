@@ -307,8 +307,8 @@ impl CompletionProvider {
             .iter()
             .filter(|entry| entry.completion)
             .map(|entry| {
-                let label = entry.emit_text(use_unicode);
-                let alternative = entry.emit_text(!use_unicode);
+                let label = entry.emit_text(use_unicode, false);
+                let alternative = entry.emit_text(!use_unicode, false);
                 let alternative = if alternative == label {
                     ""
                 } else {

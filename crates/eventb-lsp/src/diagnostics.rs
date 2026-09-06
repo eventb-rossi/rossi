@@ -68,7 +68,7 @@ pub const ASCII_OPERATOR_CODE: &str = "ascii-operator";
 pub(crate) fn ascii_operators(text: &str) -> Vec<(Range, &str, &'static str)> {
     let masked = rossi::comments::mask_opaque(text);
     let index = crate::position::PositionIndex::new(text);
-    rossi::operators::ascii_operator_spans(&masked)
+    rossi::operators::ascii_operator_spans(&masked, false)
         .into_iter()
         .map(|(span, unicode)| {
             let range = Range::new(index.position(span.start), index.position(span.end));

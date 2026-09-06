@@ -274,19 +274,25 @@ impl CodeActionProvider {
             let conversions = [
                 (
                     operators::has_ascii_operators as fn(&str) -> bool,
-                    operators::convert_to_unicode as fn(&str) -> String,
+                    true,
                     "Convert selection to Unicode",
                 ),
                 (
                     operators::has_unicode_operators,
-                    operators::convert_to_ascii,
+                    false,
                     "Convert selection to ASCII",
                 ),
             ];
-            for (has_operators, convert, title) in conversions {
+            for (has_operators, to_unicode, title) in conversions {
                 if has_operators(&masked[start..end]) {
                     let converted =
-                        rossi::comments::map_code_segments_in_range(text, start, end, convert);
+                        rossi::comments::map_code_segments_in_range(text, start, end, |code| {
+                            if to_unicode {
+                                operators::convert_to_unicode(code, false)
+                            } else {
+                                operators::convert_to_ascii(code)
+                            }
+                        });
                     if let Some(action) = self.create_convert_selection_action(
                         uri,
                         title,
@@ -306,7 +312,7 @@ impl CodeActionProvider {
     /// Convert ASCII operators to Unicode in the given text.
     /// Comment text is never rewritten — `<=` in prose stays `<=`.
     pub fn convert_to_unicode(&self, text: &str) -> String {
-        rossi::comments::map_code_segments(text, operators::convert_to_unicode)
+        rossi::comments::map_code_segments(text, |code| operators::convert_to_unicode(code, false))
     }
 
     /// Convert Unicode operators to ASCII in the given text.

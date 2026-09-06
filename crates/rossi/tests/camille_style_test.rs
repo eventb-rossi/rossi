@@ -305,6 +305,8 @@ fn resolved_applies_overrides_on_top_of_preset() {
     assert_eq!(defaults.decl_lists, DeclListLayout::Inline);
     assert!(defaults.blank_between_clauses);
     assert!(defaults.use_unicode);
+    // Portable by default: no preset asks for Rodin's private-use glyphs.
+    assert!(!defaults.private_use_glyphs);
     // Wrapping is off in every preset; only explicit overrides enable it.
     assert_eq!(defaults.max_line_width, 0);
 
@@ -316,6 +318,7 @@ fn resolved_applies_overrides_on_top_of_preset() {
             blank_between_clauses: Some(false),
             indent: Some("    ".to_string()),
             use_unicode: false,
+            private_use_glyphs: false,
             max_line_width: 100,
         },
     );

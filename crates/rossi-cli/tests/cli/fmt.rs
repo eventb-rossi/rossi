@@ -40,6 +40,67 @@ fn test_fmt_stdin_inverse_operator_conversion() {
 }
 
 #[test]
+fn fmt_private_use_glyphs_is_opt_in() {
+    // The four relation/override operators have no standard Unicode code point.
+    // rossi spells them ASCII by default so they render anywhere, and emits
+    // Rodin's private-use glyphs only when asked — for tools such as Rodin's
+    // own editors, which read no other spelling.
+    let source = concat!(
+        "MACHINE m\n",
+        "VARIABLES\n    f\n",
+        "INVARIANTS\n    @inv1 f \u{2208} \u{2115} <<-> \u{2115}\n",
+        "EVENTS\n",
+        "    EVENT evt\n",
+        "    THEN\n        @act1 f \u{2254} f <+ {1 \u{21A6} 2}\n",
+        "    END\n",
+        "END\n"
+    );
+
+    let output = run_cli_with_stdin(&["fmt", "-"], source);
+    assert!(
+        output.status.success(),
+        "fmt - should accept the ASCII form"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("<<->") && stdout.contains("<+"),
+        "default fmt should keep the ASCII spelling, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains('\u{E100}') && !stdout.contains('\u{E103}'),
+        "default fmt must not emit a private-use glyph, got: {stdout}"
+    );
+
+    let output = run_cli_with_stdin(&["fmt", "--private-use-glyphs", "-"], source);
+    assert!(
+        output.status.success(),
+        "fmt --private-use-glyphs should run"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains('\u{E100}') && stdout.contains('\u{E103}'),
+        "--private-use-glyphs should emit Rodin's glyphs, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("<<->") && !stdout.contains("<+"),
+        "--private-use-glyphs should replace the ASCII spelling, got: {stdout}"
+    );
+
+    // The ASCII convention wins: the whole document is ASCII either way.
+    let output = run_cli_with_stdin(&["fmt", "--ascii", "--private-use-glyphs", "-"], source);
+    assert!(output.status.success(), "--ascii should still run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("<<->") && stdout.contains("<+"),
+        "--ascii should keep the ASCII spelling, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains('\u{E100}') && !stdout.contains('\u{E103}'),
+        "--ascii must not emit a private-use glyph, got: {stdout}"
+    );
+}
+
+#[test]
 fn fmt_ascii_text_to_unicode_stdout() {
     let tmp = tempdir_unique("rossi-cli-fmt-ascii");
     let file = tmp.join("c.eventb");

@@ -859,9 +859,9 @@ fn lowercase_keyword(token: &str) -> Option<String> {
 /// neither parser accepts, and masking comments and labels does not help
 /// because a component name is neither.
 ///
-/// `unicode`, not `emit_text(true)`: rossi never writes the four Rodin
-/// private-use operators into a buffer because they render as tofu without
-/// Rodin's math font. A fuzz input goes to a parser, not a buffer, and
+/// `unicode`, not `emit_text(true, false)`: rossi does not write the four
+/// Rodin private-use operators into a buffer by default, because they render
+/// as tofu without Rodin's math font. A fuzz input goes to a parser, not a buffer, and
 /// `U+E100..=U+E103` are what Rodin's own lexer reads — measured against
 /// eventb-checker, which accepts all four glyphs and rejects every one of
 /// their ASCII spellings with `EB005`.

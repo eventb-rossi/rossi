@@ -805,6 +805,33 @@ fn private_use_glyphs_flag_controls_relation_and_override_spelling() {
         glyphs.contains('\u{E100}') && glyphs.contains('\u{E103}'),
         "with_private_use_glyphs(true) should emit the glyphs, got: {glyphs}"
     );
+
+    // The user-facing paths (CLI `fmt`/`import`, LSP formatting) build their
+    // printer through `resolved`, so the override has to survive that.
+    let resolved = PrettyPrinter::resolved(
+        Style::Camille,
+        &StyleOverrides {
+            private_use_glyphs: true,
+            ..StyleOverrides::default()
+        },
+    )
+    .print_formula_predicate(&pred);
+    assert_eq!(resolved, glyphs);
+
+    // Under the ASCII convention the override changes nothing.
+    let ascii = PrettyPrinter::resolved(
+        Style::Camille,
+        &StyleOverrides {
+            use_unicode: false,
+            private_use_glyphs: true,
+            ..StyleOverrides::default()
+        },
+    )
+    .print_formula_predicate(&pred);
+    assert!(
+        ascii.contains("<<->") && ascii.contains("<+"),
+        "the ASCII convention keeps the ASCII spelling, got: {ascii}"
+    );
 }
 
 // ============================================================================

@@ -59,7 +59,7 @@ pub fn render() -> String {
     out.push_str(" nil t nil nil nil nil nil nil nil t)\n\n");
 
     out.push_str("(quail-define-rules\n");
-    for row in operator_rows() {
+    for row in operator_rows(false) {
         let unicode = super::elisp_string(&row.unicode);
         // Curated aliases first (every row that has them).
         for alias in &row.aliases {
