@@ -164,6 +164,12 @@ All settings can be customized via Emacs customization interface (`M-x customize
 ;; Formatting options
 (setq lsp-rossi-format-use-unicode t)        ; Use Unicode (∧, ∨, ⇒) or ASCII (/\, \/, =>)
 (setq lsp-rossi-format-indentation "    ")   ; Indentation string (spaces or tabs)
+(setq lsp-rossi-format-private-use-glyphs nil) ; Rodin's spelling of <<->, <->>, <<->>, <+
+                                             ; (needs a font — see INSTALL.md)
+
+;; Display options
+(setq eventb-math-font "Brave Sans Mono")    ; Font for U+E100..U+E103 only; nil to leave
+                                             ; the fontset alone
 
 ;; Diagnostics options
 (setq lsp-rossi-diagnostics-enabled t)       ; Enable/disable diagnostics

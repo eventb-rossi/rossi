@@ -74,6 +74,18 @@ Can be a string (command name) or a list (command with arguments)."
                  (repeat :tag "Command with arguments" string))
   :group 'eventb)
 
+(defcustom eventb-math-font "Brave Sans Mono"
+  "Font family used for the Event-B private-use operator glyphs.
+Rodin encodes four operators in the Unicode Private Use Area
+\(U+E100..U+E103), so only a font carrying those glyphs can display
+them.  `eventb-apply-math-font' maps that range --- and nothing else ---
+to this family, leaving the rest of the buffer in your own font.
+
+Set to nil to leave the fontset alone."
+  :type '(choice (string :tag "Font family")
+                 (const :tag "Do not remap the glyph range" nil))
+  :group 'eventb)
+
 (defcustom eventb-enable-input-method t
   "When non-nil, activate the Event-B Unicode input method in new buffers.
 The input method is the Quail package named \"eventb\" (see
@@ -82,6 +94,49 @@ leader, e.g. \\\\to inserts a RIGHTWARDS ARROW.  Toggle it at any time
 with `eventb-toggle-input-method'."
   :type 'boolean
   :group 'eventb)
+
+;;; Private-use operator glyphs
+
+(defconst eventb-private-use-glyph-range '(?\uE100 . ?\uE103)
+  "Characters Rodin encodes in the Unicode Private Use Area.
+U+E100 TREL \\=`<<->', U+E101 SREL \\=`<->>', U+E102 STREL \\=`<<->>' and
+U+E103 OVR \\=`<+' --- the complete set, matching rossi's own operator
+table.  Only a font carrying these glyphs can display them.")
+
+(defvar eventb--math-font-resolved nil
+  "Family `eventb-apply-math-font' last resolved against a real display.
+Opening one Event-B buffer after another must not repeat a font lookup
+whose answer cannot have changed --- and the miss is the common case, for
+everyone who never installs the font.  Recorded only once there *is* a
+display, so an Emacs daemon started without a frame still resolves the
+font when it gets one.")
+
+;;;###autoload
+(defun eventb-apply-math-font (&optional force)
+  "Display the Event-B private-use operator glyphs in `eventb-math-font'.
+
+Maps `eventb-private-use-glyph-range' --- and only that range --- onto the
+font, so the rest of the buffer keeps whatever family you have chosen.
+This is finer-grained than editors that can only replace the whole editor
+font.
+
+Does nothing when `eventb-math-font' is nil, when the font is not
+installed, or on a terminal, where the terminal emulator picks the font
+rather than Emacs.  The answer is remembered per family, so calling this
+from a mode hook costs one lookup rather than one per buffer; FORCE
+(always, when called interactively) resolves the font again, which is
+what to call after installing it.
+
+Returns non-nil when it applied the mapping."
+  (interactive (list t))
+  (when (and eventb-math-font
+             (display-multi-font-p)
+             (or force (not (equal eventb--math-font-resolved eventb-math-font))))
+    (setq eventb--math-font-resolved eventb-math-font)
+    (let ((spec (font-spec :family eventb-math-font)))
+      (when (find-font spec)
+        (set-fontset-font t eventb-private-use-glyph-range spec)
+        t))))
 
 ;;; Syntax highlighting
 
@@ -224,6 +279,18 @@ Empty follows the style preset (2 spaces camille, 4 spaces rossi)."
   :type 'string
   :group 'eventb)
 
+(defcustom lsp-rossi-format-private-use-glyphs nil
+  "Spell four operators with Rodin's private-use glyphs, not ASCII.
+`<<->' (U+E100), `<->>' (U+E101), `<<->>' (U+E102) and `<+' (U+E103)
+have no standard Unicode code point.  Rossi writes them in ASCII, which
+renders in any font; enable this to exchange files with a tool that reads
+only Rodin's spelling.  Has no effect with `lsp-rossi-format-use-unicode'
+off.
+
+The glyphs need a font that has them --- see `eventb-math-font'."
+  :type 'boolean
+  :group 'eventb)
+
 (defcustom lsp-rossi-format-max-line-width 120
   "Maximum line width when formatting Event-B text.
 Long formulas wrap onto operator-leading continuation lines; 0
@@ -316,6 +383,8 @@ deleted in Rodin is deleted next to the sources too)."
     (lambda ()
       `(:rossi (:format (:style ,lsp-rossi-format-style
                           :useUnicode ,lsp-rossi-format-use-unicode
+                          :privateUseGlyphs ,(if lsp-rossi-format-private-use-glyphs
+                                                 t :json-false)
                           :indentation ,lsp-rossi-format-indentation
                           :maxLineWidth ,lsp-rossi-format-max-line-width)
                  :diagnostics (:enabled ,lsp-rossi-diagnostics-enabled
@@ -428,6 +497,10 @@ used in safety-critical systems and formal verification.
   (setq-local lsp-semantic-tokens-enable t)
   (setq-local lsp-lens-enable t)
   (setq-local lsp-inlay-hint-enable t)
+
+  ;; Show the private-use operator glyphs in a font that has them, when one
+  ;; is installed.  A no-op otherwise, including on a terminal.
+  (eventb-apply-math-font)
 
   ;; Activate the Unicode input method by default (respecting the toggle).
   ;; Downgrade any failure (e.g. a not-yet-loadable input package) to a

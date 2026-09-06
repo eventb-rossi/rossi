@@ -72,15 +72,47 @@ If you already have a published version installed, Zed uninstalls it first.
 
 ## The Rodin math font
 
-Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
-(`<<->`, `<->>`, `<<->>`, `<+`) in ASCII, so they render in any font. If you
-turn on the language server's `format.privateUseGlyphs` setting to exchange
-files with a tool that reads only Rodin's spelling, install Brave Sans Mono
-Roman and select it as your editor font. The font ships with the VS Code
-extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and the
-per-platform install locations are in
-[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font). (VS Code
-users get a `Rossi: Install the Rodin Math Font` command instead.)
+Four Event-B operators have no standard Unicode code point, so Rodin encodes
+them in the Unicode Private Use Area: `<<->` (U+E100), `<->>` (U+E101),
+`<<->>` (U+E102) and `<+` (U+E103). Rossi writes them in ASCII, which renders
+in any font, so **most users need nothing here**. Read on only if you turn on
+the language server's `format.privateUseGlyphs` setting to exchange files with
+a tool that reads only Rodin's spelling.
+
+The glyphs live in one font, Brave Sans Mono Roman, which ships with this
+repository at [editors/vscode/fonts/](../vscode/fonts/) — its licence is in
+[LICENSE-BraveSansMono.txt](../vscode/LICENSE-BraveSansMono.txt). Install it
+into your own font directory; no administrator rights are needed:
+
+| | Install to |
+| --- | --- |
+| macOS | `~/Library/Fonts/` (double-click the file and press *Install Font*) |
+| Linux | `~/.local/share/fonts/`, then run `fc-cache -f` |
+| Windows | right-click the file and choose *Install* |
+
+Then, in `settings.json`, turn the setting on and list the font as a fallback
+so it is consulted only for glyphs your own font lacks:
+
+```json
+{
+  "buffer_font_family": "Your Font",
+  "buffer_font_fallbacks": ["Brave Sans Mono"],
+  "lsp": {
+    "eventb-language-server": {
+      "initialization_options": {
+        "rossi": { "format": { "useUnicode": true, "privateUseGlyphs": true } }
+      }
+    }
+  }
+}
+```
+
+Two Zed caveats: `buffer_font_fallbacks` is documented for macOS and Windows,
+and [does not work on Linux](https://github.com/zed-industries/zed/issues/17254)
+— set `buffer_font_family` to the math font there instead. And Zed extensions
+are sandboxed, so this extension [cannot install the font for
+you](https://github.com/zed-industries/zed/issues/14522); the manual step above
+is required.
 
 ## Troubleshooting
 
