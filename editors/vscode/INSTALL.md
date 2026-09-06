@@ -172,27 +172,46 @@ in any font, so **you do not need this font for normal use**. Install it only
 if you turn on `rossi.format.privateUseGlyphs` to exchange files with a tool
 that reads no other spelling, such as Rodin's own editors.
 
-The font is Brave Sans Mono Roman, shipped with the extension at
-`fonts/bravesansmono_roman.ttf` inside the installed extension directory:
+The font is Brave Sans Mono Roman, and it ships with the extension. Run
+**Rossi: Install the Rodin Math Font** from the Command Palette
+(`Ctrl+Shift+P`) and restart VS Code. The command copies the bundled file into
+your own font directory and registers it — no administrator rights are needed
+on any platform:
 
-- macOS: `~/.vscode/extensions/rossi.event-b-<version>/fonts/`
-- Linux: `~/.vscode/extensions/rossi.event-b-<version>/fonts/`
-- Windows: `%USERPROFILE%\.vscode\extensions\rossi.event-b-<version>\fonts\`
+| | Installed to |
+| --- | --- |
+| macOS | `~/Library/Fonts/` |
+| Linux | `~/.local/share/fonts/`, then `fc-cache -f` |
+| Windows | `%LOCALAPPDATA%\Microsoft\Windows\Fonts\`, plus a value under `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts` |
 
-**VS Code cannot install or load a font for you** — `editor.fontFamily`
-resolves only against fonts installed in the operating system — so install the
-file yourself:
+Re-running the command overwrites the installed copy, so it repairs a stale or
+partial install rather than failing.
 
-- macOS: double-click the `.ttf` and press *Install Font*.
-- Windows: right-click the `.ttf` and choose *Install*.
-- Linux: `mkdir -p ~/.local/share/fonts && cp bravesansmono_roman.ttf
-  ~/.local/share/fonts/ && fc-cache -f`
+The command exists because **VS Code cannot load a font for you**:
+`editor.fontFamily` resolves only against fonts installed in the operating
+system, and an extension has no way to register one — the only font-file
+contribution points, `contributes.icons` and `contributes.productIconThemes`,
+produce workbench icons, not editor text. So the extension installs the file
+into the OS itself, the way you would by hand.
 
-Restart VS Code afterwards, then name the font as a fallback for Event-B files
-in `settings.json`. The extension does not set your editor font: a
-language-specific default contributed by an extension outranks your own
-`editor.fontFamily`, so shipping one would replace the font of everyone who
-never enables `rossi.format.privateUseGlyphs`.
+To do it by hand instead, the bundled file is at
+`fonts/bravesansmono_roman.ttf` inside the installed extension directory
+(`~/.vscode/extensions/rossi.event-b-<version>/` on macOS and Linux,
+`%USERPROFILE%\.vscode\extensions\rossi.event-b-<version>\` on Windows):
+double-click it on macOS and press *Install Font*, right-click → *Install* on
+Windows, or copy it into `~/.local/share/fonts/` and run `fc-cache -f` on
+Linux.
+
+Installing the font is not enough on its own: VS Code renders `.eventb` files
+in whatever `editor.fontFamily` you have configured. The command therefore
+offers, once the install succeeds, to add the math font as a *fallback* for
+Event-B files — writing your existing font stack plus `'Brave Sans Mono'` into
+`"[eventb]"` in your user settings. Declining changes nothing.
+
+The extension never sets that font itself, because a language-specific default
+contributed by an extension outranks your own global `editor.fontFamily`:
+shipping one would replace the editor font of everyone who never enables
+`rossi.format.privateUseGlyphs`. To write it by hand instead:
 
 ```json
 {
@@ -203,9 +222,11 @@ never enables `rossi.format.privateUseGlyphs`.
 ```
 
 Order matters. A font stack resolves per glyph, first match wins, so listing
-the math font after your own keeps your font everywhere it has a glyph and
-falls back to Brave Sans Mono only for the four private-use code points it
-does not.
+the math font *after* your own keeps your font everywhere it has a glyph and
+falls back to Brave Sans Mono only for the four private-use code points it does
+not. (Anything after a generic family such as `monospace` is unreachable, since
+a generic always resolves — which is why the command inserts the fallback ahead
+of it.)
 
 The font is a Bitstream Vera Sans Mono derivative by ETH Zurich, redistributed
 unmodified under the Bitstream Vera Fonts License; see

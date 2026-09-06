@@ -1,6 +1,7 @@
 import {
     CancellationToken,
     CancellationTokenSource,
+    ConfigurationTarget,
     Diagnostic,
     DiagnosticCollection,
     DiagnosticSeverity,
@@ -11,6 +12,7 @@ import {
     Range,
     TextDocument,
     Uri,
+    env,
     window,
     workspace,
     commands as vscodeCommands,
@@ -19,6 +21,12 @@ import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { resolveCommandCwd } from './commandCwd';
+import {
+    fontFamilyWithMathFont,
+    installMathFont as installMathFontFile,
+    MATH_FONT_FAMILY,
+    MATH_FONT_FILE,
+} from './mathFont';
 import { formatStyleFlags } from './styleFlags';
 import { regionToZeroIndexed, ValidationRegion } from './validationRegion';
 
@@ -234,6 +242,66 @@ export class RossiCommandController {
         } catch (error) {
             this.showCommandError(error);
         }
+    }
+
+    /**
+     * Install the bundled Rodin math font into the user's own font directory
+     * (see `mathFont.ts` for why the extension has to do this itself).
+     */
+    async installMathFont(extensionPath: string): Promise<void> {
+        try {
+            const source = path.join(extensionPath, 'fonts', MATH_FONT_FILE);
+            const destination = await installMathFontFile(source);
+            if (env.remoteName) {
+                // The extension host runs on the remote machine, but the glyphs
+                // are drawn locally: this install cannot affect what you see.
+                window.showWarningMessage(
+                    `Installed ${MATH_FONT_FAMILY} at ${destination} on the ${env.remoteName} ` +
+                    'host. Fonts are resolved on the machine running the VS Code window, so ' +
+                    'install it there too — see INSTALL.md.'
+                );
+                return;
+            }
+            window.showInformationMessage(
+                `Installed ${MATH_FONT_FAMILY} at ${destination}. ` +
+                'Restart VS Code for Event-B files to pick it up.'
+            );
+            await this.offerMathFontFallback();
+        } catch (error) {
+            this.showCommandError(error);
+        }
+    }
+
+    /**
+     * Offer to list the math font as a fallback for Event-B files.
+     *
+     * The extension does not contribute an `editor.fontFamily` default: a
+     * language-specific default from an extension outranks the user's own
+     * setting, so it would silently replace the font of everyone who never
+     * enables `rossi.format.privateUseGlyphs`. Asking here instead reaches only
+     * the user who just chose to install the font, and writes the math font
+     * *after* their own families, so it supplies the four glyphs and nothing
+     * else.
+     */
+    private async offerMathFontFallback(): Promise<void> {
+        const editor = workspace.getConfiguration('editor', { languageId: 'eventb' });
+        const updated = fontFamilyWithMathFont(editor.get<string>('fontFamily') ?? '');
+        if (!updated) {
+            return;
+        }
+        const add = 'Add fallback';
+        const choice = await window.showInformationMessage(
+            `Use ${MATH_FONT_FAMILY} as a fallback font for Event-B files? ` +
+            'Your own font keeps every glyph it has; the fallback supplies only ' +
+            'the four Rodin private-use operators it does not.',
+            add,
+            'Not now'
+        );
+        if (choice !== add) {
+            return;
+        }
+        await editor.update('fontFamily', updated, ConfigurationTarget.Global, true);
+        window.showInformationMessage(`Event-B files now use: ${updated}`);
     }
 
     private async validateInput(input: string): Promise<void> {
@@ -753,7 +821,8 @@ export function registerRossiCommands(
         vscodeCommands.registerCommand('rossi.convertCurrentFileToUnicode', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToUnicode(uri))),
         vscodeCommands.registerCommand('rossi.convertCurrentFileToAscii', (uri?: Uri) => controller.runCommand(() => controller.convertCurrentFileToAscii(uri))),
         vscodeCommands.registerCommand('rossi.checkToolchain', () => controller.runCommand(() => controller.checkToolchain())),
-        vscodeCommands.registerCommand('rossi.newProject', () => controller.runCommand(() => controller.newProject()))
+        vscodeCommands.registerCommand('rossi.newProject', () => controller.runCommand(() => controller.newProject())),
+        vscodeCommands.registerCommand('rossi.installMathFont', () => controller.runCommand(() => controller.installMathFont(context.extensionPath)))
     );
 
     // On by default (`rossi.validate.onSave`): re-run the full project
