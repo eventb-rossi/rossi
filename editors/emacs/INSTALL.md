@@ -439,6 +439,17 @@ Then check the `*lsp-log*` buffer.
 
 ---
 
+## The Rodin math font
+
+Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
+(`<<->`, `<->>`, `<<->>`, `<+`) in ASCII, so they render in any font. If you
+turn on the language server's `format.privateUseGlyphs` setting to exchange
+files with a tool that reads only Rodin's spelling, install Brave Sans Mono
+Roman and select it as your editor font. The font ships with the VS Code
+extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and
+per-platform install steps are in
+[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font).
+
 ## Troubleshooting
 
 ### Server Not Found

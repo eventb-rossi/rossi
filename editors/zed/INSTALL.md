@@ -70,6 +70,17 @@ If you already have a published version installed, Zed uninstalls it first.
    [README.md](README.md#configuration)): `semantic_tokens: "combined"`,
    `document_symbols: "on"` (outline), `document_folding_ranges: "on"`.
 
+## The Rodin math font
+
+Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
+(`<<->`, `<->>`, `<<->>`, `<+`) in ASCII, so they render in any font. If you
+turn on the language server's `format.privateUseGlyphs` setting to exchange
+files with a tool that reads only Rodin's spelling, install Brave Sans Mono
+Roman and select it as your editor font. The font ships with the VS Code
+extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and
+per-platform install steps are in
+[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font).
+
 ## Troubleshooting
 
 - **No language server / "binary not found".** Ensure `eventb-language-server`
