@@ -146,7 +146,7 @@ fn hover_still_works_after_a_local_error() {
     // variable's documentation rather than nothing.
     let (_def, hov) = setup();
     let hover = hov
-        .hover(&hover_params(19, 10), SOURCE)
+        .hover(&hover_params(19, 10), SOURCE, false)
         .expect("hover on `Roles` should resolve");
     let HoverContents::Markup(content) = hover.contents else {
         panic!("expected markup hover content");

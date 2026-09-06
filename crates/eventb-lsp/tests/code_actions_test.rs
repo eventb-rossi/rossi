@@ -37,7 +37,7 @@ fn test_convert_selection_to_unicode() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     assert!(actions.is_some());
     let actions = actions.unwrap();
@@ -86,7 +86,7 @@ fn test_no_actions_for_plain_text() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     // Should have no actions for plain text
     assert!(
@@ -107,7 +107,7 @@ fn test_code_action_kinds() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     assert!(actions.is_some());
     let actions = actions.unwrap();
@@ -166,7 +166,7 @@ fn fix_all_normalizes_operators_to_the_convention() {
             },
         );
         let actions = provider
-            .provide_code_actions(&params, text, use_unicode)
+            .provide_code_actions(&params, text, use_unicode, false)
             .unwrap_or_default();
 
         let action = fix_all_action(&actions).expect("the fix-all source action must be offered");
@@ -193,7 +193,7 @@ fn fix_all_not_offered_when_already_in_the_convention() {
         },
     );
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -228,7 +228,7 @@ fn fix_all_honours_the_only_filter() {
         );
         params.context.only = Some(vec![CodeActionKind::new(only)]);
         let actions = provider
-            .provide_code_actions(&params, text, true)
+            .provide_code_actions(&params, text, true, false)
             .unwrap_or_default();
         assert_eq!(
             fix_all_action(&actions).is_some(),
@@ -260,7 +260,7 @@ fn test_extract_constant_action_numeric_literal() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     assert!(actions.is_some());
     let actions = actions.unwrap();
@@ -318,7 +318,7 @@ fn test_operator_detection_offers_conversion_actions() {
             },
         );
         let actions = provider
-            .provide_code_actions(&params, text, true)
+            .provide_code_actions(&params, text, true, false)
             .unwrap_or_default();
 
         assert!(
@@ -378,7 +378,7 @@ fn test_clause_and_sort_actions_offered() {
             },
         );
         let actions = provider
-            .provide_code_actions(&params, text, true)
+            .provide_code_actions(&params, text, true, false)
             .unwrap_or_default();
 
         for group in title_groups {
@@ -406,7 +406,7 @@ fn test_no_sort_action_when_already_sorted() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     if let Some(actions) = actions {
         // Should NOT have action to sort variables (already sorted)
@@ -437,7 +437,7 @@ fn test_rename_event_hint() {
         },
     );
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     assert!(actions.is_some());
     let actions = actions.unwrap();
@@ -486,7 +486,7 @@ fn test_diagnostic_based_action() {
     );
     params.context.diagnostics = vec![diagnostic];
 
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     assert!(actions.is_some());
     let actions = actions.unwrap();
@@ -523,7 +523,7 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
     }];
 
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -571,7 +571,7 @@ fn eb026_offers_equality_swap_for_becomes_equal() {
     };
     let params = diagnostic_params("file:///m.eventb", op, "EB026");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix =
@@ -596,7 +596,7 @@ fn eb026_offers_membership_swap_for_becomes_in() {
     };
     let params = diagnostic_params("file:///m.eventb", op, "EB026");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -620,7 +620,7 @@ fn eb026_offers_no_swap_for_becomes_such_that() {
     };
     let params = diagnostic_params("file:///m.eventb", op, "EB026");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -641,7 +641,7 @@ fn ascii_operator_advisory_offers_the_unicode_spelling() {
     };
     let params = diagnostic_params("file:///m.eventb", op, ASCII_OPERATOR_CODE);
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix = action_titled(&actions, "Replace")
@@ -668,7 +668,7 @@ fn ascii_operator_advisory_offers_nothing_for_a_stale_range() {
     };
     let params = diagnostic_params("file:///m.eventb", stale, ASCII_OPERATOR_CODE);
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -698,7 +698,7 @@ fn test_add_missing_end_not_offered_when_terminated() {
     }];
 
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -715,7 +715,7 @@ fn test_operator_conversion_leaves_comments_alone() {
     let provider = CodeActionProvider::new();
     let text = "MACHINE test\nVARIABLES x\nINVARIANTS\n  @inv1 x : NAT & x <= 10 // prose: x <= 10 and & stay ASCII\nEND";
 
-    let converted = provider.convert_to_unicode(text);
+    let converted = provider.convert_to_unicode(text, false);
 
     // Code is converted...
     assert!(converted.contains("x ∈ ℕ ∧ x ≤ 10 //"));
@@ -740,7 +740,9 @@ fn test_selection_conversion_preserves_comment_opened_before_selection() {
             end: Position::new(2, 35),
         },
     );
-    let actions = provider.provide_code_actions(&params, text, true).unwrap();
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap();
 
     let edit_text = actions
         .iter()
@@ -779,7 +781,7 @@ fn test_ascii_operators_in_comments_do_not_offer_conversion() {
             end: Position::new(0, 0),
         },
     );
-    let actions = provider.provide_code_actions(&params, text, true);
+    let actions = provider.provide_code_actions(&params, text, true, false);
 
     let offers_unicode_conversion = actions.iter().flatten().any(|action| {
         if let CodeActionOrCommand::CodeAction(action) = action {
@@ -807,7 +809,7 @@ fn eb029_offers_to_remove_an_empty_clause() {
     };
     let params = diagnostic_params("file:///m.eventb", keyword, "EB029");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix = action_titled(&actions, "Remove empty")
@@ -841,7 +843,7 @@ fn eb029_offers_nothing_for_a_label_with_no_formula() {
     };
     let params = diagnostic_params("file:///m.eventb", label, "EB029");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     assert!(
@@ -865,7 +867,7 @@ fn eb032_offers_to_insert_a_label() {
     };
     let params = diagnostic_params("file:///m.eventb", item, "EB032");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix = action_titled(&actions, "Insert label")
@@ -910,7 +912,7 @@ fn eb032_numbers_past_the_labels_in_scope() {
     ] {
         let params = diagnostic_params("file:///m.eventb", item, "EB032");
         let actions = provider
-            .provide_code_actions(&params, text, true)
+            .provide_code_actions(&params, text, true, false)
             .unwrap_or_default();
         let fix = action_titled(&actions, "Insert label")
             .unwrap_or_else(|| panic!("no Insert quick fix for:\n{text}"));
@@ -931,7 +933,7 @@ fn eb032_finds_the_clause_written_inline_before_the_item() {
     };
     let params = diagnostic_params("file:///m.eventb", item, "EB032");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix = action_titled(&actions, "Insert label")
@@ -972,7 +974,7 @@ fn eb032_names_the_label_after_its_clause() {
     ] {
         let params = diagnostic_params("file:///m.eventb", item, "EB032");
         let actions = provider
-            .provide_code_actions(&params, text, true)
+            .provide_code_actions(&params, text, true, false)
             .unwrap_or_default();
         let fix = action_titled(&actions, "Insert label")
             .unwrap_or_else(|| panic!("no Insert quick fix for:\n{text}"));
@@ -991,7 +993,7 @@ fn eb030_offers_to_move_the_clause_above_the_one_it_must_precede() {
     };
     let params = diagnostic_params("file:///m.eventb", clause, "EB030");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
 
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered for EB030");
@@ -1032,7 +1034,7 @@ fn eb030_move_stays_inside_its_own_event() {
     };
     let params = diagnostic_params("file:///m.eventb", clause, "EB030");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
@@ -1056,7 +1058,7 @@ fn eb030_offers_nothing_when_the_clause_shares_its_last_line() {
     };
     let params = diagnostic_params("file:///m.eventb", clause, "EB030");
     let actions = provider
-        .provide_code_actions(&params, text, true)
+        .provide_code_actions(&params, text, true, false)
         .unwrap_or_default();
     assert!(
         action_titled(&actions, "Move").is_none(),

@@ -812,7 +812,7 @@ fn cars_hover_cross_file_constant() {
 
     let usage = nth_occurrence(m0, "cars_limit", 0);
     let hover = provider
-        .hover(&hover_params(ws.uri("M0"), usage), m0)
+        .hover(&hover_params(ws.uri("M0"), usage), m0, false)
         .expect("hover on cars_limit");
     // The provider only ever constructs Markup contents; a different variant
     // is itself a regression worth failing on.
@@ -1314,7 +1314,7 @@ fn merged_hover_resolves_identifiers_in_later_components() {
 
     let hover_text = |position: Position| -> String {
         let hover = provider
-            .hover(&hover_params(ws.uri("M0"), position), text)
+            .hover(&hover_params(ws.uri("M0"), position), text, false)
             .unwrap_or_else(|| panic!("no hover at {position:?}"));
         match hover.contents {
             HoverContents::Markup(markup) => markup.value,

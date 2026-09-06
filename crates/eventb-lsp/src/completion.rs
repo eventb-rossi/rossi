@@ -256,6 +256,7 @@ impl CompletionProvider {
         // Add operator completions
         items.extend(self.get_operator_completions(
             format_config.use_unicode,
+            format_config.emits_private_use_glyphs(),
             operator_prefix_range(line_text, position),
         ));
 
@@ -297,18 +298,21 @@ impl CompletionProvider {
         items
     }
 
-    /// Get operator completions (Unicode or ASCII based on config)
+    /// Get operator completions (Unicode or ASCII based on config). The four
+    /// private-use operators are offered in ASCII unless `private_use_glyphs`
+    /// says the user reads Rodin's spelling.
     fn get_operator_completions(
         &self,
         use_unicode: bool,
+        private_use_glyphs: bool,
         replace_range: Option<Range>,
     ) -> Vec<CompletionItem> {
         operators::OPERATOR_SPELLINGS
             .iter()
             .filter(|entry| entry.completion)
             .map(|entry| {
-                let label = entry.emit_text(use_unicode, false);
-                let alternative = entry.emit_text(!use_unicode, false);
+                let label = entry.emit_text(use_unicode, private_use_glyphs);
+                let alternative = entry.emit_text(!use_unicode, private_use_glyphs);
                 let alternative = if alternative == label {
                     ""
                 } else {
@@ -1000,7 +1004,7 @@ mod tests {
     #[test]
     fn test_operator_completions_unicode() {
         let provider = CompletionProvider::new();
-        let items = provider.get_operator_completions(true, None);
+        let items = provider.get_operator_completions(true, false, None);
 
         // Should include Unicode operators
         assert!(items.iter().any(|item| item.label == "∧"));
@@ -1025,11 +1029,35 @@ mod tests {
         assert!(!items.iter().any(|item| item.label == "℘"));
     }
 
+    /// With `rossi.format.privateUseGlyphs` on, completion inserts what the
+    /// formatter writes: Rodin's glyph, not the ASCII spelling.
+    #[test]
+    fn test_operator_completions_private_use_glyphs() {
+        let provider = CompletionProvider::new();
+        let items = provider.get_operator_completions(true, true, None);
+
+        for glyph in [
+            operators::TOTAL_RELATION,
+            operators::SURJECTIVE_RELATION,
+            operators::TOTAL_SURJECTIVE_RELATION,
+            operators::RELATIONAL_OVERRIDE,
+        ] {
+            assert!(
+                items.iter().any(|item| item.label == glyph),
+                "opted-in completion should offer {glyph:?}"
+            );
+        }
+        assert!(!items.iter().any(|item| item.label == "<<->"));
+        assert!(!items.iter().any(|item| item.label == "<+"));
+        // Portable operators are unaffected.
+        assert!(items.iter().any(|item| item.label == "∧"));
+    }
+
     #[test]
     fn test_operator_completions_ascii() {
         let provider = CompletionProvider::new();
         let range = Range::new(Position::new(0, 2), Position::new(0, 4));
-        let items = provider.get_operator_completions(false, Some(range));
+        let items = provider.get_operator_completions(false, false, Some(range));
 
         // Should include ASCII operators
         assert!(items.iter().any(|item| item.label == "&"));
@@ -1055,7 +1083,7 @@ mod tests {
     #[test]
     fn operator_completions_filter_on_word_aliases() {
         let provider = CompletionProvider::new();
-        let items = provider.get_operator_completions(true, None);
+        let items = provider.get_operator_completions(true, false, None);
 
         let find = |label: &str| {
             items

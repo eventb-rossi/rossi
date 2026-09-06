@@ -179,7 +179,7 @@ fn benchmark_complete_requests(
         samples,
         || {
             hover_provider
-                .hover(&hover_params, &root_source.text)
+                .hover(&hover_params, &root_source.text, false)
                 .map_or(0, |_| 1)
         },
     ));
