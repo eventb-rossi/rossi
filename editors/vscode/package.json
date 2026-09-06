@@ -41,7 +41,8 @@
     "onCommand:rossi.convertCurrentFileToUnicode",
     "onCommand:rossi.convertCurrentFileToAscii",
     "onCommand:rossi.checkToolchain",
-    "onCommand:rossi.newProject"
+    "onCommand:rossi.newProject",
+    "onCommand:rossi.installMathFont"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -119,6 +120,11 @@
       {
         "command": "rossi.checkToolchain",
         "title": "Check Toolchain",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.installMathFont",
+        "title": "Install the Rodin Math Font",
         "category": "Rossi"
       },
       {
@@ -315,7 +321,7 @@
         "rossi.format.privateUseGlyphs": {
           "type": "boolean",
           "default": false,
-          "description": "Spell the four relation/override operators with Rodin's private-use glyphs (U+E100..E103) instead of ASCII <<->, <->>, <<->> and <+, for exchanging files with a tool that reads only Rodin's spelling (no effect with rossi.format.useUnicode off). They need Rodin's Brave Sans Mono font to render — see the extension's INSTALL.md."
+          "description": "Spell the four relation/override operators with Rodin's private-use glyphs (U+E100..E103) instead of ASCII <<->, <->>, <<->> and <+, for exchanging files with a tool that reads only Rodin's spelling (no effect with rossi.format.useUnicode off). They need Rodin's Brave Sans Mono font to render; run 'Rossi: Install the Rodin Math Font' to install it."
         },
         "rossi.format.indentation": {
           "type": "string",
@@ -470,6 +476,17 @@
             "completionEvents": [
               "onCommand:rossi.exportCurrentFileToRodinZip"
             ]
+          },
+          {
+            "id": "rossi.getStarted.mathFont",
+            "title": "Install the Rodin math font (optional)",
+            "description": "Only needed for rossi.format.privateUseGlyphs, which spells four operators the way Rodin does.\n[Install the Rodin Math Font](command:rossi.installMathFont)",
+            "media": {
+              "markdown": "walkthroughs/math-font.md"
+            },
+            "completionEvents": [
+              "onCommand:rossi.installMathFont"
+            ]
           }
         ]
       }
@@ -501,7 +518,8 @@
     "test:cwd": "tsc -p ./ && node out/commandCwd.test.js",
     "test:styleflags": "tsc -p ./ && node out/styleFlags.test.js",
     "test:manifest": "tsc -p ./ && node out/manifest.test.js",
-    "test": "tsc -p ./ && node out/symbolMatcher.test.js && node out/validationRegion.test.js && node out/binaryCache.test.js && node out/commandCwd.test.js && node out/styleFlags.test.js && node out/manifest.test.js",
+    "test:mathfont": "tsc -p ./ && node out/mathFont.test.js",
+    "test": "tsc -p ./ && node out/symbolMatcher.test.js && node out/validationRegion.test.js && node out/binaryCache.test.js && node out/commandCwd.test.js && node out/styleFlags.test.js && node out/manifest.test.js && node out/mathFont.test.js",
     "package": "vsce package --baseContentUrl https://github.com/eventb-rossi/rossi/blob/HEAD/editors/vscode --baseImagesUrl https://github.com/eventb-rossi/rossi/raw/HEAD/editors/vscode",
     "check:vsix": "node scripts/check-vsix.js",
     "publish:vsce": "vsce publish --packagePath $npm_package_name-$npm_package_version.vsix",

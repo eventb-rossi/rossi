@@ -473,9 +473,10 @@ Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
 turn on the language server's `format.privateUseGlyphs` setting to exchange
 files with a tool that reads only Rodin's spelling, install Brave Sans Mono
 Roman and select it as your editor font. The font ships with the VS Code
-extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and
-per-platform install steps are in
-[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font).
+extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and the
+per-platform install locations are in
+[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font). (VS Code
+users get a `Rossi: Install the Rodin Math Font` command instead.)
 
 ## Troubleshooting
 

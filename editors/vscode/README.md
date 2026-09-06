@@ -150,7 +150,7 @@ workspace, but only in a trusted one.
 - `rossi.format.style`: Formatting style preset — `"camille"` (lowercase keywords, inline declaration lists, 2-space indent) or `"rossi"` (uppercase keywords, one-per-line lists, 4-space indent); empty follows the language server's default preset (default: `""`)
 - `rossi.format.useUnicode`: Use Unicode operators (∧, ∨, ⇒, ∈) instead of ASCII (/\, \/, =>, :) when formatting (default: `true`)
 - `rossi.format.enforceUnicode`: Flag ASCII operator spellings (`/\`, `:`, `NAT`, …) outside comments and labels with an advisory diagnostic and a quick fix, for a project that keeps its sources in Unicode (no effect with `rossi.format.useUnicode` off; the private-use operators `<+`, `<<->`, `<->>`, `<<->>` stay ASCII and are not flagged unless `rossi.format.privateUseGlyphs` is on); pair with the `source.fixAll.rossi` action on save and `rossi fmt --check` in CI (default: `false`)
-- `rossi.format.privateUseGlyphs`: Spell the four relation/override operators with Rodin's private-use glyphs (U+E100..E103) instead of ASCII `<<->`, `<->>`, `<<->>` and `<+`, for exchanging files with a tool that reads only Rodin's spelling — formatting, completion and hover follow immediately, the as-you-type input method after a window reload (it loads the operator table once, at activation); no effect with `rossi.format.useUnicode` off; the glyphs need Rodin's Brave Sans Mono font, see [INSTALL.md](INSTALL.md) (default: `false`)
+- `rossi.format.privateUseGlyphs`: Spell the four relation/override operators with Rodin's private-use glyphs (U+E100..E103) instead of ASCII `<<->`, `<->>`, `<<->>` and `<+`, for exchanging files with a tool that reads only Rodin's spelling — formatting, completion and hover follow immediately, the as-you-type input method after a window reload (it loads the operator table once, at activation); no effect with `rossi.format.useUnicode` off; the glyphs need Rodin's Brave Sans Mono font, which `Rossi: Install the Rodin Math Font` installs for you (default: `false`)
 - `rossi.format.indentation`: Indentation string (spaces or tabs) to use when formatting; empty follows the style preset (default: `""`)
 - `rossi.format.keywordCase`: Keyword-case override — `"lower"` or `"upper"`; empty follows the style preset (default: `""`)
 - `rossi.format.declLists`: Declaration-list layout override — `"inline"` or `"one-per-line"`; empty follows the style preset (default: `""`)
@@ -296,8 +296,14 @@ Open the Command Palette and run:
 - `Rossi: Convert Current File to Unicode`
 - `Rossi: Convert Current File to ASCII`
 - `Rossi: Check Toolchain`
+- `Rossi: Install the Rodin Math Font`
 
 Rodin and conversion commands shell out to the configured `rossi.tool.path`.
+`Install the Rodin Math Font` needs no toolchain: it copies the bundled Brave
+Sans Mono Roman into your own font directory (no administrator rights on any
+platform), then offers to list it as a fallback for Event-B files, so
+`rossi.format.privateUseGlyphs` renders. The extension never sets your editor
+font on its own. See [INSTALL.md](INSTALL.md#the-rodin-math-font).
 
 ### Open in Rodin
 
