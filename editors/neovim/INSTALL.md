@@ -468,15 +468,58 @@ If something isn't working:
 
 ## The Rodin math font
 
-Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
-(`<<->`, `<->>`, `<<->>`, `<+`) in ASCII, so they render in any font. If you
-turn on the language server's `format.privateUseGlyphs` setting to exchange
-files with a tool that reads only Rodin's spelling, install Brave Sans Mono
-Roman and select it as your editor font. The font ships with the VS Code
-extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and the
-per-platform install locations are in
-[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font). (VS Code
-users get a `Rossi: Install the Rodin Math Font` command instead.)
+Four Event-B operators have no standard Unicode code point, so Rodin encodes
+them in the Unicode Private Use Area: `<<->` (U+E100), `<->>` (U+E101),
+`<<->>` (U+E102) and `<+` (U+E103). Rossi writes them in ASCII, which renders
+in any font, so **most users need nothing here**. Read on only if you turn on
+the language server's `format.privateUseGlyphs` setting to exchange files with
+a tool that reads only Rodin's spelling.
+
+The glyphs live in one font, Brave Sans Mono Roman, which ships with this
+repository at [editors/vscode/fonts/](../vscode/fonts/) — its licence is in
+[LICENSE-BraveSansMono.txt](../vscode/LICENSE-BraveSansMono.txt). Install it
+into your own font directory; no administrator rights are needed:
+
+| | Install to |
+| --- | --- |
+| macOS | `~/Library/Fonts/` (double-click the file and press *Install Font*) |
+| Linux | `~/.local/share/fonts/`, then run `fc-cache -f` |
+| Windows | right-click the file and choose *Install* |
+
+Then tell the language server to write that spelling:
+
+```lua
+settings = {
+  rossi = {
+    format = { useUnicode = true, privateUseGlyphs = true },
+  },
+},
+```
+
+**Neovim itself cannot choose the font.** In a terminal the font is the
+terminal emulator's, and `guifont` applies only to GUI front-ends (Neovide,
+nvim-qt, Goneovim). Configure the terminal instead — the good ones can map just
+this range, leaving your own font everywhere else:
+
+```conf
+# kitty.conf
+symbol_map U+E100-U+E103 Brave Sans Mono
+```
+
+```lua
+-- wezterm.lua
+config.font = wezterm.font_with_fallback { 'Your Font', 'Brave Sans Mono' }
+```
+
+Terminals without per-codepoint mapping (Alacritty, most others) fall back
+automatically for glyphs their primary font lacks, which is usually enough once
+the font is installed. For a GUI front-end, put the family in `guifont`:
+
+```vim
+set guifont=Your\ Font:h12
+" Neovide and nvim-qt fall back per glyph; list the math font second:
+set guifont=Your\ Font,Brave\ Sans\ Mono:h12
+```
 
 ## Troubleshooting
 

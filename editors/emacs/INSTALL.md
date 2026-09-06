@@ -441,15 +441,39 @@ Then check the `*lsp-log*` buffer.
 
 ## The Rodin math font
 
-Rossi writes the four operators Rodin encodes in the Unicode Private Use Area
-(`<<->`, `<->>`, `<<->>`, `<+`) in ASCII, so they render in any font. If you
-turn on the language server's `format.privateUseGlyphs` setting to exchange
-files with a tool that reads only Rodin's spelling, install Brave Sans Mono
-Roman and select it as your editor font. The font ships with the VS Code
-extension at [editors/vscode/fonts/](../vscode/fonts/); its licence and the
-per-platform install locations are in
-[editors/vscode/INSTALL.md](../vscode/INSTALL.md#the-rodin-math-font). (VS Code
-users get a `Rossi: Install the Rodin Math Font` command instead.)
+Four Event-B operators have no standard Unicode code point, so Rodin encodes
+them in the Unicode Private Use Area: `<<->` (U+E100), `<->>` (U+E101),
+`<<->>` (U+E102) and `<+` (U+E103). Rossi writes them in ASCII, which renders
+in any font, so **most users need nothing here**. Read on only if you turn on
+the language server's `format.privateUseGlyphs` setting to exchange files with
+a tool that reads only Rodin's spelling.
+
+The glyphs live in one font, Brave Sans Mono Roman, which ships with this
+repository at [editors/vscode/fonts/](../vscode/fonts/) — its licence is in
+[LICENSE-BraveSansMono.txt](../vscode/LICENSE-BraveSansMono.txt). Install it
+into your own font directory; no administrator rights are needed:
+
+| | Install to |
+| --- | --- |
+| macOS | `~/Library/Fonts/` (double-click the file and press *Install Font*) |
+| Linux | `~/.local/share/fonts/`, then run `fc-cache -f` |
+| Windows | right-click the file and choose *Install* |
+
+Emacs then needs no font setting of its own. `eventb-mode` maps *only*
+U+E100..U+E103 onto the family named by `eventb-math-font` (default
+`"Brave Sans Mono"`), so the rest of the buffer keeps whatever font you have
+chosen:
+
+```elisp
+(setq lsp-rossi-format-private-use-glyphs t)   ; write Rodin's spelling
+(setq eventb-math-font "Brave Sans Mono")      ; nil leaves the fontset alone
+```
+
+The mapping is applied when an Event-B buffer opens, and silently skipped when
+the font is not installed or when Emacs is running in a terminal — there the
+terminal emulator picks the font, not Emacs (see the Neovim guide for terminal
+configuration). Run `M-x eventb-apply-math-font` to pick the font up after
+installing it without restarting Emacs.
 
 ## Troubleshooting
 

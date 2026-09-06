@@ -97,6 +97,35 @@ lines). Set
 `rossi.rodin.path` in the `settings` block above if Rodin is not at the
 platform default location (`/Applications/Rodin.app`, `rodin.exe`, `rodin`).
 
+### The Rodin math font
+
+Four Event-B operators have no standard Unicode code point, so Rodin encodes
+them in the Unicode Private Use Area: `<<->` (U+E100), `<->>` (U+E101),
+`<<->>` (U+E102) and `<+` (U+E103). Rossi writes them in ASCII, which renders
+in any font, so **most users need nothing here**. Read on only if you set
+`"privateUseGlyphs": true` under `rossi.format` in the `settings` block above,
+to exchange files with a tool that reads only Rodin's spelling.
+
+The glyphs live in one font, Brave Sans Mono Roman, which ships with this
+repository at [editors/vscode/fonts/](../vscode/fonts/) — its licence is in
+[LICENSE-BraveSansMono.txt](../vscode/LICENSE-BraveSansMono.txt). Install it
+into your own font directory (no administrator rights needed): double-click it
+on macOS and press *Install Font*, right-click → *Install* on Windows, or copy
+it into `~/.local/share/fonts/` and run `fc-cache -f` on Linux.
+
+Sublime Text has no per-range font mapping and no user-configurable fallback
+list — it uses the platform's own fallback, which has no way to guess a font
+for an unassigned private-use code point. So unlike Emacs or kitty, Sublime
+cannot keep your font for everything else: set `font_face` to the math font in
+your Event-B syntax-specific settings to see the glyphs.
+
+```json
+// Packages/User/EventB.sublime-settings — named after EventB.sublime-syntax
+{
+    "font_face": "Brave Sans Mono"
+}
+```
+
 ### Symbol input (eager mode and leader mode)
 
 `EventB.py` provides as-you-type ASCII→Unicode substitution for Event-B operators,
