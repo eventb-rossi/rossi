@@ -350,6 +350,7 @@ export class RossiCommandController {
                 blankBetweenClauses: format.get('format.blankBetweenClauses'),
                 indentation: format.get('format.indentation'),
                 maxLineWidth: format.get('format.maxLineWidth'),
+                privateUseGlyphs: format.get('format.privateUseGlyphs'),
             });
             const result = await this.runRossi(
                 ['fmt', '-', ascii ? '--ascii' : '--unicode', ...styleFlags],
