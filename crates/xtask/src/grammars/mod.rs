@@ -557,7 +557,7 @@ mod tests {
     fn nvim_operators_match_lsp_rows() {
         use rossi::operators::operator_rows;
         let rendered = operators_nvim::render();
-        let rows = operator_rows();
+        let rows = operator_rows(false);
 
         // One emitted row line per LSP row, no more, no fewer.
         let emitted = rendered.matches("{ ascii = ").count();
@@ -609,7 +609,7 @@ mod tests {
     fn emacs_quail_matches_lsp_rows() {
         use rossi::operators::operator_rows;
         let rendered = input_emacs::render();
-        let rows = operator_rows();
+        let rows = operator_rows(false);
 
         // Reuse the emitter's own `elisp_string` escaping for the Unicode glyph
         // so needles match byte-for-byte regardless of how `{:?}` would render it.
@@ -655,7 +655,7 @@ mod tests {
     fn sublime_operators_match_lsp_rows() {
         use rossi::operators::operator_rows;
         let rendered = operators_sublime::render();
-        let rows = operator_rows();
+        let rows = operator_rows(false);
 
         // One emitted entry per LSP row, no more, no fewer.
         let emitted = rendered.matches("\"ascii\":").count();

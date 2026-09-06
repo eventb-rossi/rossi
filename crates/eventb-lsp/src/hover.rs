@@ -571,7 +571,7 @@ fn operator_title(spelling: &operators::OperatorSpelling) -> String {
 /// else (see [`operators::OperatorSpelling::emit_text`]), so operators whose only
 /// Unicode form is a private-use-area glyph fall back to ASCII rather than tofu.
 fn display_glyph(spelling: &operators::OperatorSpelling) -> &'static str {
-    spelling.emit_text(true)
+    spelling.emit_text(true, false)
 }
 
 fn lookup_operator_doc(word: &str) -> Option<(String, &'static str)> {

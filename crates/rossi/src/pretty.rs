@@ -141,6 +141,9 @@ pub struct StyleOverrides {
     /// indent.
     pub indent: Option<String>,
     pub use_unicode: bool,
+    /// Emit the raw Rodin private-use glyphs for the relation/override
+    /// operators (see [`PrettyPrinter::private_use_glyphs`]).
+    pub private_use_glyphs: bool,
     /// `0` disables wrapping.
     pub max_line_width: usize,
 }
@@ -153,6 +156,7 @@ impl Default for StyleOverrides {
             blank_between_clauses: None,
             indent: None,
             use_unicode: true,
+            private_use_glyphs: false,
             max_line_width: 0,
         }
     }
@@ -192,7 +196,9 @@ pub struct PrettyPrinter {
     /// default: those glyphs render as tofu without Rodin's font, so output
     /// meant for an editor stays portable. Rodin-canonical formatting (the
     /// static checker's `canonical` form) turns this on to match Rodin's
-    /// internal bcc/bcm spelling exactly; see `OperatorSpelling::emit_text`.
+    /// internal bcc/bcm spelling exactly, and users interoperating with a tool
+    /// that reads only Rodin's spelling opt in through `--private-use-glyphs`
+    /// or `rossi.format.privateUseGlyphs`; see `OperatorSpelling::emit_text`.
     pub private_use_glyphs: bool,
     /// Whitespace convention for formulas.
     pub formula_spacing: FormulaSpacing,
@@ -288,6 +294,7 @@ impl PrettyPrinter {
             printer.indent = indent.clone();
         }
         printer.use_unicode = overrides.use_unicode;
+        printer.private_use_glyphs = overrides.private_use_glyphs;
         printer.max_line_width = overrides.max_line_width;
         printer
     }
@@ -975,16 +982,12 @@ impl PrettyPrinter {
     }
 
     /// Pick an operator spelling from the shared Event-B table. Unless
-    /// `private_use_glyphs` is set, this routes through `emit_text` so the
-    /// private-use relation/override operators print as ASCII (their glyph
-    /// won't render without Rodin's font).
+    /// `private_use_glyphs` is set, `emit_text` prints the private-use
+    /// relation/override operators as ASCII (their glyph won't render without
+    /// Rodin's font).
     #[inline]
     fn op(&self, id: OperatorId) -> &'static str {
-        if self.private_use_glyphs {
-            operators::spell(id, self.use_unicode)
-        } else {
-            operators::spelling(id).emit_text(self.use_unicode)
-        }
+        operators::spelling(id).emit_text(self.use_unicode, self.private_use_glyphs)
     }
 
     #[inline]

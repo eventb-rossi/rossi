@@ -338,12 +338,19 @@ impl OperatorSpelling {
     /// The spelling to write into emitted text — completion inserts, document
     /// formatting, hover titles, the input-method table. Identical to
     /// [`Self::text`], except an operator whose only Unicode spelling is a Rodin
-    /// private-use-area glyph always yields its ASCII form: that glyph has no
-    /// portable rendering and shows as tofu without Rodin's math font, so rossi
-    /// never emits it into a buffer. Private-use spellings are still accepted on
-    /// input (the grammar lexes them) — they are never produced.
-    pub fn emit_text(self, use_unicode: bool) -> &'static str {
-        if is_private_use_glyph(self.unicode) {
+    /// private-use-area glyph yields its ASCII form unless the caller opts in
+    /// through `private_use_glyphs`: that glyph has no portable rendering and
+    /// shows as tofu without Rodin's math font, so rossi does not emit it into a
+    /// buffer by default. Private-use spellings are always accepted on input
+    /// (the grammar lexes them); opting in is what makes them produced, for
+    /// interoperating with tools that read only Rodin's spelling.
+    ///
+    /// Opting in has no effect under the ASCII convention: with `use_unicode`
+    /// off the ASCII spelling is what the whole document uses anyway.
+    pub fn emit_text(self, use_unicode: bool, private_use_glyphs: bool) -> &'static str {
+        // The bool gates the scan, not the other way round: opted-in callers
+        // (Rodin-canonical output runs this per operator) then pay nothing.
+        if !private_use_glyphs && is_private_use_glyph(self.unicode) {
             self.ascii
         } else {
             self.text(use_unicode)
@@ -412,7 +419,8 @@ pub const RELATIONAL_OVERRIDE: &str = "\u{E103}"; // Rodin OVR,   ASCII `<+`
 /// True when `s` contains a Unicode Private-Use Area code point
 /// (`U+E000..=U+F8FF`) — a glyph that has no portable rendering and only shows
 /// under Rodin's math font. The four constants above are the only such spellings
-/// rossi uses, so callers (e.g. hover) fall back to ASCII when this holds.
+/// rossi uses, so callers (e.g. hover) fall back to ASCII when this holds and
+/// the private-use output mode is off.
 pub fn is_private_use_glyph(s: &str) -> bool {
     s.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
 }
@@ -1150,24 +1158,25 @@ pub struct OperatorRow {
 
 /// Build the operator input-method rows from the single-source table in this
 /// module. Only operators whose ASCII and *emitted* spellings differ are
-/// included: identical ones need no conversion, and the private-use operators
-/// emit ASCII (`emit_text`) so they collapse to `ascii == unicode` here and
-/// drop out.
+/// included: identical ones need no conversion, and with `private_use_glyphs`
+/// off the private-use operators emit ASCII (`emit_text`) so they collapse to
+/// `ascii == unicode` here and drop out. Opting in gives them rows like any
+/// other operator, so an input method substitutes to Rodin's glyph.
 ///
 /// Each operator's extra ASCII input aliases (e.g. `,,` for the maplet ↦) are
 /// emitted as their own rows so the editor input method converts them like any
 /// other spelling. They share the operator's emitted Unicode but carry no
 /// leader aliases of their own (those already ride on the canonical row).
-pub fn operator_rows() -> Vec<OperatorRow> {
+pub fn operator_rows(private_use_glyphs: bool) -> Vec<OperatorRow> {
     let mut seen = std::collections::HashSet::new();
     OPERATOR_SPELLINGS
         .iter()
         .filter_map(|entry| {
-            // `emit_text` is the spelling editors should substitute to; the
-            // private-use operators emit ASCII, so they collapse to `ascii ==
-            // unicode` here and drop out (no point converting `<+` to itself,
-            // and nothing should ever substitute to a private-use glyph).
-            let unicode = entry.emit_text(true);
+            // `emit_text` is the spelling editors should substitute to; with
+            // the private-use mode off those operators emit ASCII, so they
+            // collapse to `ascii == unicode` here and drop out (no point
+            // converting `<+` to itself).
+            let unicode = entry.emit_text(true, private_use_glyphs);
             (entry.ascii != unicode && seen.insert((entry.ascii, unicode))).then(|| OperatorRow {
                 ascii: entry.ascii.to_string(),
                 unicode: unicode.to_string(),
@@ -1182,7 +1191,7 @@ pub fn operator_rows() -> Vec<OperatorRow> {
                 .iter()
                 .map(|&(alias, entry)| OperatorRow {
                     ascii: alias.to_string(),
-                    unicode: entry.emit_text(true).to_string(),
+                    unicode: entry.emit_text(true, private_use_glyphs).to_string(),
                     description: entry.description.to_string(),
                     aliases: Vec::new(),
                     symbolic: is_symbolic_spelling(alias),
@@ -1245,15 +1254,17 @@ static UNICODE_TO_ASCII: std::sync::LazyLock<SpellingIndex> = std::sync::LazyLoc
     )
 });
 
-/// Maximal-munch scan of `text` for the spellings in `index`: every match
-/// whose emitted spelling (for `use_unicode`) differs from the matched text,
-/// as `(byte range, emitted spelling)` in text order. Each match is consumed
-/// whole, so `<<->` is never partly rewritten into the shorter `<->` (`↔`);
-/// alphabetic spellings (`NAT`, `or`) match only between word boundaries.
+/// Maximal-munch scan of `text` for the spellings in `index`: every match whose
+/// emitted spelling (for `use_unicode` and `private_use_glyphs`) differs from
+/// the matched text, as `(byte range, emitted spelling)` in text order. Each
+/// match is consumed whole, so `<<->` is never partly rewritten into the shorter
+/// `<->` (`↔`); alphabetic spellings (`NAT`, `or`) match only between word
+/// boundaries.
 fn operator_spans(
     text: &str,
     index: &SpellingIndex,
     use_unicode: bool,
+    private_use_glyphs: bool,
 ) -> Vec<(std::ops::Range<usize>, &'static str)> {
     let mut spans = Vec::new();
     let mut skip_until = 0;
@@ -1276,7 +1287,7 @@ fn operator_spans(
         let Some((spelling, entry)) = matched else {
             continue;
         };
-        let emitted = entry.emit_text(use_unicode);
+        let emitted = entry.emit_text(use_unicode, private_use_glyphs);
         if emitted != spelling {
             spans.push((byte_pos..byte_pos + spelling.len(), emitted));
         }
@@ -1300,22 +1311,27 @@ fn splice(text: &str, spans: Vec<(std::ops::Range<usize>, &str)>) -> String {
 
 /// Every ASCII operator spelling in `text` whose Unicode form differs, as
 /// `(byte range, emitted Unicode spelling)` in text order — the rewrites of
-/// [`convert_to_unicode`]. `emit_text` leaves the four private-use operators
-/// in ASCII (their glyph would not render), so those are consumed but not
-/// reported. `text` is scanned as code — callers mask comments and labels
-/// first.
-pub fn ascii_operator_spans(text: &str) -> Vec<(std::ops::Range<usize>, &'static str)> {
-    operator_spans(text, &ASCII_TO_UNICODE, true)
+/// [`convert_to_unicode`]. With `private_use_glyphs` off, `emit_text` leaves the
+/// four private-use operators in ASCII (their glyph would not render), so those
+/// are consumed but not reported; opting in reports them like any other
+/// operator. `text` is scanned as code — callers mask comments and labels first.
+pub fn ascii_operator_spans(
+    text: &str,
+    private_use_glyphs: bool,
+) -> Vec<(std::ops::Range<usize>, &'static str)> {
+    operator_spans(text, &ASCII_TO_UNICODE, true, private_use_glyphs)
 }
 
 /// `text` with every ASCII operator spelling rewritten to Unicode.
-pub fn convert_to_unicode(text: &str) -> String {
-    splice(text, ascii_operator_spans(text))
+pub fn convert_to_unicode(text: &str, private_use_glyphs: bool) -> String {
+    splice(text, ascii_operator_spans(text, private_use_glyphs))
 }
 
-/// `text` with every Unicode operator spelling rewritten to ASCII.
+/// `text` with every Unicode operator spelling rewritten to ASCII. The
+/// private-use glyphs are always cleaned up to their ASCII spelling — that is
+/// the ASCII convention, whatever the output mode.
 pub fn convert_to_ascii(text: &str) -> String {
-    splice(text, operator_spans(text, &UNICODE_TO_ASCII, false))
+    splice(text, operator_spans(text, &UNICODE_TO_ASCII, false, false))
 }
 
 pub fn has_ascii_operators(text: &str) -> bool {
@@ -1635,10 +1651,10 @@ mod tests {
     #[test]
     fn comma_comma_converts_to_maplet_but_never_back() {
         // ASCII → Unicode rewrites `,,` to the canonical ↦ …
-        assert_eq!(convert_to_unicode("x ,, y"), "x ↦ y");
+        assert_eq!(convert_to_unicode("x ,, y", false), "x ↦ y");
         assert!(has_ascii_operators("x ,, y"));
         // … while a lone comma (list separator) is left untouched.
-        assert_eq!(convert_to_unicode("f(a, b)"), "f(a, b)");
+        assert_eq!(convert_to_unicode("f(a, b)", false), "f(a, b)");
         // Unicode → ASCII stays canonical: ↦ becomes `|->`, never `,,`.
         assert_eq!(convert_to_ascii("x ↦ y"), "x |-> y");
     }
@@ -1667,11 +1683,11 @@ mod tests {
     #[test]
     fn surjection_aliases_convert_to_unicode_but_never_back() {
         // ASCII → Unicode rewrites the longer forms to the canonical arrows …
-        assert_eq!(convert_to_unicode("S +->> T"), "S ⤀ T");
-        assert_eq!(convert_to_unicode("S -->> T"), "S ↠ T");
+        assert_eq!(convert_to_unicode("S +->> T", false), "S ⤀ T");
+        assert_eq!(convert_to_unicode("S -->> T", false), "S ↠ T");
         // … while the partial/total function arrows they extend stay distinct.
-        assert_eq!(convert_to_unicode("S +-> T"), "S ⇸ T");
-        assert_eq!(convert_to_unicode("S --> T"), "S → T");
+        assert_eq!(convert_to_unicode("S +-> T", false), "S ⇸ T");
+        assert_eq!(convert_to_unicode("S --> T", false), "S → T");
         // Unicode → ASCII stays canonical: `+>>`/`->>`, never the alias forms.
         assert_eq!(convert_to_ascii("S ⤀ T"), "S +>> T");
         assert_eq!(convert_to_ascii("S ↠ T"), "S ->> T");
@@ -1703,12 +1719,12 @@ mod tests {
         // input aliases included (`,,`), and the private-use `<+` — emitted
         // as ASCII even in Unicode mode — never reported.
         let text = "x : NAT & f <+ g ,, notation";
-        let spans: Vec<(&str, &str)> = ascii_operator_spans(text)
+        let spans: Vec<(&str, &str)> = ascii_operator_spans(text, false)
             .into_iter()
             .map(|(range, unicode)| (&text[range], unicode))
             .collect();
         assert_eq!(spans, [(":", "∈"), ("NAT", "ℕ"), ("&", "∧"), (",,", "↦")]);
-        assert!(ascii_operator_spans("x ∈ ℕ ∧ y").is_empty());
+        assert!(ascii_operator_spans("x ∈ ℕ ∧ y", false).is_empty());
     }
 
     #[test]
@@ -1886,17 +1902,17 @@ mod tests {
         assert!(!is_private_use_glyph("<<->"));
     }
 
-    /// The invariant this module enforces: `emit_text` never produces a
-    /// private-use-area code point, in either spelling mode. Operators whose only
-    /// Unicode form is a Rodin private-use glyph fall back to their ASCII
-    /// spelling; everything else emits exactly what `text` would.
+    /// The invariant this module enforces by default: `emit_text` produces a
+    /// private-use-area code point only when the caller opts in. Operators whose
+    /// only Unicode form is a Rodin private-use glyph otherwise fall back to
+    /// their ASCII spelling; everything else emits exactly what `text` would.
     #[test]
-    fn emit_text_never_yields_a_private_use_glyph() {
-        // The invariant: nothing emitted is ever a private-use code point.
+    fn emit_text_yields_a_private_use_glyph_only_when_opted_in() {
+        // The default invariant: nothing emitted is ever a private-use code point.
         for entry in OPERATOR_SPELLINGS {
             for use_unicode in [true, false] {
                 assert!(
-                    !is_private_use_glyph(entry.emit_text(use_unicode)),
+                    !is_private_use_glyph(entry.emit_text(use_unicode, false)),
                     "{:?} emits a private-use glyph (use_unicode={use_unicode})",
                     entry.id
                 );
@@ -1905,37 +1921,50 @@ mod tests {
 
         // The four private-use operators emit their ASCII spelling even in
         // Unicode mode; operators with a portable glyph are left untouched.
-        assert_eq!(spelling(OperatorId::Overwrite).emit_text(true), "<+");
-        assert_eq!(spelling(OperatorId::TotalRelation).emit_text(true), "<<->");
-        assert_eq!(
-            spelling(OperatorId::SurjectiveRelation).emit_text(true),
-            "<->>"
-        );
-        assert_eq!(
-            spelling(OperatorId::TotalSurjectiveRelation).emit_text(true),
-            "<<->>"
-        );
+        for (id, ascii, glyph) in [
+            (OperatorId::Overwrite, "<+", RELATIONAL_OVERRIDE),
+            (OperatorId::TotalRelation, "<<->", TOTAL_RELATION),
+            (OperatorId::SurjectiveRelation, "<->>", SURJECTIVE_RELATION),
+            (
+                OperatorId::TotalSurjectiveRelation,
+                "<<->>",
+                TOTAL_SURJECTIVE_RELATION,
+            ),
+        ] {
+            assert_eq!(spelling(id).emit_text(true, false), ascii);
+            // Opting in reproduces Rodin's spelling, but only under Unicode:
+            // the ASCII convention spells the whole document in ASCII.
+            assert_eq!(spelling(id).emit_text(true, true), glyph);
+            assert_eq!(spelling(id).emit_text(false, true), ascii);
+        }
         let and = spelling(OperatorId::And);
-        assert_eq!(and.emit_text(true), and.unicode);
-        assert_eq!(and.emit_text(false), and.ascii);
+        assert_eq!(and.emit_text(true, false), and.unicode);
+        assert_eq!(and.emit_text(false, false), and.ascii);
+        // A portable glyph is unaffected by the private-use mode.
+        assert_eq!(and.emit_text(true, true), and.unicode);
     }
 
-    /// ASCII → Unicode conversion never introduces a private-use glyph: the four
-    /// private-use operators are dropped from the conversion table, so their
-    /// ASCII spellings round-trip unchanged.
+    /// ASCII → Unicode conversion introduces a private-use glyph only when asked:
+    /// by default the four private-use operators are dropped from the conversion
+    /// table, so their ASCII spellings round-trip unchanged.
     #[test]
     fn convert_to_unicode_keeps_private_use_operators_ascii() {
-        assert_eq!(convert_to_unicode("f <+ g"), "f <+ g");
-        assert_eq!(convert_to_unicode("A <<-> B"), "A <<-> B");
-        assert_eq!(convert_to_unicode("A <->> B"), "A <->> B");
-        assert_eq!(convert_to_unicode("A <<->> B"), "A <<->> B");
-        // Convert-to-ASCII still cleans pasted private-use glyphs back to ASCII.
+        assert_eq!(convert_to_unicode("f <+ g", false), "f <+ g");
+        assert_eq!(convert_to_unicode("A <<-> B", false), "A <<-> B");
+        assert_eq!(convert_to_unicode("A <->> B", false), "A <->> B");
+        assert_eq!(convert_to_unicode("A <<->> B", false), "A <<->> B");
+        // Opting in rewrites them to Rodin's spelling.
+        assert_eq!(convert_to_unicode("f <+ g", true), "f \u{E103} g");
+        assert_eq!(convert_to_unicode("A <<-> B", true), "A \u{E100} B");
+        assert_eq!(convert_to_unicode("A <->> B", true), "A \u{E101} B");
+        assert_eq!(convert_to_unicode("A <<->> B", true), "A \u{E102} B");
+        // Convert-to-ASCII always cleans pasted private-use glyphs back to ASCII.
         assert_eq!(convert_to_ascii("f \u{E103} g"), "f <+ g");
     }
 
     #[test]
     fn operator_rows_are_well_formed() {
-        let rows = operator_rows();
+        let rows = operator_rows(false);
         assert!(!rows.is_empty(), "operator table must not be empty");
 
         // Every row differs (ascii != unicode) and has non-empty spellings, and
@@ -1958,6 +1987,23 @@ mod tests {
                 "{ascii:?} should not appear in the input-method table"
             );
         }
+
+        // Opting in gives them rows carrying Rodin's glyph, for an editor whose
+        // user asked for that spelling.
+        let opted_in = operator_rows(true);
+        for (ascii, glyph) in [
+            ("<+", RELATIONAL_OVERRIDE),
+            ("<<->", TOTAL_RELATION),
+            ("<->>", SURJECTIVE_RELATION),
+            ("<<->>", TOTAL_SURJECTIVE_RELATION),
+        ] {
+            let row = opted_in
+                .iter()
+                .find(|r| r.ascii == ascii)
+                .unwrap_or_else(|| panic!("{ascii:?} should appear when opted in"));
+            assert_eq!(row.unicode, glyph);
+        }
+        assert_eq!(opted_in.len(), rows.len() + 4);
         let ascii_set: std::collections::HashSet<&str> =
             rows.iter().map(|r| r.ascii.as_str()).collect();
         assert_eq!(

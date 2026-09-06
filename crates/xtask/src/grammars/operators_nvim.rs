@@ -30,7 +30,7 @@ pub fn render() -> String {
     out.push_str(&format!("-- {NOTICE}\n"));
     out.push_str("return {\n");
     out.push_str("  rows = {\n");
-    for row in operator_rows() {
+    for row in operator_rows(false) {
         let aliases = row
             .aliases
             .iter()

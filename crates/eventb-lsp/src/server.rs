@@ -2032,7 +2032,7 @@ impl RossiLanguageServer {
     /// is moot: `vscode-languageclient` omits `params`, and no other client
     /// calls this method.
     pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
-        Ok(rossi::operators::operator_rows())
+        Ok(rossi::operators::operator_rows(false))
     }
 }
 

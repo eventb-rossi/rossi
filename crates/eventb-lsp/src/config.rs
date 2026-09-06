@@ -146,6 +146,7 @@ impl FormatConfig {
                 // clients' "unset" spelling); `Some` is always an override.
                 indent: (!self.indentation.is_empty()).then(|| self.indentation.clone()),
                 use_unicode: self.use_unicode,
+                private_use_glyphs: false,
                 max_line_width: self.max_line_width as usize,
             },
         )

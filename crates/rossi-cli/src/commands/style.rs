@@ -28,14 +28,21 @@ pub struct StyleArgs {
     /// continuation lines. 0 disables wrapping
     #[arg(long, value_name = "N", default_value_t = rossi::DEFAULT_MAX_LINE_WIDTH)]
     max_width: usize,
+
+    /// Emit Rodin's private-use glyphs (U+E100..E103) for `<<->`, `<->>`,
+    /// `<<->>` and `<+` instead of their ASCII spelling, for tools that read
+    /// only Rodin's spelling. They render only under Rodin's Brave Sans Mono
+    /// font, and the flag has no effect with --ascii
+    #[arg(long)]
+    private_use_glyphs: bool,
 }
 
 impl StyleArgs {
     /// The printer these style options denote — the one CLI construction,
     /// shared by `fmt` and `import` so the two can never format text
     /// differently. `indent` is the `--indent` value; `None` follows the
-    /// preset. Emitted text stays portable: the resolved printer never
-    /// uses the private-use glyphs.
+    /// preset. Emitted text stays portable unless `--private-use-glyphs` asks
+    /// for Rodin's spelling of the four relation/override operators.
     pub fn printer(&self, use_unicode: bool, indent: Option<&str>) -> PrettyPrinter {
         PrettyPrinter::resolved(
             self.style.into(),
@@ -45,6 +52,7 @@ impl StyleArgs {
                 blank_between_clauses: self.blank_between_clauses,
                 indent: indent.map(str::to_string),
                 use_unicode,
+                private_use_glyphs: self.private_use_glyphs,
                 max_line_width: self.max_width,
             },
         )
