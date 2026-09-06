@@ -240,8 +240,12 @@ impl Analyzer {
         // emitted even mid-edit, before the clean-parse gate below.
         diags.extend(self.proof_status_diagnostics(uri, doc));
         // The operator-convention advisory is textual, so it too runs mid-edit.
-        if self.config_manager.get().format.flags_ascii_operators() {
-            diags.extend(crate::diagnostics::ascii_operator_diagnostics(doc.text()));
+        let format = &self.config_manager.get().format;
+        if format.flags_ascii_operators() {
+            diags.extend(crate::diagnostics::ascii_operator_diagnostics(
+                doc.text(),
+                format.emits_private_use_glyphs(),
+            ));
         }
         // Animate findings are anchored by name and resolved via text-scan
         // fallbacks, so they too survive mid-edit breakage.
@@ -1652,7 +1656,9 @@ impl LanguageServer for RossiLanguageServer {
         // no per-request re-parse. Cross-file cold loads run on the blocking
         // pool so they cannot occupy an async handler thread.
         let provider = Arc::clone(&self.hover_provider);
-        let response = run_blocking(move || provider.hover(&params, &text)).await?;
+        let private_use_glyphs = self.config_manager.get().format.emits_private_use_glyphs();
+        let response =
+            run_blocking(move || provider.hover(&params, &text, private_use_glyphs)).await?;
 
         debug!(
             "Hover returned: {}",
@@ -1907,10 +1913,13 @@ impl LanguageServer for RossiLanguageServer {
         };
 
         // Get code actions
-        let use_unicode = self.config_manager.get().format.use_unicode;
-        let response = self
-            .code_actions_provider
-            .provide_code_actions(&params, &text, use_unicode);
+        let format = &self.config_manager.get().format;
+        let response = self.code_actions_provider.provide_code_actions(
+            &params,
+            &text,
+            format.use_unicode,
+            format.emits_private_use_glyphs(),
+        );
 
         debug!(
             "Code actions returned: {}",
@@ -2032,7 +2041,9 @@ impl RossiLanguageServer {
     /// is moot: `vscode-languageclient` omits `params`, and no other client
     /// calls this method.
     pub async fn operator_table(&self) -> Result<Vec<OperatorRow>> {
-        Ok(rossi::operators::operator_rows(false))
+        Ok(rossi::operators::operator_rows(
+            self.config_manager.get().format.emits_private_use_glyphs(),
+        ))
     }
 }
 

@@ -160,12 +160,15 @@ impl CodeActionProvider {
 
     /// Provide code actions for a given document position/range.
     /// `use_unicode` is the operator convention (`rossi.format.useUnicode`)
-    /// the fix-all source action normalizes to.
+    /// the fix-all source action normalizes to; `private_use_glyphs`
+    /// (`rossi.format.privateUseGlyphs`) is how a conversion toward Unicode
+    /// spells the four relation/override operators.
     pub fn provide_code_actions(
         &self,
         params: &CodeActionParams,
         text: &str,
         use_unicode: bool,
+        private_use_glyphs: bool,
     ) -> Option<CodeActionResponse> {
         // Each group is computed only when the client's `only` filter admits
         // its kind, so an on-save request for the fix-all neither pays for
@@ -175,12 +178,17 @@ impl CodeActionProvider {
 
         // Add operator conversion actions, including the on-save normalization
         if requested(&CodeActionKind::REFACTOR) || requested(&FIX_ALL_KIND) {
-            actions.extend(self.provide_operator_conversion_actions(params, text, use_unicode));
+            actions.extend(self.provide_operator_conversion_actions(
+                params,
+                text,
+                use_unicode,
+                private_use_glyphs,
+            ));
         }
 
         if requested(&CodeActionKind::QUICKFIX) {
             // Add diagnostic-based quick fixes (from diagnostics in context)
-            actions.extend(self.provide_diagnostic_based_actions(params, text));
+            actions.extend(self.provide_diagnostic_based_actions(params, text, private_use_glyphs));
 
             // Add missing clause actions
             actions.extend(self.provide_add_missing_clause_actions(params, text));
@@ -219,6 +227,7 @@ impl CodeActionProvider {
         params: &CodeActionParams,
         text: &str,
         use_unicode: bool,
+        private_use_glyphs: bool,
     ) -> Vec<CodeActionOrCommand> {
         let uri = &params.text_document.uri;
         let refactor = kind_requested(params, &CodeActionKind::REFACTOR);
@@ -242,7 +251,9 @@ impl CodeActionProvider {
             if !present || !(refactor || normalizes) {
                 continue;
             }
-            let Some(action) = self.create_convert_all_action(uri, text, to_unicode) else {
+            let Some(action) =
+                self.create_convert_all_action(uri, text, to_unicode, private_use_glyphs)
+            else {
                 continue;
             };
             if normalizes {
@@ -288,7 +299,7 @@ impl CodeActionProvider {
                     let converted =
                         rossi::comments::map_code_segments_in_range(text, start, end, |code| {
                             if to_unicode {
-                                operators::convert_to_unicode(code, false)
+                                operators::convert_to_unicode(code, private_use_glyphs)
                             } else {
                                 operators::convert_to_ascii(code)
                             }
@@ -311,8 +322,10 @@ impl CodeActionProvider {
 
     /// Convert ASCII operators to Unicode in the given text.
     /// Comment text is never rewritten — `<=` in prose stays `<=`.
-    pub fn convert_to_unicode(&self, text: &str) -> String {
-        rossi::comments::map_code_segments(text, |code| operators::convert_to_unicode(code, false))
+    pub fn convert_to_unicode(&self, text: &str, private_use_glyphs: bool) -> String {
+        rossi::comments::map_code_segments(text, |code| {
+            operators::convert_to_unicode(code, private_use_glyphs)
+        })
     }
 
     /// Convert Unicode operators to ASCII in the given text.
@@ -328,9 +341,10 @@ impl CodeActionProvider {
         uri: &Url,
         text: &str,
         to_unicode: bool,
+        private_use_glyphs: bool,
     ) -> Option<CodeAction> {
         let converted = if to_unicode {
-            self.convert_to_unicode(text)
+            self.convert_to_unicode(text, private_use_glyphs)
         } else {
             self.convert_to_ascii(text)
         };
@@ -450,6 +464,7 @@ impl CodeActionProvider {
         &self,
         params: &CodeActionParams,
         text: &str,
+        private_use_glyphs: bool,
     ) -> Vec<CodeActionOrCommand> {
         let mut actions = Vec::new();
 
@@ -552,7 +567,7 @@ impl CodeActionProvider {
             .filter(|d| diagnostic_code_is(d, crate::diagnostics::ASCII_OPERATOR_CODE))
             .collect();
         if !advisories.is_empty() {
-            let current = crate::diagnostics::ascii_operators(text);
+            let current = crate::diagnostics::ascii_operators(text, private_use_glyphs);
             for diagnostic in advisories {
                 if let Some((_, ascii, unicode)) = current
                     .iter()
@@ -1188,14 +1203,17 @@ mod tests {
     #[test]
     fn test_convert_to_unicode() {
         let provider = CodeActionProvider::new();
-        assert_eq!(provider.convert_to_unicode("x & y"), "x ∧ y");
-        assert_eq!(provider.convert_to_unicode("x => y"), "x ⇒ y");
-        assert_eq!(provider.convert_to_unicode("x : NAT"), "x ∈ ℕ");
-        assert_eq!(provider.convert_to_unicode("x :: S"), "x :∈ S");
-        assert_eq!(provider.convert_to_unicode("x :| x' : NAT"), "x :∣ x' ∈ ℕ");
-        assert_eq!(provider.convert_to_unicode("r~"), "r∼");
+        assert_eq!(provider.convert_to_unicode("x & y", false), "x ∧ y");
+        assert_eq!(provider.convert_to_unicode("x => y", false), "x ⇒ y");
+        assert_eq!(provider.convert_to_unicode("x : NAT", false), "x ∈ ℕ");
+        assert_eq!(provider.convert_to_unicode("x :: S", false), "x :∈ S");
         assert_eq!(
-            provider.convert_to_unicode("x & y => z or w"),
+            provider.convert_to_unicode("x :| x' : NAT", false),
+            "x :∣ x' ∈ ℕ"
+        );
+        assert_eq!(provider.convert_to_unicode("r~", false), "r∼");
+        assert_eq!(
+            provider.convert_to_unicode("x & y => z or w", false),
             "x ∧ y ⇒ z ∨ w"
         );
     }
@@ -1249,7 +1267,7 @@ mod tests {
         // conversion must not read their `.` and `-` as operators.
         let provider = CodeActionProvider::new();
         assert_eq!(
-            provider.convert_to_unicode("@inv1.1 x : NAT\n@safety-END x - 1 > 0"),
+            provider.convert_to_unicode("@inv1.1 x : NAT\n@safety-END x - 1 > 0", false),
             "@inv1.1 x ∈ ℕ\n@safety-END x − 1 > 0"
         );
     }
@@ -1275,7 +1293,7 @@ mod tests {
             "END\n",
             "END\n",
         );
-        let converted = provider.convert_to_unicode(source);
+        let converted = provider.convert_to_unicode(source, false);
         for name in ["A-C0", "end-to-end", "CTX-INT-1", "A-or-B", "do-step"] {
             assert!(
                 converted.contains(name),
@@ -1296,7 +1314,7 @@ mod tests {
     fn test_roundtrip_ascii_unicode_ascii() {
         let provider = CodeActionProvider::new();
         let ascii_text = "x : NAT & x <= 10 => x /= 0";
-        let unicode = provider.convert_to_unicode(ascii_text);
+        let unicode = provider.convert_to_unicode(ascii_text, false);
         let back = provider.convert_to_ascii(&unicode);
         assert_eq!(back, ascii_text);
     }
@@ -1305,7 +1323,7 @@ mod tests {
     fn test_roundtrip_set_operators() {
         let provider = CodeActionProvider::new();
         let ascii_text = "S <: T /\\ x : S \\/ T";
-        let unicode = provider.convert_to_unicode(ascii_text);
+        let unicode = provider.convert_to_unicode(ascii_text, false);
         let back = provider.convert_to_ascii(&unicode);
         assert_eq!(back, ascii_text);
     }
@@ -1314,7 +1332,7 @@ mod tests {
     fn test_roundtrip_function_types() {
         let provider = CodeActionProvider::new();
         let ascii_text = "f : S --> T & g : S >-> T & h : S ->> T & k : S >->> T";
-        let unicode = provider.convert_to_unicode(ascii_text);
+        let unicode = provider.convert_to_unicode(ascii_text, false);
         let back = provider.convert_to_ascii(&unicode);
         assert_eq!(back, ascii_text);
     }

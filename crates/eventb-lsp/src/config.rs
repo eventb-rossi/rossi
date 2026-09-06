@@ -77,6 +77,14 @@ pub struct FormatConfig {
     #[serde(default)]
     pub enforce_unicode: bool,
 
+    /// Emit Rodin's private-use glyphs (U+E100..E103) for `<<->`, `<->>`,
+    /// `<<->>` and `<+` rather than their ASCII spelling, for a project that
+    /// exchanges sources with a tool reading only Rodin's spelling. Off by
+    /// default: those glyphs need Rodin's Brave Sans Mono font to render. Has
+    /// no effect unless `use_unicode` is on.
+    #[serde(default)]
+    pub private_use_glyphs: bool,
+
     /// Indentation string (e.g., "  " or "    "); empty follows the style
     /// preset (2 spaces camille, 4 spaces rossi)
     #[serde(default)]
@@ -114,12 +122,23 @@ impl FormatConfig {
         self.enforce_unicode && self.use_unicode
     }
 
+    /// Whether emitted text spells the four relation/override operators with
+    /// Rodin's private-use glyphs: opted in through `private_use_glyphs`, and
+    /// only under the Unicode convention — with `use_unicode` off the whole
+    /// document is spelled in ASCII, so there is no Unicode spelling to pick.
+    /// The one source of truth for the mode, so the formatter, the conversion
+    /// actions, completion, hover and the input method cannot disagree.
+    pub fn emits_private_use_glyphs(&self) -> bool {
+        self.private_use_glyphs && self.use_unicode
+    }
+
     /// The pretty-printer this configuration denotes — the single mapping
     /// used everywhere the server renders Event-B text into a user's file
     /// (`textDocument/formatting` and the Rodin model-edit sync), so the two
     /// can never format the same file differently. Built through
     /// `PrettyPrinter::resolved`, the same preset + override resolution the
-    /// CLI uses; editor output stays portable (no private-use glyphs).
+    /// CLI uses; editor output stays portable unless `private_use_glyphs`
+    /// asks for Rodin's spelling.
     pub fn printer(&self) -> rossi::PrettyPrinter {
         let style = match self.style.to_ascii_lowercase().as_str() {
             "camille" => rossi::Style::Camille,
@@ -146,7 +165,7 @@ impl FormatConfig {
                 // clients' "unset" spelling); `Some` is always an override.
                 indent: (!self.indentation.is_empty()).then(|| self.indentation.clone()),
                 use_unicode: self.use_unicode,
-                private_use_glyphs: false,
+                private_use_glyphs: self.emits_private_use_glyphs(),
                 max_line_width: self.max_line_width as usize,
             },
         )
@@ -159,6 +178,7 @@ impl Default for FormatConfig {
             style: String::new(),
             use_unicode: default_use_unicode(),
             enforce_unicode: false,
+            private_use_glyphs: false,
             indentation: String::new(),
             keyword_case: String::new(),
             decl_lists: String::new(),
@@ -555,10 +575,31 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("format"));
         assert!(json.contains("useUnicode"));
+        assert!(json.contains("privateUseGlyphs"));
 
         // Deserialize from JSON
         let deserialized: RossiConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.format.use_unicode, deserialized.format.use_unicode);
+        assert_eq!(
+            config.format.private_use_glyphs,
+            deserialized.format.private_use_glyphs
+        );
+    }
+
+    /// `privateUseGlyphs` picks a Unicode spelling, so it means nothing under
+    /// the ASCII convention — the same shape as `enforceUnicode`.
+    #[test]
+    fn private_use_glyphs_needs_the_unicode_convention() {
+        let mut format = FormatConfig::default();
+        assert!(!format.emits_private_use_glyphs());
+
+        format.private_use_glyphs = true;
+        assert!(format.emits_private_use_glyphs());
+        assert!(format.printer().private_use_glyphs);
+
+        format.use_unicode = false;
+        assert!(!format.emits_private_use_glyphs());
+        assert!(!format.printer().private_use_glyphs);
     }
 
     #[test]
@@ -567,6 +608,7 @@ mod tests {
             "format": {
                 "useUnicode": false,
                 "enforceUnicode": true,
+                "privateUseGlyphs": true,
                 "indentation": "  "
             },
             "diagnostics": {
@@ -582,6 +624,7 @@ mod tests {
 
         assert!(!config.format.use_unicode);
         assert!(config.format.enforce_unicode);
+        assert!(config.format.private_use_glyphs);
         assert_eq!(config.format.indentation, "  ");
 
         assert!(!config.diagnostics.enabled);

@@ -63,12 +63,16 @@ pub const ASCII_OPERATOR_CODE: &str = "ascii-operator";
 /// component names masked first) as `(range, ASCII spelling, Unicode spelling)`: what
 /// [`ascii_operator_diagnostics`] flags, and what its quick fix checks a
 /// diagnostic against, so the two can never disagree. It is exactly what the
-/// fix-all conversion would rewrite — the private-use operators, which stay
-/// ASCII even in Unicode mode, are not included.
-pub(crate) fn ascii_operators(text: &str) -> Vec<(Range, &str, &'static str)> {
+/// fix-all conversion would rewrite — the private-use operators are included
+/// only when `private_use_glyphs` says the user reads Rodin's spelling; they
+/// otherwise stay ASCII even in Unicode mode.
+pub(crate) fn ascii_operators(
+    text: &str,
+    private_use_glyphs: bool,
+) -> Vec<(Range, &str, &'static str)> {
     let masked = rossi::comments::mask_opaque(text);
     let index = crate::position::PositionIndex::new(text);
-    rossi::operators::ascii_operator_spans(&masked, false)
+    rossi::operators::ascii_operator_spans(&masked, private_use_glyphs)
         .into_iter()
         .map(|(span, unicode)| {
             let range = Range::new(index.position(span.start), index.position(span.end));
@@ -80,8 +84,8 @@ pub(crate) fn ascii_operators(text: &str) -> Vec<(Range, &str, &'static str)> {
 /// One advisory diagnostic per ASCII operator spelling in `text` (see
 /// [`ascii_operators`]), naming the Unicode spelling it should be. Textual,
 /// so it runs mid-edit like the proof overlay.
-pub(crate) fn ascii_operator_diagnostics(text: &str) -> Vec<Diagnostic> {
-    ascii_operators(text)
+pub(crate) fn ascii_operator_diagnostics(text: &str, private_use_glyphs: bool) -> Vec<Diagnostic> {
+    ascii_operators(text, private_use_glyphs)
         .into_iter()
         .map(|(range, ascii, unicode)| {
             lsp_diagnostic(
@@ -496,7 +500,7 @@ mod tests {
             "  @i x - 1 : NAT\n",
             "END\n",
         );
-        let diagnostics = ascii_operator_diagnostics(text);
+        let diagnostics = ascii_operator_diagnostics(text, false);
         let flagged: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
         // Only the invariant's own operators, never a name's hyphen or a
         // keyword-shaped segment inside one.
@@ -517,7 +521,7 @@ mod tests {
         // flagged. The three ASCII spellings in code are, each on its own
         // token with its Unicode form.
         let text = "@inv-1 x : NAT & x <+ y // x <= 1\n";
-        let diagnostics = ascii_operator_diagnostics(text);
+        let diagnostics = ascii_operator_diagnostics(text, false);
         let flagged: Vec<(u32, u32, &str)> = diagnostics
             .iter()
             .map(|d| {
@@ -540,6 +544,34 @@ mod tests {
             d.code == Some(NumberOrString::String("ascii-operator".to_string()))
                 && d.severity == Some(DiagnosticSeverity::INFORMATION)
         }));
+    }
+
+    /// With `rossi.format.privateUseGlyphs` on, the advisory covers the four
+    /// relation/override operators too: their Unicode spelling is now something
+    /// the formatter would actually write, so leaving them unflagged would let a
+    /// file drift from the convention the project has chosen.
+    #[test]
+    fn ascii_operator_diagnostics_flag_private_use_operators_when_opted_in() {
+        let text = "@inv1 r : A <<-> B & f <+ g\n";
+        assert!(
+            !ascii_operator_diagnostics(text, false)
+                .iter()
+                .any(|d| d.message.contains("<+") || d.message.contains("<<->")),
+            "the private-use operators stay unflagged by default"
+        );
+
+        let messages: Vec<String> = ascii_operator_diagnostics(text, true)
+            .into_iter()
+            .map(|d| d.message)
+            .collect();
+        assert!(
+            messages.contains(&"use `\u{E100}` instead of ASCII `<<->`".to_string()),
+            "got: {messages:?}"
+        );
+        assert!(
+            messages.contains(&"use `\u{E103}` instead of ASCII `<+`".to_string()),
+            "got: {messages:?}"
+        );
     }
 
     #[test]

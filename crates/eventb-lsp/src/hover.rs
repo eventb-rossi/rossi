@@ -168,8 +168,15 @@ impl HoverProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Generate hover information for the given position
-    pub fn hover(&self, params: &HoverParams, text: &str) -> Option<Hover> {
+    /// Generate hover information for the given position. `private_use_glyphs`
+    /// is the format setting of the same name: it decides how an operator title
+    /// spells the four relation/override operators.
+    pub fn hover(
+        &self,
+        params: &HoverParams,
+        text: &str,
+        private_use_glyphs: bool,
+    ) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
@@ -209,7 +216,7 @@ impl HoverProvider {
         if let Some(mut hover) = self
             .hover_keyword(&word)
             .filter(|_| !declaration_shadows_keyword(stored, text, offset, &word))
-            .or_else(|| self.hover_operator(&word))
+            .or_else(|| self.hover_operator(&word, private_use_glyphs))
             .or_else(|| self.hover_builtin(&word))
         {
             hover.range = Some(range);
@@ -266,8 +273,8 @@ impl HoverProvider {
     }
 
     /// Get hover information for operators
-    fn hover_operator(&self, word: &str) -> Option<Hover> {
-        if let Some((title, body)) = lookup_operator_doc(word) {
+    fn hover_operator(&self, word: &str, private_use_glyphs: bool) -> Option<Hover> {
+        if let Some((title, body)) = lookup_operator_doc(word, private_use_glyphs) {
             return Some(create_hover(&title, body));
         }
         let (title, body) = lookup_doc(BUILTIN_OPERATOR_DOCS, word)?;
@@ -563,24 +570,24 @@ fn lookup_doc(table: &[DocEntry], word: &str) -> Option<(&'static str, &'static 
 }
 
 /// Build a hover title from the canonical spelling: `"<glyph> (<description>)"`.
-fn operator_title(spelling: &operators::OperatorSpelling) -> String {
-    format!("{} ({})", display_glyph(spelling), spelling.description)
+/// The glyph is the one rossi emits everywhere else (see
+/// [`operators::OperatorSpelling::emit_text`]), so a hover names an operator the
+/// way the user's own buffer spells it.
+fn operator_title(spelling: &operators::OperatorSpelling, private_use_glyphs: bool) -> String {
+    format!(
+        "{} ({})",
+        spelling.emit_text(true, private_use_glyphs),
+        spelling.description
+    )
 }
 
-/// Glyph to show in hover titles — the same spelling rossi emits everywhere
-/// else (see [`operators::OperatorSpelling::emit_text`]), so operators whose only
-/// Unicode form is a private-use-area glyph fall back to ASCII rather than tofu.
-fn display_glyph(spelling: &operators::OperatorSpelling) -> &'static str {
-    spelling.emit_text(true, false)
-}
-
-fn lookup_operator_doc(word: &str) -> Option<(String, &'static str)> {
+fn lookup_operator_doc(word: &str, private_use_glyphs: bool) -> Option<(String, &'static str)> {
     let spelling = operators::lookup_token(word)?;
     let body = OPERATOR_DOCS
         .iter()
         .find(|(id, _)| *id == spelling.id)
         .map(|(_, body)| *body)?;
-    Some((operator_title(spelling), body))
+    Some((operator_title(spelling, private_use_glyphs), body))
 }
 
 const KEYWORD_DOCS: &[KeywordDocEntry] = &[
@@ -1048,6 +1055,7 @@ mod tests {
                 work_done_progress_params: Default::default(),
             },
             source,
+            false,
         )
     }
 
@@ -1086,7 +1094,7 @@ mod tests {
     fn test_hover_operator_unicode() {
         let provider = HoverProvider::new();
 
-        let hover = provider.hover_operator("∧");
+        let hover = provider.hover_operator("∧", false);
         assert!(hover.is_some());
         let hover = hover.unwrap();
         if let HoverContents::Markup(content) = hover.contents {
@@ -1100,7 +1108,7 @@ mod tests {
     fn test_hover_operator_ascii() {
         let provider = HoverProvider::new();
 
-        let hover = provider.hover_operator("&");
+        let hover = provider.hover_operator("&", false);
         assert!(hover.is_some());
         let hover = hover.unwrap();
         if let HoverContents::Markup(content) = hover.contents {
@@ -1109,7 +1117,7 @@ mod tests {
         }
 
         // /\ is now set intersection only (no longer logical AND)
-        let hover = provider.hover_operator("/\\");
+        let hover = provider.hover_operator("/\\", false);
         assert!(hover.is_some());
         let hover = hover.unwrap();
         if let HoverContents::Markup(content) = hover.contents {
@@ -1184,6 +1192,7 @@ mod tests {
                     work_done_progress_params: Default::default(),
                 },
                 source,
+                false,
             )
             .expect("hover on max_value resolves via the shared parse");
         let HoverContents::Markup(content) = hover.contents else {
@@ -1280,6 +1289,7 @@ mod tests {
                 work_done_progress_params: Default::default(),
             },
             source,
+            false,
         )
     }
 
@@ -1469,6 +1479,7 @@ mod tests {
                 work_done_progress_params: Default::default(),
             },
             target,
+            false,
         )
     }
 
@@ -1791,7 +1802,7 @@ mod tests {
             }
             for op in [spelling.unicode, spelling.ascii] {
                 assert!(
-                    provider.hover_operator(op).is_some(),
+                    provider.hover_operator(op, false).is_some(),
                     "Missing hover for operator {:?} ({op})",
                     spelling.id
                 );
@@ -1808,7 +1819,7 @@ mod tests {
         // return None so the builtin wins in dispatch order.
         for token in ["ℕ", "NAT", "ℕ1", "NAT1", "ℤ", "INT"] {
             assert!(
-                provider.hover_operator(token).is_none(),
+                provider.hover_operator(token, false).is_none(),
                 "{token} must not be served as an operator hover (would shadow builtin)"
             );
         }
@@ -1826,7 +1837,7 @@ mod tests {
 
         // Overwrite's unicode spelling is a private-use code point that won't
         // render; the derived title must fall back to the ASCII spelling "<+".
-        let hover = provider.hover_operator("<+").unwrap();
+        let hover = provider.hover_operator("<+", false).unwrap();
         if let HoverContents::Markup(content) = hover.contents {
             assert!(content.value.contains("<+ (Relational override)"));
             assert!(!content.value.contains("U+E"));
@@ -1834,8 +1845,11 @@ mod tests {
     }
 
     /// The hand-written hover bodies for the private-use operators must show the
-    /// ASCII spelling and never the private-use glyph — it renders as tofu without
-    /// Rodin's font, the same reason `emit_text` keeps it out of the title.
+    /// ASCII spelling and never the private-use glyph — it renders as tofu
+    /// without Rodin's font, the same reason `emit_text` keeps it out of the
+    /// title. The bodies are documentation rather than emitted text, so they
+    /// stay ASCII even when the user opts into the glyphs: ASCII is accepted
+    /// input under every convention.
     #[test]
     fn test_private_use_hover_bodies_avoid_the_glyph() {
         let provider = HoverProvider::new();
@@ -1851,7 +1865,7 @@ mod tests {
                 "{id:?} is expected to be a private-use operator"
             );
             let hover = provider
-                .hover_operator(spelling.ascii)
+                .hover_operator(spelling.ascii, false)
                 .unwrap_or_else(|| panic!("no hover for {id:?}"));
             let HoverContents::Markup(content) = hover.contents else {
                 panic!("expected markup hover for {id:?}");
@@ -1865,6 +1879,26 @@ mod tests {
                 "{id:?} hover body must show the ASCII spelling {:?}",
                 spelling.ascii
             );
+
+            // Opting in moves the glyph into the title, where it names the
+            // operator the way the user's own buffer spells it; the example
+            // body keeps its ASCII spelling.
+            let opted_in = provider
+                .hover_operator(spelling.ascii, true)
+                .unwrap_or_else(|| panic!("no hover for {id:?}"));
+            let HoverContents::Markup(content) = opted_in.contents else {
+                panic!("expected markup hover for {id:?}");
+            };
+            let title = format!("{} ({})", spelling.unicode, spelling.description);
+            assert!(
+                content.value.contains(&title),
+                "{id:?} opted-in hover title should be {title:?}, got: {}",
+                content.value
+            );
+            assert!(
+                content.value.contains(spelling.ascii),
+                "{id:?} opted-in hover body must still show the ASCII spelling"
+            );
         }
     }
 
@@ -1875,7 +1909,7 @@ mod tests {
         // Dot and Bar were previously undocumented; both spellings must hover.
         for token in ["·", ".", "∣", "|"] {
             assert!(
-                provider.hover_operator(token).is_some(),
+                provider.hover_operator(token, false).is_some(),
                 "Missing hover for separator: {token}"
             );
         }
@@ -2013,6 +2047,7 @@ END
                 work_done_progress_params: Default::default(),
             },
             source,
+            false,
         );
 
         assert!(hover.is_some());
@@ -2091,6 +2126,7 @@ END
                 work_done_progress_params: Default::default(),
             },
             concrete_source,
+            false,
         );
 
         assert!(hover.is_some(), "Should get hover for abstract_state");
