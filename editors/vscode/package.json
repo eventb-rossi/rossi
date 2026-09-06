@@ -312,6 +312,11 @@
           "default": false,
           "description": "Flag ASCII operator spellings (/\\, :, NAT, …) outside comments and labels with an advisory diagnostic and a quick fix, for a project that keeps its sources in Unicode (no effect with rossi.format.useUnicode off). Pair with the source.fixAll.rossi code action on save and rossi fmt --check in CI."
         },
+        "rossi.format.privateUseGlyphs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Spell the four relation/override operators with Rodin's private-use glyphs (U+E100..E103) instead of ASCII <<->, <->>, <<->> and <+, for exchanging files with a tool that reads only Rodin's spelling (no effect with rossi.format.useUnicode off). They need Rodin's Brave Sans Mono font to render — see the extension's INSTALL.md."
+        },
         "rossi.format.indentation": {
           "type": "string",
           "default": "",

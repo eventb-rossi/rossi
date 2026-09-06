@@ -5,7 +5,9 @@
  * strings are matched case-insensitively and an unknown or mistyped value
  * falls back to the style preset by omitting the flag. `useUnicode` is
  * deliberately not mirrored — the convert commands pass an explicit
- * `--ascii`/`--unicode`.
+ * `--ascii`/`--unicode`. `privateUseGlyphs` is mirrored, because nothing else
+ * in the invocation carries it and `rossi fmt` would otherwise write a
+ * different spelling of `<+` than the LSP formatter.
  */
 export interface FormatSettings {
     style: unknown;
@@ -14,6 +16,7 @@ export interface FormatSettings {
     blankBetweenClauses: unknown;
     indentation: unknown;
     maxLineWidth: unknown;
+    privateUseGlyphs: unknown;
 }
 
 function pick(value: unknown, allowed: readonly string[]): string | undefined {
@@ -50,6 +53,9 @@ export function formatStyleFlags(format: FormatSettings): string[] {
         format.maxLineWidth >= 0
     ) {
         flags.push('--max-width', String(format.maxLineWidth));
+    }
+    if (format.privateUseGlyphs === true) {
+        flags.push('--private-use-glyphs');
     }
     return flags;
 }

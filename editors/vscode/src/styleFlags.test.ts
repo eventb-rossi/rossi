@@ -33,6 +33,7 @@ const defaults: FormatSettings = {
     blankBetweenClauses: null,
     indentation: '',
     maxLineWidth: 120,
+    privateUseGlyphs: false,
 };
 
 // Default settings follow the preset for everything but the line width,
@@ -56,6 +57,7 @@ eq(
         blankBetweenClauses: false,
         indentation: '\t',
         maxLineWidth: 0,
+        privateUseGlyphs: true,
     }),
     [
         '--style', 'camille',
@@ -64,8 +66,10 @@ eq(
         '--blank-between-clauses', 'false',
         '--indent', '\t',
         '--max-width', '0',
+        '--private-use-glyphs',
     ]
 );
+
 
 // Tolerance mirrors the server: case-insensitive enums, unknown or mistyped
 // values fall back to the preset instead of failing the CLI invocation.
@@ -88,6 +92,7 @@ eq(
         blankBetweenClauses: 'false',
         indentation: 4,
         maxLineWidth: 'wide',
+        privateUseGlyphs: 1,
     }),
     []
 );
