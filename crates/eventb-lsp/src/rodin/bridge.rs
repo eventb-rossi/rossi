@@ -20,11 +20,13 @@
 //! not offer the method) is reported as an error, so the caller falls back to
 //! the file-mediated path unchanged.
 //!
-//! Connections are made per operation rather than held open. Nothing here
-//! needs to *receive* an unsolicited message yet, and a fresh connection is
-//! also the only honest answer to "is a bridge really there?": a Rodin that
-//! was killed leaves its descriptor behind, so only the handshake proves
-//! anything.
+//! Most connections are made per operation rather than held open: a fresh
+//! connection is the only honest answer to "is a bridge really there?", since
+//! a Rodin that was killed leaves its descriptor behind and only the handshake
+//! proves anything. Live sync is the exception. It asks the plug-in to push
+//! `model/dirty` as the user types, which needs a connection that outlives one
+//! request, so [`Bridge::connect_listening`] hands the caller a stream of the
+//! notifications that arrive on it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -38,7 +40,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Directory holding the bridge's descriptor, inside the Rodin workspace.
 const BRIDGE_DIR: &str = ".rossi-bridge";
@@ -79,6 +81,23 @@ pub const REGISTER: &str = "project/register";
 /// Bring Rodin forward and select the project.
 const REVEAL: &str = "project/reveal";
 
+/// Ask to be sent `model/dirty` for this connection.
+pub const SUBSCRIBE: &str = "model/subscribe";
+
+/// Re-read files from disk and reload any editor open on them.
+pub const RELOAD: &str = "model/reload";
+
+/// The notification the plug-in pushes when an unsaved edit lands in a
+/// component's in-memory tree.
+pub const DIRTY: &str = "model/dirty";
+
+/// A message the plug-in sent without being asked.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub method: String,
+    pub params: Value,
+}
+
 /// The descriptor the plug-in publishes. Only what a client needs to reach it
 /// is read; everything else there, the protocol revision included, is for a
 /// human reading the file, since `bridge/hello` is what actually decides.
@@ -112,10 +131,24 @@ pub struct Bridge {
 }
 
 impl Bridge {
-    /// Connect to the bridge published for `workspace_dir` and handshake.
+    /// Connect to the bridge published for `workspace_dir` and handshake,
+    /// discarding anything the plug-in pushes. A connection that never
+    /// subscribes is never pushed to anyway.
     pub async fn connect(workspace_dir: &Path) -> Result<Self, String> {
+        Self::connect_listening(workspace_dir)
+            .await
+            .map(|(bridge, _)| bridge)
+    }
+
+    /// As [`Self::connect`], but also delivering everything the plug-in pushes
+    /// on this connection. The receiver ends when the connection does, so a
+    /// caller that holds it learns of a Rodin that quit.
+    pub async fn connect_listening(
+        workspace_dir: &Path,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<Notification>), String> {
+        let (notifications, receiver) = mpsc::unbounded_channel();
         let descriptor = read_descriptor(workspace_dir)?;
-        let transport = Transport::connect(descriptor.port).await?;
+        let transport = Transport::connect(descriptor.port, notifications).await?;
         // The handshake gets the shorter timeout: a stale descriptor whose
         // port someone else now owns is exactly the case that accepts the
         // connection and then never answers.
@@ -129,11 +162,14 @@ impl Bridge {
         let hello: Hello = serde_json::from_value(hello)
             .map_err(|e| format!("bridge/hello answered something unreadable: {e}"))?;
         check_protocol(hello.protocol)?;
-        Ok(Self {
-            transport,
-            caps: hello.caps,
-            rodin: hello.rodin,
-        })
+        Ok((
+            Self {
+                transport,
+                caps: hello.caps,
+                rodin: hello.rodin,
+            },
+            receiver,
+        ))
     }
 
     /// Whether the plug-in offers a method, such as [`REGISTER`].
@@ -170,6 +206,24 @@ impl Bridge {
     pub async fn reveal_project(&self, project_name: &str) -> Result<(), String> {
         self.transport
             .request(REVEAL, json!({ "project": project_name }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Ask for `model/dirty` on this connection. The plug-in pushes to nobody
+    /// who has not asked, so the per-operation connections stay quiet.
+    pub async fn subscribe(&self) -> Result<(), String> {
+        self.transport
+            .request(SUBSCRIBE, json!({}))
+            .await
+            .map(|_| ())
+    }
+
+    /// Re-read `files` in `project` from disk and reload any editor open on
+    /// them, which is what spares the user an F5 after a rebuild.
+    pub async fn reload(&self, project_name: &str, files: &[String]) -> Result<(), String> {
+        self.transport
+            .request(RELOAD, json!({ "project": project_name, "files": files }))
             .await
             .map(|_| ())
     }
@@ -223,7 +277,10 @@ impl Drop for Transport {
 }
 
 impl Transport {
-    async fn connect(port: u16) -> Result<Self, String> {
+    async fn connect(
+        port: u16,
+        notifications: mpsc::UnboundedSender<Notification>,
+    ) -> Result<Self, String> {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
             .await
@@ -232,7 +289,7 @@ impl Transport {
         let _ = stream.set_nodelay(true);
         let (read_half, write_half) = stream.into_split();
         let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
-        let reader = tokio::spawn(read_loop(read_half, Arc::clone(&pending)));
+        let reader = tokio::spawn(read_loop(read_half, Arc::clone(&pending), notifications));
         Ok(Self {
             writer: Mutex::new(write_half),
             pending,
@@ -304,7 +361,11 @@ impl Transport {
 }
 
 /// Route answers to their waiting callers until the connection ends.
-async fn read_loop(read_half: OwnedReadHalf, pending: Pending) {
+async fn read_loop(
+    read_half: OwnedReadHalf,
+    pending: Pending,
+    notifications: mpsc::UnboundedSender<Notification>,
+) {
     let mut reader = BufReader::new(read_half);
     while let Some(mut message) = read_message(&mut reader).await {
         // A message without a usable id is one of two things. It may be a
@@ -314,6 +375,16 @@ async fn read_loop(read_half: OwnedReadHalf, pending: Pending) {
         // answers with a null id; that kind says it could not read what we
         // sent, so nothing in flight is going to be answered either.
         let Some(id) = message.get("id").and_then(Value::as_i64) else {
+            // A message with a method and no id is the plug-in pushing. The
+            // send fails harmlessly when the caller dropped the receiver,
+            // which is what `connect` does.
+            if let Some(method) = message.get("method").and_then(Value::as_str) {
+                let _ = notifications.send(Notification {
+                    method: method.to_string(),
+                    params: message.get("params").cloned().unwrap_or(Value::Null),
+                });
+                continue;
+            }
             if let Some(error) = message.get("error") {
                 let reason = error_message(error);
                 let Some(in_flight) = pending.lock().await.as_mut().map(std::mem::take) else {
@@ -717,6 +788,61 @@ mod tests {
             started.elapsed() < REQUEST_TIMEOUT,
             "must not wait out the request timeout"
         );
+    }
+
+    #[tokio::test]
+    async fn a_subscription_is_sent_and_the_channel_stays_open() {
+        // Live sync is the one thing that needs the plug-in to speak first,
+        // so the subscription has to actually leave, and the channel has to
+        // outlive it with nothing in it.
+        let (port, seen) = fake_bridge(greeting(json!([SUBSCRIBE, DIRTY]), |message| {
+            Some(ok(message, json!({})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-push", port);
+
+        let (bridge, mut pushes) = Bridge::connect_listening(dir.path()).await.unwrap();
+        assert!(bridge.supports(SUBSCRIBE));
+        bridge.subscribe().await.unwrap();
+        assert_eq!(methods(&seen).await, ["bridge/hello", SUBSCRIBE]);
+
+        assert!(
+            matches!(pushes.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "open and empty, not closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_notification_is_delivered_with_its_params() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            if let Some(message) = read_message(&mut reader).await {
+                let answer = ok(&message, json!({"protocol": 1, "caps": [DIRTY]}));
+                write_half
+                    .write_all(&frame(&answer.to_string()))
+                    .await
+                    .unwrap();
+                let push = json!({"jsonrpc": "2.0", "method": DIRTY,
+                                  "params": {"project": "proj", "file": "M0.bum", "xml": "<x/>"}});
+                write_half
+                    .write_all(&frame(&push.to_string()))
+                    .await
+                    .unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+
+        let dir = workspace_for("rossi-bridge-notify", port);
+        let (_bridge, mut pushes) = Bridge::connect_listening(dir.path()).await.unwrap();
+
+        let push = pushes.recv().await.expect("the push must arrive");
+        assert_eq!(push.method, DIRTY);
+        assert_eq!(push.params["file"], "M0.bum");
+        assert_eq!(push.params["xml"], "<x/>");
     }
 
     #[tokio::test]
