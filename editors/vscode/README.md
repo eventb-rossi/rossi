@@ -328,6 +328,16 @@ your open buffer — automatically via a three-way merge; when both sides
 changed the same lines, the conflict lands in the source with git-style
 markers and a warning.
 
+When Rodin is already open on the workspace, clicking the lens can only rebuild
+the project: registering a new one needs the same Eclipse instance area Rodin is
+holding, so you are told to use `File > Import`. The **Rodin bridge** removes
+that step. It is a plug-in shipped with the
+[eventb-rossi Rodin bundle](https://github.com/eventb-rossi/Rodin-Bundle) that
+opens a loopback socket inside Rodin; when it is there, the lens registers the
+project in the running instance and brings it forward instead. Nothing is
+required of you: with stock Rodin, or with `rossi.rodin.bridge` turned off,
+everything above behaves exactly as described.
+
 Proof files travel with the sources too (`rossi.rodin.mirrorProofs`, on by
 default). When the lens runs, `.bpr`/`.bps`/`.bpo` files sitting next to the
 `.eventb` sources — placed there by `rossi import` or a `git pull` — are
