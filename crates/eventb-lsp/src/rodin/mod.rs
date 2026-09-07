@@ -13,6 +13,7 @@
 pub mod bridge;
 pub mod build;
 pub mod launch;
+pub mod live;
 pub mod lock;
 pub mod model_sync;
 pub(crate) mod proof_mirror;
@@ -398,6 +399,50 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     }
 }
 
+/// Ask a running Rodin to re-read the components a rebuild just wrote and
+/// reload any editor open on them.
+///
+/// This is what spares the user an F5: Eclipse's seeded auto-refresh notices
+/// the files on its own within a few seconds, but an editor already open on a
+/// component keeps showing what it loaded. Best effort throughout, since the
+/// auto-refresh remains the fallback and a missing bridge is the normal case.
+pub(crate) async fn reload_in_rodin(
+    workspace_dir: &Path,
+    project_name: &str,
+    outcome: &build::BuildOutcome,
+) {
+    // Only the sources Rodin reads; the checked and proof files it regenerates
+    // itself, and reloading an editor on them means nothing.
+    let files: Vec<String> = outcome
+        .written
+        .iter()
+        .filter(|(path, _)| rossi_build::project::is_xml_component(path))
+        .filter_map(|(path, _)| Some(path.file_name()?.to_str()?.to_string()))
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    let bridge = match bridge::Bridge::connect(workspace_dir).await {
+        Ok(bridge) => bridge,
+        Err(message) => {
+            tracing::debug!("no Rodin bridge to reload through: {message}");
+            return;
+        }
+    };
+    if !bridge.supports(bridge::RELOAD) {
+        tracing::info!(
+            "the Rodin {} bridge does not offer {}",
+            bridge.rodin_version(),
+            bridge::RELOAD
+        );
+        return;
+    }
+    match bridge.reload(project_name, &files).await {
+        Ok(()) => tracing::debug!("reloaded {} component(s) in Rodin", files.len()),
+        Err(message) => tracing::info!("the Rodin bridge could not reload: {message}"),
+    }
+}
+
 /// Register and reveal the project through a running Rodin's bridge plug-in,
 /// answering the name the workspace registered it under.
 ///
@@ -451,7 +496,7 @@ async fn register_through_bridge(
 /// [`open_in_rodin`] stops waiting for it (and with that stops holding the
 /// single-flight guard). Generous — cold Eclipse starts are slow — but
 /// bounded, so a Rodin that failed to come up re-enables the lens.
-const BOOT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const BOOT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Poll the workspace lock until it leaves [`lock::LockState::Free`] or the
 /// timeout passes, returning the state that ended the wait (`Free` on
