@@ -819,6 +819,7 @@ fn parse_machine_xml_with_name(
                             };
                             let predicate_str = get_xml_attr(&e, b"predicate")?.unwrap_or_default();
                             let kind = get_xml_attr(&e, b"rossi.kind")?;
+                            let comment = get_xml_attr(&e, b"comment")?;
 
                             if !predicate_str.is_empty() {
                                 let event_origin = format!("{} (event {:?})", origin, event.name);
@@ -834,7 +835,7 @@ fn parse_machine_xml_with_name(
                                     is_theorem: false,
                                     predicate,
                                     span: None,
-                                    comment: None,
+                                    comment,
                                 };
                                 if kind.as_deref() == Some("witness") {
                                     event.witnesses.push(lp);
@@ -1951,17 +1952,19 @@ fn write_witness_xml(
         .as_deref()
         .map(|l| format!(" org.eventb.core.label=\"{}\"", escape_xml(l)))
         .unwrap_or_default();
+    let comment_attr = format_comment_attr(lp.comment.as_deref());
     let kind_attr = if kind_witness {
         " rossi.kind=\"witness\""
     } else {
         ""
     };
     xml.push_str(&format!(
-        "{}<org.eventb.core.witness name=\"{}\"{} org.eventb.core.predicate=\"{}\"{}/>\n",
+        "{}<org.eventb.core.witness name=\"{}\"{} org.eventb.core.predicate=\"{}\"{}{}/>\n",
         indent,
         name,
         label_attr,
         escape_xml(&predicate_str),
+        comment_attr,
         kind_attr,
     ));
 }

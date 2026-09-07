@@ -11,6 +11,7 @@ mod common;
 use common::{assert_roundtrip, parse_context, parse_machine};
 use rossi::{
     Component, PrettyPrinter, Style, format_str, parse, parse_xml, to_string, to_string_ascii,
+    to_xml,
 };
 
 // =========================================================================
@@ -328,6 +329,60 @@ fn format_is_idempotent_with_comments() {
 // =========================================================================
 // Rodin XML fidelity
 // =========================================================================
+
+#[test]
+fn witness_comment_survives_export_to_xml() {
+    // `write_witness_xml` was the one element writer that never emitted
+    // `org.eventb.core.comment`, so a witness comment was visible in text and
+    // absent from the `.bum` — `fmt` and `export` disagreed about the same
+    // file. Rodin's `IWitness` is an `ICommentedElement`, so the attribute is
+    // legal there.
+    let src = "MACHINE m REFINES a
+VARIABLES
+    x
+INVARIANTS
+    @inv1 x ∈ ℕ
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act0 x ≔ 0
+    END
+
+    EVENT dec REFINES d
+    ANY
+        p
+    WHERE
+        @grd1 p ∈ ℕ
+    WITH
+        @q p = q // why this witness
+    THEN
+        @act1 x ≔ p
+    END
+END
+";
+    let component = parse(src).expect("parses");
+    let xml = to_xml(&component);
+    assert!(
+        xml.contains("org.eventb.core.witness")
+            && xml.contains("org.eventb.core.comment=\"why this witness\""),
+        "witness comment missing from XML:\n{xml}"
+    );
+
+    let back = parse_xml(&xml).expect("xml reparses");
+    let Component::Machine(m) = &back else {
+        panic!("expected machine");
+    };
+    let ev = m
+        .events
+        .iter()
+        .find(|e| e.name == "dec")
+        .expect("event dec");
+    let witness = ev.with.first().or_else(|| ev.witnesses.first());
+    assert_eq!(
+        witness.and_then(|w| w.comment.as_deref()),
+        Some("why this witness"),
+    );
+}
 
 /// All comments of a component in traversal order, normalized, with a label
 /// describing the carrying element (so mismatches are readable).
