@@ -10,6 +10,7 @@
 //! and rebuilt `.bpo`/`.bps` reconcile against the previous state, which is
 //! exactly what makes proofs survive model edits.
 
+pub mod bridge;
 pub mod build;
 pub mod launch;
 pub mod lock;
@@ -26,6 +27,16 @@ use tower_lsp::Client;
 
 /// The `workspace/executeCommand` command behind the code lens.
 pub const COMMAND_OPEN: &str = "rossi.rodin.open";
+
+/// How every "Rodin is already running" message opens.
+const ALREADY_RUNNING: &str = "Rodin is already running on this workspace:";
+
+/// Refreshing a project's files does not reload an editor Rodin already has
+/// open on a component, whichever way the files got there, so every arm that
+/// reports a rebuilt project has to say this.
+const REOPEN_NOTE: &str = "Editors already open on a component show the new \
+     content after reopening it (or F5 inside the editor; the Explorer's F5 \
+     does not reload files).";
 
 /// The "Open in Rodin" lenses for a document: one per component, anchored on
 /// the component's name. When the parse yields no components (mid-edit
@@ -93,6 +104,9 @@ pub struct OpenRequest {
     /// files into the project before the build, and mirror the project's
     /// proof files back next to the sources when the session ends.
     pub mirror_proofs: bool,
+    /// The `rossi.rodin.bridge` setting: talk to a running Rodin's bridge
+    /// plug-in when one is published, instead of only writing files at it.
+    pub bridge: bool,
     /// Slot for the per-workspace Rodin session stop monitor.
     pub(crate) session_monitor: proof_mirror::SessionMonitorSlot,
     /// Analysis handles, for refreshing the proof-status overlay after the
@@ -240,11 +254,29 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             .await;
     }
 
-    if lock::workspace_lock_state(&request.workspace_dir) == lock::LockState::Held {
+    let lock_state = lock::workspace_lock_state(&request.workspace_dir);
+
+    // The bridge plug-in, if this Rodin has one, can do inside the running
+    // instance what nothing outside it can: register the project and bring it
+    // forward. A bridge that answers is itself proof a Rodin is running, and
+    // that is the only proof to be had where the lock cannot be probed at all
+    // (Windows), so the attempt follows the same "not demonstrably free" rule
+    // as `lock::rebuild_on_save_wanted` rather than waiting for `Held`.
+    let bridged = if request.bridge && lock_state != lock::LockState::Free {
+        register_through_bridge(&request.workspace_dir, &project_dir, &project_name).await
+    } else {
+        None
+    };
+
+    if bridged.is_some() || lock_state == lock::LockState::Held {
         // The running session still ends someday — arm the stop monitor so
         // its proofs are mirrored back even though this click launched
-        // nothing (covers an LSP restarted mid-session).
-        if request.mirror_proofs {
+        // nothing (covers an LSP restarted mid-session). Only where the lock
+        // says `Held`, though: the monitor watches for that lock to be
+        // released, so where the probe cannot read it at all there is nothing
+        // for it to see, and arming it would only promise a mirror that
+        // cannot happen.
+        if request.mirror_proofs && lock_state == lock::LockState::Held {
             proof_mirror::RodinSessionMonitor::arm(
                 &request.session_monitor,
                 &client,
@@ -258,29 +290,33 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
         // the workspace: the headless registration needs the same Eclipse
         // workspace. Say so instead of promising an automatic pickup that
         // will never happen.
-        let message = if launch::project_registered(&request.workspace_dir, &project_name) {
-            (
+        let (level, text) = match bridged {
+            Some(registered) => (
                 MessageType::INFO,
                 format!(
-                    "Rodin is already running on this workspace — project '{project_name}' \
-                     was rebuilt; Rodin picks the files up within a few seconds. Editors \
-                     already open on a component show the new content after reopening it \
-                     (or F5 inside the editor — the Explorer's F5 does not reload files)."
+                    "{ALREADY_RUNNING} project '{registered}' was rebuilt and \
+                     registered in it through the Rodin bridge. {REOPEN_NOTE}"
                 ),
-            )
-        } else {
-            (
+            ),
+            None if launch::project_registered(&request.workspace_dir, &project_name) => (
+                MessageType::INFO,
+                format!(
+                    "{ALREADY_RUNNING} project '{project_name}' was rebuilt; Rodin \
+                     picks the files up within a few seconds. {REOPEN_NOTE}"
+                ),
+            ),
+            None => (
                 MessageType::WARNING,
                 format!(
-                    "Rodin is already running on this workspace — project '{project_name}' \
-                     was built at {} but cannot be registered while Rodin holds the \
-                     workspace. In Rodin, use File > Import > Existing Projects to add \
-                     it, or close Rodin and run Open in Rodin again.",
+                    "{ALREADY_RUNNING} project '{project_name}' was built at {} but \
+                     cannot be registered while Rodin holds the workspace. In Rodin, use \
+                     File > Import > Existing Projects to add it, or close Rodin and run \
+                     Open in Rodin again.",
                     project_dir.display()
                 ),
-            )
+            ),
         };
-        return progress.finish(message.0, message.1).await;
+        return progress.finish(level, text).await;
     }
 
     let rodin_path = launch::effective_rodin_path(&request.configured_rodin_path, platform);
@@ -360,6 +396,55 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             &request.written,
         );
     }
+}
+
+/// Register and reveal the project through a running Rodin's bridge plug-in,
+/// answering the name the workspace registered it under.
+///
+/// `None` means no bridge answered, whether because there is no plug-in, an
+/// older one, or a descriptor left behind by a Rodin that was killed; the
+/// caller then falls back to the file-mediated path. Nothing here is reported
+/// to the user directly, since a missing bridge is the normal case for stock
+/// Rodin, not a fault.
+async fn register_through_bridge(
+    workspace_dir: &Path,
+    project_dir: &Path,
+    project_name: &str,
+) -> Option<String> {
+    let bridge = match bridge::Bridge::connect(workspace_dir).await {
+        Ok(bridge) => bridge,
+        Err(message) => {
+            tracing::info!("no Rodin bridge for this workspace: {message}");
+            return None;
+        }
+    };
+    if !bridge.supports(bridge::REGISTER) {
+        tracing::info!(
+            "the Rodin {} bridge does not offer {}",
+            bridge.rodin_version(),
+            bridge::REGISTER
+        );
+        return None;
+    }
+    let registered = match bridge.register_project(project_dir).await {
+        Ok(registered) => registered,
+        Err(message) => {
+            tracing::info!("the Rodin bridge could not register the project: {message}");
+            return None;
+        }
+    };
+    // The workspace registers a project under the name in its `.project`
+    // descriptor, not the directory's: reveal and report the name it answered
+    // with, so a mismatch cannot point the user at a project nobody has.
+    let registered = registered.unwrap_or_else(|| project_name.to_string());
+    // Registering is the part that matters; failing to bring the window
+    // forward is cosmetic and must not discard the success above. A plug-in
+    // too old to offer the method answers `METHOD_NOT_FOUND`, which lands
+    // here as any other failed reveal does.
+    if let Err(message) = bridge.reveal_project(&registered).await {
+        tracing::info!("the Rodin bridge could not reveal the project: {message}");
+    }
+    Some(registered)
 }
 
 /// How long a just-launched Rodin gets to take the workspace lock before

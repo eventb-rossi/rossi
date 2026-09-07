@@ -51,7 +51,7 @@ zip = { version = "8.1", default-features = false, features = ["deflate-flate2-z
 # Protocol types are re-exported from eventb-lsp as `crate::lsp_types` so they
 # always match the version tower-lsp uses internally.
 tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros", "sync", "time", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros", "net", "sync", "time", "process"] }
 serde_json = "1.0"
 ropey = "1.6"
 dashmap = "6"
