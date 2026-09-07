@@ -319,6 +319,15 @@ pub struct RodinConfig {
     /// is unavailable on Windows. On by default.
     #[serde(default = "default_mirror_proofs")]
     pub mirror_proofs: bool,
+
+    /// Use the Rodin bridge plug-in when the running Rodin publishes one.
+    /// It can do inside the live instance what writing files at it cannot:
+    /// registering a project while Rodin holds the workspace, and bringing
+    /// the project forward. With no plug-in (stock Rodin) this setting
+    /// changes nothing: the file-mediated path runs either way. On by
+    /// default; turn it off to keep to that path even where a bridge exists.
+    #[serde(default = "default_bridge")]
+    pub bridge: bool,
 }
 
 impl Default for RodinConfig {
@@ -328,11 +337,16 @@ impl Default for RodinConfig {
             workspace: String::new(),
             sync: default_sync(),
             mirror_proofs: default_mirror_proofs(),
+            bridge: default_bridge(),
         }
     }
 }
 
 fn default_sync() -> bool {
+    true
+}
+
+fn default_bridge() -> bool {
     true
 }
 

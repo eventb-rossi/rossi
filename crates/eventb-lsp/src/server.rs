@@ -810,6 +810,7 @@ impl RossiLanguageServer {
             progress_supported: self.supports_work_done_progress.load(Ordering::Relaxed),
             written: Arc::clone(&self.rodin_written),
             mirror_proofs: config.rodin.mirror_proofs,
+            bridge: config.rodin.bridge,
             session_monitor: Arc::clone(&self.rodin_session_monitor),
             analyzer: self.analyzer.clone(),
         };
