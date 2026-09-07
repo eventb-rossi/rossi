@@ -109,7 +109,7 @@ pub fn load_manifest(workspace_dir: &Path, project_name: &str) -> Option<BaseMan
     serde_json::from_slice(&bytes).ok()
 }
 
-fn base_source_path(workspace_dir: &Path, project_name: &str, relative: &Path) -> PathBuf {
+pub fn base_source_path(workspace_dir: &Path, project_name: &str, relative: &Path) -> PathBuf {
     base_dir(workspace_dir, project_name)
         .join("sources")
         .join(relative)
@@ -181,12 +181,34 @@ pub fn sync_source_file(
     ))
     .map_err(|e| format!("no base snapshot for {}: {e}", relative.display()))?;
 
+    merge_source_file(manifest, relative, changed, &base, ours, printer, |name| {
+        // Deleted in Rodin (or transiently unreadable): not synced.
+        std::fs::read_to_string(project_dir.join(name)).ok()
+    })
+}
+
+/// The merge itself, with every input supplied rather than read.
+///
+/// `sync_source_file` is the disk-backed caller: the base comes from the
+/// snapshot and `xml_for` reads the project directory. A live edit has neither
+/// on disk yet, so it passes its own ancestor and hands over the XML the
+/// plug-in pushed. Everything here is pure, which is what lets the two share
+/// one merge instead of growing a second one.
+pub fn merge_source_file(
+    manifest: &BaseManifest,
+    relative: &Path,
+    changed: &std::collections::BTreeSet<String>,
+    base: &str,
+    ours: &str,
+    printer: &PrettyPrinter,
+    xml_for: impl Fn(&str) -> Option<String>,
+) -> Result<MergeOutcome, String> {
     let component_files = manifest
         .files
         .get(relative)
         .ok_or_else(|| format!("{} is not in the build manifest", relative.display()))?;
 
-    let base_components = rossi::parse_components(&base).map_err(|e| {
+    let base_components = rossi::parse_components(base).map_err(|e| {
         format!(
             "base snapshot of {} does not parse: {e}",
             relative.display()
@@ -200,14 +222,11 @@ pub fn sync_source_file(
         .iter()
         .filter(|name| changed.contains(*name))
     {
-        let xml_path = project_dir.join(xml_name);
-        let xml = match std::fs::read_to_string(&xml_path) {
-            Ok(xml) => xml,
-            // Deleted in Rodin (or transiently unreadable): not synced.
-            Err(_) => continue,
+        let Some(xml) = xml_for(xml_name) else {
+            continue;
         };
         let imported = rossi_build::ProjectComponent::from_xml(xml_name.clone(), &xml)
-            .map_err(|e| format!("cannot import {}: {e}", xml_path.display()))?;
+            .map_err(|e| format!("cannot import {xml_name}: {e}"))?;
         let base_match = base_components
             .iter()
             .find(|c| c.name() == imported.component.name());
@@ -230,7 +249,7 @@ pub fn sync_source_file(
 
     // "Theirs": the base text with each changed component's span replaced by
     // its re-imported rendering (hand formatting elsewhere survives).
-    let mut theirs = base.clone();
+    let mut theirs = base.to_string();
     let mut splices: Vec<(rossi::ast::Span, String)> = Vec::new();
     for (base_component, new_text) in &replaced {
         match base_component.span() {
@@ -260,7 +279,7 @@ pub fn sync_source_file(
     if ours == base {
         return Ok(MergeOutcome::FastForward(theirs));
     }
-    match diffy::merge(&base, ours, &theirs) {
+    match diffy::merge(base, ours, &theirs) {
         Ok(clean) => Ok(MergeOutcome::Merged(clean)),
         Err(conflicted) => Ok(MergeOutcome::Conflict(conflicted)),
     }
