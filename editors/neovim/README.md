@@ -327,6 +327,11 @@ Hand the model to the Rodin IDE without leaving Neovim:
   new content there); edits saved in Rodin flow back into the `.eventb`
   sources automatically via a three-way merge, with git-style conflict
   markers if both sides changed the same lines
+- If that Rodin ships the bridge plug-in (the eventb-rossi Rodin bundle
+  does), running the lens while Rodin already holds the workspace registers
+  the project in the live instance and brings it forward, instead of asking
+  you to use `File > Import`; set `bridge = false` to keep to the
+  file-mediated path
 - Configure `rossi.rodin.path` / `rossi.rodin.workspace` in the `settings`
   block if Rodin is not at the platform default location
 
