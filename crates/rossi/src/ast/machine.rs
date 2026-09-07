@@ -70,6 +70,9 @@ pub struct Variant {
 
     /// Source location of the whole item, label included
     pub span: Option<Span>,
+
+    /// Comment from Rodin XML
+    pub comment: Option<String>,
 }
 
 impl Variant {

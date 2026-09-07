@@ -681,7 +681,13 @@ impl PrettyPrinter {
                             head.chars().count(),
                             base.chars().count(),
                         );
-                        writeln!(output, "{head}{expr}").unwrap();
+                        let line = format!("{head}{expr}");
+                        self.writeln_commented(
+                            &mut output,
+                            &line,
+                            variant.comment.as_deref(),
+                            base,
+                        );
                     }
                 }
                 Style::Rossi => {
@@ -702,7 +708,14 @@ impl PrettyPrinter {
                             head.chars().count(),
                             self.indent.chars().count(),
                         );
-                        writeln!(output, "{head}{expr}").unwrap();
+                        let line = format!("{head}{expr}");
+                        let indent = self.indent.clone();
+                        self.writeln_commented(
+                            &mut output,
+                            &line,
+                            variant.comment.as_deref(),
+                            &indent,
+                        );
                     }
                 }
             }

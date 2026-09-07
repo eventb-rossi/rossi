@@ -697,6 +697,7 @@ fn parse_machine_xml_with_name(
                                 )?,
                                 // Rodin XML carries no source text to index.
                                 span: None,
+                                comment: get_xml_attr(&e, b"comment")?,
                             });
                         }
                     }
@@ -1806,8 +1807,9 @@ fn machine_to_xml(machine: &Machine) -> String {
                 format!(" org.eventb.core.label=\"{}\"", escape_xml(label))
             }
         };
+        let comment_attr = format_comment_attr(variant.comment.as_deref());
         xml.push_str(&format!(
-            "    <org.eventb.core.variant name=\"{name}\" org.eventb.core.expression=\"{}\"{label_attr}/>\n",
+            "    <org.eventb.core.variant name=\"{name}\" org.eventb.core.expression=\"{}\"{label_attr}{comment_attr}/>\n",
             escape_xml(&expr_str)
         ));
     }

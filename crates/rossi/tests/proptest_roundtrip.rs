@@ -722,6 +722,7 @@ fn arb_machine() -> impl Strategy<Value = Component> {
                         label: None,
                         expression,
                         span: None,
+                        comment: None,
                     })
                     .chain(
                         labeled_variants
@@ -730,6 +731,7 @@ fn arb_machine() -> impl Strategy<Value = Component> {
                                 label,
                                 expression,
                                 span: None,
+                                comment: None,
                             }),
                     )
                     .collect();

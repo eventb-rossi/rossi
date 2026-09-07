@@ -75,6 +75,9 @@ pub(crate) fn attach_comments_from_spans(
                 for invariant in &mut machine.invariants {
                     anchor!(invariant.span, &mut invariant.comment);
                 }
+                for variant in &mut machine.variants {
+                    anchor!(variant.span, &mut variant.comment);
+                }
                 if let Some(init) = &mut machine.initialisation {
                     anchor!(init.span, &mut init.comment);
                     for action in &mut init.actions {

@@ -331,6 +331,43 @@ fn format_is_idempotent_with_comments() {
 // =========================================================================
 
 #[test]
+fn variant_comment_stays_on_the_variant() {
+    // A variant was not a comment anchor, so its own trailing comment was
+    // re-homed onto the preceding invariant — in the text *and* in the XML.
+    // Rodin's IVariant is an ICommentedElement, so the variant can hold it.
+    let src = "MACHINE m
+VARIABLES
+    x
+INVARIANTS
+    @inv1 x ∈ ℕ
+VARIANT x // why this measure
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act0 x ≔ 0
+    END
+END
+";
+    let m = parse_machine(src);
+    assert_eq!(m.invariants[0].comment, None, "note must not land on @inv1");
+    assert_eq!(m.variants[0].comment.as_deref(), Some("why this measure"));
+
+    let xml = to_xml(&Component::Machine(m));
+    assert!(
+        xml.contains("org.eventb.core.variant")
+            && xml.contains("org.eventb.core.comment=\"why this measure\""),
+        "variant comment missing from XML:\n{xml}"
+    );
+    let Component::Machine(back) = parse_xml(&xml).expect("xml reparses") else {
+        panic!("expected machine");
+    };
+    assert_eq!(
+        back.variants[0].comment.as_deref(),
+        Some("why this measure")
+    );
+}
+
+#[test]
 fn witness_comment_survives_export_to_xml() {
     // `write_witness_xml` was the one element writer that never emitted
     // `org.eventb.core.comment`, so a witness comment was visible in text and
@@ -413,6 +450,9 @@ fn collect_comments(component: &Component) -> Vec<(String, String)> {
             }
             for i in &m.invariants {
                 out.extend(norm(&format!("invariant {:?}", i.label), &i.comment));
+            }
+            for v in &m.variants {
+                out.extend(norm(&format!("variant {:?}", v.label), &v.comment));
             }
             if let Some(init) = &m.initialisation {
                 out.extend(norm("initialisation", &init.comment));

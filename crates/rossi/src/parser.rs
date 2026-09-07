@@ -1304,6 +1304,7 @@ fn parse_machine(pair: pest::iterators::Pair<Rule>) -> Result<Component, ParseEr
                                         start,
                                         end: expression_span.end,
                                     }),
+                                    comment: None,
                                 });
                             }
                         }
@@ -4475,6 +4476,7 @@ fn parse_machine_with_recovery(
                     label: item.label,
                     expression,
                     span: Some(segment_span(start, item.whole)),
+                    comment: None,
                 });
             }
         }
