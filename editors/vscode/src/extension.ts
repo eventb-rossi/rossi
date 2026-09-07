@@ -39,6 +39,7 @@ interface RossiConfiguration {
         workspace: string;
         sync: boolean;
         bridge: boolean;
+        liveSync: boolean;
         mirrorProofs: boolean;
     };
     animate: {
@@ -78,6 +79,7 @@ function getRossiConfiguration(): RossiConfiguration {
             workspace: config.get<string>('rodin.workspace', ''),
             sync: config.get<boolean>('rodin.sync', true),
             bridge: config.get<boolean>('rodin.bridge', true),
+            liveSync: config.get<boolean>('rodin.liveSync', false),
             mirrorProofs: config.get<boolean>('rodin.mirrorProofs', true),
         },
         animate: {

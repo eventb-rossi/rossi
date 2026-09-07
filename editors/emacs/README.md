@@ -188,6 +188,7 @@ All settings can be customized via Emacs customization interface (`M-x customize
 (setq lsp-rossi-rodin-path "")               ; "" = platform default Rodin install
 (setq lsp-rossi-rodin-workspace "")          ; "" = <root>/.rossi/rodin
 (setq lsp-rossi-rodin-bridge t)              ; Use a running Rodin's bridge plug-in when present
+(setq lsp-rossi-rodin-live-sync nil)         ; Merge Rodin's unsaved edits as they are typed
 (setq lsp-rossi-rodin-mirror-proofs t)       ; Carry proof files checkout <-> workspace
 ```
 

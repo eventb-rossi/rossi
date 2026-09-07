@@ -145,6 +145,9 @@ return {
           -- is one: it registers the project in the live instance rather
           -- than asking you to use File > Import
           bridge = true,
+          -- Merge Rodin's unsaved edits into the buffer as they are typed,
+          -- rather than waiting for Ctrl+S in Rodin. Needs the bridge plug-in.
+          liveSync = false,
         },
       },
     },

@@ -280,6 +280,11 @@
           "default": true,
           "description": "Use the Rodin bridge plug-in when the running Rodin publishes one (it ships with the eventb-rossi Rodin bundle). It can do inside the live instance what writing files at it cannot: register a project while Rodin holds the workspace (which otherwise needs File > Import) and bring the project forward. With no plug-in installed this changes nothing."
         },
+        "rossi.rodin.liveSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Merge Rodin's unsaved model edits into the open buffer as they are typed, rather than waiting for Ctrl+S in Rodin. Needs the bridge plug-in from the eventb-rossi Rodin bundle, which pushes the in-memory component; the save-driven merge runs either way. Only ever applies a clean merge: where both sides changed the same lines the buffer is left alone until they settle."
+        },
         "rossi.rodin.mirrorProofs": {
           "type": "boolean",
           "default": true,
