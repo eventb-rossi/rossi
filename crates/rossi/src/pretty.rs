@@ -44,7 +44,12 @@
 //! ```
 
 use crate::ast::*;
+use crate::comment_place::{
+    self, Anchor, ClauseLayout, CommentPlacements, clause_anchor, end_anchor, header_anchor,
+    item_anchor,
+};
 use crate::comments;
+use crate::keywords::KeywordId;
 use crate::op_info;
 use crate::operators::{self, OperatorId};
 use crate::operators::{BinaryOp, UnaryOp};
@@ -60,6 +65,13 @@ fn debug_assert_component_name(name: &str, role: &str) {
         crate::names::is_valid_component_name(name),
         "{role} {name:?} is not a valid component name; printed output would not re-parse"
     );
+}
+
+/// Close the current physical line of a hanging list and start a fresh one.
+fn break_line(output: &mut Sink<'_>, line: &mut String, hang: &str) {
+    writeln!(output, "{line}").unwrap();
+    line.clear();
+    line.push_str(hang);
 }
 
 /// True when a comment would actually render, i.e. it survives
@@ -242,24 +254,58 @@ impl Default for PrettyPrinter {
 /// without touching the helpers again. Implementing [`std::fmt::Write`] is the
 /// point: every `write!` and `writeln!` body in the printer is unchanged by the
 /// switch away from a bare `String`.
-struct Sink {
+struct Sink<'a> {
     out: String,
+    /// Where the source put each comment, on the text -> text path only.
+    ///
+    /// `Some` exactly when [`format_str`] built it from the source text, where
+    /// a comment's own position is the truth. Every other caller — `rossi
+    /// import`, [`to_string`], Rodin-canonical formatting — prints an AST built
+    /// without source text, passes `None`, and keeps the element `comment`
+    /// attributes as the only carrier.
+    placements: Option<&'a CommentPlacements>,
 }
 
-impl std::fmt::Write for Sink {
+impl std::fmt::Write for Sink<'_> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.out.push_str(s);
         Ok(())
     }
 }
 
-impl Sink {
+impl<'a> Sink<'a> {
     fn new() -> Self {
-        Self { out: String::new() }
+        Self {
+            out: String::new(),
+            placements: None,
+        }
+    }
+
+    fn positioned(placements: &'a CommentPlacements) -> Self {
+        Self {
+            out: String::new(),
+            placements: Some(placements),
+        }
     }
 
     fn push(&mut self, c: char) {
         self.out.push(c);
+    }
+
+    /// The buffer, for the comment writers that append straight into it.
+    fn buf(&mut self) -> &mut String {
+        &mut self.out
+    }
+
+    /// Whether `anchor`'s line will end with a comment.
+    ///
+    /// Layout decisions that today ask "does this element render a comment?"
+    /// must ask the placements instead when formatting from source.
+    fn ends_with_comment(&self, comment: Option<&str>, anchor: Option<Anchor>) -> bool {
+        match self.placements {
+            Some(placements) => placements.has_trailing(anchor),
+            None => renders_comment(comment),
+        }
     }
 
     fn finish(self) -> String {
@@ -413,14 +459,14 @@ impl PrettyPrinter {
         output.finish()
     }
 
-    fn print_component_into(&self, output: &mut Sink, component: &Component) {
+    fn print_component_into(&self, output: &mut Sink<'_>, component: &Component) {
         match component {
             Component::Context(ctx) => self.print_context_into(output, ctx),
             Component::Machine(mch) => self.print_machine_into(output, mch),
         }
     }
 
-    fn print_components_into(&self, output: &mut Sink, components: &[Component]) {
+    fn print_components_into(&self, output: &mut Sink<'_>, components: &[Component]) {
         for (i, component) in components.iter().enumerate() {
             if i > 0 {
                 output.push('\n');
@@ -429,22 +475,38 @@ impl PrettyPrinter {
         }
     }
 
-    /// Print one element line followed by its comment, Camille style.
+    /// Print one element line with its comment.
+    ///
+    /// Which comment depends on the carrier. Formatting text replays the
+    /// source's own placements for `anchor` — the comments written above the
+    /// line, then the one trailing it, each in the marker it was written in.
+    /// Everything else renders the element's `comment` attribute Camille style:
+    /// a single-line comment trails the element (`line // text`) and a
+    /// multiline one becomes a `/* ... */` block on the following lines, one
+    /// level deeper. Attribute comments are normalized first, so a blank one
+    /// emits nothing and parse → print is idempotent.
     ///
     /// `line` is the complete element line without the trailing newline and
-    /// `indent` is the element's own indentation. A single-line comment
-    /// trails the element (`line // text`); a multiline comment becomes a
-    /// `/* ... */` block on the following lines, one level deeper, with
-    /// continuation lines aligned under the first — the same layout Rodin's
-    /// Camille editor prints. Comments are normalized first, so a blank
-    /// comment emits nothing and parse → print is idempotent.
+    /// `indent` is the element's own indentation.
     fn writeln_commented(
         &self,
-        output: &mut Sink,
+        output: &mut Sink<'_>,
         line: &str,
         comment: Option<&str>,
         indent: &str,
+        anchor: Option<Anchor>,
     ) {
+        // Formatting from source: the placements own every comment, and the
+        // element's `comment` attribute — the same text, re-derived by
+        // `comment_attach` — is deliberately ignored so nothing prints twice.
+        if let Some(placements) = output.placements {
+            let out = output.buf();
+            placements.write_above(out, anchor, indent);
+            out.push_str(line);
+            placements.write_trailing(out, anchor, indent);
+            out.push('\n');
+            return;
+        }
         let Some(text) = comment.and_then(comments::normalize_comment) else {
             writeln!(output, "{line}").unwrap();
             return;
@@ -453,21 +515,33 @@ impl PrettyPrinter {
             writeln!(output, "{line} // {text}").unwrap();
             return;
         }
-        // `*/` inside the text (possible only via Rodin XML) would close the
-        // block early; break it up, losing one byte of fidelity.
-        let text = text.replace("*/", "* /");
         writeln!(output, "{line}").unwrap();
         let block_indent = format!("{indent}{}", self.indent);
-        let mut lines = text.split('\n');
-        let first = lines.next().unwrap();
-        write!(output, "{block_indent}/* {first}").unwrap();
-        for cont in lines {
-            writeln!(output).unwrap();
-            if !cont.is_empty() {
-                write!(output, "{block_indent}   {cont}").unwrap();
-            }
+        let out = output.buf();
+        comment_place::write_block(out, &text, &block_indent, &block_indent);
+        out.push('\n');
+    }
+
+    /// Whether `variant` shares its line with the first variant expression.
+    ///
+    /// Read by the printer and by [`CommentPlacements`], which has to know
+    /// whether that keyword gets a line a comment can be anchored to.
+    #[inline]
+    fn variant_inline(&self) -> bool {
+        self.style == Style::Camille
+    }
+
+    /// Which clause keywords this printer gives a line of their own.
+    ///
+    /// The one place the printer's layout decisions are restated for
+    /// [`CommentPlacements`]; an anchor it gets wrong is one the printer never
+    /// visits, which is why both fields read the same state the printer
+    /// branches on rather than a copy of it.
+    fn clause_layout(&self) -> ClauseLayout {
+        ClauseLayout {
+            inline_header_clauses: self.header_clauses == HeaderClauseLayout::Inline,
+            inline_variant: self.variant_inline(),
         }
-        writeln!(output, " */").unwrap();
     }
 
     /// The structural keyword in the configured case.
@@ -482,7 +556,7 @@ impl PrettyPrinter {
     /// Blank line before a top-level clause keyword, when the style asks
     /// for one. Never emitted before the closing END.
     #[inline]
-    fn clause_gap(&self, output: &mut Sink) {
+    fn clause_gap(&self, output: &mut Sink<'_>) {
         if self.blank_between_clauses {
             output.push('\n');
         }
@@ -554,16 +628,45 @@ impl PrettyPrinter {
     /// on the next hanging line.
     fn print_inline_name_list(
         &self,
-        output: &mut Sink,
+        output: &mut Sink<'_>,
         keyword: &str,
         clause_indent: &str,
         items: &[NamedElement],
+        keyword_anchor: Option<Anchor>,
     ) {
+        if let Some(placements) = output.placements {
+            let out = output.buf();
+            placements.write_above(out, keyword_anchor, clause_indent);
+            // The keyword shares its line with the names, so a comment written
+            // after it has nowhere to trail: left where it is, the next pass
+            // would read it as the last name's. Lift it onto its own line
+            // above the keyword, where a reparse files it under this same
+            // clause and the result is a fixed point.
+            placements.write_trailing_alone(out, keyword_anchor, clause_indent);
+        }
         let head = format!("{clause_indent}{keyword}");
         let hang = " ".repeat(head.chars().count());
         let mut line = head;
         let mut pending = false;
+        // Where a comment above the next name goes: the keyword's own column
+        // while `line` is still the keyword's line, the hanging column after.
+        let mut comment_indent = clause_indent;
         for item in items {
+            let anchor = item_anchor(item.span);
+            if let Some(placements) = output.placements
+                && placements.has_above(anchor)
+            {
+                // A comment written above this name cannot share a line with
+                // the names before it: close the run so the name starts a
+                // fresh hanging line, then write the comment above the line
+                // the name will open.
+                if pending {
+                    break_line(output, &mut line, &hang);
+                    pending = false;
+                    comment_indent = &hang;
+                }
+                placements.write_above(output.buf(), anchor, comment_indent);
+            }
             // Wrap to the hanging column when the next name would exceed
             // the width — but never break between the keyword (or a fresh
             // hanging line) and its first name.
@@ -571,17 +674,19 @@ impl PrettyPrinter {
                 && self.max_line_width > 0
                 && line.chars().count() + 1 + item.name.chars().count() > self.max_line_width
             {
-                writeln!(output, "{line}").unwrap();
-                line.clear();
-                line.push_str(&hang);
+                break_line(output, &mut line, &hang);
+                comment_indent = &hang;
             }
             write!(line, " {}", item.name).unwrap();
             pending = true;
-            if renders_comment(item.comment.as_deref()) {
-                self.writeln_commented(output, &line, item.comment.as_deref(), &hang);
+            if output.ends_with_comment(item.comment.as_deref(), anchor) {
+                // Any comments above this name are already out; `write_above`
+                // is idempotent, so the shared path re-emits nothing.
+                self.writeln_commented(output, &line, item.comment.as_deref(), &hang, anchor);
                 line.clear();
                 line.push_str(&hang);
                 pending = false;
+                comment_indent = &hang;
             }
         }
         if pending {
@@ -590,7 +695,7 @@ impl PrettyPrinter {
     }
 
     /// Convert a Context to formatted text
-    fn print_context_into(&self, output: &mut Sink, context: &Context) {
+    fn print_context_into(&self, output: &mut Sink<'_>, context: &Context) {
         debug_assert_component_name(&context.name, "context name");
         let mut header = format!("{} {}", self.kw("CONTEXT", "context"), context.name);
         if self.header_clauses == HeaderClauseLayout::Inline && !context.extends.is_empty() {
@@ -601,11 +706,23 @@ impl PrettyPrinter {
             }
             self.push_header_segment(&mut header, &segment, &self.indent);
         }
-        self.writeln_commented(output, &header, context.comment.as_deref(), "");
+        self.writeln_commented(
+            output,
+            &header,
+            context.comment.as_deref(),
+            "",
+            header_anchor(context.span.or(context.name_span)),
+        );
 
         if self.header_clauses == HeaderClauseLayout::Block && !context.extends.is_empty() {
             self.clause_gap(output);
-            writeln!(output, "{}", self.kw("EXTENDS", "extends")).unwrap();
+            self.writeln_commented(
+                output,
+                self.kw("EXTENDS", "extends"),
+                None,
+                "",
+                clause_anchor(&context.clauses, KeywordId::Extends),
+            );
             for ext in &context.extends {
                 debug_assert_component_name(ext, "extends target");
                 writeln!(output, "{}{}", self.indent, ext).unwrap();
@@ -614,7 +731,12 @@ impl PrettyPrinter {
 
         if !context.sets.is_empty() {
             self.clause_gap(output);
-            self.print_decl_list(output, self.kw("SETS", "sets"), &context.sets);
+            self.print_decl_list(
+                output,
+                self.kw("SETS", "sets"),
+                &context.sets,
+                clause_anchor(&context.clauses, KeywordId::Sets),
+            );
         }
 
         if !context.constants.is_empty() {
@@ -623,33 +745,55 @@ impl PrettyPrinter {
                 output,
                 self.kw("CONSTANTS", "constants"),
                 &context.constants,
+                clause_anchor(&context.clauses, KeywordId::Constants),
             );
         }
 
         if !context.axioms.is_empty() {
             self.clause_gap(output);
-            writeln!(output, "{}", self.kw("AXIOMS", "axioms")).unwrap();
+            self.writeln_commented(
+                output,
+                self.kw("AXIOMS", "axioms"),
+                None,
+                "",
+                clause_anchor(&context.clauses, KeywordId::Axioms),
+            );
             for axiom in &context.axioms {
                 self.print_labeled_predicate(output, axiom, &self.indent);
             }
         }
 
-        writeln!(output, "{}", self.kw("END", "end")).unwrap();
+        self.writeln_commented(
+            output,
+            self.kw("END", "end"),
+            None,
+            "",
+            end_anchor(context.span),
+        );
     }
 
     /// Print a top-level declaration list (`sets`/`constants`/`variables`)
     /// in the configured [`DeclListLayout`].
-    fn print_decl_list(&self, output: &mut Sink, keyword: &str, items: &[NamedElement]) {
+    fn print_decl_list(
+        &self,
+        output: &mut Sink<'_>,
+        keyword: &str,
+        items: &[NamedElement],
+        keyword_anchor: Option<Anchor>,
+    ) {
         match self.decl_lists {
-            DeclListLayout::Inline => self.print_inline_name_list(output, keyword, "", items),
+            DeclListLayout::Inline => {
+                self.print_inline_name_list(output, keyword, "", items, keyword_anchor);
+            }
             DeclListLayout::OnePerLine => {
-                writeln!(output, "{keyword}").unwrap();
+                self.writeln_commented(output, keyword, None, "", keyword_anchor);
                 for item in items {
                     self.writeln_commented(
                         output,
                         &format!("{}{}", self.indent, item.name),
                         item.comment.as_deref(),
                         &self.indent,
+                        item_anchor(item.span),
                     );
                 }
             }
@@ -657,7 +801,7 @@ impl PrettyPrinter {
     }
 
     /// Convert a Machine to formatted text
-    fn print_machine_into(&self, output: &mut Sink, machine: &Machine) {
+    fn print_machine_into(&self, output: &mut Sink<'_>, machine: &Machine) {
         debug_assert_component_name(&machine.name, "machine name");
         let mut header = format!("{} {}", self.kw("MACHINE", "machine"), machine.name);
         if self.header_clauses == HeaderClauseLayout::Inline {
@@ -675,19 +819,37 @@ impl PrettyPrinter {
                 self.push_header_segment(&mut header, &segment, &self.indent);
             }
         }
-        self.writeln_commented(output, &header, machine.comment.as_deref(), "");
+        self.writeln_commented(
+            output,
+            &header,
+            machine.comment.as_deref(),
+            "",
+            header_anchor(machine.span.or(machine.name_span)),
+        );
 
         if self.header_clauses == HeaderClauseLayout::Block {
             if let Some(ref refines) = machine.refines {
                 debug_assert_component_name(refines, "refines target");
                 self.clause_gap(output);
-                writeln!(output, "{}", self.kw("REFINES", "refines")).unwrap();
+                self.writeln_commented(
+                    output,
+                    self.kw("REFINES", "refines"),
+                    None,
+                    "",
+                    clause_anchor(&machine.clauses, KeywordId::Refines),
+                );
                 writeln!(output, "{}{}", self.indent, refines).unwrap();
             }
 
             if !machine.sees.is_empty() {
                 self.clause_gap(output);
-                writeln!(output, "{}", self.kw("SEES", "sees")).unwrap();
+                self.writeln_commented(
+                    output,
+                    self.kw("SEES", "sees"),
+                    None,
+                    "",
+                    clause_anchor(&machine.clauses, KeywordId::Sees),
+                );
                 for sees in &machine.sees {
                     debug_assert_component_name(sees, "sees target");
                     writeln!(output, "{}{}", self.indent, sees).unwrap();
@@ -701,12 +863,19 @@ impl PrettyPrinter {
                 output,
                 self.kw("VARIABLES", "variables"),
                 &machine.variables,
+                clause_anchor(&machine.clauses, KeywordId::Variables),
             );
         }
 
         if !machine.invariants.is_empty() {
             self.clause_gap(output);
-            writeln!(output, "{}", self.kw("INVARIANTS", "invariants")).unwrap();
+            self.writeln_commented(
+                output,
+                self.kw("INVARIANTS", "invariants"),
+                None,
+                "",
+                clause_anchor(&machine.clauses, KeywordId::Invariants),
+            );
             for inv in &machine.invariants {
                 self.print_labeled_predicate(output, inv, &self.indent);
             }
@@ -715,56 +884,80 @@ impl PrettyPrinter {
         if !machine.variants.is_empty() {
             self.clause_gap(output);
             let keyword = self.kw("VARIANT", "variant");
-            match self.style {
-                Style::Camille => {
-                    // The first variant sits inline on the keyword line;
-                    // later variants need their `@label` sigil to delimit
-                    // the expressions.
-                    for (i, variant) in machine.variants.iter().enumerate() {
-                        let head = match &variant.label {
-                            Some(label) if i == 0 => format!("{keyword} @{label} "),
-                            None if i == 0 => format!("{keyword} "),
-                            _ => format!("{}@{} ", self.indent, variant.effective_label()),
-                        };
-                        let base = if i == 0 { "" } else { self.indent.as_str() };
-                        let expr = self.print_expression_at(
-                            &variant.expression,
-                            head.chars().count(),
-                            base.chars().count(),
-                        );
-                        let line = format!("{head}{expr}");
-                        self.writeln_commented(output, &line, variant.comment.as_deref(), base);
-                    }
+            // Asking `variant_inline` rather than matching the style again is
+            // what stops the placements and the printer disagreeing about
+            // whether the keyword has a line of its own to anchor a comment to.
+            if self.variant_inline() {
+                // The first variant sits inline on the keyword line;
+                // later variants need their `@label` sigil to delimit
+                // the expressions.
+                for (i, variant) in machine.variants.iter().enumerate() {
+                    let head = match &variant.label {
+                        Some(label) if i == 0 => format!("{keyword} @{label} "),
+                        None if i == 0 => format!("{keyword} "),
+                        _ => format!("{}@{} ", self.indent, variant.effective_label()),
+                    };
+                    let base = if i == 0 { "" } else { self.indent.as_str() };
+                    let expr = self.print_expression_at(
+                        &variant.expression,
+                        head.chars().count(),
+                        base.chars().count(),
+                    );
+                    let line = format!("{head}{expr}");
+                    self.writeln_commented(
+                        output,
+                        &line,
+                        variant.comment.as_deref(),
+                        base,
+                        item_anchor(variant.span),
+                    );
                 }
-                Style::Rossi => {
-                    writeln!(output, "{keyword}").unwrap();
-                    for (i, variant) in machine.variants.iter().enumerate() {
-                        // The grammar only allows a bare expression in first
-                        // position; spell out the default label elsewhere so
-                        // the output stays parseable.
-                        let head = match &variant.label {
-                            Some(label) => format!("{}@{label} ", self.indent),
-                            None if i == 0 => self.indent.clone(),
-                            None => {
-                                format!("{}@{} ", self.indent, crate::ast::DEFAULT_VARIANT_LABEL)
-                            }
-                        };
-                        let expr = self.print_expression_at(
-                            &variant.expression,
-                            head.chars().count(),
-                            self.indent.chars().count(),
-                        );
-                        let line = format!("{head}{expr}");
-                        let indent = self.indent.clone();
-                        self.writeln_commented(output, &line, variant.comment.as_deref(), &indent);
-                    }
+            } else {
+                self.writeln_commented(
+                    output,
+                    keyword,
+                    None,
+                    "",
+                    clause_anchor(&machine.clauses, KeywordId::Variant),
+                );
+                for (i, variant) in machine.variants.iter().enumerate() {
+                    // The grammar only allows a bare expression in first
+                    // position; spell out the default label elsewhere so
+                    // the output stays parseable.
+                    let head = match &variant.label {
+                        Some(label) => format!("{}@{label} ", self.indent),
+                        None if i == 0 => self.indent.clone(),
+                        None => {
+                            format!("{}@{} ", self.indent, crate::ast::DEFAULT_VARIANT_LABEL)
+                        }
+                    };
+                    let expr = self.print_expression_at(
+                        &variant.expression,
+                        head.chars().count(),
+                        self.indent.chars().count(),
+                    );
+                    let line = format!("{head}{expr}");
+                    let indent = self.indent.clone();
+                    self.writeln_commented(
+                        output,
+                        &line,
+                        variant.comment.as_deref(),
+                        &indent,
+                        item_anchor(variant.span),
+                    );
                 }
             }
         }
 
         if machine.initialisation.is_some() || !machine.events.is_empty() {
             self.clause_gap(output);
-            writeln!(output, "{}", self.kw("EVENTS", "events")).unwrap();
+            self.writeln_commented(
+                output,
+                self.kw("EVENTS", "events"),
+                None,
+                "",
+                clause_anchor(&machine.clauses, KeywordId::Events),
+            );
 
             // Camille: no blank line before the first item, one blank line
             // between successive items. Rossi: a blank line before every
@@ -784,7 +977,13 @@ impl PrettyPrinter {
             }
         }
 
-        writeln!(output, "{}", self.kw("END", "end")).unwrap();
+        self.writeln_commented(
+            output,
+            self.kw("END", "end"),
+            None,
+            "",
+            end_anchor(machine.span),
+        );
     }
 
     /// Print a labeled predicate.
@@ -794,7 +993,7 @@ impl PrettyPrinter {
     /// canonical, order-preserving form and mirrors Rodin's model, where a theorem
     /// is a boolean attribute on an axiom/invariant rather than a distinct section.
     /// Parsing a `THEOREMS` section is therefore normalized to inline on output.
-    fn print_labeled_predicate(&self, output: &mut Sink, lp: &LabeledPredicate, indent: &str) {
+    fn print_labeled_predicate(&self, output: &mut Sink<'_>, lp: &LabeledPredicate, indent: &str) {
         let theorem_str = if lp.is_theorem { "theorem " } else { "" };
         let head = match &lp.label {
             Some(label) => format!("{indent}{theorem_str}@{label} "),
@@ -803,11 +1002,17 @@ impl PrettyPrinter {
         let rendered =
             self.print_predicate_at(&lp.predicate, head.chars().count(), indent.chars().count());
         let line = format!("{head}{rendered}");
-        self.writeln_commented(output, &line, lp.comment.as_deref(), indent);
+        self.writeln_commented(
+            output,
+            &line,
+            lp.comment.as_deref(),
+            indent,
+            item_anchor(lp.span),
+        );
     }
 
     /// Print a labeled action
-    fn print_labeled_action(&self, output: &mut Sink, la: &LabeledAction, indent: &str) {
+    fn print_labeled_action(&self, output: &mut Sink<'_>, la: &LabeledAction, indent: &str) {
         let head = match &la.label {
             Some(label) => format!("{indent}@{label} "),
             None => indent.to_string(),
@@ -815,18 +1020,24 @@ impl PrettyPrinter {
         let rendered =
             self.print_action_at(&la.action, head.chars().count(), indent.chars().count());
         let line = format!("{head}{rendered}");
-        self.writeln_commented(output, &line, la.comment.as_deref(), indent);
+        self.writeln_commented(
+            output,
+            &line,
+            la.comment.as_deref(),
+            indent,
+            item_anchor(la.span),
+        );
     }
 
     /// Print an action list (one action per line, no separators).
-    fn print_action_list(&self, output: &mut Sink, actions: &[LabeledAction], indent: &str) {
+    fn print_action_list(&self, output: &mut Sink<'_>, actions: &[LabeledAction], indent: &str) {
         for action in actions {
             self.print_labeled_action(output, action, indent);
         }
     }
 
     /// Print an initialisation event
-    fn print_initialisation(&self, output: &mut Sink, init: &InitialisationEvent) {
+    fn print_initialisation(&self, output: &mut Sink<'_>, init: &InitialisationEvent) {
         let (event_indent, kw_indent, item_indent) = self.event_ladder();
         let event_kw = self.kw("EVENT", "event");
         let header = if init.extended {
@@ -834,16 +1045,28 @@ impl PrettyPrinter {
         } else {
             format!("{event_indent}{event_kw} INITIALISATION")
         };
-        self.writeln_commented(output, &header, init.comment.as_deref(), &event_indent);
+        self.writeln_commented(
+            output,
+            &header,
+            init.comment.as_deref(),
+            &event_indent,
+            item_anchor(init.span),
+        );
         if !init.actions.is_empty() {
             writeln!(output, "{kw_indent}{}", self.kw("THEN", "then")).unwrap();
             self.print_action_list(output, &init.actions, &item_indent);
         }
-        writeln!(output, "{event_indent}{}", self.kw("END", "end")).unwrap();
+        self.writeln_commented(
+            output,
+            &format!("{event_indent}{}", self.kw("END", "end")),
+            None,
+            &event_indent,
+            end_anchor(init.span),
+        );
     }
 
     /// Print an event
-    fn print_event(&self, output: &mut Sink, event: &Event) {
+    fn print_event(&self, output: &mut Sink<'_>, event: &Event) {
         let (event_indent, kw_indent, item_indent) = self.event_ladder();
 
         debug_assert_component_name(&event.name, "event name");
@@ -879,7 +1102,13 @@ impl PrettyPrinter {
             }
             self.push_header_segment(&mut header, &segment, &kw_indent);
         }
-        self.writeln_commented(output, &header, event.comment.as_deref(), &event_indent);
+        self.writeln_commented(
+            output,
+            &header,
+            event.comment.as_deref(),
+            &event_indent,
+            item_anchor(event.span.or(event.name_span)),
+        );
 
         // Print REFINES as a block clause when not extended, one target per
         // line (Camille inlines the targets on the header line instead).
@@ -897,7 +1126,16 @@ impl PrettyPrinter {
             let any_kw = self.kw("ANY", "any");
             match self.decl_lists {
                 DeclListLayout::Inline => {
-                    self.print_inline_name_list(output, any_kw, &kw_indent, &event.parameters);
+                    // No anchor: an event's clauses carry no `ClauseRegion`, so
+                    // `ANY` has no line a comment can be filed against (see
+                    // `keywords.rs`).
+                    self.print_inline_name_list(
+                        output,
+                        any_kw,
+                        &kw_indent,
+                        &event.parameters,
+                        None,
+                    );
                 }
                 DeclListLayout::OnePerLine => {
                     writeln!(output, "{kw_indent}{any_kw}").unwrap();
@@ -907,6 +1145,7 @@ impl PrettyPrinter {
                             &format!("{item_indent}{}", param.name),
                             param.comment.as_deref(),
                             &item_indent,
+                            item_anchor(param.span),
                         );
                     }
                 }
@@ -939,7 +1178,13 @@ impl PrettyPrinter {
             self.print_action_list(output, &event.actions, &item_indent);
         }
 
-        writeln!(output, "{event_indent}{}", self.kw("END", "end")).unwrap();
+        self.writeln_commented(
+            output,
+            &format!("{event_indent}{}", self.kw("END", "end")),
+            None,
+            &event_indent,
+            end_anchor(event.span),
+        );
     }
 
     #[inline]
@@ -2799,10 +3044,31 @@ pub fn components_to_string_ascii(components: &[Component]) -> String {
 /// server both format through it, and `rossi import` prints through the same
 /// [`PrettyPrinter`], so command-line and editor formatting always agree.
 ///
+/// It is also the **only** path that keeps comments where the source put them.
+/// Formatting has the source text, so a comment's own position is the truth and
+/// the `comment_place` module replays it: text, `//` or `/* */` marker, and
+/// whether it trails an element or introduces what follows. `import` and
+/// [`to_string`] print an AST that may have come from Rodin XML, where a
+/// comment is an element attribute with no position at all, so they keep
+/// attaching it to its element.
+///
+/// Comments that cannot be anchored keep moving, once and stably: above an
+/// event's inner clause keyword (`WHERE`, `THEN`, … carry no clause region),
+/// between a `refines`/`sees`/`extends` keyword and its target, or inside a
+/// formula. See the `comment_place` module docs for the full list.
+///
 /// # Errors
 ///
 /// Returns a [`ParseError`](crate::ParseError) if `src` is not valid Event-B.
 pub fn format_str(src: &str, printer: &PrettyPrinter) -> Result<String, crate::error::ParseError> {
     let components = crate::parser::parse_components(src)?;
-    Ok(printer.print_components(&components))
+    // The only positional-mode caller. Every other printer entry point works
+    // from an AST that may have come from Rodin XML, where a comment has no
+    // position at all and the element `comment` attribute is the only carrier.
+    let placements = CommentPlacements::new(src, &components, printer.clause_layout());
+    let mut output = Sink::positioned(&placements);
+    printer.print_components_into(&mut output, &components);
+    placements.write_above(output.buf(), Some(Anchor::Eof), "");
+    placements.assert_fully_rendered();
+    Ok(output.finish())
 }

@@ -10,8 +10,8 @@ mod common;
 
 use common::{assert_roundtrip, parse_context, parse_machine};
 use rossi::{
-    Component, PrettyPrinter, Style, format_str, parse, parse_xml, to_string, to_string_ascii,
-    to_xml,
+    Component, DeclListLayout, PrettyPrinter, Style, StyleOverrides, format_str, parse,
+    parse_components, parse_xml, to_string, to_string_ascii, to_xml,
 };
 
 // =========================================================================
@@ -324,6 +324,290 @@ fn format_is_idempotent_with_comments() {
         let twice = format_str(&once, &printer).unwrap();
         assert_eq!(once, twice, "format not idempotent for:\n{src}");
     }
+}
+
+// =========================================================================
+// Positional fidelity: `fmt` must not move a comment
+// =========================================================================
+
+/// Every comment in `src` as `(is_trailing, text, elements_before_it)`.
+///
+/// Positions are described relative to the surrounding elements rather than by
+/// offset, so the signature is invariant under everything formatting is allowed
+/// to change — indentation, wrapping, keyword case, blank lines.
+fn comment_signature(src: &str) -> Vec<(bool, String, usize)> {
+    let mut element_starts: Vec<usize> = Vec::new();
+    for component in &parse_components(src).expect("parses") {
+        collect_element_starts(component, &mut element_starts);
+    }
+    element_starts.sort_unstable();
+
+    rossi::comments::comment_spans(src)
+        .iter()
+        .filter_map(|span| {
+            // Only the lexical half is shared with the printer; the position
+            // logic below is deliberately re-derived, so a bug in the
+            // placements cannot cancel itself out in the assertion.
+            let (_, text) = rossi::comments::comment_body(&src[span.start..span.end])?;
+            let trailing = src[..span.start]
+                .rsplit('\n')
+                .next()
+                .is_some_and(|line| !line.trim().is_empty());
+            let before = element_starts.partition_point(|start| *start < span.start);
+            Some((trailing, text, before))
+        })
+        .collect()
+}
+
+fn collect_element_starts(component: &Component, out: &mut Vec<usize>) {
+    let mut push = |span: Option<rossi::ast::Span>| {
+        if let Some(span) = span {
+            out.push(span.start);
+        }
+    };
+    match component {
+        Component::Context(ctx) => {
+            for set in &ctx.sets {
+                push(set.span);
+            }
+            for constant in &ctx.constants {
+                push(constant.span);
+            }
+            for axiom in &ctx.axioms {
+                push(axiom.span);
+            }
+        }
+        Component::Machine(m) => {
+            for variable in &m.variables {
+                push(variable.span);
+            }
+            for invariant in &m.invariants {
+                push(invariant.span);
+            }
+            for variant in &m.variants {
+                push(variant.span);
+            }
+            if let Some(init) = &m.initialisation {
+                push(init.span);
+                for action in &init.actions {
+                    push(action.span);
+                }
+            }
+            for event in &m.events {
+                push(event.span);
+                for parameter in &event.parameters {
+                    push(parameter.span);
+                }
+                for lp in event
+                    .guards
+                    .iter()
+                    .chain(&event.with)
+                    .chain(&event.witnesses)
+                {
+                    push(lp.span);
+                }
+                for action in &event.actions {
+                    push(action.span);
+                }
+            }
+        }
+    }
+}
+
+/// Formatting must leave every comment's text, marker and position alone, and
+/// be a fixed point.
+fn assert_comments_stay_put(src: &str, printer: &PrettyPrinter) {
+    let once = format_str(src, printer).unwrap_or_else(|e| panic!("format {src:?}: {e}"));
+    assert_eq!(
+        comment_signature(src),
+        comment_signature(&once),
+        "fmt moved or rewrote a comment:\n--- before ---\n{src}--- after ---\n{once}"
+    );
+    let twice = format_str(&once, printer).expect("reformat");
+    assert_eq!(once, twice, "fmt is not idempotent for:\n{src}");
+}
+
+#[test]
+fn comments_keep_their_place_across_every_slot() {
+    let sources = [
+        // A banner above a clause keyword. It used to become a `/* */` block
+        // trailing the last invariant.
+        "machine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\n\n////////////////\n// EVENTS\n////////////////\n\nevents\n  event INITIALISATION\n  then\n    @act0 x ≔ 0\n  end\nend\n",
+        // A file header, and a footer after the final `end`. The footer used
+        // to migrate backwards across three closing scopes onto the last
+        // action — enough to turn a stray `-` into a coverage-exclusion
+        // marker, which is how at least one downstream tool reads it.
+        "// licence line one\n// licence line two\n\nmachine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\nevents\n  event INITIALISATION\n  then\n    @act0 x ≔ 0\n  end\nend\n// footer\n",
+        // Two separate comments in different clauses: they used to merge into
+        // one block on the invariant.
+        "machine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\n\n// about the events\n\nevents\n  // about this one\n  event INITIALISATION\n  then\n    @act0 x ≔ 0\n  end\nend\n",
+        // Trailing and own-line comments on consecutive lines stay distinct.
+        "context c\naxioms\n  @axm1 1 = 1 // first\n  // second\nend\n",
+        // Inside a declaration list, which Camille prints inline.
+        "context c\nsets\n  S // about S\n  // about T\n  T\nconstants k\naxioms\n  @axm1 k ∈ S\nend\n",
+        // A block comment keeps its `/* */` marker.
+        "context c\naxioms\n  @axm1 1 = 1\n  /* first line\n     second line */\nend\n",
+        // Before a closing `end`, inside an event.
+        "machine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\nevents\n  event INITIALISATION\n  then\n    @act0 x ≔ 0\n  // before end\n  end\nend\n",
+        // Two components with a comment between them.
+        "context c\naxioms\n  @axm1 1 = 1\nend\n\n// between the components\n\nmachine m\nsees c\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\nend\n",
+    ];
+    for src in sources {
+        for printer in comment_bearing_printers() {
+            assert_comments_stay_put(src, &printer);
+        }
+    }
+}
+
+/// The printer configurations a comment's placement can actually depend on.
+///
+/// `comment_place` has to predict which clause keywords get a line of their
+/// own, so the layout axes that move a keyword onto or off a shared line are
+/// exactly where the two models can drift apart: the style preset, the
+/// declaration-list layout crossed against it, and a width narrow enough that
+/// an inline list wraps to a hanging line.
+fn comment_bearing_printers() -> Vec<PrettyPrinter> {
+    let mut printers = Vec::new();
+    for style in [Style::Camille, Style::Rossi] {
+        for decl_lists in [
+            None,
+            Some(DeclListLayout::Inline),
+            Some(DeclListLayout::OnePerLine),
+        ] {
+            for max_line_width in [0, 28] {
+                printers.push(PrettyPrinter::resolved(
+                    style,
+                    &StyleOverrides {
+                        decl_lists,
+                        max_line_width,
+                        ..StyleOverrides::default()
+                    },
+                ));
+            }
+        }
+    }
+    printers
+}
+
+/// Format in Camille style, assert the result is a fixed point, and return it.
+fn format_camille(src: &str) -> String {
+    let printer = PrettyPrinter::styled(Style::Camille);
+    let once = format_str(src, &printer).expect("formats");
+    assert_eq!(
+        once,
+        format_str(&once, &printer).expect("reformat"),
+        "fmt is not idempotent for:\n{src}"
+    );
+    once
+}
+
+#[test]
+fn comment_on_an_inline_clause_keyword_line_is_kept() {
+    // Camille prints `sets`/`constants`/`variables` with their names on the
+    // keyword's line, so the keyword line has no room left for a trailing
+    // comment: it used to be filed under the clause and then never rendered,
+    // which dropped it. It is lifted above the keyword instead, where a
+    // reparse files it under the same clause.
+    let src = "context c\nconstants // the interesting ones\n  a b\naxioms\n  @axm1 a ∈ ℕ\nend\n";
+    let printer = PrettyPrinter::styled(Style::Camille);
+    let once = format_str(src, &printer).expect("formats");
+    assert!(
+        once.contains("// the interesting ones\nconstants a b\n"),
+        "keyword comment lost:\n{once}"
+    );
+}
+
+#[test]
+fn comment_above_the_first_name_does_not_split_the_list() {
+    // The comment belongs above the whole `constants a b` line, so it must not
+    // force `a` to end its line — doing so made the second pass rejoin the
+    // names and `fmt --check` fail on `fmt`'s own output.
+    let src = "context c\nconstants\n  // pick these\n  a b\naxioms\n  @axm1 a ∈ ℕ\nend\n";
+    let once = format_camille(src);
+    assert!(
+        once.contains("// pick these\nconstants a b\n"),
+        "list split around the comment:\n{once}"
+    );
+}
+
+#[test]
+fn a_second_comment_on_one_line_is_kept_above_what_follows() {
+    // Only one comment can trail a printed line; the extra one used to be
+    // dropped on the floor. It is filed above the next line instead.
+    let src = "context c\naxioms\n  @axm1 1 = 1 /* first */ /* second */\n  @axm2 2 = 2\nend\n";
+    let once = format_camille(src);
+    assert!(once.contains("/* first */"), "first comment lost:\n{once}");
+    assert!(
+        once.contains("/* second */"),
+        "second comment lost:\n{once}"
+    );
+}
+
+#[test]
+fn comment_on_the_variant_keyword_line_follows_the_variant() {
+    // Camille prints `variant` on the first variant's line, so a comment
+    // written after the keyword belongs there too; it used to drift backwards
+    // onto the preceding invariant.
+    let src = "machine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\nvariant // why this measure\n  x\nevents\n  event INITIALISATION\n  then\n    @act0 x ≔ 0\n  end\nend\n";
+    let once = format_camille(src);
+    assert!(
+        once.contains("variant x // why this measure"),
+        "comment left the variant:\n{once}"
+    );
+}
+
+#[test]
+fn licence_header_survives_formatting_verbatim() {
+    // examples/base-model.eventb opens with a 14-line Apache header. It used
+    // to be joined into one `/* */` block *below* `context C1`, which is both
+    // a move and a marker some Event-B text front-ends cannot parse.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/base-model.eventb");
+    let src = std::fs::read_to_string(&path).expect("read example");
+    let header: String = src.lines().take(15).map(|l| format!("{l}\n")).collect();
+    let formatted = format_str(&src, &PrettyPrinter::styled(Style::Camille)).expect("format");
+    assert!(
+        formatted.starts_with(&header),
+        "licence header not preserved, got:\n{}",
+        &formatted[..header.len().min(formatted.len())]
+    );
+    assert_comments_stay_put(&src, &PrettyPrinter::styled(Style::Camille));
+}
+
+#[test]
+fn corpus_comments_never_move_under_formatting() {
+    // Every archive EVENTB_CORPUS_DIR points at, imported to text and then
+    // formatted: the whole point of the feature, over thousands of comments
+    // written by hand. Skipped unless that variable is set.
+    let Some(dir) = std::env::var_os("EVENTB_CORPUS_DIR") else {
+        eprintln!("EVENTB_CORPUS_DIR is not set — skipping");
+        return;
+    };
+    let printer = PrettyPrinter::styled(Style::Camille);
+    let mut checked = 0;
+    let entries = std::fs::read_dir(&dir).expect("read corpus dir");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "zip") {
+            continue;
+        }
+        let Ok(named) = rossi::parse_zip_file(&path) else {
+            continue; // not a Rodin archive, or one rossi cannot read
+        };
+        for nc in &named {
+            let text = to_string(&nc.component);
+            if rossi::comments::comment_spans(&text).is_empty() {
+                continue;
+            }
+            // Some corpus models use reserved words as identifiers and do not
+            // reparse; that is a separate limitation, not a comment one.
+            if format_str(&text, &printer).is_err() {
+                continue;
+            }
+            assert_comments_stay_put(&text, &printer);
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no corpus model was checked — bad corpus dir?");
 }
 
 // =========================================================================

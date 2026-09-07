@@ -182,9 +182,15 @@ fn camille_header_comment_trails_inline_clauses() {
 }
 
 #[test]
-fn camille_header_multiline_comment_becomes_block() {
+fn camille_header_comment_run_stays_above_the_header() {
+    // Formatting reads the source, so a run of `//` lines above the header is
+    // re-emitted where it was written, one `//` line each. It used to be joined
+    // into a single `/* */` block *below* `machine m` — a merge some Event-B
+    // text front-ends cannot parse (one has no block comment in its grammar at
+    // all) and a move that turned a file banner into the machine's own
+    // comment.
     let source = "// first\n// second\nMACHINE m\nEND\n";
-    let expected = "machine m\n\x20\x20/* first\n\x20\x20\x20\x20\x20second */\nend\n";
+    let expected = "// first\n// second\nmachine m\nend\n";
     assert_eq!(format_checked(source, &camille()), expected);
 }
 

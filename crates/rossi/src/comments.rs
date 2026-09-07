@@ -329,6 +329,22 @@ pub fn comment_text(raw: &str) -> Option<String> {
     normalize_comment(inner)
 }
 
+/// The text to put back after a comment's marker when re-emitting it verbatim.
+///
+/// Unlike [`comment_text`], which normalizes both forms for storage in an AST
+/// `comment` field, this keeps a `//` comment's line exactly as written (only
+/// trailing whitespace goes), so a banner of slashes (`//////`) and a bare `//`
+/// separator survive a reformat byte for byte. A block comment is normalized,
+/// because it is re-indented as it is written back. `None` means the comment is
+/// blank and not worth re-emitting — possible only for a block, since a bare
+/// `//` is meaningful inside a licence banner.
+pub fn comment_body(raw: &str) -> Option<(bool, String)> {
+    match raw.strip_prefix("//") {
+        Some(rest) => Some((true, rest.trim_end().to_string())),
+        None => comment_text(raw).map(|text| (false, text)),
+    }
+}
+
 /// Apply `f` to the code between the opaque spans, leaving comment, label and
 /// component-name text untouched.
 ///

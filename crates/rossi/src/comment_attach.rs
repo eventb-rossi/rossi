@@ -8,6 +8,14 @@
 //! Camille editor uses. The pretty printer emits these fields back out, so
 //! parse → print round-trips comments (issue #31).
 //!
+//! This is the carrier Rodin can store, and the one `rossi export` needs. It
+//! is deliberately *not* what `rossi fmt` uses: text -> text formatting keeps a
+//! comment's own position instead, via [`crate::comment_place`]. That module
+//! enumerates the same elements as this one, so the two lists have to stay in
+//! step — every element given a comment slot here needs an `Item` anchor there,
+//! or `fmt` will drop its comments. The documented exceptions are
+//! `init.with`/`init.witnesses`, which the printer never emits.
+//!
 //! Attachment is by byte position: an element "anchors" at the start of its
 //! span, and a comment belongs to the anchor with the greatest start not
 //! after the comment. Comments before the first anchor (e.g. above the
