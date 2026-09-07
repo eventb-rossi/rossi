@@ -316,6 +316,23 @@ pub(super) fn elisp_string(s: &str) -> String {
     out
 }
 
+/// A negated whitespace class for labels. Enumerating the existing predicate
+/// during generation avoids a separate table of label terminators per editor.
+pub(super) fn label_character_class(escape: impl Fn(char) -> String) -> String {
+    let whitespace: String = (0..=char::MAX as u32)
+        .filter_map(char::from_u32)
+        .filter(|&c| rossi::keywords::is_whitespace(c))
+        .map(escape)
+        .collect();
+    format!("[^{whitespace}]")
+}
+
+/// Complete Camille label token for TextMate and Sublime's Oniguruma regexes.
+pub(super) fn label_regex_oniguruma() -> String {
+    let class = label_character_class(|c| format!(r"\x{{{:X}}}", c as u32));
+    format!("@{class}+")
+}
+
 /// The files this generator owns, relative to the workspace root.
 pub mod paths {
     // Syntax-highlighting grammars.

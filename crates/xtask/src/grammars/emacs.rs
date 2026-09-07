@@ -52,6 +52,13 @@ pub fn render(model: &Model) -> String {
         "Event-B symbolic operators.",
     );
 
+    // Elisp's string reader decodes these escapes into literal separators;
+    // they are not regex escapes (Emacs regexes do not interpret \uXXXX).
+    let label_class = super::label_character_class(|c| format!(r"\u{:04X}", c as u32));
+    out.push_str(&format!(
+        "(defconst eventb-label-regexp\n  \"@{label_class}+\"\n  \"Camille label, ending at grammar whitespace.\")\n\n"
+    ));
+
     // The two name-capturing rules reference case-insensitive keywords, so
     // they carry the same baked-in folding.
     let event_kw = fold_ascii_case("event");
@@ -60,7 +67,8 @@ pub fn render(model: &Model) -> String {
     let name = component_name_regex();
     out.push_str(&format!(
         r#"(defvar eventb-font-lock-keywords
-  `((,eventb-keywords-regexp . font-lock-keyword-face)
+  `((,eventb-label-regexp . font-lock-preprocessor-face)
+    (,eventb-keywords-regexp . font-lock-keyword-face)
     (,eventb-status-keywords-regexp . font-lock-keyword-face)
     ("\\<{event_kw}\\s-+{name}" 1 font-lock-function-name-face)
     ("\\<\\(?:{context_kw}\\|{machine_kw}\\)\\s-+{name}" 1 font-lock-type-face)
@@ -69,8 +77,7 @@ pub fn render(model: &Model) -> String {
     (,eventb-builtins-regexp . font-lock-function-name-face)
     (,eventb-operator-words-regexp . font-lock-builtin-face)
     (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
-    ("\\<[0-9]+\\>" . font-lock-constant-face)
-    ("@[A-Za-z0-9_]+" . font-lock-preprocessor-face))
+    ("\\<[0-9]+\\>" . font-lock-constant-face))
   "Font lock keywords for Event-B mode (comments and strings come from the syntax table).
 Word patterns carry their own case folding; `font-lock-keywords-case-fold-search'
 must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")

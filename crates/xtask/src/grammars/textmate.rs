@@ -44,7 +44,7 @@ pub fn render(model: &Model) -> String {
     includes.push(json!({ "include": "#numbers" }));
     repository.insert(
         "labels".into(),
-        single("entity.name.tag.eventb", "@[A-Za-z0-9_]+"),
+        single("entity.name.tag.eventb", &super::label_regex_oniguruma()),
     );
     includes.push(json!({ "include": "#labels" }));
     repository.insert(

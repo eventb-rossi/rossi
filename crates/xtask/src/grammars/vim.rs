@@ -72,7 +72,8 @@ pub fn render(model: &Model) -> String {
     out.push_str("syn match eventbEscape \"\\\\[nrt\\\\\\\"]\" contained\n");
     out.push_str("syn match eventbComment \"//.*$\"\n");
     out.push_str("syn region eventbComment start=\"/\\*\" end=\"\\*/\"\n");
-    out.push_str("syn match eventbLabel \"@[A-Za-z0-9_]\\+\"\n");
+    let label_class = super::label_character_class(|c| format!(r"\u{:04X}", c as u32));
+    out.push_str(&format!("syn match eventbLabel \"@{label_class}\\+\"\n"));
     out.push_str("syn match eventbIdentifier \"\\<[a-zA-Z_][a-zA-Z0-9_]*\\>\"\n");
     out.push_str("syn match eventbDelimiter \"[(){}\\[\\]]\"\n");
     out.push('\n');

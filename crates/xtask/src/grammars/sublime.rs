@@ -43,7 +43,11 @@ pub fn render(model: &Model) -> String {
 
     // Numbers, labels, identifiers last.
     rule(&mut out, "\\b[0-9]+\\b", "constant.numeric.eventb");
-    rule(&mut out, "@[A-Za-z0-9_]+", "entity.name.tag.eventb");
+    rule(
+        &mut out,
+        &super::label_regex_oniguruma(),
+        "entity.name.tag.eventb",
+    );
     rule(
         &mut out,
         "[a-zA-Z_][a-zA-Z0-9_]*'?",

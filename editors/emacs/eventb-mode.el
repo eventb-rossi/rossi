@@ -169,8 +169,13 @@ Returns non-nil when it applied the mapping."
   '("<<->>" "/<<:" ":∈" ":∣" "<->>" "<<->" ">->>" "ℙ1" "+->" "+>>" "-->" "->>" "/<:" "<->" "<<:" "<<|" "<=>" ">+>" ">->" "|->" "|>>" "‥" "ℙ" "→" "↔" "↠" "↣" "↦" "⇒" "⇔" "⇸" "∀" "∃" "∈" "∉" "−" "∖" "∗" "∘" "∣" "∥" "∧" "∨" "∩" "∪" "∼" "≔" "≠" "≤" "≥" "⊂" "⊄" "⊆" "⊈" "⊗" "⋂" "⋃" "▷" "◁" "⤀" "⤔" "⤖" "⦂" "⩤" "⩥" "" "" "" "" "**" ".." "/:" "/=" "/\\" "::" ":=" ":|" "<+" "<:" "<=" "<|" "=>" "><" ">=" "\\/" "|>" "||" "¬" "·" "×" "÷" "λ" "!" "#" "%" "&" "*" "+" "-" "." "/" ":" ";" "<" "=" ">" "\\" "^" "|" "~")
   "Event-B symbolic operators.")
 
+(defconst eventb-label-regexp
+  "@[^\u0009\u000A\u000B\u000C\u000D\u001C\u001D\u001E\u001F\u0020\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000]+"
+  "Camille label, ending at grammar whitespace.")
+
 (defvar eventb-font-lock-keywords
-  `((,eventb-keywords-regexp . font-lock-keyword-face)
+  `((,eventb-label-regexp . font-lock-preprocessor-face)
+    (,eventb-keywords-regexp . font-lock-keyword-face)
     (,eventb-status-keywords-regexp . font-lock-keyword-face)
     ("\\<[Ee][Vv][Ee][Nn][Tt]\\s-+\\([A-Za-z_][A-Za-z0-9_]*\\(?:-[A-Za-z0-9_]+\\)*\\)" 1 font-lock-function-name-face)
     ("\\<\\(?:[Cc][Oo][Nn][Tt][Ee][Xx][Tt]\\|[Mm][Aa][Cc][Hh][Ii][Nn][Ee]\\)\\s-+\\([A-Za-z_][A-Za-z0-9_]*\\(?:-[A-Za-z0-9_]+\\)*\\)" 1 font-lock-type-face)
@@ -179,8 +184,7 @@ Returns non-nil when it applied the mapping."
     (,eventb-builtins-regexp . font-lock-function-name-face)
     (,eventb-operator-words-regexp . font-lock-builtin-face)
     (,(regexp-opt eventb-operator-symbols) . font-lock-builtin-face)
-    ("\\<[0-9]+\\>" . font-lock-constant-face)
-    ("@[A-Za-z0-9_]+" . font-lock-preprocessor-face))
+    ("\\<[0-9]+\\>" . font-lock-constant-face))
   "Font lock keywords for Event-B mode (comments and strings come from the syntax table).
 Word patterns carry their own case folding; `font-lock-keywords-case-fold-search'
 must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
@@ -222,6 +226,18 @@ must stay nil so the exact-case math words (dom, card, POW, …) do not fold.")
 
     table)
   "Syntax table for Event-B mode.")
+
+;; Quotes and comment markers within a label are ordinary label characters.
+;; Extend incremental rescans to whole lines so editing the sigil also clears
+;; the old label's syntax properties.
+(defun eventb--syntax-propertize-labels (start end)
+  "Mark label characters between START and END as punctuation syntax."
+  (goto-char start)
+  (while (re-search-forward eventb-label-regexp end t)
+    (let ((from (match-beginning 0))
+          (to (match-end 0)))
+      (unless (nth 8 (save-excursion (syntax-ppss from)))
+        (put-text-property from to 'syntax-table (string-to-syntax "."))))))
 
 ;;; Indentation
 
@@ -498,6 +514,9 @@ used in safety-critical systems and formal verification.
   ;; keywords fold; the math words dom/card/POW/… are exact-case tokens, and
   ;; DOM/Card/pow are ordinary identifiers), so matching must not fold here.
   (setq-local font-lock-keywords-case-fold-search nil)
+  (setq-local syntax-propertize-function #'eventb--syntax-propertize-labels)
+  (add-hook 'syntax-propertize-extend-region-functions
+            #'syntax-propertize-wholelines nil t)
 
   ;; Comments
   (setq-local comment-start "// ")
