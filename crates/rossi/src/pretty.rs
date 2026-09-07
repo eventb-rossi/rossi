@@ -235,6 +235,38 @@ impl Default for PrettyPrinter {
     }
 }
 
+/// The printer's output buffer.
+///
+/// A newtype over the `String` every print helper threads, so that the
+/// interleaving state the text -> text path needs can be attached to it
+/// without touching the helpers again. Implementing [`std::fmt::Write`] is the
+/// point: every `write!` and `writeln!` body in the printer is unchanged by the
+/// switch away from a bare `String`.
+struct Sink {
+    out: String,
+}
+
+impl std::fmt::Write for Sink {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.out.push_str(s);
+        Ok(())
+    }
+}
+
+impl Sink {
+    fn new() -> Self {
+        Self { out: String::new() }
+    }
+
+    fn push(&mut self, c: char) {
+        self.out.push(c);
+    }
+
+    fn finish(self) -> String {
+        self.out
+    }
+}
+
 impl PrettyPrinter {
     /// Create a new pretty printer with default settings
     pub fn new() -> Self {
@@ -355,22 +387,46 @@ impl PrettyPrinter {
 
     /// Convert a Component to formatted Event-B text
     pub fn print_component(&self, component: &Component) -> String {
-        match component {
-            Component::Context(ctx) => self.print_context(ctx),
-            Component::Machine(mch) => self.print_machine(mch),
-        }
+        let mut output = Sink::new();
+        self.print_component_into(&mut output, component);
+        output.finish()
     }
 
     /// Convert multiple Components to formatted Event-B text, separated by blank lines
     pub fn print_components(&self, components: &[Component]) -> String {
-        let mut output = String::new();
+        let mut output = Sink::new();
+        self.print_components_into(&mut output, components);
+        output.finish()
+    }
+
+    /// Convert a Context to formatted text
+    pub fn print_context(&self, context: &Context) -> String {
+        let mut output = Sink::new();
+        self.print_context_into(&mut output, context);
+        output.finish()
+    }
+
+    /// Convert a Machine to formatted text
+    pub fn print_machine(&self, machine: &Machine) -> String {
+        let mut output = Sink::new();
+        self.print_machine_into(&mut output, machine);
+        output.finish()
+    }
+
+    fn print_component_into(&self, output: &mut Sink, component: &Component) {
+        match component {
+            Component::Context(ctx) => self.print_context_into(output, ctx),
+            Component::Machine(mch) => self.print_machine_into(output, mch),
+        }
+    }
+
+    fn print_components_into(&self, output: &mut Sink, components: &[Component]) {
         for (i, component) in components.iter().enumerate() {
             if i > 0 {
                 output.push('\n');
             }
-            output.push_str(&self.print_component(component));
+            self.print_component_into(output, component);
         }
-        output
     }
 
     /// Print one element line followed by its comment, Camille style.
@@ -384,7 +440,7 @@ impl PrettyPrinter {
     /// comment emits nothing and parse → print is idempotent.
     fn writeln_commented(
         &self,
-        output: &mut String,
+        output: &mut Sink,
         line: &str,
         comment: Option<&str>,
         indent: &str,
@@ -426,7 +482,7 @@ impl PrettyPrinter {
     /// Blank line before a top-level clause keyword, when the style asks
     /// for one. Never emitted before the closing END.
     #[inline]
-    fn clause_gap(&self, output: &mut String) {
+    fn clause_gap(&self, output: &mut Sink) {
         if self.blank_between_clauses {
             output.push('\n');
         }
@@ -498,7 +554,7 @@ impl PrettyPrinter {
     /// on the next hanging line.
     fn print_inline_name_list(
         &self,
-        output: &mut String,
+        output: &mut Sink,
         keyword: &str,
         clause_indent: &str,
         items: &[NamedElement],
@@ -534,9 +590,7 @@ impl PrettyPrinter {
     }
 
     /// Convert a Context to formatted text
-    pub fn print_context(&self, context: &Context) -> String {
-        let mut output = String::new();
-
+    fn print_context_into(&self, output: &mut Sink, context: &Context) {
         debug_assert_component_name(&context.name, "context name");
         let mut header = format!("{} {}", self.kw("CONTEXT", "context"), context.name);
         if self.header_clauses == HeaderClauseLayout::Inline && !context.extends.is_empty() {
@@ -547,10 +601,10 @@ impl PrettyPrinter {
             }
             self.push_header_segment(&mut header, &segment, &self.indent);
         }
-        self.writeln_commented(&mut output, &header, context.comment.as_deref(), "");
+        self.writeln_commented(output, &header, context.comment.as_deref(), "");
 
         if self.header_clauses == HeaderClauseLayout::Block && !context.extends.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             writeln!(output, "{}", self.kw("EXTENDS", "extends")).unwrap();
             for ext in &context.extends {
                 debug_assert_component_name(ext, "extends target");
@@ -559,34 +613,33 @@ impl PrettyPrinter {
         }
 
         if !context.sets.is_empty() {
-            self.clause_gap(&mut output);
-            self.print_decl_list(&mut output, self.kw("SETS", "sets"), &context.sets);
+            self.clause_gap(output);
+            self.print_decl_list(output, self.kw("SETS", "sets"), &context.sets);
         }
 
         if !context.constants.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             self.print_decl_list(
-                &mut output,
+                output,
                 self.kw("CONSTANTS", "constants"),
                 &context.constants,
             );
         }
 
         if !context.axioms.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             writeln!(output, "{}", self.kw("AXIOMS", "axioms")).unwrap();
             for axiom in &context.axioms {
-                self.print_labeled_predicate(&mut output, axiom, &self.indent);
+                self.print_labeled_predicate(output, axiom, &self.indent);
             }
         }
 
         writeln!(output, "{}", self.kw("END", "end")).unwrap();
-        output
     }
 
     /// Print a top-level declaration list (`sets`/`constants`/`variables`)
     /// in the configured [`DeclListLayout`].
-    fn print_decl_list(&self, output: &mut String, keyword: &str, items: &[NamedElement]) {
+    fn print_decl_list(&self, output: &mut Sink, keyword: &str, items: &[NamedElement]) {
         match self.decl_lists {
             DeclListLayout::Inline => self.print_inline_name_list(output, keyword, "", items),
             DeclListLayout::OnePerLine => {
@@ -604,9 +657,7 @@ impl PrettyPrinter {
     }
 
     /// Convert a Machine to formatted text
-    pub fn print_machine(&self, machine: &Machine) -> String {
-        let mut output = String::new();
-
+    fn print_machine_into(&self, output: &mut Sink, machine: &Machine) {
         debug_assert_component_name(&machine.name, "machine name");
         let mut header = format!("{} {}", self.kw("MACHINE", "machine"), machine.name);
         if self.header_clauses == HeaderClauseLayout::Inline {
@@ -624,18 +675,18 @@ impl PrettyPrinter {
                 self.push_header_segment(&mut header, &segment, &self.indent);
             }
         }
-        self.writeln_commented(&mut output, &header, machine.comment.as_deref(), "");
+        self.writeln_commented(output, &header, machine.comment.as_deref(), "");
 
         if self.header_clauses == HeaderClauseLayout::Block {
             if let Some(ref refines) = machine.refines {
                 debug_assert_component_name(refines, "refines target");
-                self.clause_gap(&mut output);
+                self.clause_gap(output);
                 writeln!(output, "{}", self.kw("REFINES", "refines")).unwrap();
                 writeln!(output, "{}{}", self.indent, refines).unwrap();
             }
 
             if !machine.sees.is_empty() {
-                self.clause_gap(&mut output);
+                self.clause_gap(output);
                 writeln!(output, "{}", self.kw("SEES", "sees")).unwrap();
                 for sees in &machine.sees {
                     debug_assert_component_name(sees, "sees target");
@@ -645,24 +696,24 @@ impl PrettyPrinter {
         }
 
         if !machine.variables.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             self.print_decl_list(
-                &mut output,
+                output,
                 self.kw("VARIABLES", "variables"),
                 &machine.variables,
             );
         }
 
         if !machine.invariants.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             writeln!(output, "{}", self.kw("INVARIANTS", "invariants")).unwrap();
             for inv in &machine.invariants {
-                self.print_labeled_predicate(&mut output, inv, &self.indent);
+                self.print_labeled_predicate(output, inv, &self.indent);
             }
         }
 
         if !machine.variants.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             let keyword = self.kw("VARIANT", "variant");
             match self.style {
                 Style::Camille => {
@@ -682,12 +733,7 @@ impl PrettyPrinter {
                             base.chars().count(),
                         );
                         let line = format!("{head}{expr}");
-                        self.writeln_commented(
-                            &mut output,
-                            &line,
-                            variant.comment.as_deref(),
-                            base,
-                        );
+                        self.writeln_commented(output, &line, variant.comment.as_deref(), base);
                     }
                 }
                 Style::Rossi => {
@@ -710,19 +756,14 @@ impl PrettyPrinter {
                         );
                         let line = format!("{head}{expr}");
                         let indent = self.indent.clone();
-                        self.writeln_commented(
-                            &mut output,
-                            &line,
-                            variant.comment.as_deref(),
-                            &indent,
-                        );
+                        self.writeln_commented(output, &line, variant.comment.as_deref(), &indent);
                     }
                 }
             }
         }
 
         if machine.initialisation.is_some() || !machine.events.is_empty() {
-            self.clause_gap(&mut output);
+            self.clause_gap(output);
             writeln!(output, "{}", self.kw("EVENTS", "events")).unwrap();
 
             // Camille: no blank line before the first item, one blank line
@@ -733,18 +774,17 @@ impl PrettyPrinter {
                 Style::Rossi => true,
             };
             if let Some(init) = &machine.initialisation {
-                self.print_initialisation(&mut output, init);
+                self.print_initialisation(output, init);
             }
             for (i, event) in machine.events.iter().enumerate() {
                 if i > 0 || blank_before_first_event {
                     writeln!(output).unwrap();
                 }
-                self.print_event(&mut output, event);
+                self.print_event(output, event);
             }
         }
 
         writeln!(output, "{}", self.kw("END", "end")).unwrap();
-        output
     }
 
     /// Print a labeled predicate.
@@ -754,7 +794,7 @@ impl PrettyPrinter {
     /// canonical, order-preserving form and mirrors Rodin's model, where a theorem
     /// is a boolean attribute on an axiom/invariant rather than a distinct section.
     /// Parsing a `THEOREMS` section is therefore normalized to inline on output.
-    fn print_labeled_predicate(&self, output: &mut String, lp: &LabeledPredicate, indent: &str) {
+    fn print_labeled_predicate(&self, output: &mut Sink, lp: &LabeledPredicate, indent: &str) {
         let theorem_str = if lp.is_theorem { "theorem " } else { "" };
         let head = match &lp.label {
             Some(label) => format!("{indent}{theorem_str}@{label} "),
@@ -767,7 +807,7 @@ impl PrettyPrinter {
     }
 
     /// Print a labeled action
-    fn print_labeled_action(&self, output: &mut String, la: &LabeledAction, indent: &str) {
+    fn print_labeled_action(&self, output: &mut Sink, la: &LabeledAction, indent: &str) {
         let head = match &la.label {
             Some(label) => format!("{indent}@{label} "),
             None => indent.to_string(),
@@ -779,14 +819,14 @@ impl PrettyPrinter {
     }
 
     /// Print an action list (one action per line, no separators).
-    fn print_action_list(&self, output: &mut String, actions: &[LabeledAction], indent: &str) {
+    fn print_action_list(&self, output: &mut Sink, actions: &[LabeledAction], indent: &str) {
         for action in actions {
             self.print_labeled_action(output, action, indent);
         }
     }
 
     /// Print an initialisation event
-    fn print_initialisation(&self, output: &mut String, init: &InitialisationEvent) {
+    fn print_initialisation(&self, output: &mut Sink, init: &InitialisationEvent) {
         let (event_indent, kw_indent, item_indent) = self.event_ladder();
         let event_kw = self.kw("EVENT", "event");
         let header = if init.extended {
@@ -803,7 +843,7 @@ impl PrettyPrinter {
     }
 
     /// Print an event
-    fn print_event(&self, output: &mut String, event: &Event) {
+    fn print_event(&self, output: &mut Sink, event: &Event) {
         let (event_indent, kw_indent, item_indent) = self.event_ladder();
 
         debug_assert_component_name(&event.name, "event name");
