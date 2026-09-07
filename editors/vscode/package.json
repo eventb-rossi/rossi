@@ -275,6 +275,11 @@
           "default": true,
           "description": "Mutual live synchronization with a running Rodin: saving a source file rebuilds its Rodin project while Rodin is open (it picks the edit up within a few seconds), and edits saved in Rodin flow back into the .eventb sources automatically. Turning it off also stops the workspace watcher."
         },
+        "rossi.rodin.bridge": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the Rodin bridge plug-in when the running Rodin publishes one (it ships with the eventb-rossi Rodin bundle). It can do inside the live instance what writing files at it cannot: register a project while Rodin holds the workspace (which otherwise needs File > Import) and bring the project forward. With no plug-in installed this changes nothing."
+        },
         "rossi.rodin.mirrorProofs": {
           "type": "boolean",
           "default": true,
