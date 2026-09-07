@@ -328,6 +328,16 @@ pub struct RodinConfig {
     /// default; turn it off to keep to that path even where a bridge exists.
     #[serde(default = "default_bridge")]
     pub bridge: bool,
+
+    /// Merge Rodin's *unsaved* model edits into the open buffer as they are
+    /// typed, rather than waiting for Ctrl+S in Rodin. Needs the bridge
+    /// plug-in, which pushes the in-memory component; the save-driven merge
+    /// runs either way. Only ever applies a clean merge: where both sides
+    /// changed the same lines the buffer is left alone until they settle.
+    /// Off by default while the machinery is new, since it edits a buffer the
+    /// user is typing in.
+    #[serde(default = "default_live_sync")]
+    pub live_sync: bool,
 }
 
 impl Default for RodinConfig {
@@ -338,6 +348,7 @@ impl Default for RodinConfig {
             sync: default_sync(),
             mirror_proofs: default_mirror_proofs(),
             bridge: default_bridge(),
+            live_sync: default_live_sync(),
         }
     }
 }
@@ -348,6 +359,10 @@ fn default_sync() -> bool {
 
 fn default_bridge() -> bool {
     true
+}
+
+fn default_live_sync() -> bool {
+    false
 }
 
 fn default_mirror_proofs() -> bool {

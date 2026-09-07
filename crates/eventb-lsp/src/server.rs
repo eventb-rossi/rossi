@@ -335,6 +335,13 @@ impl Analyzer {
     /// edit is refused rather than silently overwriting keystrokes typed in
     /// the meantime, and the edit itself is sent versioned so a conforming
     /// client rejects it too.
+    /// The open buffer's version, if the document is open. A direct lookup
+    /// that copies nothing, unlike [`Self::source_text`], so it is cheap
+    /// enough to poll.
+    pub(crate) fn document_version(&self, uri: &Url) -> Option<i32> {
+        self.document_manager.version(uri)
+    }
+
     pub(crate) async fn apply_source_text(
         &self,
         path: &std::path::Path,
@@ -467,6 +474,22 @@ enum RodinSyncState {
     Ready(crate::rodin::sync::RodinSyncManager),
 }
 
+/// Gap between attempts while waiting for a launching Rodin to publish its
+/// bridge. The window itself is the lens's own wait for the workspace lock,
+/// since that is the launch this is keeping pace with.
+const LIVE_SYNC_RETRY: Duration = Duration::from_secs(2);
+
+/// Lifecycle of the held bridge connection carrying Rodin's unsaved edits.
+/// Connecting happens off the request path (a stale descriptor costs a connect
+/// timeout), so — exactly as for [`RodinSyncState`] — a `Starting` marker keeps
+/// concurrent starts from stacking up and lets shutdown or a workspace switch
+/// discard a late arrival instead of adopting it.
+enum LiveSyncState {
+    Off,
+    Starting(PathBuf),
+    Ready(crate::rodin::live::LiveSyncManager),
+}
+
 /// The Rossi Language Server
 pub struct RossiLanguageServer {
     /// LSP client for sending notifications and requests
@@ -542,6 +565,10 @@ pub struct RossiLanguageServer {
     /// the Open in Rodin flow, mirrors proof files back next to the sources
     /// when the launched Rodin releases the workspace lock.
     rodin_session_monitor: crate::rodin::proof_mirror::SessionMonitorSlot,
+    /// The held bridge connection carrying Rodin's unsaved edits, when
+    /// `rossi.rodin.liveSync` is on and a plug-in is there to push them.
+    /// Dropped on shutdown and whenever the workspace or the setting changes.
+    rodin_live: Arc<parking_lot::Mutex<LiveSyncState>>,
 }
 
 /// A single-flight command guard: [`SingleFlight::try_begin`] either yields
@@ -701,6 +728,7 @@ impl RossiLanguageServer {
             supports_inlay_hint_refresh: std::sync::atomic::AtomicBool::new(false),
             supports_watched_files_registration: std::sync::atomic::AtomicBool::new(false),
             rodin_sync: Arc::new(parking_lot::Mutex::new(RodinSyncState::Off)),
+            rodin_live: Arc::new(parking_lot::Mutex::new(LiveSyncState::Off)),
             rodin_written: Arc::new(crate::rodin::sync::WriteRegistry::default()),
             rodin_rebuild_generations: Arc::new(parking_lot::Mutex::new(
                 std::collections::HashMap::new(),
@@ -796,6 +824,7 @@ impl RossiLanguageServer {
         // is the watcher's master switch.
         if std::fs::create_dir_all(&workspace_dir).is_ok() && config.rodin.sync {
             self.ensure_rodin_sync(&workspace_dir);
+            self.ensure_rodin_live(&workspace_dir, true);
         }
         let project_name = rossi_build::workspace::project_name_for(
             &source_dir,
@@ -917,6 +946,7 @@ impl RossiLanguageServer {
     /// switch — off tears a running watcher down).
     fn ensure_rodin_sync_for_existing_workspace(&self) {
         if !self.config_manager.get().rodin.sync {
+            *self.rodin_live.lock() = LiveSyncState::Off;
             self.replace_rodin_sync(RodinSyncState::Off, |state| {
                 matches!(state, RodinSyncState::Off)
             });
@@ -926,6 +956,7 @@ impl RossiLanguageServer {
             && rodin_workspace.is_dir()
         {
             self.ensure_rodin_sync(&rodin_workspace);
+            self.ensure_rodin_live(&rodin_workspace, false);
         }
     }
 
@@ -1009,6 +1040,7 @@ impl RossiLanguageServer {
         let generations = Arc::clone(&self.rodin_rebuild_generations);
         let document_manager = Arc::clone(&self.document_manager);
         let written = Arc::clone(&self.rodin_written);
+        let bridge = self.config_manager.get().rodin.bridge;
         let analyzer = self.analyzer.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1034,15 +1066,103 @@ impl RossiLanguageServer {
             let result = crate::rodin::build_into_workspace(
                 source_dir,
                 document_manager,
-                workspace_dir,
-                project_name,
+                workspace_dir.clone(),
+                project_name.clone(),
                 &written,
                 &analyzer,
             )
             .await;
-            match result {
-                Ok(_) => debug!("rebuilt Rodin project {} on save", project_dir.display()),
-                Err(message) => info!("rebuild-on-save skipped: {message}"),
+            let outcome = match result {
+                Ok(outcome) => {
+                    debug!("rebuilt Rodin project {} on save", project_dir.display());
+                    outcome
+                }
+                Err(message) => {
+                    info!("rebuild-on-save skipped: {message}");
+                    return;
+                }
+            };
+            if bridge {
+                crate::rodin::reload_in_rodin(&workspace_dir, &project_name, &outcome).await;
+            }
+        });
+    }
+
+    /// Start, or stop, the held bridge connection that carries Rodin's unsaved
+    /// edits, so it follows `rossi.rodin.liveSync` and the workspace the
+    /// watcher is on.
+    ///
+    /// Connecting is off the request path because a stale descriptor costs a
+    /// connect timeout. Nothing here is reported to the user: no plug-in, an
+    /// older one, or a Rodin that is not running all mean the same thing, that
+    /// live sync is off and the save-driven merge still runs.
+    fn ensure_rodin_live(&self, workspace_dir: &std::path::Path, launching: bool) {
+        let config = self.config_manager.get();
+        let wanted = config.rodin.sync && config.rodin.bridge && config.rodin.live_sync;
+        {
+            let mut slot = self.rodin_live.lock();
+            if !wanted {
+                // Unwanted now: what is there has to go.
+                *slot = LiveSyncState::Off;
+                return;
+            }
+            let current = match &*slot {
+                // A connection that ended — Rodin quit — is not current: left
+                // installed it would make every later call a no-op and live
+                // sync would never come back for the Rodin that replaced it.
+                LiveSyncState::Ready(manager) => {
+                    manager.workspace_dir() == workspace_dir && manager.is_running()
+                }
+                LiveSyncState::Starting(dir) => dir == workspace_dir,
+                LiveSyncState::Off => false,
+            };
+            if current {
+                return;
+            }
+            *slot = LiveSyncState::Starting(workspace_dir.to_path_buf());
+        }
+
+        let slot = Arc::clone(&self.rodin_live);
+        let analyzer = self.analyzer.clone();
+        let dir = workspace_dir.to_path_buf();
+        tokio::spawn(async move {
+            // The lens asks for this *before* it launches Rodin, so on a
+            // first click there is no bridge to find yet and one attempt would
+            // always fail. Keep trying while that Rodin boots; `Starting` is
+            // the lease, so a shutdown or a workspace switch ends the retries
+            // by replacing it. Nothing is launching for the other callers
+            // (startup, a settings change), so they get the single attempt
+            // rather than a minute of polling a port that will not answer.
+            let deadline = tokio::time::Instant::now()
+                + if launching {
+                    crate::rodin::BOOT_LOCK_TIMEOUT
+                } else {
+                    Duration::ZERO
+                };
+            loop {
+                let started =
+                    crate::rodin::live::LiveSyncManager::start(dir.clone(), analyzer.clone()).await;
+                {
+                    let mut slot = slot.lock();
+                    // Only install if nothing superseded this start.
+                    if !matches!(&*slot, LiveSyncState::Starting(d) if *d == dir) {
+                        return;
+                    }
+                    match started {
+                        Ok(manager) => {
+                            info!("live sync with Rodin is on for {}", dir.display());
+                            *slot = LiveSyncState::Ready(manager);
+                            return;
+                        }
+                        Err(message) if tokio::time::Instant::now() >= deadline => {
+                            *slot = LiveSyncState::Off;
+                            info!("live sync with Rodin is off: {message}");
+                            return;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                tokio::time::sleep(LIVE_SYNC_RETRY).await;
             }
         });
     }
@@ -1341,6 +1461,7 @@ impl LanguageServer for RossiLanguageServer {
         info!("Received shutdown request");
         // Stop the Rodin workspace watcher and its processing task (a
         // creation still in flight sees the reset state and discards itself).
+        *self.rodin_live.lock() = LiveSyncState::Off;
         self.replace_rodin_sync(RodinSyncState::Off, |_| false);
         // Abort the session stop monitor: with the server gone the mirror
         // cannot fire anyway, and the next lens click re-seeds.
