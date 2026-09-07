@@ -141,6 +141,10 @@ return {
           -- project while Rodin is open, and edits saved in Rodin flow
           -- back into the .eventb sources
           sync = true,
+          -- Use the bridge plug-in a running Rodin publishes, when there
+          -- is one: it registers the project in the live instance rather
+          -- than asking you to use File > Import
+          bridge = true,
         },
       },
     },

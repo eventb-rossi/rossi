@@ -358,6 +358,15 @@ Turning it off also stops the workspace watcher."
   :type 'boolean
   :group 'eventb)
 
+(defcustom lsp-rossi-rodin-bridge t
+  "Use the Rodin bridge plug-in when a running Rodin publishes one.
+It ships with the eventb-rossi Rodin bundle and lets Open in Rodin
+register a project in the live instance -- which otherwise needs
+File > Import while Rodin holds the workspace -- and bring it forward.
+With no plug-in installed this changes nothing."
+  :type 'boolean
+  :group 'eventb)
+
 (defcustom lsp-rossi-rodin-mirror-proofs t
   "Bridge proof files between the checkout and the Rodin workspace.
 At Open in Rodin session boundaries: proof files (.bpr/.bps/.bpo) next
@@ -396,6 +405,7 @@ deleted in Rodin is deleted next to the sources too)."
                  :rodin (:path ,lsp-rossi-rodin-path
                          :workspace ,lsp-rossi-rodin-workspace
                          :sync ,(if lsp-rossi-rodin-sync t :json-false)
+                         :bridge ,(if lsp-rossi-rodin-bridge t :json-false)
                          :mirrorProofs ,(if lsp-rossi-rodin-mirror-proofs t :json-false))))))))
 
 ;;; Unicode input method
