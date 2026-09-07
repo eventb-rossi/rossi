@@ -367,6 +367,15 @@ With no plug-in installed this changes nothing."
   :type 'boolean
   :group 'eventb)
 
+(defcustom lsp-rossi-rodin-live-sync nil
+  "Merge Rodin's unsaved model edits into the buffer as they are typed.
+Needs the bridge plug-in, which pushes the in-memory component;
+the save-driven merge runs either way.  Only a clean merge is
+applied: where both sides changed the same lines the buffer is
+left alone until they settle."
+  :type 'boolean
+  :group 'eventb)
+
 (defcustom lsp-rossi-rodin-mirror-proofs t
   "Bridge proof files between the checkout and the Rodin workspace.
 At Open in Rodin session boundaries: proof files (.bpr/.bps/.bpo) next
@@ -406,6 +415,7 @@ deleted in Rodin is deleted next to the sources too)."
                          :workspace ,lsp-rossi-rodin-workspace
                          :sync ,(if lsp-rossi-rodin-sync t :json-false)
                          :bridge ,(if lsp-rossi-rodin-bridge t :json-false)
+                         :liveSync ,(if lsp-rossi-rodin-live-sync t :json-false)
                          :mirrorProofs ,(if lsp-rossi-rodin-mirror-proofs t :json-false))))))))
 
 ;;; Unicode input method

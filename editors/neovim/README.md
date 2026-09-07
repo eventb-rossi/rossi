@@ -332,6 +332,9 @@ Hand the model to the Rodin IDE without leaving Neovim:
   the project in the live instance and brings it forward, instead of asking
   you to use `File > Import`; set `bridge = false` to keep to the
   file-mediated path
+- With `liveSync = true` and the bridge plug-in installed, edits made in Rodin
+  reach your buffer before you save there; a conflicting edit is skipped rather
+  than marked up
 - Configure `rossi.rodin.path` / `rossi.rodin.workspace` in the `settings`
   block if Rodin is not at the platform default location
 

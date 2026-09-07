@@ -338,6 +338,14 @@ project in the running instance and brings it forward instead. Nothing is
 required of you: with stock Rodin, or with `rossi.rodin.bridge` turned off,
 everything above behaves exactly as described.
 
+Editing in Rodin can reach your buffer before you save there
+(`rossi.rodin.liveSync`, off by default). The Rodin Editor writes every
+keystroke through to its database rather than holding it in the widget, so the
+bridge can report a rename the moment it is typed and the language server
+merges it into the `.eventb` file. Where you and Rodin have changed the same
+lines it leaves the buffer alone and tries again on the next edit, so conflict
+markers never appear while you type.
+
 Proof files travel with the sources too (`rossi.rodin.mirrorProofs`, on by
 default). When the lens runs, `.bpr`/`.bps`/`.bpo` files sitting next to the
 `.eventb` sources — placed there by `rossi import` or a `git pull` — are

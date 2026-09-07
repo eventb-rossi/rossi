@@ -600,7 +600,9 @@ interface RossiConfig {
   rodin: {
     path: string;                          // default: "" (platform default)
     workspace: string;                     // default: "" (<root>/.rossi/rodin)
-    sync: boolean;                         // live sync; default: true
+    sync: boolean;                         // save-driven sync; default: true
+    bridge: boolean;                       // use the plug-in; default: true
+    liveSync: boolean;                     // merge unsaved edits; default: false
     mirrorProofs: boolean;                 // default: true
   };
   animate: {
