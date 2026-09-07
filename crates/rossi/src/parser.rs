@@ -953,9 +953,7 @@ fn named_target(pair: &pest::iterators::Pair<Rule>) -> NamedElement {
 fn extract_label(pair: pest::iterators::Pair<Rule>) -> Option<String> {
     pair.into_inner().next().and_then(|label_inner| {
         if label_inner.as_rule() == Rule::label_text {
-            let text = label_inner.as_str();
-            // Strip optional trailing colon (for eventb-to-txt compat)
-            Some(text.trim_end_matches(':').to_string())
+            Some(label_inner.as_str().to_string())
         } else {
             None
         }
@@ -3344,9 +3342,11 @@ fn predicate_body_after_prefix(content: &str) -> (usize, &str) {
     loop {
         let before = body.len();
         if let Some(rest) = body.strip_prefix('@') {
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let end = rest
+                .find(crate::keywords::is_whitespace)
+                .unwrap_or(rest.len());
             if end > 0 {
-                body = rest[end..].trim_start();
+                body = rest[end..].trim_start_matches(crate::keywords::is_whitespace);
             }
         }
         if starts_with_keyword(body, "theorem") {
@@ -3929,7 +3929,9 @@ fn leading_label(content: &str) -> Option<&str> {
         return None;
     }
     let rest = &content[at..];
-    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let end = rest
+        .find(crate::keywords::is_whitespace)
+        .unwrap_or(rest.len());
     Some(&rest[..end])
 }
 
@@ -4359,13 +4361,15 @@ fn parse_context_with_recovery(
 }
 
 /// Split a recovered `VARIANT` clause body into its optionally labeled
-/// items: `[expr] (@label expr)*`. A label cannot contain whitespace and
-/// an expression cannot contain `@`, so every `@` starts a new item.
-fn split_variant_items(body: &str) -> Vec<VariantItem<'_>> {
-    let mut boundaries: Vec<usize> = body
-        .char_indices()
-        .filter(|(_, c)| *c == '@')
-        .map(|(i, _)| i)
+/// items: `[expr] (@label expr)*`. Use lexical label starts so an embedded
+/// `@` stays inside its label.
+fn split_variant_items<'a>(text: &RecoveryText, body: &'a str) -> Vec<VariantItem<'a>> {
+    let start = subslice_offset(&text.masked, body);
+    let mut boundaries: Vec<usize> = text
+        .labels
+        .iter()
+        .filter(|span| (start..start + body.len()).contains(&span.start))
+        .map(|span| span.start - start)
         .collect();
     boundaries.push(body.len());
     let mut items = Vec::new();
@@ -4379,8 +4383,11 @@ fn split_variant_items(body: &str) -> Vec<VariantItem<'_>> {
     }
     for pair in boundaries.windows(2) {
         let item = &body[pair[0] + 1..pair[1]];
-        let (label, expr) = match item.find(char::is_whitespace) {
-            Some(end) => (&item[..end], item[end..].trim()),
+        let (label, expr) = match item.find(crate::keywords::is_whitespace) {
+            Some(end) => (
+                &item[..end],
+                item[end..].trim_matches(crate::keywords::is_whitespace),
+            ),
             None => (item, ""),
         };
         if !expr.is_empty() {
@@ -4462,7 +4469,7 @@ fn parse_machine_with_recovery(
     if let Some(region) = variant {
         let kw_len = crate::keywords::spell(KeywordId::Variant).len();
         let body = text.masked[region.span.start + kw_len..region.span.end].trim();
-        for item in split_variant_items(body) {
+        for item in split_variant_items(text, body) {
             // The items are subslices of the masked text, whose offsets are the
             // document's, so these are where the item sits in the file. Without
             // the `with_span_base` shift the expression's own spans would be
@@ -4748,7 +4755,7 @@ impl RecoveryFormulaKind {
                 try_parse_labeled_predicate_from_text(content, 0).is_ok()
             }
             (Self::Component, KeywordId::Variant) => {
-                let items = split_variant_items(content);
+                let items = split_variant_items(text, content);
                 !items.is_empty()
                     && items
                         .iter()
@@ -5294,47 +5301,14 @@ fn parse_labeled_predicate_str(input: &str) -> Result<LabeledPredicate, ParseErr
 /// `@label theorem P`, bare `P` — including ASCII membership `c : S`) go
 /// through the strict `labeled_predicate` rule, so recovery cannot drift
 /// from the grammar (issue #24; this includes the trailing-colon label
-/// spelling `@axm1: P`, where the colon belongs to the label). Only the
-/// grammar-external `label: P` colon form is handled heuristically on top.
+/// spelling `@axm1: P`, where the colon belongs to the label).
 fn try_parse_labeled_predicate_from_text(
     text: &str,
     abs_start: usize,
 ) -> Result<LabeledPredicate, ParseError> {
     // The segment is parsed in isolation, so the lowering lifts the
     // formula spans to document coordinates as they are produced.
-    let text = text.trim();
-    let strict_error = match with_span_base(abs_start, || parse_labeled_predicate_str(text)) {
-        Ok(result) => return Ok(result),
-        Err(e) => e,
-    };
-
-    // "label:" form. Only reached for lines the grammar rejects outright:
-    // a colon that is ASCII membership already parsed above.
-    if !text.starts_with('@')
-        && let Some(colon_pos) = text.find(':')
-    {
-        let potential_label = text[..colon_pos].trim();
-        if !potential_label.is_empty()
-            // Unicode labels are fine here (Rodin permits them); the ASCII
-            // `is_word_char` predicate is only for keyword boundaries.
-            && potential_label
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_')
-            && let Ok(predicate) = with_span_base(abs_start, || {
-                parse_predicate_str(text[colon_pos + 1..].trim())
-            })
-        {
-            return Ok(LabeledPredicate {
-                label: Some(potential_label.to_string()),
-                is_theorem: false,
-                predicate,
-                span: None,
-                comment: None,
-            });
-        }
-    }
-
-    Err(strict_error)
+    with_span_base(abs_start, || parse_labeled_predicate_str(text))
 }
 
 /// Parse a labeled action from a string segment: `@label lhs := rhs` or
@@ -5357,9 +5331,16 @@ fn try_parse_labeled_action_from_text(
     let (label, action_text) = text
         .strip_prefix('@')
         .and_then(|rest| {
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            let name = rest[..end].trim_end_matches(':');
-            (!name.is_empty()).then(|| (Some(name.to_string()), rest[end..].trim()))
+            let end = rest
+                .find(crate::keywords::is_whitespace)
+                .unwrap_or(rest.len());
+            let name = &rest[..end];
+            (!name.is_empty()).then(|| {
+                (
+                    Some(name.to_string()),
+                    rest[end..].trim_matches(crate::keywords::is_whitespace),
+                )
+            })
         })
         .unwrap_or((None, text));
 

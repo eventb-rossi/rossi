@@ -145,9 +145,9 @@ pub fn lexical_spans(source: &str) -> LexicalSpans {
                 // (the grammar's `label_text`), never a comment.
                 let start = i;
                 i += 1;
-                while i < bytes.len() && !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-                    i += 1;
-                }
+                i += source[i..]
+                    .find(crate::keywords::is_whitespace)
+                    .unwrap_or(source.len() - i);
                 labels.push(Span { start, end: i });
                 role = WordRole::Code;
             }

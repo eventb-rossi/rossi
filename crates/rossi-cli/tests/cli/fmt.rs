@@ -7,6 +7,31 @@ use crate::helpers::{
 };
 
 #[test]
+fn fmt_preserves_camille_label_names() {
+    let source = "context c\naxioms\n@a 1 = 1\n@a: 1 = 1\n@a:: 1 = 1\n@: 1 = 1\nend\n";
+    for style in ["camille", "rossi"] {
+        for operator_mode in ["--ascii", "--unicode"] {
+            let args = ["fmt", "--style", style, operator_mode, "-"];
+            let output = run_cli_with_stdin(&args, source);
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            let rossi::Component::Context(context) = rossi::parse(&text).unwrap() else {
+                panic!("expected context");
+            };
+            let labels: Vec<_> = context
+                .axioms
+                .iter()
+                .filter_map(|a| a.label.as_deref())
+                .collect();
+            assert_eq!(labels, ["a", "a:", "a::", ":"]);
+            let again = run_cli_with_stdin(&args, &text);
+            assert!(again.status.success(), "{again:?}");
+            assert_eq!(again.stdout, text.as_bytes());
+        }
+    }
+}
+
+#[test]
 fn test_fmt_stdin_inverse_operator_conversion() {
     // ASCII `~` is accepted on input; `fmt` emits Unicode ∼ (U+223C) and
     // `fmt --ascii` emits `~` (U+007E).

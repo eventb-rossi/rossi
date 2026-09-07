@@ -454,6 +454,24 @@ mod tests {
     }
 
     #[test]
+    fn colon_bearing_labels_are_distinct() {
+        let source = "context c\naxioms\n@a 1 = 1\n@a: 1 = 1\n@a:: 1 = 1\n@: 1 = 1\nend\n";
+        let component = rossi::parse(source).unwrap();
+        let diags = component_duplicate_diagnostics(&component);
+        assert!(
+            dups_of(&diags, RuleId::DuplicateLabel).is_empty(),
+            "{diags:?}"
+        );
+
+        let repeated = source.replace("\nend", "\n@a: 1 = 1\nend");
+        let component = rossi::parse(&repeated).unwrap();
+        let diags = component_duplicate_diagnostics(&component);
+        let labels = dups_of(&diags, RuleId::DuplicateLabel);
+        assert_eq!(labels.len(), 1, "{diags:?}");
+        assert_eq!(labels[0].origin, "c.a:");
+    }
+
+    #[test]
     fn duplicate_invariant_label_is_flagged() {
         let mut m = Machine::new("M".into());
         m.invariants = vec![

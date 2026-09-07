@@ -781,14 +781,8 @@ fn recovery_errors(result: &rossi::ParseResult<Component>) -> Vec<String> {
     &[(Some("axm1"), false)]
     ; "block_comment_with_colon"
 )]
-// The undocumented `label: predicate` form must keep working, including
-// with a trailing colon comment.
-#[test_case(None, "axm1: c1 = 1 // note: colon label form", &[(Some("axm1"), false)] ; "colon_label_syntax_still_works")]
-// `@axm1: P` is the eventb-to-txt label spelling: the strict parser strips
-// the trailing colon (label "axm1"), and recovery must agree.
-#[test_case(None, "@axm1: c1 = 1", &[(Some("axm1"), false)] ; "trailing_colon_label_matches_strict_parser")]
-// The legacy `label: P` colon form permits Unicode labels (Rodin does).
-#[test_case(None, "метка: c1 = 1", &[(Some("метка"), false)] ; "colon_label_accepts_unicode")]
+// The trailing colon belongs to the label in both strict parsing and recovery.
+#[test_case(None, "@axm1: c1 = 1", &[(Some("axm1:"), false)] ; "trailing_colon_label_matches_strict_parser")]
 // `@axm1//note` is a complete label per the grammar; masking must not
 // truncate it into an unparseable `@axm1` stub.
 #[test_case(None, "@axm1//note c1 = 1", &[(Some("axm1//note"), false)] ; "comment_markers_in_label_no_spurious_error")]
@@ -1178,7 +1172,7 @@ fn test_recovery_set_error_does_not_leak_into_axioms_issue_32() {
         .collect();
     assert_eq!(
         labels,
-        vec!["axm1", "axm2"],
+        vec!["axm1:", "axm2:"],
         "both axioms must be recovered"
     );
 }
@@ -1204,8 +1198,7 @@ fn test_recovery_rejects_enumerated_sets_without_promoting_elements() {
 #[test]
 fn test_recovery_does_not_read_ascii_membership_as_a_label() {
     // `:` is the ASCII spelling of ∈, so `c1 : S` is a membership predicate
-    // with no label — never label `c1` with predicate `S`. The legacy
-    // `label: predicate` form must not claim it.
+    // with no label — never label `c1` with predicate `S`.
     let source = "\n    CONTEXT issue24\n    SETS\n        S\n    CONSTANTS\n        c1\n        +\n    AXIOMS\n        c1 : S\n    END\n    ";
 
     let result = parse_with_recovery(source);

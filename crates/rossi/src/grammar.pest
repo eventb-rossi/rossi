@@ -626,7 +626,7 @@ context_clause_constants = {
 // Label: "@" followed by any non-whitespace characters, per the TextEditor EBNF spec:
 // "all characters following '@' belong to the label until the next whitespace character is found."
 // This supports labels with non-identifier chars like SAF5" from Rodin XML &quot; escapes.
-// The optional trailing colon supports eventb-to-txt reference output (e.g. "@inv1:").
+// Colons are label characters too: "@inv1:" names "inv1:", not "inv1".
 // `!WHITESPACE` (not a hardcoded ASCII list) keeps the label boundary in lockstep
 // with the parser's whitespace set, so a label terminates on the same Unicode
 // spaces (e.g. U+00A0) the rest of the grammar skips.

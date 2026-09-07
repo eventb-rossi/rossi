@@ -1178,16 +1178,16 @@ fn test_machine_full_valid_order() {
 }
 
 // ============================================================================
-// eventb-to-txt reference format compatibility tests
+// Camille label and structural syntax tests
 // ============================================================================
 
 use rossi::ast::event::EventStatus;
 use test_case::test_case;
 
-// --- Label with optional colon: parse succeeds and label is extracted --------
+// --- A colon belongs to the label -------------------------------------------
 
 #[test_case("@axm1 1 = 1",  "axm1"  ; "without_colon")]
-#[test_case("@axm1: 1 = 1", "axm1"  ; "with_colon")]
+#[test_case("@axm1: 1 = 1", "axm1:" ; "with_colon")]
 fn test_label_colon_in_axiom(predicate_text: &str, expected_label: &str) {
     let source = format!("CONTEXT test\nAXIOMS\n    {predicate_text}\nEND\n");
     let ctx = common::parse_context(&source);
@@ -1196,7 +1196,7 @@ fn test_label_colon_in_axiom(predicate_text: &str, expected_label: &str) {
 }
 
 #[test_case("@inv1 x >= 0",  "inv1" ; "without_colon")]
-#[test_case("@inv1: x >= 0", "inv1" ; "with_colon")]
+#[test_case("@inv1: x >= 0", "inv1:" ; "with_colon")]
 fn test_label_colon_in_invariant(predicate_text: &str, expected_label: &str) {
     let source = format!("MACHINE test\nVARIABLES\n    x\nINVARIANTS\n    {predicate_text}\nEND\n");
     let m = common::parse_machine(&source);
@@ -1219,7 +1219,7 @@ fn test_label_colon_in_event_guard() {
     "#;
 
     let m = common::parse_machine(source);
-    assert_eq!(m.events[0].guards[0].label, Some("grd1".to_string()));
+    assert_eq!(m.events[0].guards[0].label, Some("grd1:".to_string()));
 }
 
 #[test]
@@ -1239,19 +1239,19 @@ fn test_label_colon_in_action() {
         .initialisation
         .as_ref()
         .expect("Should have initialisation");
-    assert_eq!(init.actions[0].label, Some("act1".to_string()));
+    assert_eq!(init.actions[0].label, Some("act1:".to_string()));
 }
 
 // --- Theorem keyword ordering: both "@label theorem" and "theorem @label" ----
 
-#[test_case("@thm1 theorem 1 = 1"  ; "label_before_theorem")]
-#[test_case("theorem @thm1 1 = 1"  ; "theorem_before_label")]
-#[test_case("theorem @thm1: 1 = 1" ; "theorem_before_label_with_colon")]
-fn test_theorem_label_ordering(predicate_text: &str) {
+#[test_case("@thm1 theorem 1 = 1", "thm1" ; "label_before_theorem")]
+#[test_case("theorem @thm1 1 = 1", "thm1" ; "theorem_before_label")]
+#[test_case("theorem @thm1: 1 = 1", "thm1:" ; "theorem_before_label_with_colon")]
+fn test_theorem_label_ordering(predicate_text: &str, expected_label: &str) {
     let source = format!("CONTEXT test\nAXIOMS\n    {predicate_text}\nEND\n");
     let ctx = common::parse_context(&source);
     assert_eq!(ctx.axioms.len(), 1);
-    assert_eq!(ctx.axioms[0].label, Some("thm1".to_string()));
+    assert_eq!(ctx.axioms[0].label.as_deref(), Some(expected_label));
     assert!(ctx.axioms[0].is_theorem);
 }
 
@@ -1339,7 +1339,7 @@ fn test_label_with_non_identifier_chars() {
 
 #[test]
 fn test_label_with_colon_suffix() {
-    // Labels with trailing colon (eventb-to-txt format) should still work
+    // A trailing colon is retained as part of the Camille label.
     let source = indoc::indoc! {"
         CONTEXT test
         AXIOMS
@@ -1348,7 +1348,7 @@ fn test_label_with_colon_suffix() {
     "};
     let component = parse(source).expect("Should parse label with colon");
     if let Component::Context(c) = &component {
-        assert_eq!(c.axioms[0].label.as_deref(), Some("axm1"));
+        assert_eq!(c.axioms[0].label.as_deref(), Some("axm1:"));
     } else {
         panic!("Expected Context");
     }
