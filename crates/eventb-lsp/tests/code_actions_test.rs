@@ -909,6 +909,14 @@ fn eb032_numbers_past_the_labels_in_scope() {
             },
             "Insert label @inv2",
         ),
+        (
+            "context c\naxioms\n@axm1:\u{a0}1 = 1\n1 = 1\nend\n",
+            Range {
+                start: Position::new(3, 0),
+                end: Position::new(3, 5),
+            },
+            "Insert label @axm1",
+        ),
     ] {
         let params = diagnostic_params("file:///m.eventb", item, "EB032");
         let actions = provider

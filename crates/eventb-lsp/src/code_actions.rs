@@ -698,9 +698,8 @@ impl CodeActionProvider {
             .labels
             .iter()
             .filter(|span| scope.contains(&span.start))
-            // The span covers `@name`; a trailing `:` is dropped to match the
-            // parser's `extract_label`, as the semantic tokens do.
-            .map(|span| text[span.start + 1..span.end].trim_end_matches(':'))
+            // The span covers `@name`; only the leading sigil is syntax.
+            .map(|span| &text[span.start + 1..span.end])
             .collect();
         let label = (1..)
             .map(|n| format!("{stem}{n}"))

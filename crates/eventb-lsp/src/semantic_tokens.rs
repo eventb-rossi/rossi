@@ -748,13 +748,12 @@ impl<'a> SemanticTokensBuilder<'a> {
     fn emit_label_tokens(&mut self) {
         for span in &self.lexical.labels {
             // The span covers `@name`; color the name, leaving the `@` to the
-            // TextMate `entity.name.tag` scope (matches the prior behavior). A
-            // trailing `:` is dropped to match the strict parser's `extract_label`
-            // (eventb-to-txt compat), which strips it from the label text.
+            // TextMate `entity.name.tag` scope. Every following character,
+            // including a trailing colon, belongs to the name.
             let name_start = span.start + 1; // `@` is ASCII, one byte
-            let name = self.text[name_start..span.end].trim_end_matches(':');
+            let name = &self.text[name_start..span.end];
             if name.is_empty() {
-                continue; // a bare `@` (or `@:`) with no label text
+                continue; // a bare `@` with no label text
             }
             let length = crate::position::utf16_len(name);
             let (line, col) = self.position_from_offset(name_start);

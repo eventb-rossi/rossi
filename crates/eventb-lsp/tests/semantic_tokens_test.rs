@@ -354,21 +354,23 @@ fn test_labels_consistent_across_events_with_initialisation() {
 }
 
 #[test]
-fn test_label_token_excludes_trailing_colon() {
-    // eventb-to-txt writes labels with a trailing colon (`@axm1:`); the strict
-    // parser's `extract_label` strips it, so the label token must cover `axm1`
-    // (4 chars), not `axm1:` (5) — the colon is a separator, not label text.
-    let text = "CONTEXT c\nAXIOMS\n    @axm1: 1 = 1\nEND\n";
-    assert!(rossi::parse(text).is_ok(), "fixture must be strictly valid");
-
-    let tokens = decode_tokens(text);
-    let label = token_type_index("macro");
-    let labels: Vec<_> = tokens.iter().filter(|t| t.3 == label).collect();
-    assert_eq!(
-        labels,
-        [&(2, 5, 4, label)],
-        "label token must cover `axm1` (col 5, len 4), not the trailing colon"
-    );
+fn label_tokens_cover_complete_names_in_valid_and_broken_documents() {
+    for name in ["axm1:", "a::", ":", "😀:", "a@b", "a//:", "SAF5\""] {
+        for separator in [" ", "\t", "\u{1c}", "\u{a0}"] {
+            for predicate in ["1 = 1", "1 ="] {
+                let text = format!("CONTEXT c\nAXIOMS\n    @{name}{separator}{predicate}\nEND\n");
+                assert_eq!(rossi::parse(&text).is_ok(), predicate == "1 = 1");
+                let tokens = decode_tokens(&text);
+                let label = token_type_index("macro");
+                let labels: Vec<_> = tokens.iter().filter(|t| t.3 == label).collect();
+                assert_eq!(
+                    labels,
+                    [&(2, 5, name.encode_utf16().count() as u32, label)],
+                    "{text}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
