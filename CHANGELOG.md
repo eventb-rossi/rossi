@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.2.2](https://github.com/eventb-rossi/rossi/compare/v0.2.1...v0.2.2) - 2026-09-08
+
+### Added
+- *(fmt)* Add an opt-in private-use-glyph output mode
+- *(build)* Reject a declared name that carries a prime
+- *(cli)* Clean orphaned and broken proofs from a project
+- *(pretty)* Keep comments where the source put them
+- *(parse)* Give variants a comment field
+- *(ast)* Record where a skip action is written
+- *(ast)* Give a machine variant its source span
+- *(build)* Locate WD conditions by source
+- *(ast)* Identify the source a span indexes
+- *(formula)* Enumerate a predicate's propositional leaves
+- *(prove)* Rewrite a proof file's entries in place
+- *(lsp)* Merge Rodin's unsaved edits into the buffer
+- *(lsp)* Receive what the Rodin bridge pushes
+- *(lsp)* Register the Rodin project through its bridge plug-in
+- *(lsp)* Honour privateUseGlyphs across formatting and assistance
+- *(lsp)* Filter operator completions on word aliases
+
+### Changed
+- *(cli)* Share the prove command's obligation classification
+- *(pretty)* Thread an output sink through the print helpers
+- *(lsp)* Take a merge's inputs rather than reading them
+- *(lsp)* Resolve document symbols through the line index
+
+### Fixed
+- *(build)* Report a primed identifier nothing can declare
+- *(xml)* Emit the comment attribute on witnesses
+- *(parse)* Span the primed declarations an action's lowering derives
+- *(parse)* Reject an annotation that does not denote a type
+- *(formula)* Read a type spelling the way Rodin's parser does
+- *(lsp)* Mask names by the grammar's own list and whitespace rules
+- *(lsp)* Keep component and event names out of the operator rewrite
+- *(parse)* Treat bool as the closed operator word it is
+- *(parse)* Reject a math keyword as a predicate-application head
+- *(lsp)* Point the variant outline row at the variant
+- *(lsp)* Point declaration symbols at their declaration
+
+### Documentation
+- Correct the subcommand tables
+- Describe rossi clean in the READMEs
+- *(lsp)* Document the documentSymbol and settings contract
+
 ## [0.2.1](https://github.com/eventb-rossi/rossi/compare/v0.2.0...v0.2.1) - 2026-09-03
 
 ### Added
