@@ -2,6 +2,7 @@ mod helpers;
 
 mod build;
 mod clean;
+mod dump;
 mod export_build;
 mod fmt;
 mod import_export;

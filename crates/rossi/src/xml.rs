@@ -1637,12 +1637,26 @@ pub fn read_project_name(xml: &str) -> Option<String> {
     }
 }
 
-fn rodin_project_file_xml(project_name: &str) -> String {
-    let project_name = if project_name.trim().is_empty() {
-        "rossi_project"
+/// The project name a Rodin archive is given when the caller supplies none.
+///
+/// A descriptor always names a project, so a blank name has to become
+/// something; every handle in the archive then starts with it. Public because
+/// a caller that assembles a project without going through the archive writer
+/// still has to arrive at the same name, or its handles would differ.
+pub const DEFAULT_PROJECT_NAME: &str = "rossi_project";
+
+/// Normalise a project name the way the descriptor records it.
+#[must_use]
+pub fn descriptor_project_name(project_name: &str) -> &str {
+    if project_name.trim().is_empty() {
+        DEFAULT_PROJECT_NAME
     } else {
         project_name.trim()
-    };
+    }
+}
+
+fn rodin_project_file_xml(project_name: &str) -> String {
+    let project_name = descriptor_project_name(project_name);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>

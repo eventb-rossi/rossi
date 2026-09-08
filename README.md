@@ -158,6 +158,7 @@ the `rossi-build` static checker (the language server is the separate
 | `export`   | Export `.eventb`/`.txt`/dir into a Rodin `.zip` archive. |
 | `fmt`      | Reformat Event-B in place (style, operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
+| `dump`     | Write a checked project as a `rossi-model` JSON document: the typed formula trees in Rodin's vocabulary. |
 | `prove`    | Check a project's stored proofs against its proof obligations. |
 | `clean`    | Drop the stored proofs whose obligation no longer exists, and empty the ones that no longer apply. |
 | `completions` | Print a shell completion script to stdout (run `rossi completions --help` for the supported shells). |
@@ -394,6 +395,93 @@ rossi build project.zip --output project-checked.zip
 # Or emit loose files into a directory
 rossi build project.zip --output ./out
 ```
+
+### Dump (checked model as JSON)
+
+Rodin has no tree export of its typed syntax: every file it writes turns a
+formula back into text and stores the types beside it, so a tool that wants
+the tree has to parse and type-check the text again. `rossi dump` writes the
+checked model with its formulas still trees, in Rodin's own vocabulary.
+
+```bash
+# Write the document to stdout
+rossi dump project.zip
+
+# Or to a file
+rossi dump ./src --output model.json
+
+# Choose a project from an archive holding several
+rossi dump many.zip --project inventory
+
+# Indent it for reading
+rossi dump counter.eventb --pretty
+
+# Print the schema the documents conform to
+rossi dump --schema
+```
+
+A document is written on one line, because it is written for a tool rather
+than for a reader and indenting one costs several times the bytes. `--pretty`
+indents it for reading a small model or inspecting the format.
+
+Inputs are the same as `build`: a Rodin `.zip`, a directory (a Rodin project
+or a folder of Event-B text), or a single `.eventb` / `.txt` / `.buc` / `.bum`
+file.
+
+**JSON output** (trimmed to one invariant):
+
+```json
+{
+  "format": "rossi-model",
+  "version": 1,
+  "types": { "ℤ": { "kind": "INT" } },
+  "machines": [
+    {
+      "name": "counter",
+      "invariants": [
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/counter/counter.bum|org.eventb.core.machineFile#counter|org.eventb.core.invariant#inv1",
+          "span": { "file": "counter.bum", "start": 62, "end": 76, "line": 6, "col": 5, "end_line": 6, "end_col": 19 },
+          "text": "count\u2208\u2115",
+          "predicate": {
+            "tag": 107, "op": "IN",
+            "children": [
+              { "tag": 1, "op": "FREE_IDENT", "type": "\u2124", "name": "count" },
+              { "tag": 402, "op": "NATURAL", "type": "\u2119(\u2124)" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each node carries Rodin's numeric `tag` and its constant name as `op`, and its
+children follow Rodin's child positions, so a path through `children` is the
+same path through the formula in Rodin. Bound variables are de Bruijn indices,
+as in Rodin, and each occurrence also names the declaration it resolves to.
+Every action additionally carries `ba`, the same action written as a predicate
+relating the before and after states.
+
+A machine carries the closure of what is visible in it, as Rodin's checked
+files do: inherited invariants, the whole chain of an extended event, and the
+contexts it sees transitively. Anything inherited names the machine that wrote
+it, so a consumer wanting only one machine's own declarations can filter on
+that.
+
+Spans are absent for Rodin XML input, which carries no source text.
+
+#### Exit codes
+
+`0` when the document has no error diagnostics, `1` when it does, and `2` for
+a usage mistake such as an archive holding several projects with no
+`--project`. A document is written even when the exit code is `1`: what the
+checker rejected is absent from the elements, and `diagnostics` says why. When
+the input cannot be read at all nothing reaches stdout, so a consumer never
+parses a truncated document.
 
 ### Shell completions
 
