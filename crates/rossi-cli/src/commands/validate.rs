@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::commands::eventb_io;
+use crate::commands::report::{Report, finish_structured_output};
 use crate::commands::sarif;
 
 #[derive(Args)]
@@ -241,59 +242,6 @@ fn ser_rule_id<S: Serializer>(value: &Option<RuleId>, s: S) -> Result<S::Ok, S::
     s.serialize_some(value.expect("skipped by serde when None").code())
 }
 
-/// Where the report goes.
-///
-/// Without `--output` the human format keeps its stream split — error rows on
-/// stderr, everything else on stdout — so a shell can separate them. With it,
-/// every line of the report goes to the file whatever the format, and the
-/// terminal stays clean.
-enum Report {
-    Console,
-    File(io::BufWriter<fs::File>),
-}
-
-impl Report {
-    fn open(path: Option<&Path>) -> io::Result<Self> {
-        match path {
-            Some(path) => Ok(Self::File(io::BufWriter::new(fs::File::create(path)?))),
-            None => Ok(Self::Console),
-        }
-    }
-
-    /// Emit one line of the human report.
-    fn line(&mut self, line: &str, is_error: bool) -> io::Result<()> {
-        match self {
-            Self::Console if is_error => {
-                eprintln!("{line}");
-                Ok(())
-            }
-            Self::Console => {
-                println!("{line}");
-                Ok(())
-            }
-            Self::File(out) => writeln!(out, "{line}"),
-        }
-    }
-
-    /// Emit a whole structured document through `write`.
-    fn structured(
-        &mut self,
-        write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
-    ) -> io::Result<()> {
-        match self {
-            Self::Console => write(&mut io::stdout().lock()),
-            Self::File(out) => write(out),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Console => Ok(()),
-            Self::File(out) => out.flush(),
-        }
-    }
-}
-
 pub fn run(cli: ValidateArgs) -> ExitCode {
     if let Err(e) = eventb_io::stdin_is_sole_input(&cli.files) {
         eprintln!("rossi validate: {e}");
@@ -372,7 +320,7 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
         .and_then(|()| report.flush());
 
     let mut stderr = io::stderr().lock();
-    finish_structured_output(output_result, validation_exit, &mut stderr)
+    finish_structured_output("validate", output_result, validation_exit, &mut stderr)
 }
 
 /// Whether a row makes the run fail.
@@ -381,21 +329,6 @@ pub fn run(cli: ValidateArgs) -> ExitCode {
 /// even when explicitly included with `--show-info`.
 fn row_failed(result: &ValidationResult, deny_warnings: bool) -> bool {
     !result.success || (deny_warnings && result.severity == Some(Severity::Warning))
-}
-
-fn finish_structured_output(
-    output_result: io::Result<()>,
-    validation_exit: ExitCode,
-    stderr: &mut impl Write,
-) -> ExitCode {
-    match output_result {
-        Ok(()) => validation_exit,
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => validation_exit,
-        Err(e) => {
-            let _ = writeln!(stderr, "rossi validate: failed to write output: {e}");
-            ExitCode::from(1)
-        }
-    }
 }
 
 fn validate_file(file: &Path, cli: &ValidateArgs) -> Vec<ValidationResult> {
@@ -1302,38 +1235,6 @@ mod tests {
         );
 
         assert_eq!(result.portable_path(), "repo/project/nested/M.eventb");
-    }
-
-    #[test]
-    fn output_failure_is_reported_and_exits_nonzero() {
-        let mut stderr = Vec::new();
-
-        let exit = finish_structured_output(
-            Err(io::Error::other("write failed")),
-            ExitCode::SUCCESS,
-            &mut stderr,
-        );
-
-        assert_eq!(exit, ExitCode::from(1));
-        assert_eq!(
-            String::from_utf8(stderr).unwrap(),
-            "rossi validate: failed to write output: write failed\n"
-        );
-    }
-
-    #[test]
-    fn broken_pipe_preserves_failed_validation_exit() {
-        let mut stderr = Vec::new();
-        let failed_validation = ExitCode::from(1);
-
-        let exit = finish_structured_output(
-            Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-            failed_validation,
-            &mut stderr,
-        );
-
-        assert_eq!(exit, failed_validation);
-        assert!(stderr.is_empty());
     }
 
     #[test]
