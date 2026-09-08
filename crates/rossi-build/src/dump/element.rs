@@ -1,0 +1,736 @@
+//! The checked model as document elements.
+//!
+//! The shape follows Rodin's checked files rather than the source: a machine
+//! carries the closure of what is visible in it, not just what was written in
+//! it. Its invariants include the ones it inherits, its events carry the full
+//! chain of an extended event's guards and actions, and the contexts it sees
+//! are listed transitively. A consumer that wants only what a machine wrote
+//! can filter on the recorded owner; a consumer that wants the whole picture
+//! already has it, and neither has to reimplement the checker's closure rules.
+
+use rossi::formula::{Assignment, Expression, Predicate};
+
+use crate::normalize;
+use crate::sc::machine_record::{ActionDecl, Convergence, EventDecl};
+use crate::sc_model::{CheckedContext, CheckedMachine, ScModel};
+use crate::{Diagnostic, Severity};
+
+use super::formula::{AssignmentNode, Ctx, Node};
+use super::location::SpanDump;
+use super::origin::{ComponentOrigin, Origin, is_synthesized};
+
+/// An identifier declaration: a carrier set, constant or event parameter.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct IdentDump {
+    pub name: String,
+    /// The declared type, as a key into the document's type table.
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
+    pub ty: String,
+    /// The Rodin handle of the checked declaration.
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// The machine an inherited parameter was written in.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub inherited_from: Option<String>,
+}
+
+/// A machine variable.
+///
+/// There is no owner to record: the checked model keeps the visible set with
+/// no note of which ancestor declared each name, and Rodin's checked file
+/// says the same. `abstract` is the inheritance marker.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct VariableDump {
+    pub name: String,
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
+    pub ty: String,
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// Declared by a machine this one refines.
+    #[cfg_attr(feature = "serde", serde(rename = "abstract"))]
+    pub is_abstract: bool,
+    /// Declared by this machine.
+    #[cfg_attr(feature = "serde", serde(rename = "concrete"))]
+    pub is_concrete: bool,
+}
+
+/// An axiom, invariant, guard or witness.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct PredicateDump {
+    /// For a witness this is the identifier being witnessed, which for an
+    /// after-state is a primed name, as in Rodin.
+    pub label: String,
+    /// Absent on a witness, which cannot be a theorem.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub theorem: Option<bool>,
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// The machine an inherited invariant or guard was written in.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub inherited_from: Option<String>,
+    /// The predicate as Rodin's checked file spells it, so a consumer can
+    /// hand it to a Rodin parser and get the same formula back.
+    pub text: String,
+    pub predicate: Node,
+}
+
+/// A machine variant.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct VariantDump {
+    pub label: String,
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    pub text: String,
+    /// Absent when the variant was kept despite naming something unknown, so
+    /// there is no typed expression to report.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub expression: Option<Node>,
+}
+
+/// One action of an event.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ActionDump {
+    pub label: String,
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// The machine an inherited action was written in.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub inherited_from: Option<String>,
+    pub text: String,
+    /// Absent for `skip`, which has no assignment.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub assignment: Option<AssignmentNode>,
+    /// The before-after predicate: the same action written as a relation
+    /// between the states, with each after-state value a primed identifier.
+    /// Absent for `skip`.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub ba: Option<Node>,
+}
+
+/// An event, with the whole chain an extended event inherits.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct EventDump {
+    pub label: String,
+    /// `ordinary`, `convergent` or `anticipated`.
+    pub convergence: &'static str,
+    /// Whether the event extends its abstract counterpart rather than
+    /// restating it.
+    pub extended: bool,
+    /// Whether checking this event was complete. A false value means some
+    /// part of it was dropped, and `diagnostics` says why.
+    pub accurate: bool,
+    pub source: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// The abstract events this one refines. More than one is a merge.
+    pub refines: Vec<String>,
+    pub parameters: Vec<IdentDump>,
+    pub guards: Vec<PredicateDump>,
+    pub witnesses: Vec<PredicateDump>,
+    pub actions: Vec<ActionDump>,
+}
+
+/// A checked context.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ContextDump {
+    pub name: String,
+    pub source: String,
+    pub accurate: bool,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// Directly extended contexts.
+    pub extends: Vec<String>,
+    /// Every extended context, transitively, oldest first.
+    pub ancestors: Vec<String>,
+    pub carrier_sets: Vec<IdentDump>,
+    pub constants: Vec<IdentDump>,
+    pub axioms: Vec<PredicateDump>,
+}
+
+/// A checked machine.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct MachineDump {
+    pub name: String,
+    pub source: String,
+    pub accurate: bool,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub comment: Option<String>,
+    /// The machine this one refines, if any.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub refines: Option<String>,
+    /// Every refined machine, transitively, oldest first.
+    pub ancestors: Vec<String>,
+    /// Directly seen contexts.
+    pub sees: Vec<String>,
+    /// Every context visible here, transitively, in the order the checker
+    /// makes them visible.
+    pub internal_contexts: Vec<String>,
+    pub variables: Vec<VariableDump>,
+    /// Inherited invariants first, oldest machine first, then this machine's.
+    pub invariants: Vec<PredicateDump>,
+    pub variants: Vec<VariantDump>,
+    /// Initialisation first, then the events in source order.
+    pub events: Vec<EventDump>,
+}
+
+/// A finding about the model.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct DiagnosticDump {
+    /// `error`, `warning` or `info`.
+    pub severity: &'static str,
+    /// The rule that produced it, where one did.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub rule_id: Option<&'static str>,
+    /// What it is about, as a component name optionally followed by a label.
+    pub origin: String,
+    pub message: String,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub span: Option<SpanDump>,
+}
+
+/// The severity a finding must have for a document to count as failed.
+pub(crate) const SEVERITY_ERROR: &str = "error";
+
+fn severity_name(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => SEVERITY_ERROR,
+        Severity::Warning => "warning",
+        Severity::Info => "info",
+    }
+}
+
+fn convergence_name(convergence: Convergence) -> &'static str {
+    match convergence {
+        Convergence::Ordinary => "ordinary",
+        Convergence::Convergent => "convergent",
+        Convergence::Anticipated => "anticipated",
+    }
+}
+
+/// Everything the assembly needs about one component while it converts it.
+pub(crate) struct Builder<'a, 'b> {
+    pub(crate) ctx: Ctx<'b>,
+    pub(crate) origin: Option<&'a ComponentOrigin<'a>>,
+}
+
+impl<'a, 'b> Builder<'a, 'b> {
+    /// The element-level form of a source position, which unlike a node's
+    /// also names the file.
+    fn span(&self, origin: &Origin<'_>) -> Option<SpanDump> {
+        let component = self.origin?;
+        let lines = component.lines.as_ref()?;
+        let span = origin.span?;
+        Some(lines.span(span, Some(component.source_id.clone())))
+    }
+
+    fn place(&self, origin: &Origin<'_>) -> (Option<SpanDump>, Option<String>) {
+        (self.span(origin), origin.comment.map(str::to_string))
+    }
+
+    fn lookup(&self, f: impl FnOnce(&ComponentOrigin<'a>) -> Origin<'a>) -> Origin<'a> {
+        self.origin.map(f).unwrap_or_default()
+    }
+
+    fn ident(
+        &mut self,
+        name: &str,
+        ty: &rossi::formula::Type,
+        source: &str,
+        origin: Origin<'_>,
+        inherited_from: Option<String>,
+    ) -> IdentDump {
+        let (span, comment) = self.place(&origin);
+        IdentDump {
+            name: name.to_string(),
+            ty: self.ctx.register_type(ty),
+            source: source.to_string(),
+            span,
+            comment,
+            inherited_from,
+        }
+    }
+
+    fn predicate(
+        &mut self,
+        label: &str,
+        theorem: Option<bool>,
+        typed: &Predicate,
+        source: &str,
+        origin: Origin<'_>,
+        inherited_from: Option<String>,
+    ) -> PredicateDump {
+        let (span, comment) = self.place(&origin);
+        // Ascriptions are unwrapped first: they are a spelling of a type the
+        // node already carries, and Rodin's tree has no node for them, so
+        // keeping them would make the tree depend on how the author wrote
+        // the formula rather than on what it means.
+        let stripped = typed.strip_ascriptions();
+        PredicateDump {
+            label: label.to_string(),
+            theorem,
+            source: source.to_string(),
+            span,
+            comment,
+            inherited_from,
+            text: normalize::canonical_typed_predicate(typed),
+            predicate: super::formula::predicate(&mut self.ctx, &stripped, &mut Vec::new()),
+        }
+    }
+
+    fn expression(&mut self, typed: &Expression) -> Node {
+        let stripped = typed.strip_ascriptions();
+        super::formula::expression(&mut self.ctx, &stripped, &mut Vec::new())
+    }
+
+    fn assignment(&mut self, typed: &Assignment) -> (AssignmentNode, Option<Node>) {
+        let stripped = typed.strip_ascriptions();
+        let node = super::formula::assignment(&mut self.ctx, &stripped);
+        // The before-after predicate is only defined on a checked
+        // assignment, and asking for one otherwise is a panic rather than an
+        // error, so an unchecked action simply reports none.
+        let ba = stripped.is_type_checked().then(|| {
+            let predicate = stripped.ba_predicate();
+            super::formula::predicate(&mut self.ctx, &predicate, &mut Vec::new())
+        });
+        (node, ba)
+    }
+}
+
+/// Convert one checked context.
+pub(crate) fn context(builder: &mut Builder<'_, '_>, checked: &CheckedContext) -> ContextDump {
+    let record = &checked.record;
+    let own = builder.origin.map(|c| c.own.clone()).unwrap_or_default();
+    let (span, comment) = builder.place(&own);
+
+    let carrier_sets = record
+        .carrier_sets
+        .iter()
+        .map(|set| {
+            let origin = builder.lookup(|c| c.carrier_set(&set.name));
+            builder.ident(&set.name, &set.ty, set.source.as_str(), origin, None)
+        })
+        .collect();
+    let constants = record
+        .constants
+        .iter()
+        .map(|constant| {
+            let origin = builder.lookup(|c| c.constant(&constant.name));
+            builder.ident(
+                &constant.name,
+                &constant.ty,
+                constant.source.as_str(),
+                origin,
+                None,
+            )
+        })
+        .collect();
+    let axioms = record
+        .axioms
+        .iter()
+        .map(|axiom| {
+            let origin = builder.lookup(|c| c.axiom(axiom.source_index, &axiom.label));
+            builder.predicate(
+                &axiom.label,
+                Some(axiom.is_theorem),
+                &axiom.typed,
+                axiom.source.as_str(),
+                origin,
+                None,
+            )
+        })
+        .collect();
+
+    ContextDump {
+        name: record.name.clone(),
+        source: context_handle(checked),
+        accurate: checked.accurate,
+        span,
+        comment,
+        extends: record
+            .extends
+            .iter()
+            .map(|e| e.parent_name.clone())
+            .collect(),
+        ancestors: record.ancestors.clone(),
+        carrier_sets,
+        constants,
+        axioms,
+    }
+}
+
+/// A context's own handle, which the record does not store directly: every
+/// declaration's handle is a child of it.
+fn context_handle(checked: &CheckedContext) -> String {
+    checked
+        .record
+        .carrier_sets
+        .first()
+        .map(|d| d.source.as_str())
+        .or_else(|| checked.record.constants.first().map(|d| d.source.as_str()))
+        .or_else(|| checked.record.axioms.first().map(|d| d.source.as_str()))
+        .and_then(parent_handle)
+        .unwrap_or_default()
+}
+
+fn machine_handle(checked: &CheckedMachine) -> String {
+    checked
+        .record
+        .variables
+        .first()
+        .map(|d| d.source.as_str())
+        .or_else(|| checked.record.invariants.first().map(|d| d.source.as_str()))
+        .or_else(|| checked.record.events.first().map(|e| e.source.as_str()))
+        .and_then(parent_handle)
+        .unwrap_or_default()
+}
+
+/// The handle of the element a child handle hangs off, which is everything
+/// before its last segment.
+fn parent_handle(handle: &str) -> Option<String> {
+    handle.rfind('|').map(|cut| handle[..cut].to_string())
+}
+
+/// The chain an extended event inherits, oldest level first, each paired with
+/// the machine that wrote it.
+///
+/// The chain and the refinement line advance together: an event's inherited
+/// level was written in the machine this one refines. Walking both at once is
+/// what lets an inherited guard say where it came from.
+fn chain_with_owners<'m>(
+    model: &'m ScModel,
+    machine: &'m CheckedMachine,
+    event: &'m EventDecl,
+) -> Vec<(&'m EventDecl, &'m str)> {
+    let mut levels = Vec::new();
+    let mut current_event = Some(event);
+    let mut current_machine = Some(machine);
+    while let Some(level) = current_event {
+        levels.push((level, current_machine.map_or("", CheckedMachine::name)));
+        current_event = level.inherited.as_deref();
+        current_machine = current_machine.and_then(|m| model.refined_machine(m));
+    }
+    levels.reverse();
+    levels
+}
+
+/// Convert one checked machine.
+pub(crate) fn machine(
+    builder: &mut Builder<'_, '_>,
+    model: &ScModel,
+    checked: &CheckedMachine,
+) -> MachineDump {
+    let record = &checked.record;
+    let own = builder.origin.map(|c| c.own.clone()).unwrap_or_default();
+    let (span, comment) = builder.place(&own);
+
+    let variables = record
+        .variables
+        .iter()
+        .map(|variable| {
+            let origin = builder.lookup(|c| c.variable(&variable.name));
+            let (span, comment) = builder.place(&origin);
+            VariableDump {
+                name: variable.name.clone(),
+                ty: builder.ctx.register_type(&variable.ty),
+                source: variable.source.as_str().to_string(),
+                span,
+                comment,
+                is_abstract: variable.is_abstract,
+                is_concrete: variable.is_concrete,
+            }
+        })
+        .collect();
+
+    // Inherited invariants come from the ancestors directly rather than
+    // through the flattened helper, which drops the machine each one was
+    // written in.
+    let mut invariants = Vec::new();
+    for ancestor in checked.ancestors() {
+        let Some(parent) = model.machines.get(ancestor) else {
+            continue;
+        };
+        for invariant in &parent.record.invariants {
+            invariants.push(builder.predicate(
+                &invariant.label,
+                Some(invariant.is_theorem),
+                &invariant.typed,
+                invariant.source.as_str(),
+                Origin::default(),
+                Some(ancestor.clone()),
+            ));
+        }
+    }
+    for invariant in &record.invariants {
+        let origin = builder.lookup(|c| c.invariant(invariant.source_index, &invariant.label));
+        invariants.push(builder.predicate(
+            &invariant.label,
+            Some(invariant.is_theorem),
+            &invariant.typed,
+            invariant.source.as_str(),
+            origin,
+            None,
+        ));
+    }
+
+    let variants = record
+        .variants
+        .iter()
+        .map(|variant| {
+            let origin = builder.lookup(|c| c.variant(&variant.label));
+            let (span, comment) = builder.place(&origin);
+            VariantDump {
+                label: variant.label.clone(),
+                source: variant.source.as_str().to_string(),
+                span,
+                comment,
+                text: variant
+                    .typed
+                    .as_ref()
+                    .map(normalize::canonical_typed_expression)
+                    .unwrap_or_else(|| normalize::canonical_expression(&variant.expression)),
+                expression: variant.typed.as_ref().map(|e| builder.expression(e)),
+            }
+        })
+        .collect();
+
+    let events = record
+        .events
+        .iter()
+        .map(|event| self_event(builder, model, checked, event))
+        .collect();
+
+    MachineDump {
+        name: record.name.clone(),
+        source: machine_handle(checked),
+        accurate: checked.accurate,
+        span,
+        comment,
+        refines: record.refines.as_ref().map(|r| r.parent_name.clone()),
+        ancestors: record.ancestors.clone(),
+        sees: record.sees.iter().map(|s| s.name.clone()).collect(),
+        internal_contexts: model
+            .seen_contexts(checked)
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect(),
+        variables,
+        invariants,
+        variants,
+        events,
+    }
+}
+
+fn self_event(
+    builder: &mut Builder<'_, '_>,
+    model: &ScModel,
+    machine: &CheckedMachine,
+    event: &EventDecl,
+) -> EventDump {
+    let own_machine = machine.name();
+    let levels = chain_with_owners(model, machine, event);
+    let inherited_from = |owner: &str| (owner != own_machine).then(|| owner.to_string());
+
+    let origin = builder.lookup(|c| c.event(&event.label));
+    let (span, comment) = builder.place(&origin);
+
+    // Parameters, guards and actions all read the same way: the chain oldest
+    // first, then this event's own. A parameter re-listed along the chain
+    // names the same thing, so it is kept once.
+    let mut parameters: Vec<IdentDump> = Vec::new();
+    for (level, owner) in &levels {
+        for parameter in &level.parameters {
+            if parameters.iter().any(|p| p.name == parameter.name) {
+                continue;
+            }
+            let origin = if *owner == own_machine {
+                builder.lookup(|c| c.parameter(&event.label, &parameter.name))
+            } else {
+                Origin::default()
+            };
+            parameters.push(builder.ident(
+                &parameter.name,
+                &parameter.ty,
+                parameter.source.as_str(),
+                origin,
+                inherited_from(owner),
+            ));
+        }
+    }
+
+    let mut guards = Vec::new();
+    for (level, owner) in &levels {
+        for guard in &level.guards {
+            let origin = if *owner == own_machine {
+                builder.lookup(|c| c.guard(&event.label, guard.source_index, &guard.label))
+            } else {
+                Origin::default()
+            };
+            guards.push(builder.predicate(
+                &guard.label,
+                Some(guard.is_theorem),
+                &guard.typed,
+                guard.source.as_str(),
+                origin,
+                inherited_from(owner),
+            ));
+        }
+    }
+
+    let witnesses = event
+        .witnesses
+        .iter()
+        .map(|witness| {
+            // A witness the checker supplied for an unmet name has no clause
+            // to read a comment from, and is told from a written one by
+            // being sourced on the event itself.
+            let origin = if is_synthesized(&witness.source, &event.source) {
+                Origin::default()
+            } else {
+                builder.lookup(|c| c.witness(&event.label, &witness.label))
+            };
+            builder.predicate(
+                &witness.label,
+                None,
+                &witness.typed,
+                witness.source.as_str(),
+                origin,
+                None,
+            )
+        })
+        .collect();
+
+    // Actions are already materialised on the record in chain order, so the
+    // chain is used only to say who owns each stretch of that list.
+    let mut actions = Vec::new();
+    for (level, owner) in &levels {
+        for action in level.own_actions() {
+            let origin = if *owner == own_machine {
+                action_origin(builder, &event.label, level, action)
+            } else {
+                Origin::default()
+            };
+            actions.push(self_action(builder, action, origin, inherited_from(owner)));
+        }
+    }
+
+    EventDump {
+        label: event.label.clone(),
+        convergence: convergence_name(event.convergence),
+        extended: event.extended,
+        accurate: event.accurate,
+        source: event.source.as_str().to_string(),
+        span,
+        comment,
+        refines: event
+            .refines
+            .iter()
+            .map(|r| r.abstract_label.clone())
+            .collect(),
+        parameters,
+        guards,
+        witnesses,
+        actions,
+    }
+}
+
+/// Where an action was written, or nothing when the checker wrote it.
+///
+/// The initialisation repair pass adds an action whose recorded position is a
+/// placeholder. That position is a real index into the written clauses, so
+/// pairing on it would hand the synthesized action another action's comment.
+fn action_origin<'a>(
+    builder: &Builder<'a, '_>,
+    event_label: &str,
+    level: &EventDecl,
+    action: &ActionDecl,
+) -> Origin<'a> {
+    if is_synthesized(&action.source, &level.source) {
+        return Origin::default();
+    }
+    builder.lookup(|c| c.action(event_label, action.source_index, &action.label))
+}
+
+fn self_action(
+    builder: &mut Builder<'_, '_>,
+    action: &ActionDecl,
+    origin: Origin<'_>,
+    inherited_from: Option<String>,
+) -> ActionDump {
+    let (span, comment) = builder.place(&origin);
+    let converted = action.typed.as_ref().map(|a| builder.assignment(a));
+    let (assignment, ba) = match converted {
+        Some((assignment, ba)) => (Some(assignment), ba),
+        None => (None, None),
+    };
+    ActionDump {
+        label: action.label.clone(),
+        source: action.source.as_str().to_string(),
+        span,
+        comment,
+        inherited_from,
+        text: action
+            .typed
+            .as_ref()
+            .map(normalize::canonical_typed_assignment)
+            .unwrap_or_else(|| normalize::canonical_action(&action.action)),
+        assignment,
+        ba,
+    }
+}
+
+/// Convert one finding, anchoring it in the component its origin names.
+pub(crate) fn diagnostic(
+    diagnostic: &Diagnostic,
+    origins: &super::origin::Origins<'_>,
+) -> DiagnosticDump {
+    // The leading segment of an origin is the component; the rest, when
+    // present, is a label within it.
+    let component = diagnostic
+        .origin
+        .split('.')
+        .next()
+        .unwrap_or(&diagnostic.origin);
+    let span = origins.get(component).and_then(|c| {
+        let lines = c.lines.as_ref()?;
+        let span = diagnostic.span?;
+        Some(lines.span(span, Some(c.source_id.clone())))
+    });
+
+    DiagnosticDump {
+        severity: severity_name(diagnostic.severity),
+        rule_id: diagnostic.rule_id.map(|rule| rule.code()),
+        origin: diagnostic.origin.clone(),
+        message: diagnostic.message.clone(),
+        span,
+    }
+}
