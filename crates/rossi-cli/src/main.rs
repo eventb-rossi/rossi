@@ -16,6 +16,7 @@ mod commands {
     pub mod build_common;
     pub mod clean;
     pub mod completions;
+    pub mod dump;
     pub mod eventb_io;
     pub mod export;
     pub mod fmt;
@@ -57,6 +58,9 @@ enum Command {
     /// Static-check a Rodin project and emit `.bcc` / `.bcm` output.
     #[command(about = "Static-check a Rodin project and emit .bcc/.bcm output")]
     Build(commands::build::BuildArgs),
+    /// Write a checked project as a rossi-model JSON document.
+    #[command(about = "Write a checked project as a rossi-model JSON document")]
+    Dump(commands::dump::DumpArgs),
     /// Drop orphaned proofs and empty broken ones.
     #[command(about = "Clean orphaned and broken proofs from a project")]
     Clean(commands::clean::CleanArgs),
@@ -76,6 +80,7 @@ fn main() -> ExitCode {
         Command::Export(args) => commands::export::run(args),
         Command::Fmt(args) => commands::fmt::run(args),
         Command::Build(args) => commands::build::run_build_command(args),
+        Command::Dump(args) => commands::dump::run(args),
         Command::Clean(args) => commands::clean::run(args),
         Command::Prove(args) => commands::prove::run(args),
         // Derive the completion script from the same clap command tree the CLI

@@ -23,7 +23,7 @@ mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 rossi.workspace = true
-rossi-build.workspace = true
+rossi-build = { workspace = true, features = ["serde"] }
 rossi-prove.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
