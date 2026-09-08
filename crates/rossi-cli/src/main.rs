@@ -22,6 +22,7 @@ mod commands {
     pub mod import;
     pub mod proofs;
     pub mod prove;
+    pub mod report;
     pub mod sarif;
     pub mod style;
     pub mod validate;
