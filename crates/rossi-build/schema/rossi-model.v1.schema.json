@@ -1,0 +1,624 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/eventb-rossi/rossi/schema/rossi-model.v1.schema.json",
+  "title": "rossi-model",
+  "description": "A checked Event-B project: the static-checker model with its formulas as typed trees in Rodin's vocabulary. Version 1. Adding an optional field, an operator name for a new Rodin tag, or a new layer keeps this version, so a consumer must ignore keys it does not know. Renaming or removing a field, or changing what one means, raises it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "generator",
+    "project",
+    "sources",
+    "types",
+    "extensions",
+    "contexts",
+    "machines",
+    "diagnostics"
+  ],
+  "properties": {
+    "format": { "const": "rossi-model" },
+    "version": { "const": 1 },
+    "generator": {
+      "description": "What wrote the document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "description": "The Rodin project name, which is the leading segment of every handle.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The input as the caller named it.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "The archive prefix this project was found under, when its archive held several.",
+          "type": "string"
+        }
+      }
+    },
+    "sources": {
+      "description": "The files spans refer to.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "types": {
+      "description": "Every type the document names, keyed by its canonical Rodin string. Each entry is a whole type, nested inline, so one lookup needs no further resolution.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/type" }
+    },
+    "extensions": {
+      "description": "Every operator extension the document uses.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/extension" }
+    },
+    "contexts": { "type": "array", "items": { "$ref": "#/$defs/context" } },
+    "machines": { "type": "array", "items": { "$ref": "#/$defs/machine" } },
+    "diagnostics": {
+      "description": "What checking and linting found, in report order. A document is written even when this holds errors; what was rejected is absent from the elements.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "kind"],
+      "properties": {
+        "id": {
+          "description": "What a span names as its file.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Where the text came from, when that differs from the id.",
+          "type": "string"
+        },
+        "kind": { "enum": ["eventb", "buc", "bum"] }
+      }
+    },
+    "type": {
+      "description": "A type as a tree, mirroring Rodin's type objects.",
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "INT" } }
+        },
+        {
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "BOOL" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "kind": { "const": "GIVEN" },
+            "name": { "type": "string" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["base"],
+          "properties": {
+            "kind": { "const": "POW" },
+            "base": { "$ref": "#/$defs/type" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["left", "right"],
+          "properties": {
+            "kind": { "const": "PROD" },
+            "left": { "$ref": "#/$defs/type" },
+            "right": { "$ref": "#/$defs/type" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["symbol", "params"],
+          "properties": {
+            "kind": { "const": "PARAMETRIC" },
+            "symbol": { "type": "string" },
+            "params": { "type": "array", "items": { "$ref": "#/$defs/type" } }
+          }
+        }
+      ]
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "symbol", "group"],
+      "properties": {
+        "id": {
+          "description": "The extension's identity. Its tag is assigned per process and is never its identity.",
+          "type": "string"
+        },
+        "symbol": { "type": "string" },
+        "group": { "type": "string" }
+      }
+    },
+    "span": {
+      "description": "Byte offsets with an exclusive end, plus 1-based lines and character columns.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "line", "col", "end_line", "end_col"],
+      "properties": {
+        "file": {
+          "description": "The source id. Present on an element, omitted on the nodes below it, which share it.",
+          "type": "string"
+        },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "line": { "type": "integer", "minimum": 1 },
+        "col": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "end_col": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "op": {
+      "description": "Rodin's constant name for the operator. Only the names this model can emit are listed: Rodin's three deprecated projection spellings never appear, and neither do rossi's own type-ascription and predicate-application nodes, which cannot reach a checked formula.",
+      "enum": [
+        "FREE_IDENT",
+        "BOUND_IDENT_DECL",
+        "BOUND_IDENT",
+        "INTLIT",
+        "SETEXT",
+        "PREDICATE_VARIABLE",
+        "EQUAL",
+        "NOTEQUAL",
+        "LT",
+        "LE",
+        "GT",
+        "GE",
+        "IN",
+        "NOTIN",
+        "SUBSET",
+        "NOTSUBSET",
+        "SUBSETEQ",
+        "NOTSUBSETEQ",
+        "MAPSTO",
+        "REL",
+        "TREL",
+        "SREL",
+        "STREL",
+        "PFUN",
+        "TFUN",
+        "PINJ",
+        "TINJ",
+        "PSUR",
+        "TSUR",
+        "TBIJ",
+        "SETMINUS",
+        "CPROD",
+        "DPROD",
+        "PPROD",
+        "DOMRES",
+        "DOMSUB",
+        "RANRES",
+        "RANSUB",
+        "UPTO",
+        "MINUS",
+        "DIV",
+        "MOD",
+        "EXPN",
+        "FUNIMAGE",
+        "RELIMAGE",
+        "LIMP",
+        "LEQV",
+        "BUNION",
+        "BINTER",
+        "BCOMP",
+        "FCOMP",
+        "OVR",
+        "PLUS",
+        "MUL",
+        "LAND",
+        "LOR",
+        "INTEGER",
+        "NATURAL",
+        "NATURAL1",
+        "BOOL",
+        "TRUE",
+        "FALSE",
+        "EMPTYSET",
+        "KPRED",
+        "KSUCC",
+        "KPRJ1_GEN",
+        "KPRJ2_GEN",
+        "KID_GEN",
+        "KBOOL",
+        "BTRUE",
+        "BFALSE",
+        "KFINITE",
+        "NOT",
+        "KCARD",
+        "POW",
+        "POW1",
+        "KUNION",
+        "KINTER",
+        "KDOM",
+        "KRAN",
+        "KMIN",
+        "KMAX",
+        "CONVERSE",
+        "UNMINUS",
+        "QUNION",
+        "QINTER",
+        "CSET",
+        "FORALL",
+        "EXISTS",
+        "KPARTITION",
+        "EXTENDED"
+      ]
+    },
+    "node": {
+      "description": "One expression, predicate or bound-identifier declaration. Children follow Rodin's child positions, so a path through them is a path through the formula in Rodin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "op"],
+      "properties": {
+        "tag": {
+          "description": "Rodin's numeric tag. A tag at or above 1000 is an extension's, assigned per process.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "op": { "$ref": "#/$defs/op" },
+        "type": {
+          "description": "The solved type, as a key into the document's type table. Expressions and declarations have one; predicates never do.",
+          "type": "string"
+        },
+        "span": { "$ref": "#/$defs/span" },
+        "name": {
+          "description": "A free identifier's name, a declaration's name, the name a bound occurrence resolves to, or a predicate variable's name.",
+          "type": "string"
+        },
+        "index": {
+          "description": "A bound occurrence's de Bruijn index, counting binders outward from 0. Within one declaration list, index 0 is the last declaration. An occurrence with no declaration in scope reports an index and no name.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "value": {
+          "description": "An integer literal in decimal. Always a string, because these are unbounded.",
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "form": {
+          "description": "How a comprehension or quantified union was written. Purely syntactic, and not recoverable from the tree. IdentList is rossi's own spelling of a set of identifiers.",
+          "enum": ["Explicit", "Implicit", "IdentList", "Lambda"]
+        },
+        "extension": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "symbol"],
+          "properties": {
+            "id": { "type": "string" },
+            "symbol": { "type": "string" }
+          }
+        },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "assignment": {
+      "description": "An assignment. Rodin gives these no child positions, so instead of a numbered list they name their parts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "op", "idents"],
+      "properties": {
+        "tag": { "enum": [6, 7, 8] },
+        "op": {
+          "enum": ["BECOMES_EQUAL_TO", "BECOMES_MEMBER_OF", "BECOMES_SUCH_THAT"]
+        },
+        "span": { "$ref": "#/$defs/span" },
+        "idents": {
+          "description": "The assigned variables, always free identifiers.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "values": {
+          "description": "BECOMES_EQUAL_TO: the assigned values, one per target.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "set": {
+          "description": "BECOMES_MEMBER_OF: the set chosen from.",
+          "$ref": "#/$defs/node"
+        },
+        "primed": {
+          "description": "BECOMES_SUCH_THAT: the after-state declarations the predicate binds. A primed occurrence inside pred is a bound identifier resolving to one of these.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "pred": {
+          "description": "BECOMES_SUCH_THAT: the relation between the before and after states.",
+          "$ref": "#/$defs/node"
+        }
+      }
+    },
+    "ident": {
+      "description": "A carrier set, constant or event parameter.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "source"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "inherited_from": {
+          "description": "The machine an inherited parameter was written in.",
+          "type": "string"
+        }
+      }
+    },
+    "handle": {
+      "description": "The Rodin handle of the checked element, as its checked file would carry it.",
+      "type": "string"
+    },
+    "variable": {
+      "description": "A machine variable. There is no owner to record: the checked model keeps the visible set with no note of which ancestor declared each name, so abstract is the inheritance marker, exactly as in Rodin's checked file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "source", "abstract", "concrete"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "abstract": {
+          "description": "Declared by a machine this one refines.",
+          "type": "boolean"
+        },
+        "concrete": {
+          "description": "Declared by this machine.",
+          "type": "boolean"
+        }
+      }
+    },
+    "predicate": {
+      "description": "An axiom, invariant, guard or witness.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "source", "text", "predicate"],
+      "properties": {
+        "label": {
+          "description": "For a witness this is the identifier being witnessed, which for an after-state is a primed name, as in Rodin.",
+          "type": "string"
+        },
+        "theorem": {
+          "description": "Absent on a witness, which cannot be a theorem.",
+          "type": "boolean"
+        },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "inherited_from": {
+          "description": "The machine an inherited invariant or guard was written in.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The predicate as Rodin's checked file spells it, so a consumer can hand it to a Rodin parser and get the same formula back. Type ascriptions appear here wherever Rodin writes them, though the tree has no node for them.",
+          "type": "string"
+        },
+        "predicate": { "$ref": "#/$defs/node" }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "source", "text"],
+      "properties": {
+        "label": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "text": { "type": "string" },
+        "expression": {
+          "description": "Absent when the variant was kept despite naming something unknown, so there is no typed expression to report.",
+          "$ref": "#/$defs/node"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "source", "text"],
+      "properties": {
+        "label": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "inherited_from": {
+          "description": "The machine an inherited action was written in.",
+          "type": "string"
+        },
+        "text": { "type": "string" },
+        "assignment": {
+          "description": "Absent for skip, which has no assignment.",
+          "$ref": "#/$defs/assignment"
+        },
+        "ba": {
+          "description": "The before-after predicate: the same action as a relation between the states, where an after-state value is an ordinary primed identifier. Absent for skip. Its synthesized nodes carry no span.",
+          "$ref": "#/$defs/node"
+        }
+      }
+    },
+    "event": {
+      "description": "An event, carrying the whole chain an extended event inherits.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "convergence",
+        "extended",
+        "accurate",
+        "source",
+        "refines",
+        "parameters",
+        "guards",
+        "witnesses",
+        "actions"
+      ],
+      "properties": {
+        "label": { "type": "string" },
+        "convergence": { "enum": ["ordinary", "convergent", "anticipated"] },
+        "extended": {
+          "description": "Whether the event extends its abstract counterpart rather than restating it.",
+          "type": "boolean"
+        },
+        "accurate": {
+          "description": "Whether checking this event was complete. False means part of it was dropped, and diagnostics says why.",
+          "type": "boolean"
+        },
+        "source": { "$ref": "#/$defs/handle" },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "refines": {
+          "description": "The abstract events this one refines. More than one is a merge.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/ident" } },
+        "guards": { "type": "array", "items": { "$ref": "#/$defs/predicate" } },
+        "witnesses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/predicate" }
+        },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "source",
+        "accurate",
+        "extends",
+        "ancestors",
+        "carrier_sets",
+        "constants",
+        "axioms"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "accurate": {
+          "description": "Whether checking this context was complete.",
+          "type": "boolean"
+        },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "extends": {
+          "description": "Directly extended contexts.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ancestors": {
+          "description": "Every extended context, transitively, oldest first.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "carrier_sets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ident" }
+        },
+        "constants": { "type": "array", "items": { "$ref": "#/$defs/ident" } },
+        "axioms": { "type": "array", "items": { "$ref": "#/$defs/predicate" } }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "source",
+        "accurate",
+        "ancestors",
+        "sees",
+        "internal_contexts",
+        "variables",
+        "invariants",
+        "variants",
+        "events"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "source": { "$ref": "#/$defs/handle" },
+        "accurate": {
+          "description": "Whether checking this machine was complete.",
+          "type": "boolean"
+        },
+        "span": { "$ref": "#/$defs/span" },
+        "comment": { "type": "string" },
+        "refines": {
+          "description": "The machine this one refines, if any.",
+          "type": "string"
+        },
+        "ancestors": {
+          "description": "Every refined machine, transitively, oldest first.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "sees": {
+          "description": "Directly seen contexts.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "internal_contexts": {
+          "description": "Every context visible here, transitively, in the order the checker makes them visible.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "variables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/variable" }
+        },
+        "invariants": {
+          "description": "Inherited invariants first, oldest machine first, then this machine's own.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/predicate" }
+        },
+        "variants": { "type": "array", "items": { "$ref": "#/$defs/variant" } },
+        "events": {
+          "description": "Initialisation first, then the events in source order.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "origin", "message"],
+      "properties": {
+        "severity": { "enum": ["error", "warning", "info"] },
+        "rule_id": {
+          "description": "The rule that produced the finding, where one did.",
+          "type": "string"
+        },
+        "origin": {
+          "description": "What the finding is about: a component name, optionally followed by a label.",
+          "type": "string"
+        },
+        "message": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" }
+      }
+    }
+  }
+}

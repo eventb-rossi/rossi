@@ -21,6 +21,7 @@ walkdir.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+jsonschema = { version = "0.55.1", default-features = false }
 # Only to build an integer wider than the surface parser accepts, so the
 # dump's string encoding of a literal is exercised against a real one.
 num-bigint.workspace = true
