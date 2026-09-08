@@ -1,0 +1,3210 @@
+{
+  "format": "rossi-model",
+  "version": 1,
+  "generator": {
+    "name": "rossi",
+    "version": "0.2.1"
+  },
+  "project": {
+    "name": "binary-search"
+  },
+  "sources": [
+    {
+      "id": "C0.buc",
+      "path": "C0.buc",
+      "kind": "buc"
+    },
+    {
+      "id": "M0.bum",
+      "path": "M0.bum",
+      "kind": "bum"
+    },
+    {
+      "id": "M1.bum",
+      "path": "M1.bum",
+      "kind": "bum"
+    },
+    {
+      "id": "M2.bum",
+      "path": "M2.bum",
+      "kind": "bum"
+    },
+    {
+      "id": "M3.bum",
+      "path": "M3.bum",
+      "kind": "bum"
+    }
+  ],
+  "types": {
+    "ℙ(ℙ(ℤ×ℤ))": {
+      "kind": "POW",
+      "base": {
+        "kind": "POW",
+        "base": {
+          "kind": "PROD",
+          "left": {
+            "kind": "INT"
+          },
+          "right": {
+            "kind": "INT"
+          }
+        }
+      }
+    },
+    "ℙ(ℤ)": {
+      "kind": "POW",
+      "base": {
+        "kind": "INT"
+      }
+    },
+    "ℙ(ℤ×ℤ)": {
+      "kind": "POW",
+      "base": {
+        "kind": "PROD",
+        "left": {
+          "kind": "INT"
+        },
+        "right": {
+          "kind": "INT"
+        }
+      }
+    },
+    "ℤ": {
+      "kind": "INT"
+    }
+  },
+  "extensions": [],
+  "contexts": [
+    {
+      "name": "C0",
+      "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0",
+      "accurate": true,
+      "extends": [],
+      "ancestors": [],
+      "carrier_sets": [],
+      "constants": [
+        {
+          "name": "f",
+          "type": "ℙ(ℤ×ℤ)",
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.constant#*"
+        },
+        {
+          "name": "n",
+          "type": "ℤ",
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.constant#'"
+        },
+        {
+          "name": "v",
+          "type": "ℤ",
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.constant#("
+        }
+      ],
+      "axioms": [
+        {
+          "label": "axm1",
+          "theorem": false,
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.axiom#)",
+          "text": "n∈ℕ",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "n"
+              },
+              {
+                "tag": 402,
+                "op": "NATURAL",
+                "type": "ℙ(ℤ)"
+              }
+            ]
+          }
+        },
+        {
+          "label": "axm2",
+          "theorem": false,
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.axiom#+",
+          "text": "f∈0 ‥ n − 1 → ℤ",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℙ(ℤ×ℤ)",
+                "name": "f"
+              },
+              {
+                "tag": 207,
+                "op": "TFUN",
+                "type": "ℙ(ℙ(ℤ×ℤ))",
+                "children": [
+                  {
+                    "tag": 221,
+                    "op": "UPTO",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "0"
+                      },
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "n"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 401,
+                    "op": "INTEGER",
+                    "type": "ℙ(ℤ)"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "axm3",
+          "theorem": false,
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.axiom#,",
+          "text": "v∈ran(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "v"
+              },
+              {
+                "tag": 757,
+                "op": "KRAN",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "axm4",
+          "theorem": false,
+          "source": "/binary-search/C0.buc|org.eventb.core.contextFile#C0|org.eventb.core.axiom#-",
+          "text": "∀x⦂ℤ,y⦂ℤ·x∈dom(f)∧y∈dom(f)∧x≤y⇒f(x)≤f(y)",
+          "predicate": {
+            "tag": 851,
+            "op": "FORALL",
+            "children": [
+              {
+                "tag": 2,
+                "op": "BOUND_IDENT_DECL",
+                "type": "ℤ",
+                "name": "x"
+              },
+              {
+                "tag": 2,
+                "op": "BOUND_IDENT_DECL",
+                "type": "ℤ",
+                "name": "y"
+              },
+              {
+                "tag": 251,
+                "op": "LIMP",
+                "children": [
+                  {
+                    "tag": 351,
+                    "op": "LAND",
+                    "children": [
+                      {
+                        "tag": 107,
+                        "op": "IN",
+                        "children": [
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "x",
+                            "index": 1
+                          },
+                          {
+                            "tag": 756,
+                            "op": "KDOM",
+                            "type": "ℙ(ℤ)",
+                            "children": [
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℙ(ℤ×ℤ)",
+                                "name": "f"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 107,
+                        "op": "IN",
+                        "children": [
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "y",
+                            "index": 0
+                          },
+                          {
+                            "tag": 756,
+                            "op": "KDOM",
+                            "type": "ℙ(ℤ)",
+                            "children": [
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℙ(ℤ×ℤ)",
+                                "name": "f"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 104,
+                        "op": "LE",
+                        "children": [
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "x",
+                            "index": 1
+                          },
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "y",
+                            "index": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 104,
+                    "op": "LE",
+                    "children": [
+                      {
+                        "tag": 226,
+                        "op": "FUNIMAGE",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℙ(ℤ×ℤ)",
+                            "name": "f"
+                          },
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "x",
+                            "index": 1
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 226,
+                        "op": "FUNIMAGE",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℙ(ℤ×ℤ)",
+                            "name": "f"
+                          },
+                          {
+                            "tag": 3,
+                            "op": "BOUND_IDENT",
+                            "type": "ℤ",
+                            "name": "y",
+                            "index": 0
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "machines": [
+    {
+      "name": "M0",
+      "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0",
+      "accurate": true,
+      "ancestors": [],
+      "sees": [
+        "C0"
+      ],
+      "internal_contexts": [
+        "C0"
+      ],
+      "variables": [
+        {
+          "name": "r",
+          "type": "ℤ",
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.variable#(",
+          "abstract": false,
+          "concrete": true
+        }
+      ],
+      "invariants": [
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.invariant#)",
+          "text": "r∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "r"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "variants": [],
+      "events": [
+        {
+          "label": "INITIALISATION",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#'",
+          "refines": [],
+          "parameters": [],
+          "guards": [],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#'|org.eventb.core.action#'",
+              "text": "r ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "found",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#+",
+          "refines": [],
+          "parameters": [
+            {
+              "name": "e",
+              "type": "ℤ",
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#+|org.eventb.core.parameter#'"
+            }
+          ],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#+|org.eventb.core.guard#(",
+              "text": "e∈dom(f)",
+              "predicate": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "e"
+                  },
+                  {
+                    "tag": 756,
+                    "op": "KDOM",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "grd2",
+              "theorem": false,
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#+|org.eventb.core.guard#*",
+              "text": "f(e)=v",
+              "predicate": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "e"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#+|org.eventb.core.action#)",
+              "text": "r ≔ e",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "e"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "e"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "M1",
+      "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1",
+      "accurate": true,
+      "refines": "M0",
+      "ancestors": [
+        "M0"
+      ],
+      "sees": [
+        "C0"
+      ],
+      "internal_contexts": [
+        "C0"
+      ],
+      "variables": [
+        {
+          "name": "k",
+          "type": "ℤ",
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.variable#-",
+          "abstract": false,
+          "concrete": true
+        },
+        {
+          "name": "r",
+          "type": "ℤ",
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.variable#(",
+          "abstract": true,
+          "concrete": true
+        }
+      ],
+      "invariants": [
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.invariant#)",
+          "inherited_from": "M0",
+          "text": "r∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "r"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.invariant#.",
+          "text": "k∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "k"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "variants": [],
+      "events": [
+        {
+          "label": "INITIALISATION",
+          "convergence": "ordinary",
+          "extended": true,
+          "accurate": true,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#+",
+          "refines": [
+            "INITIALISATION"
+          ],
+          "parameters": [],
+          "guards": [],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#'|org.eventb.core.action#'",
+              "inherited_from": "M0",
+              "text": "r ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#+|org.eventb.core.action#'",
+              "text": "k :∈ dom(f)",
+              "assignment": {
+                "tag": 7,
+                "op": "BECOMES_MEMBER_OF",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "set": {
+                  "tag": 756,
+                  "op": "KDOM",
+                  "type": "ℙ(ℤ)",
+                  "children": [
+                    {
+                      "tag": 1,
+                      "op": "FREE_IDENT",
+                      "type": "ℙ(ℤ×ℤ)",
+                      "name": "f"
+                    }
+                  ]
+                }
+              },
+              "ba": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 756,
+                    "op": "KDOM",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "found",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,",
+          "refines": [
+            "found"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.guard#(",
+              "text": "f(k)=v",
+              "predicate": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [
+            {
+              "label": "e",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.witness#*",
+              "text": "e=k",
+              "predicate": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "e"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              }
+            }
+          ],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.action#)",
+              "text": "r ≔ k",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "search",
+          "convergence": "anticipated",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#\\/",
+          "refines": [],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#\\/|org.eventb.core.guard#'",
+              "text": "f(k)≠v",
+              "predicate": {
+                "tag": 102,
+                "op": "NOTEQUAL",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#\\/|org.eventb.core.action#(",
+              "text": "k :∈ dom(f)",
+              "assignment": {
+                "tag": 7,
+                "op": "BECOMES_MEMBER_OF",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "set": {
+                  "tag": 756,
+                  "op": "KDOM",
+                  "type": "ℙ(ℤ)",
+                  "children": [
+                    {
+                      "tag": 1,
+                      "op": "FREE_IDENT",
+                      "type": "ℙ(ℤ×ℤ)",
+                      "name": "f"
+                    }
+                  ]
+                }
+              },
+              "ba": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 756,
+                    "op": "KDOM",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "M2",
+      "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2",
+      "accurate": true,
+      "refines": "M1",
+      "ancestors": [
+        "M0",
+        "M1"
+      ],
+      "sees": [
+        "C0"
+      ],
+      "internal_contexts": [
+        "C0"
+      ],
+      "variables": [
+        {
+          "name": "i",
+          "type": "ℤ",
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.variable#1",
+          "abstract": false,
+          "concrete": true
+        },
+        {
+          "name": "j",
+          "type": "ℤ",
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.variable#3",
+          "abstract": false,
+          "concrete": true
+        },
+        {
+          "name": "k",
+          "type": "ℤ",
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.variable#-",
+          "abstract": true,
+          "concrete": true
+        },
+        {
+          "name": "r",
+          "type": "ℤ",
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.variable#(",
+          "abstract": true,
+          "concrete": true
+        }
+      ],
+      "invariants": [
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.invariant#)",
+          "inherited_from": "M0",
+          "text": "r∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "r"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.invariant#.",
+          "inherited_from": "M1",
+          "text": "k∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "k"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#2",
+          "text": "i∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "i"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv2",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#4",
+          "text": "j∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "j"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv3",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#5",
+          "text": "k∈i ‥ j",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "k"
+              },
+              {
+                "tag": 221,
+                "op": "UPTO",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv4",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#6",
+          "text": "v∈f[i ‥ j]",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "v"
+              },
+              {
+                "tag": 227,
+                "op": "RELIMAGE",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  },
+                  {
+                    "tag": 221,
+                    "op": "UPTO",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "i"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "j"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "variants": [
+        {
+          "label": "vrn",
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.variant#7",
+          "text": "j − i",
+          "expression": {
+            "tag": 222,
+            "op": "MINUS",
+            "type": "ℤ",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "j"
+              },
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "i"
+              }
+            ]
+          }
+        }
+      ],
+      "events": [
+        {
+          "label": "INITIALISATION",
+          "convergence": "ordinary",
+          "extended": true,
+          "accurate": true,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#.",
+          "refines": [
+            "INITIALISATION"
+          ],
+          "parameters": [],
+          "guards": [],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.event#'|org.eventb.core.action#'",
+              "inherited_from": "M0",
+              "text": "r ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#+|org.eventb.core.action#'",
+              "inherited_from": "M1",
+              "text": "k :∈ dom(f)",
+              "assignment": {
+                "tag": 7,
+                "op": "BECOMES_MEMBER_OF",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "set": {
+                  "tag": 756,
+                  "op": "KDOM",
+                  "type": "ℙ(ℤ)",
+                  "children": [
+                    {
+                      "tag": 1,
+                      "op": "FREE_IDENT",
+                      "type": "ℙ(ℤ×ℤ)",
+                      "name": "f"
+                    }
+                  ]
+                }
+              },
+              "ba": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 756,
+                    "op": "KDOM",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act3",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#.|org.eventb.core.action#'",
+              "text": "i ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act4",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#.|org.eventb.core.action#(",
+              "text": "j ≔ n − 1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "n"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j'"
+                  },
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "n"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "found",
+          "convergence": "ordinary",
+          "extended": true,
+          "accurate": true,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#\\/",
+          "refines": [
+            "found"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.guard#(",
+              "inherited_from": "M1",
+              "text": "f(k)=v",
+              "predicate": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.action#)",
+              "inherited_from": "M1",
+              "text": "r ≔ k",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "search_inc",
+          "convergence": "convergent",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#0",
+          "refines": [
+            "search"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#0|org.eventb.core.guard#'",
+              "text": "f(k)<v",
+              "predicate": {
+                "tag": 103,
+                "op": "LT",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#0|org.eventb.core.action#(",
+              "text": "k :∈ k+1 ‥ j",
+              "assignment": {
+                "tag": 7,
+                "op": "BECOMES_MEMBER_OF",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "set": {
+                  "tag": 221,
+                  "op": "UPTO",
+                  "type": "ℙ(ℤ)",
+                  "children": [
+                    {
+                      "tag": 306,
+                      "op": "PLUS",
+                      "type": "ℤ",
+                      "children": [
+                        {
+                          "tag": 1,
+                          "op": "FREE_IDENT",
+                          "type": "ℤ",
+                          "name": "k"
+                        },
+                        {
+                          "tag": 4,
+                          "op": "INTLIT",
+                          "type": "ℤ",
+                          "value": "1"
+                        }
+                      ]
+                    },
+                    {
+                      "tag": 1,
+                      "op": "FREE_IDENT",
+                      "type": "ℤ",
+                      "name": "j"
+                    }
+                  ]
+                }
+              },
+              "ba": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 221,
+                    "op": "UPTO",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 306,
+                        "op": "PLUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "k"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "j"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#0|org.eventb.core.action#)",
+              "text": "i ≔ k+1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 306,
+                    "op": "PLUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i'"
+                  },
+                  {
+                    "tag": 306,
+                    "op": "PLUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "search_dec",
+          "convergence": "convergent",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#evt1",
+          "refines": [
+            "search"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#evt1|org.eventb.core.guard#'",
+              "text": "f(k)>v",
+              "predicate": {
+                "tag": 105,
+                "op": "GT",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#evt1|org.eventb.core.action#(",
+              "text": "k :∈ i ‥ k − 1",
+              "assignment": {
+                "tag": 7,
+                "op": "BECOMES_MEMBER_OF",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "set": {
+                  "tag": 221,
+                  "op": "UPTO",
+                  "type": "ℙ(ℤ)",
+                  "children": [
+                    {
+                      "tag": 1,
+                      "op": "FREE_IDENT",
+                      "type": "ℤ",
+                      "name": "i"
+                    },
+                    {
+                      "tag": 222,
+                      "op": "MINUS",
+                      "type": "ℤ",
+                      "children": [
+                        {
+                          "tag": 1,
+                          "op": "FREE_IDENT",
+                          "type": "ℤ",
+                          "name": "k"
+                        },
+                        {
+                          "tag": 4,
+                          "op": "INTLIT",
+                          "type": "ℤ",
+                          "value": "1"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "ba": {
+                "tag": 107,
+                "op": "IN",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 221,
+                    "op": "UPTO",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "i"
+                      },
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "k"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.event#evt1|org.eventb.core.action#)",
+              "text": "j ≔ k − 1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j'"
+                  },
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "M3",
+      "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3",
+      "accurate": true,
+      "refines": "M2",
+      "ancestors": [
+        "M0",
+        "M1",
+        "M2"
+      ],
+      "sees": [
+        "C0"
+      ],
+      "internal_contexts": [
+        "C0"
+      ],
+      "variables": [
+        {
+          "name": "i",
+          "type": "ℤ",
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.variable#1",
+          "abstract": true,
+          "concrete": true
+        },
+        {
+          "name": "j",
+          "type": "ℤ",
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.variable#3",
+          "abstract": true,
+          "concrete": true
+        },
+        {
+          "name": "k",
+          "type": "ℤ",
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.variable#-",
+          "abstract": true,
+          "concrete": true
+        },
+        {
+          "name": "r",
+          "type": "ℤ",
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.variable#(",
+          "abstract": true,
+          "concrete": true
+        }
+      ],
+      "invariants": [
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M0.bum|org.eventb.core.machineFile#M0|org.eventb.core.invariant#)",
+          "inherited_from": "M0",
+          "text": "r∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "r"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.invariant#.",
+          "inherited_from": "M1",
+          "text": "k∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "k"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv1",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#2",
+          "inherited_from": "M2",
+          "text": "i∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "i"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv2",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#4",
+          "inherited_from": "M2",
+          "text": "j∈dom(f)",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "j"
+              },
+              {
+                "tag": 756,
+                "op": "KDOM",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv3",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#5",
+          "inherited_from": "M2",
+          "text": "k∈i ‥ j",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "k"
+              },
+              {
+                "tag": 221,
+                "op": "UPTO",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "inv4",
+          "theorem": false,
+          "source": "/binary-search/M2.bum|org.eventb.core.machineFile#M2|org.eventb.core.invariant#6",
+          "inherited_from": "M2",
+          "text": "v∈f[i ‥ j]",
+          "predicate": {
+            "tag": 107,
+            "op": "IN",
+            "children": [
+              {
+                "tag": 1,
+                "op": "FREE_IDENT",
+                "type": "ℤ",
+                "name": "v"
+              },
+              {
+                "tag": 227,
+                "op": "RELIMAGE",
+                "type": "ℙ(ℤ)",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℙ(ℤ×ℤ)",
+                    "name": "f"
+                  },
+                  {
+                    "tag": 221,
+                    "op": "UPTO",
+                    "type": "ℙ(ℤ)",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "i"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "j"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "variants": [],
+      "events": [
+        {
+          "label": "INITIALISATION",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#4",
+          "refines": [
+            "INITIALISATION"
+          ],
+          "parameters": [],
+          "guards": [],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#4|org.eventb.core.action#'",
+              "text": "r ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#4|org.eventb.core.action#internal1",
+              "text": "k ≔ (n − 1) ÷ 2",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "n"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "n"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act3",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#4|org.eventb.core.action#internal2",
+              "text": "i ≔ 0",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i'"
+                  },
+                  {
+                    "tag": 4,
+                    "op": "INTLIT",
+                    "type": "ℤ",
+                    "value": "0"
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act4",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#4|org.eventb.core.action#(",
+              "text": "j ≔ n − 1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "n"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j'"
+                  },
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "n"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "found",
+          "convergence": "ordinary",
+          "extended": true,
+          "accurate": true,
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#5",
+          "refines": [
+            "found"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.guard#(",
+              "inherited_from": "M1",
+              "text": "f(k)=v",
+              "predicate": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M1.bum|org.eventb.core.machineFile#M1|org.eventb.core.event#,|org.eventb.core.action#)",
+              "inherited_from": "M1",
+              "text": "r ≔ k",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "r'"
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "search_inc",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#6",
+          "refines": [
+            "search_inc"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#6|org.eventb.core.guard#'",
+              "text": "f(k)<v",
+              "predicate": {
+                "tag": 103,
+                "op": "LT",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#6|org.eventb.core.action#(",
+              "text": "k ≔ (k+1+j) ÷ 2",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 306,
+                        "op": "PLUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "k"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          },
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "j"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 306,
+                        "op": "PLUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "k"
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          },
+                          {
+                            "tag": 1,
+                            "op": "FREE_IDENT",
+                            "type": "ℤ",
+                            "name": "j"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#6|org.eventb.core.action#)",
+              "text": "i ≔ k+1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 306,
+                    "op": "PLUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "i'"
+                  },
+                  {
+                    "tag": 306,
+                    "op": "PLUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "label": "search_dec",
+          "convergence": "ordinary",
+          "extended": false,
+          "accurate": true,
+          "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#7",
+          "refines": [
+            "search_dec"
+          ],
+          "parameters": [],
+          "guards": [
+            {
+              "label": "grd1",
+              "theorem": false,
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#7|org.eventb.core.guard#'",
+              "text": "f(k)>v",
+              "predicate": {
+                "tag": 105,
+                "op": "GT",
+                "children": [
+                  {
+                    "tag": 226,
+                    "op": "FUNIMAGE",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℙ(ℤ×ℤ)",
+                        "name": "f"
+                      },
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "v"
+                  }
+                ]
+              }
+            }
+          ],
+          "witnesses": [],
+          "actions": [
+            {
+              "label": "act1",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#7|org.eventb.core.action#(",
+              "text": "k ≔ (i+k − 1) ÷ 2",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 306,
+                            "op": "PLUS",
+                            "type": "ℤ",
+                            "children": [
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℤ",
+                                "name": "i"
+                              },
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℤ",
+                                "name": "k"
+                              }
+                            ]
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "k'"
+                  },
+                  {
+                    "tag": 223,
+                    "op": "DIV",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 222,
+                        "op": "MINUS",
+                        "type": "ℤ",
+                        "children": [
+                          {
+                            "tag": 306,
+                            "op": "PLUS",
+                            "type": "ℤ",
+                            "children": [
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℤ",
+                                "name": "i"
+                              },
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ℤ",
+                                "name": "k"
+                              }
+                            ]
+                          },
+                          {
+                            "tag": 4,
+                            "op": "INTLIT",
+                            "type": "ℤ",
+                            "value": "1"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "label": "act2",
+              "source": "/binary-search/M3.bum|org.eventb.core.machineFile#M3|org.eventb.core.event#7|org.eventb.core.action#)",
+              "text": "j ≔ k − 1",
+              "assignment": {
+                "tag": 6,
+                "op": "BECOMES_EQUAL_TO",
+                "idents": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j"
+                  }
+                ],
+                "values": [
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "ba": {
+                "tag": 101,
+                "op": "EQUAL",
+                "children": [
+                  {
+                    "tag": 1,
+                    "op": "FREE_IDENT",
+                    "type": "ℤ",
+                    "name": "j'"
+                  },
+                  {
+                    "tag": 222,
+                    "op": "MINUS",
+                    "type": "ℤ",
+                    "children": [
+                      {
+                        "tag": 1,
+                        "op": "FREE_IDENT",
+                        "type": "ℤ",
+                        "name": "k"
+                      },
+                      {
+                        "tag": 4,
+                        "op": "INTLIT",
+                        "type": "ℤ",
+                        "value": "1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagnostics": []
+}
