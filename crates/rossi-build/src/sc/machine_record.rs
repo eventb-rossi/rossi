@@ -281,9 +281,11 @@ impl EventDecl {
         &self.actions[inherited_count..]
     }
 
-    /// Walk `self.inherited` chain root-first (oldest ancestor first,
-    /// own EventDecl last). Useful both for rendering inherited
-    /// buckets and for collecting inherited typing axioms.
+    /// Walk the `self.inherited` chain root-first: the oldest ancestor
+    /// first, the immediate parent last. This event itself is *not*
+    /// included, so a caller wanting the whole chain appends it. Useful
+    /// both for rendering inherited buckets and for collecting inherited
+    /// typing axioms.
     pub fn chain_root_first(&self) -> Vec<&EventDecl> {
         let mut out: Vec<&EventDecl> = Vec::new();
         let mut cur = self.inherited.as_deref();
