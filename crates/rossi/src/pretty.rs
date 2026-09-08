@@ -1345,7 +1345,6 @@ impl PrettyPrinter {
 // a declaration keeps its hint unless a name visible in its body would
 // be captured, in which case it is freshened.
 
-use crate::formula::fresh::{FreshNameSolver, resolve_idents};
 use crate::formula::tag::{
     AssocExprOp, AssocPredOp, AtomicOp, BinaryExprOp, BinaryPredOp, LiteralPredOp, QuantExprOp,
     QuantPredOp, RelationalOp, UnaryExprOp,
@@ -1558,13 +1557,7 @@ impl PrettyPrinter {
         dangling: &[u32],
         names: &[String],
     ) -> Vec<String> {
-        let mut solver = FreshNameSolver::new(free.iter().cloned());
-        for index in dangling {
-            if let Some(i) = names.len().checked_sub(1 + *index as usize) {
-                solver.add(names[i].clone());
-            }
-        }
-        resolve_idents(decls, &mut solver)
+        formula::fresh::resolve_binder_names(decls, free, dangling, names)
     }
 
     /// Prints a declaration list under its resolved names, with `⦂`

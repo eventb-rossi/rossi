@@ -78,6 +78,35 @@ pub fn resolve_idents(decls: &[BoundIdentDecl], solver: &mut FreshNameSolver) ->
         .collect()
 }
 
+/// Resolves the printing names of a binding construct's declarations
+/// against everything visible inside it.
+///
+/// A bound occurrence refers to its declaration by de Bruijn index, so a
+/// declaration's name is free to change; what must not change is which
+/// identifier the reader sees. The names that would capture an
+/// occurrence in the binder's subtree are its own free identifiers
+/// (`free`) plus the enclosing declarations that subtree reaches
+/// (`dangling`, resolved against `enclosing`, innermost last). Seeding
+/// the solver with both leaves every occurrence reading as itself.
+///
+/// This is the whole of the naming policy: both the pretty-printer and
+/// any other consumer that has to report a bound identifier by name call
+/// it, so the answers cannot diverge.
+pub fn resolve_binder_names(
+    decls: &[BoundIdentDecl],
+    free: &[String],
+    dangling: &[u32],
+    enclosing: &[String],
+) -> Vec<String> {
+    let mut solver = FreshNameSolver::new(free.iter().cloned());
+    for index in dangling {
+        if let Some(i) = enclosing.len().checked_sub(1 + *index as usize) {
+            solver.add(enclosing[i].clone());
+        }
+    }
+    resolve_idents(decls, &mut solver)
+}
+
 /// An identifier split into stem, optional numeric suffix, and trailing
 /// prime marks, so that incrementing touches only the number.
 struct StructuredName {
@@ -206,5 +235,60 @@ mod tests {
         ];
         let mut s = solver(&["z"]);
         assert_eq!(resolve_idents(&decls, &mut s), ["y", "y0", "z0"]);
+    }
+
+    fn decls(names: &[&str]) -> Vec<BoundIdentDecl> {
+        let ff = FormulaFactory::default_factory();
+        names
+            .iter()
+            .map(|n| ff.bound_ident_decl(*n, None, None, None))
+            .collect()
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn binder_names_avoid_the_free_identifiers_of_the_body() {
+        // `x` occurs free below the binder, so the declaration cannot
+        // also print as `x` without capturing it.
+        assert_eq!(
+            resolve_binder_names(&decls(&["x"]), &owned(&["x"]), &[], &[]),
+            ["x0"]
+        );
+    }
+
+    #[test]
+    fn binder_names_avoid_the_enclosing_declarations_the_body_reaches() {
+        // The body reaches one level out (index 0), which the enclosing
+        // scope resolves to `x` — innermost last.
+        assert_eq!(
+            resolve_binder_names(&decls(&["x"]), &[], &[0], &owned(&["y", "x"])),
+            ["x0"]
+        );
+        // An index the body never mentions constrains nothing.
+        assert_eq!(
+            resolve_binder_names(&decls(&["x"]), &[], &[1], &owned(&["y", "x"])),
+            ["x"]
+        );
+    }
+
+    #[test]
+    fn binder_names_stay_distinct_from_each_other() {
+        assert_eq!(
+            resolve_binder_names(&decls(&["x", "x", "x"]), &[], &[], &[]),
+            ["x", "x0", "x1"]
+        );
+    }
+
+    #[test]
+    fn a_dangling_index_past_the_enclosing_scope_is_ignored() {
+        // Index 3 has no enclosing declaration; resolution must not
+        // panic on the underflow, it simply constrains nothing.
+        assert_eq!(
+            resolve_binder_names(&decls(&["x"]), &[], &[3], &owned(&["x"])),
+            ["x"]
+        );
     }
 }
