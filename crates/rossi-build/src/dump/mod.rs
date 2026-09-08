@@ -103,6 +103,15 @@ pub const FORMAT: &str = "rossi-model";
 /// change to it means.
 pub const VERSION: u32 = 1;
 
+/// The JSON Schema of a document, as a draft 2020-12 schema.
+///
+/// It is the contract a consumer can check against, and it is strict: no
+/// object accepts a key the schema does not name, so a field added on one
+/// side and not the other is caught rather than ignored. The schema also
+/// carries the prose that explains the format, which the doc comments here
+/// repeat for a reader of the source.
+pub const JSON_SCHEMA: &str = include_str!("../../schema/rossi-model.v1.schema.json");
+
 /// What a caller can vary about a document.
 #[derive(Debug, Default, Clone)]
 pub struct Options {
