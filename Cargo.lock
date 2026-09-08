@@ -1213,11 +1213,13 @@ dependencies = [
 name = "rossi-build"
 version = "0.2.1"
 dependencies = [
+ "num-bigint",
  "proptest",
  "quick-xml",
  "rayon",
  "rossi",
  "rossi-prove",
+ "serde",
  "serde_json",
  "thiserror",
  "walkdir",
