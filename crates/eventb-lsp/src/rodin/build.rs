@@ -274,6 +274,11 @@ mod tests {
 
         assert!(outcome.error_diagnostics.is_empty());
         assert!(project.join(".project").is_file());
+        assert!(
+            project
+                .join(".settings/org.eclipse.core.resources.prefs")
+                .is_file()
+        );
         assert!(project.join("base_ctx.buc").is_file());
         assert!(project.join("base_ctx.bcc").is_file());
         assert!(project.join("base_ctx.bpo").is_file());

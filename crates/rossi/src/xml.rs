@@ -1437,8 +1437,9 @@ pub fn to_multi_project_zip(projects: &[NamedProject]) -> Result<Vec<u8>> {
 /// Each project is `(prefix, descriptor_name, components)`: its entries are
 /// written at `{prefix}{filename}` (so `prefix` is `""` for a flat archive or
 /// `"Name/"` for a sub-project), preceded by a `{prefix}.project` descriptor
-/// when `descriptor_name` is `Some`. Taking the projects as an iterator of
-/// borrows lets the flat wrappers pass a single entry without allocating.
+/// and its encoding preferences when `descriptor_name` is `Some`. Taking the
+/// projects as an iterator of borrows lets the flat wrappers pass a single
+/// entry without allocating.
 fn write_projects_zip<'a>(
     projects: impl IntoIterator<Item = (&'a str, Option<&'a str>, &'a [NamedComponent])>,
 ) -> Result<Vec<u8>> {
@@ -1460,6 +1461,12 @@ fn write_projects_zip<'a>(
                         ParseError::IoError(format!("Failed to write zip entry: {}", e))
                     })?;
                 writer.write_all(rodin_project_file_xml(name).as_bytes())?;
+                writer
+                    .start_file(format!("{prefix}{RODIN_PROJECT_PREFS_PATH}"), options)
+                    .map_err(|e| {
+                        ParseError::IoError(format!("Failed to write zip entry: {}", e))
+                    })?;
+                writer.write_all(RODIN_PROJECT_PREFS.as_bytes())?;
             }
 
             for named in components {
@@ -1549,9 +1556,9 @@ pub fn write_multi_project_directory<P: AsRef<std::path::Path>>(
 ///
 /// Each project is `(subdir, descriptor_name, components)`: an empty `subdir`
 /// writes the project flat into `root` (the single-project case), otherwise it
-/// goes under `root/subdir`. A `.project` descriptor is written when
-/// `descriptor_name` is `Some`. Shared by [`write_project_directory`] and
-/// [`write_multi_project_directory`].
+/// goes under `root/subdir`. A `.project` descriptor and its encoding
+/// preferences are written when `descriptor_name` is `Some`. Shared by
+/// [`write_project_directory`] and [`write_multi_project_directory`].
 fn write_projects_directory<'a>(
     root: &std::path::Path,
     projects: impl IntoIterator<Item = (&'a str, Option<&'a str>, &'a [NamedComponent])>,
@@ -1565,6 +1572,7 @@ fn write_projects_directory<'a>(
         std::fs::create_dir_all(&base)?;
         if let Some(name) = descriptor_name {
             std::fs::write(base.join(".project"), rodin_project_file_xml(name))?;
+            write_rodin_project_prefs(&base)?;
         }
 
         for named in components {
@@ -1654,6 +1662,41 @@ fn rodin_project_file_xml(project_name: &str) -> String {
 "#,
         escape_xml(project_name)
     )
+}
+
+/// Eclipse project preferences carrying the project's own text encoding,
+/// relative to the project directory. `/`-separated: it doubles as a zip
+/// entry name, and `Path::join` accepts it on every platform.
+const RODIN_PROJECT_PREFS_PATH: &str = ".settings/org.eclipse.core.resources.prefs";
+
+/// The contents of [`RODIN_PROJECT_PREFS_PATH`].
+///
+/// Without it Eclipse flags the project ("Project 'X' has no explicit encoding
+/// set"): `ValidateProjectEncoding` warns whenever the project has no charset
+/// of its own, and it deliberately does not consult the workspace default. The
+/// key is the one Eclipse's own quick fix writes — `<project>` is a literal,
+/// the reserved name `CharsetManager` gives the project resource itself. UTF-8
+/// is not a choice here: every file we export declares it in its XML prolog,
+/// and Event-B sources are full of non-ASCII operators, so inheriting a
+/// platform charset would only mean mojibake.
+const RODIN_PROJECT_PREFS: &str = "eclipse.preferences.version=1\nencoding/<project>=UTF-8\n";
+
+/// Write [`RODIN_PROJECT_PREFS`] into `base`, unless the file already exists.
+///
+/// Eclipse owns this file too — setting an encoding in the UI rewrites it and
+/// may add per-resource `encoding/<path>=` keys — so an existing one is left
+/// untouched. That is why it is not rewritten on every export the way
+/// `.project` is, which is derived entirely from our own state.
+fn write_rodin_project_prefs(base: &std::path::Path) -> Result<()> {
+    let path = base.join(RODIN_PROJECT_PREFS_PATH);
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, RODIN_PROJECT_PREFS)?;
+    Ok(())
 }
 
 /// Converts a Context to .buc XML format
@@ -3098,12 +3141,24 @@ mod tests {
         assert_eq!(parsed[0].filename, "test_ctx.buc");
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data)).unwrap();
-        let mut project = archive.by_name(".project").unwrap();
         let mut project_xml = String::new();
-        std::io::Read::read_to_string(&mut project, &mut project_xml).unwrap();
+        {
+            let mut project = archive.by_name(".project").unwrap();
+            std::io::Read::read_to_string(&mut project, &mut project_xml).unwrap();
+        }
         assert!(project_xml.contains("<name>Rossi &amp; &lt;Project&gt;</name>"));
         assert!(project_xml.contains("<nature>org.rodinp.core.rodinnature</nature>"));
         assert!(project_xml.contains("<name>org.rodinp.core.rodinbuilder</name>"));
+
+        let mut prefs = String::new();
+        let mut entry = archive
+            .by_name(".settings/org.eclipse.core.resources.prefs")
+            .unwrap();
+        std::io::Read::read_to_string(&mut entry, &mut prefs).unwrap();
+        assert_eq!(
+            prefs,
+            "eclipse.preferences.version=1\nencoding/<project>=UTF-8\n"
+        );
     }
 
     #[test]
@@ -3119,6 +3174,40 @@ mod tests {
         let project_xml = std::fs::read_to_string(dir.join(".project")).unwrap();
         assert!(project_xml.contains("<name>Dir Project</name>"));
         assert!(dir.join("test_ctx.buc").exists());
+        let prefs = std::fs::read_to_string(dir.join(".settings/org.eclipse.core.resources.prefs"))
+            .unwrap();
+        assert_eq!(
+            prefs,
+            "eclipse.preferences.version=1\nencoding/<project>=UTF-8\n"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Eclipse rewrites the same preferences file when the user sets an
+    /// encoding in the UI, so a re-export must not throw those keys away.
+    #[test]
+    fn test_write_project_directory_keeps_existing_project_prefs() {
+        let dir = tempdir_unique("rossi-project-prefs");
+        let existing = "eclipse.preferences.version=1\n\
+                        encoding/<project>=UTF-8\n\
+                        encoding//test_ctx.buc=UTF-16\n";
+        std::fs::create_dir_all(dir.join(".settings")).unwrap();
+        std::fs::write(
+            dir.join(".settings/org.eclipse.core.resources.prefs"),
+            existing,
+        )
+        .unwrap();
+
+        let named = NamedComponent {
+            filename: "test_ctx.buc".to_string(),
+            component: Component::Context(Context::new("test_ctx".to_string())),
+        };
+        write_project_directory(&dir, &[named], "Dir Project").unwrap();
+
+        let prefs = std::fs::read_to_string(dir.join(".settings/org.eclipse.core.resources.prefs"))
+            .unwrap();
+        assert_eq!(prefs, existing);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -3165,7 +3254,14 @@ mod tests {
         let names = entry_names(&zip_data);
         assert_eq!(
             names,
-            vec!["A/.project", "A/C.buc", "B/.project", "B/C.buc"],
+            vec![
+                "A/.project",
+                "A/.settings/org.eclipse.core.resources.prefs",
+                "A/C.buc",
+                "B/.project",
+                "B/.settings/org.eclipse.core.resources.prefs",
+                "B/C.buc",
+            ],
             "each project is namespaced under its own directory prefix",
         );
 
@@ -3180,8 +3276,9 @@ mod tests {
     #[test]
     fn test_single_project_zip_keeps_flat_rodin_layout() {
         // Pin the Rodin-compatible layout the generalized writer must preserve:
-        // a root `.project` descriptor first, then each component flat at its
-        // basename (no directory prefix), in input order. A refactor of
+        // a root `.project` descriptor and its encoding preferences first, then
+        // each component flat at its basename (no directory prefix), in input
+        // order. A refactor of
         // `write_projects_zip` that prefixed or reordered entries would break
         // Rodin import — this guards against that, unlike comparing the writer
         // to itself.
@@ -3193,7 +3290,15 @@ mod tests {
             },
         ];
         let zip = to_project_zip(&components, "rossi_project").unwrap();
-        assert_eq!(entry_names(&zip), vec![".project", "C0.buc", "M0.bum"]);
+        assert_eq!(
+            entry_names(&zip),
+            vec![
+                ".project",
+                ".settings/org.eclipse.core.resources.prefs",
+                "C0.buc",
+                "M0.bum",
+            ]
+        );
     }
 
     #[test]

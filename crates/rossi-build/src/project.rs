@@ -879,7 +879,14 @@ mod tests {
         let components = rossi::parse_named_components("CONTEXT C1\nEND\n").unwrap();
         let (bytes, project) = project_from_text_components("MyName", &components).unwrap();
         assert_eq!(project.name, "MyName");
-        assert_eq!(entry_names(&bytes), [".project", "C1.buc"]);
+        assert_eq!(
+            entry_names(&bytes),
+            [
+                ".project",
+                ".settings/org.eclipse.core.resources.prefs",
+                "C1.buc",
+            ]
+        );
         let descriptor = entry_string(&bytes, ".project");
         assert!(
             descriptor.contains("<name>MyName</name>"),
@@ -923,7 +930,14 @@ mod tests {
         let (bytes, discovered) = projects_from_text_components(&[a, b]).unwrap();
         assert_eq!(
             entry_names(&bytes),
-            ["A/.project", "A/C.buc", "B/.project", "B/M.bum"]
+            [
+                "A/.project",
+                "A/.settings/org.eclipse.core.resources.prefs",
+                "A/C.buc",
+                "B/.project",
+                "B/.settings/org.eclipse.core.resources.prefs",
+                "B/M.bum",
+            ]
         );
         let summary: Vec<(&str, &str, usize)> = discovered
             .iter()
