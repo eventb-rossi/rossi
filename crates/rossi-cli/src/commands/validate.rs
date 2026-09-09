@@ -937,7 +937,7 @@ fn fold_project_diagnostic(
     project: &Project,
     prefix: &str,
 ) -> ValidationResult {
-    let component = diag.origin.split('.').next().unwrap_or(&diag.origin);
+    let component = diag.component();
     let mut carriers = project
         .components
         .iter()

@@ -211,6 +211,19 @@ impl PartialEq for Diagnostic {
 
 impl Eq for Diagnostic {}
 
+impl Diagnostic {
+    /// The component this finding is about.
+    ///
+    /// The convention is the one [`Diagnostic::origin`] documents: the
+    /// leading dot-separated segment names the component, and the rest, when
+    /// present, names an element inside it. A project-level finding uses an
+    /// origin that names no component, and returns it whole.
+    #[must_use]
+    pub fn component(&self) -> &str {
+        self.origin.split('.').next().unwrap_or(&self.origin)
+    }
+}
+
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.rule_id {
@@ -231,12 +244,24 @@ pub enum Severity {
     Info,
 }
 
+impl Severity {
+    /// The word this severity is reported under, in every format.
+    ///
+    /// The human report, the JSON document and the SARIF level all name a
+    /// severity, and a reader comparing two of them should not find different
+    /// words for the same finding, so they share one spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+        }
+    }
+}
+
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Severity::Error => write!(f, "error"),
-            Severity::Warning => write!(f, "warning"),
-            Severity::Info => write!(f, "info"),
-        }
+        f.write_str(self.as_str())
     }
 }
