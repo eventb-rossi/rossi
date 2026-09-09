@@ -653,3 +653,58 @@ pub enum FailOrSkip {
     Skip(String),
     Fail(String),
 }
+
+// --- dump document fixtures ---
+
+/// The text of an example model, resolved from the workspace root so it does
+/// not depend on the working directory.
+pub fn example(name: &str) -> String {
+    let path = workspace_root().join("crates/rossi/examples").join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// A project built from Event-B text under the Rodin names the dump command
+/// gives its components, so handles match what a build writes.
+pub fn text_project(name: &str, files: &[(&str, &str)]) -> rossi_build::project::Project {
+    use rossi_build::project::{Project, ProjectComponent};
+    let mut components = Vec::new();
+    for (rodin_name, text) in files {
+        components.extend(
+            ProjectComponent::from_eventb(*rodin_name, text)
+                .unwrap_or_else(|e| panic!("{rodin_name} parses: {e}")),
+        );
+    }
+    Project::new(name, components)
+}
+
+/// A project assembled from example files on disk.
+pub fn example_project(name: &str, files: &[(&str, &str)]) -> rossi_build::project::Project {
+    let loaded: Vec<(&str, String)> = files
+        .iter()
+        .map(|(rodin_name, example_name)| (*rodin_name, example(example_name)))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = loaded
+        .iter()
+        .map(|(rodin_name, text)| (*rodin_name, text.as_str()))
+        .collect();
+    text_project(name, &borrowed)
+}
+
+/// The example models the dump tests share, as the Rodin name each component
+/// takes and the example file it comes from.
+pub const DUMP_MODELS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "bank_account",
+        &[
+            ("bank_account_ctx.buc", "bank_account_ctx.eventb"),
+            ("bank_account.bum", "bank_account_machine.eventb"),
+        ],
+    ),
+    (
+        "refinement",
+        &[
+            ("refinement_abstract.bum", "refinement_abstract.eventb"),
+            ("refinement_concrete.bum", "refinement_concrete.eventb"),
+        ],
+    ),
+];

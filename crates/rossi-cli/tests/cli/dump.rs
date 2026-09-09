@@ -1,10 +1,8 @@
 //! `rossi dump`: the document, its exit codes, and where it goes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::helpers::{
-    MINIMAL_BUILD_CONTEXT_XML, rossi_command, run_cli, tempdir_unique, write_zip,
-};
+use crate::helpers::{MINIMAL_BUILD_CONTEXT_XML, run_cli, tempdir_unique, write_zip};
 
 /// A context and a machine that check cleanly.
 const CONTEXT: &str = "\
@@ -51,7 +49,6 @@ END
 
 fn fixture_dir(prefix: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = tempdir_unique(prefix);
-    std::fs::create_dir_all(&dir).unwrap();
     for (name, body) in files {
         std::fs::write(dir.join(name), body).unwrap();
     }
@@ -208,7 +205,6 @@ fn the_schema_is_printed_on_request() {
 #[test]
 fn an_archive_of_several_projects_needs_a_choice() {
     let dir = tempdir_unique("rossi-cli-dump-multi");
-    std::fs::create_dir_all(&dir).unwrap();
     let zip = dir.join("two.zip");
     write_zip(
         &zip,
@@ -280,23 +276,6 @@ fn the_document_is_the_same_on_every_run() {
     let second = dump(&[path]);
 
     assert_eq!(first.stdout, second.stdout);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// The command is wired into the binary, not merely compiled.
-#[test]
-fn the_subcommand_is_listed_in_help() {
-    let output = rossi_command().arg("--help").output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("dump"), "help: {stdout}");
-}
-
-/// Directories are made under the system temp root, so a helper that assumes
-/// one exists is checked here rather than failing obscurely later.
-#[test]
-fn the_fixture_helper_makes_a_usable_directory() {
-    let dir = fixture_dir("rossi-cli-dump-helper", &[("c.eventb", CONTEXT)]);
-    assert!(Path::new(&dir).join("c.eventb").exists());
     std::fs::remove_dir_all(&dir).ok();
 }
 

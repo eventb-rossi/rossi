@@ -4,12 +4,14 @@
 //! checked: the closure a machine carries, where each part came from, and the
 //! invariants a consumer is entitled to rely on.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::formula::Type;
 use rossi::formula::position::FormulaRef;
 use rossi_build::dump::{self, MachineDump, Model, Node};
 use rossi_build::project::{Project, ProjectComponent};
+
+mod common;
 
 fn project(files: &[(&str, &str)]) -> Project {
     let mut components = Vec::new();
@@ -154,15 +156,21 @@ fn a_comment_reaches_the_element_it_was_written_beside() {
 
     assert_eq!(guard.comment.as_deref(), Some("a written guard"));
 
-    // The same guard reached through the refinement is the abstract one, so
-    // it has no clause in the refining file and reports no comment there.
+    // The same guard reached through the refinement is the abstract one. It
+    // was written once, so it carries the same comment either way; what says
+    // where it came from is the recorded owner and the file its span names.
     let inherited = &machine(&model, "ref")
         .events
         .iter()
         .find(|e| e.label == "step")
         .expect("the event")
         .guards[0];
-    assert_eq!(inherited.comment, None);
+    assert_eq!(inherited.comment.as_deref(), Some("a written guard"));
+    assert_eq!(inherited.inherited_from.as_deref(), Some("base"));
+    assert_eq!(
+        inherited.span.as_ref().and_then(|s| s.file.as_deref()),
+        Some("base.bum")
+    );
 }
 
 #[test]
@@ -320,39 +328,25 @@ fn visit_nodes(model: &Model, mut f: impl FnMut(&Node)) {
     }
 }
 
-fn example(name: &str) -> String {
-    let path = format!("../rossi/examples/{name}");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
-}
-
-/// The projects the whole-document invariants are checked over.
+/// The projects the whole-document invariants are checked over: the shared
+/// example models, plus the extended-event pair defined here.
 fn corpus() -> Vec<(&'static str, Model)> {
-    vec![
-        (
-            "bank_account",
-            model(&[
-                ("bank_account_ctx.buc", &example("bank_account_ctx.eventb")),
-                ("bank_account.bum", &example("bank_account_machine.eventb")),
-            ]),
-        ),
-        (
-            "refinement",
-            model(&[
-                (
-                    "refinement_abstract.bum",
-                    &example("refinement_abstract.eventb"),
-                ),
-                (
-                    "refinement_concrete.bum",
-                    &example("refinement_concrete.eventb"),
-                ),
-            ]),
-        ),
-        (
-            "extended",
-            model(&[("base.bum", ABSTRACT), ("ref.bum", EXTENDED)]),
-        ),
-    ]
+    let mut out: Vec<(&'static str, Model)> = common::DUMP_MODELS
+        .iter()
+        .map(|(name, files)| {
+            let project = common::example_project(name, files);
+            let (build, sc) = rossi_build::check_with_model(&project);
+            (
+                *name,
+                dump::model(&project, &sc, &build, &dump::Options::default()),
+            )
+        })
+        .collect();
+    out.push((
+        "extended",
+        model(&[("base.bum", ABSTRACT), ("ref.bum", EXTENDED)]),
+    ));
+    out
 }
 
 #[test]
@@ -364,10 +358,13 @@ fn every_type_string_parses_and_matches_its_table_entry() {
                 .types
                 .get(key)
                 .unwrap_or_else(|| panic!("{name}: {key} is missing from the type table"));
+            // The content is the round trip: the string a node names must
+            // parse back to a type, and that type must be the one the table
+            // records under it.
             let parsed = Type::parse_rodin(key)
                 .unwrap_or_else(|| panic!("{name}: {key} does not parse as a Rodin type"));
             assert_eq!(
-                &dump_type(&parsed),
+                &dump::TypeNode::of(&parsed),
                 entry,
                 "{name}: {key} does not rebuild to its table entry"
             );
@@ -375,59 +372,45 @@ fn every_type_string_parses_and_matches_its_table_entry() {
     }
 }
 
-/// The table entry a type should have, rebuilt independently of the
-/// converter so the comparison is not a tautology.
-fn dump_type(ty: &Type) -> dump::TypeNode {
-    use dump::TypeNode;
-    match ty {
-        Type::Int => TypeNode::INT,
-        Type::Bool => TypeNode::BOOL,
-        Type::Given(name) => TypeNode::GIVEN { name: name.clone() },
-        Type::Pow(base) => TypeNode::POW {
-            base: Box::new(dump_type(base)),
-        },
-        Type::Prod(left, right) => TypeNode::PROD {
-            left: Box::new(dump_type(left)),
-            right: Box::new(dump_type(right)),
-        },
-        Type::Parametric { symbol, params, .. } => TypeNode::PARAMETRIC {
-            symbol: symbol.clone(),
-            params: params.iter().map(dump_type).collect(),
-        },
-    }
-}
-
 #[test]
-fn a_predicate_carries_no_type_and_an_expression_always_does() {
+fn a_predicate_carries_no_type() {
+    // Types belong to expressions; a predicate denotes truth, not a value.
+    // The vocabulary comes from the operator tables rather than a transcribed
+    // list, so a predicate operator added later is covered without edits here.
+    use rossi::formula::tag::{
+        AssocPredOp, BinaryPredOp, LiteralPredOp, QuantPredOp, RelationalOp,
+    };
+    let mut predicate_ops: BTreeSet<&str> = BTreeSet::new();
+    predicate_ops.extend(
+        RelationalOp::ALL
+            .iter()
+            .map(|op| dump::op_name_relational(*op)),
+    );
+    predicate_ops.extend(
+        BinaryPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_binary_pred(*op)),
+    );
+    predicate_ops.extend(
+        AssocPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_assoc_pred(*op)),
+    );
+    predicate_ops.extend(
+        LiteralPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_literal_pred(*op)),
+    );
+    predicate_ops.extend(
+        QuantPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_quant_pred(*op)),
+    );
+    predicate_ops.extend(["NOT", "KFINITE", "KPARTITION"]);
+
     for (name, model) in corpus() {
         visit_nodes(&model, |node| {
-            let is_predicate = matches!(
-                node.op,
-                "BTRUE"
-                    | "BFALSE"
-                    | "NOT"
-                    | "LAND"
-                    | "LOR"
-                    | "LIMP"
-                    | "LEQV"
-                    | "FORALL"
-                    | "EXISTS"
-                    | "KFINITE"
-                    | "KPARTITION"
-                    | "EQUAL"
-                    | "NOTEQUAL"
-                    | "LT"
-                    | "LE"
-                    | "GT"
-                    | "GE"
-                    | "IN"
-                    | "NOTIN"
-                    | "SUBSET"
-                    | "NOTSUBSET"
-                    | "SUBSETEQ"
-                    | "NOTSUBSETEQ"
-            );
-            if is_predicate {
+            if predicate_ops.contains(node.op) {
                 assert!(node.ty.is_none(), "{name}: {} carries a type", node.op);
             }
         });
@@ -474,54 +457,48 @@ fn a_bound_occurrence_always_names_a_declaration_in_scope() {
 }
 
 #[test]
-fn an_inherited_element_places_no_node() {
-    // An inherited invariant, guard or action keeps the spans of the machine
-    // that wrote it. A node span names no file of its own, so emitting one
-    // here would report a position in this machine's text that belongs to
-    // another file's; the element itself already reports none.
+fn an_inherited_element_is_placed_in_the_file_that_wrote_it() {
+    // An inherited formula's offsets index the machine that wrote it. A node
+    // span names no file of its own by default, so reporting one without
+    // saying which file it belongs to would point a reader at unrelated text
+    // in the refining machine. Naming the owner makes the position usable
+    // instead of merely absent.
     let model = model(&[("base.bum", ABSTRACT), ("ref.bum", EXTENDED)]);
     let refined = machine(&model, "ref");
 
-    let mut inherited = 0;
-    let mut spans = Vec::new();
-    for invariant in &refined.invariants {
-        if invariant.inherited_from.is_some() {
-            inherited += 1;
-            assert!(invariant.span.is_none());
-            collect_spans(&invariant.predicate, &mut spans);
-        }
-    }
-    for event in &refined.events {
-        for guard in &event.guards {
-            if guard.inherited_from.is_some() {
-                inherited += 1;
-                assert!(guard.span.is_none());
-                collect_spans(&guard.predicate, &mut spans);
-            }
-        }
-        for action in &event.actions {
-            if action.inherited_from.is_some() {
-                inherited += 1;
-                assert!(action.span.is_none());
-                if let Some(assignment) = &action.assignment {
-                    assert!(assignment.span.is_none());
-                    for part in assignment
-                        .idents
-                        .iter()
-                        .chain(assignment.values.iter().flatten())
-                    {
-                        collect_spans(part, &mut spans);
-                    }
-                }
-                if let Some(ba) = &action.ba {
-                    collect_spans(ba, &mut spans);
-                }
-            }
-        }
-    }
+    let inherited = refined
+        .invariants
+        .iter()
+        .find(|i| i.inherited_from.as_deref() == Some("base"))
+        .expect("the refinement inherits an invariant");
 
-    assert!(inherited > 0, "the project inherits nothing");
-    assert!(spans.is_empty(), "an inherited element placed a node");
+    let element = inherited.span.as_ref().expect("the element is placed");
+    assert_eq!(element.file.as_deref(), Some("base.bum"));
+
+    let mut placed = 0;
+    let mut spans = Vec::new();
+    collect_spans(&inherited.predicate, &mut spans);
+    for span in &spans {
+        assert_eq!(
+            span.file.as_deref(),
+            Some("base.bum"),
+            "an inherited node must name the file it indexes"
+        );
+        assert!(span.start >= element.start && span.end <= element.end);
+        placed += 1;
+    }
+    assert!(placed > 0, "the inherited predicate placed no node");
+
+    // A formula written here names no file, because the element above it
+    // already does.
+    let own = refined
+        .invariants
+        .iter()
+        .find(|i| i.inherited_from.is_none())
+        .expect("the refinement has an invariant of its own");
+    let mut spans = Vec::new();
+    collect_spans(&own.predicate, &mut spans);
+    assert!(spans.iter().all(|s| s.file.is_none()));
 }
 
 #[test]

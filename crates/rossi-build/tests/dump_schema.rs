@@ -9,7 +9,10 @@
 
 use rossi_build::dump;
 use rossi_build::project::{Project, ProjectComponent};
+
+mod common;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 fn validator() -> jsonschema::Validator {
     let schema: Value =
@@ -31,11 +34,6 @@ fn document(files: &[(&str, &str)]) -> Value {
     serde_json::to_value(&model).expect("the document serializes")
 }
 
-fn example(name: &str) -> String {
-    let path = format!("../rossi/examples/{name}");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
-}
-
 fn assert_valid(name: &str, document: &Value) {
     let validator = validator();
     let errors: Vec<String> = validator
@@ -54,28 +52,103 @@ fn the_published_schema_is_a_valid_schema() {
     let _ = validator();
 }
 
+/// The schema lists the operator names a document may use. Validating real
+/// documents only exercises the operators those models happen to contain, so
+/// a name added to the converter and forgotten in the schema would go
+/// unnoticed until a consumer hit it. This compares the two lists directly.
 #[test]
-fn a_context_and_machine_project_matches_the_schema() {
-    let document = document(&[
-        ("bank_account_ctx.buc", &example("bank_account_ctx.eventb")),
-        ("bank_account.bum", &example("bank_account_machine.eventb")),
-    ]);
-    assert_valid("bank_account", &document);
+fn the_schema_lists_every_operator_the_converter_can_emit() {
+    use rossi::formula::tag::{
+        AssocExprOp, AssocPredOp, AtomicOp, BinaryExprOp, BinaryPredOp, LiteralPredOp, QuantExprOp,
+        QuantPredOp, RelationalOp, UnaryExprOp,
+    };
+
+    let schema: Value = serde_json::from_str(dump::JSON_SCHEMA).expect("the schema parses");
+    let listed: BTreeSet<String> = schema["$defs"]["op"]["enum"]
+        .as_array()
+        .expect("the operator enum")
+        .iter()
+        .map(|v| v.as_str().expect("an operator name").to_string())
+        .collect();
+
+    let mut emitted: BTreeSet<String> = BTreeSet::new();
+    // The operators that come from a table.
+    emitted.extend(
+        RelationalOp::ALL
+            .iter()
+            .map(|op| dump::op_name_relational(*op).to_string()),
+    );
+    emitted.extend(
+        BinaryExprOp::ALL
+            .iter()
+            .map(|op| dump::op_name_binary_expr(*op).to_string()),
+    );
+    emitted.extend(
+        BinaryPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_binary_pred(*op).to_string()),
+    );
+    emitted.extend(
+        AssocExprOp::ALL
+            .iter()
+            .map(|op| dump::op_name_assoc_expr(*op).to_string()),
+    );
+    emitted.extend(
+        AssocPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_assoc_pred(*op).to_string()),
+    );
+    emitted.extend(
+        AtomicOp::ALL
+            .iter()
+            .map(|op| dump::op_name_atomic(*op).to_string()),
+    );
+    emitted.extend(
+        LiteralPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_literal_pred(*op).to_string()),
+    );
+    emitted.extend(
+        UnaryExprOp::ALL
+            .iter()
+            .map(|op| dump::op_name_unary_expr(*op).to_string()),
+    );
+    emitted.extend(
+        QuantExprOp::ALL
+            .iter()
+            .map(|op| dump::op_name_quant_expr(*op).to_string()),
+    );
+    emitted.extend(
+        QuantPredOp::ALL
+            .iter()
+            .map(|op| dump::op_name_quant_pred(*op).to_string()),
+    );
+    // The operators the converter names directly, having no operator enum.
+    for fixed in dump::FIXED_OP_NAMES {
+        emitted.insert((*fixed).to_string());
+    }
+
+    let missing: Vec<&String> = emitted.difference(&listed).collect();
+    let extra: Vec<&String> = listed.difference(&emitted).collect();
+    assert!(
+        missing.is_empty(),
+        "the converter can emit operators the schema does not list: {missing:?}"
+    );
+    assert!(
+        extra.is_empty(),
+        "the schema lists operators the converter never emits: {extra:?}"
+    );
 }
 
 #[test]
-fn a_refinement_matches_the_schema() {
-    let document = document(&[
-        (
-            "refinement_abstract.bum",
-            &example("refinement_abstract.eventb"),
-        ),
-        (
-            "refinement_concrete.bum",
-            &example("refinement_concrete.eventb"),
-        ),
-    ]);
-    assert_valid("refinement", &document);
+fn the_shared_example_models_match_the_schema() {
+    for (name, files) in common::DUMP_MODELS {
+        let project = common::example_project(name, files);
+        let (build, sc) = rossi_build::check_with_model(&project);
+        let model = dump::model(&project, &sc, &build, &dump::Options::default());
+        let document = serde_json::to_value(&model).expect("the document serializes");
+        assert_valid(name, &document);
+    }
 }
 
 /// Every element kind and every assignment form in one project, so the parts

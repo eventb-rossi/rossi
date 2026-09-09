@@ -14,28 +14,13 @@
 use std::path::PathBuf;
 
 use rossi_build::dump;
-use rossi_build::project::{Project, ProjectComponent, discover_projects};
+use rossi_build::project::{Project, discover_projects};
 
 mod common;
 
-/// The models locked here, as the name of their reference file and how to
-/// load them.
-const TEXT_MODELS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "bank_account",
-        &[
-            ("bank_account_ctx.buc", "bank_account_ctx.eventb"),
-            ("bank_account.bum", "bank_account_machine.eventb"),
-        ],
-    ),
-    (
-        "refinement",
-        &[
-            ("refinement_abstract.bum", "refinement_abstract.eventb"),
-            ("refinement_concrete.bum", "refinement_concrete.eventb"),
-        ],
-    ),
-];
+/// The text models locked here. Shared with the other dump tests, so the
+/// three binaries cannot drift on which examples they cover.
+use common::DUMP_MODELS as TEXT_MODELS;
 
 /// One archive is enough, and it is the one that exercises the most: an
 /// extended event chain, inherited guards, actions and invariants, a variant,
@@ -48,10 +33,6 @@ fn fixtures_dir() -> PathBuf {
     common::workspace_root().join("crates/rossi-build/tests/fixtures/dump_golden")
 }
 
-fn examples_dir() -> PathBuf {
-    common::workspace_root().join("crates/rossi/examples")
-}
-
 fn document(project: &Project) -> String {
     let (build, sc) = rossi_build::check_with_model(project);
     let model = dump::model(project, &sc, &build, &dump::Options::default());
@@ -60,24 +41,10 @@ fn document(project: &Project) -> String {
     json
 }
 
-/// Load a text model under the Rodin names the command gives it, so the
-/// reference holds the handles a real run produces.
-fn text_project(name: &str, files: &[(&str, &str)]) -> Project {
-    let mut components = Vec::new();
-    for (rodin_name, example) in files {
-        let path = examples_dir().join(example);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        components.extend(
-            ProjectComponent::from_eventb(*rodin_name, &text)
-                .unwrap_or_else(|e| panic!("{example} parses: {e}")),
-        );
-    }
-    Project::new(name, components)
-}
-
 fn archive_project(name: &str) -> Project {
-    let path = examples_dir().join(format!("{name}.zip"));
+    let path = common::workspace_root()
+        .join("crates/rossi/examples")
+        .join(format!("{name}.zip"));
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let mut projects =
         discover_projects(&bytes, name).unwrap_or_else(|e| panic!("{name}: discovery: {e}"));
@@ -88,7 +55,10 @@ fn archive_project(name: &str) -> Project {
 fn generated() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (name, files) in TEXT_MODELS {
-        out.push(((*name).to_string(), document(&text_project(name, files))));
+        out.push((
+            (*name).to_string(),
+            document(&common::example_project(name, files)),
+        ));
     }
     for name in ARCHIVE_MODELS {
         out.push(((*name).to_string(), document(&archive_project(name))));
