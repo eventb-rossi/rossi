@@ -198,6 +198,30 @@ end
 }
 
 #[test]
+fn a_component_that_declares_nothing_still_reports_its_handle() {
+    // A component's own handle is not stored on the checked record, and a
+    // context with no carrier set, constant or axiom has no declaration to
+    // read one off either. It is still a component a consumer keys by handle.
+    let model = model(&[
+        ("empty.buc", "context empty\nend\n"),
+        ("aggregate.buc", "context aggregate\nextends empty\nend\n"),
+    ]);
+    assert_eq!(errors(&model), Vec::<&str>::new());
+
+    for context in &model.contexts {
+        assert_eq!(
+            context.source,
+            format!(
+                "/p/{}.buc|org.eventb.core.contextFile#{}",
+                context.name, context.name
+            ),
+            "{} reports no handle",
+            context.name
+        );
+    }
+}
+
+#[test]
 fn a_machine_lists_the_contexts_it_can_see_transitively() {
     let base_ctx = "\
 context base_ctx
@@ -447,6 +471,57 @@ fn a_bound_occurrence_always_names_a_declaration_in_scope() {
             }
         });
     }
+}
+
+#[test]
+fn an_inherited_element_places_no_node() {
+    // An inherited invariant, guard or action keeps the spans of the machine
+    // that wrote it. A node span names no file of its own, so emitting one
+    // here would report a position in this machine's text that belongs to
+    // another file's; the element itself already reports none.
+    let model = model(&[("base.bum", ABSTRACT), ("ref.bum", EXTENDED)]);
+    let refined = machine(&model, "ref");
+
+    let mut inherited = 0;
+    let mut spans = Vec::new();
+    for invariant in &refined.invariants {
+        if invariant.inherited_from.is_some() {
+            inherited += 1;
+            assert!(invariant.span.is_none());
+            collect_spans(&invariant.predicate, &mut spans);
+        }
+    }
+    for event in &refined.events {
+        for guard in &event.guards {
+            if guard.inherited_from.is_some() {
+                inherited += 1;
+                assert!(guard.span.is_none());
+                collect_spans(&guard.predicate, &mut spans);
+            }
+        }
+        for action in &event.actions {
+            if action.inherited_from.is_some() {
+                inherited += 1;
+                assert!(action.span.is_none());
+                if let Some(assignment) = &action.assignment {
+                    assert!(assignment.span.is_none());
+                    for part in assignment
+                        .idents
+                        .iter()
+                        .chain(assignment.values.iter().flatten())
+                    {
+                        collect_spans(part, &mut spans);
+                    }
+                }
+                if let Some(ba) = &action.ba {
+                    collect_spans(ba, &mut spans);
+                }
+            }
+        }
+    }
+
+    assert!(inherited > 0, "the project inherits nothing");
+    assert!(spans.is_empty(), "an inherited element placed a node");
 }
 
 #[test]

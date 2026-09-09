@@ -941,18 +941,28 @@
           "label": "inv1",
           "theorem": false,
           "source": "/refinement/refinement_abstract.bum|org.eventb.core.machineFile#refinement_abstract|org.eventb.core.invariant#inv1",
+          "span": {
+            "file": "refinement_abstract.bum",
+            "start": 72,
+            "end": 101,
+            "line": 5,
+            "col": 5,
+            "end_line": 6,
+            "end_col": 1
+          },
           "inherited_from": "refinement_abstract",
           "text": "abstract_state∈ℕ",
           "predicate": {
             "tag": 107,
             "op": "IN",
             "span": {
+              "file": "refinement_abstract.bum",
               "start": 78,
               "end": 101,
               "line": 5,
-              "col": 9,
+              "col": 11,
               "end_line": 6,
-              "end_col": 3
+              "end_col": 1
             },
             "children": [
               {
@@ -960,12 +970,13 @@
                 "op": "FREE_IDENT",
                 "type": "ℤ",
                 "span": {
+                  "file": "refinement_abstract.bum",
                   "start": 78,
                   "end": 92,
                   "line": 5,
-                  "col": 9,
+                  "col": 11,
                   "end_line": 5,
-                  "end_col": 23
+                  "end_col": 25
                 },
                 "name": "abstract_state"
               },
@@ -974,12 +985,13 @@
                 "op": "NATURAL",
                 "type": "ℙ(ℤ)",
                 "span": {
+                  "file": "refinement_abstract.bum",
                   "start": 97,
                   "end": 100,
                   "line": 5,
                   "col": 28,
-                  "end_line": 6,
-                  "end_col": 2
+                  "end_line": 5,
+                  "end_col": 29
                 }
               }
             ]

@@ -27,7 +27,7 @@ use rossi::ast::{
 use crate::handles::HandleUri;
 use crate::project::Project;
 
-use super::location::LineIndex;
+use super::location::{LineIndex, SpanDump};
 
 /// What a checked declaration inherits from the clause that produced it.
 #[derive(Debug, Default, Clone)]
@@ -125,29 +125,42 @@ pub(crate) struct ComponentOrigin<'a> {
     pub(crate) lines: Option<LineIndex<'a>>,
     /// The component's own comment and span.
     pub(crate) own: Origin<'a>,
-    syntax: Syntax<'a>,
-}
-
-enum Syntax<'a> {
-    Context(&'a Context),
-    Machine(&'a Machine),
+    /// The component's source syntax.
+    component: &'a Component,
+    /// The component's events by label. Every guard, action, parameter and
+    /// witness is looked up through one of these, and a machine can hold
+    /// well over a hundred events, so they are indexed once rather than
+    /// scanned per element.
+    events: HashMap<&'a str, EventSyntax<'a>>,
 }
 
 impl<'a> ComponentOrigin<'a> {
     /// The initialisation label, which reaches a different syntax node from
     /// every other event.
     fn machine(&self) -> Option<&'a Machine> {
-        match self.syntax {
-            Syntax::Machine(m) => Some(m),
-            Syntax::Context(_) => None,
+        match self.component {
+            Component::Machine(m) => Some(m),
+            Component::Context(_) => None,
         }
     }
 
     fn context(&self) -> Option<&'a Context> {
-        match self.syntax {
-            Syntax::Context(c) => Some(c),
-            Syntax::Machine(_) => None,
+        match self.component {
+            Component::Context(c) => Some(c),
+            Component::Machine(_) => None,
         }
+    }
+
+    /// The document form of a span in this component's text.
+    ///
+    /// Every span the document reports is resolved here, so a position always
+    /// names the file it indexes.
+    pub(crate) fn place(&self, span: Option<Span>) -> Option<SpanDump> {
+        Some(
+            self.lines
+                .as_ref()?
+                .span(span?, Some(self.source_id.clone())),
+        )
     }
 
     pub(crate) fn carrier_set(&self, name: &str) -> Origin<'a> {
@@ -228,18 +241,7 @@ impl<'a> ComponentOrigin<'a> {
     }
 
     fn event_syntax(&self, label: &str) -> Option<EventSyntax<'a>> {
-        let machine = self.machine()?;
-        if label == crate::sc::initialisation_label() {
-            return machine
-                .initialisation
-                .as_ref()
-                .map(EventSyntax::Initialisation);
-        }
-        machine
-            .events
-            .iter()
-            .find(|e| e.name == label)
-            .map(EventSyntax::Ordinary)
+        self.events.get(label).copied()
     }
 }
 
@@ -273,6 +275,26 @@ fn label_matches(written: Option<&str>, checked: &str) -> bool {
     written.is_none_or(|label| label == checked)
 }
 
+/// A machine's events by label, initialisation included under the label the
+/// checker gives it.
+fn events_of(component: &Component) -> HashMap<&str, EventSyntax<'_>> {
+    let Component::Machine(machine) = component else {
+        return HashMap::new();
+    };
+    let mut events: HashMap<&str, EventSyntax<'_>> = machine
+        .events
+        .iter()
+        .map(|e| (e.name.as_str(), EventSyntax::Ordinary(e)))
+        .collect();
+    if let Some(init) = machine.initialisation.as_ref() {
+        events.insert(
+            crate::sc::initialisation_label(),
+            EventSyntax::Initialisation(init),
+        );
+    }
+    events
+}
+
 /// Every component's source syntax, keyed by component name.
 pub(crate) struct Origins<'a> {
     by_name: HashMap<&'a str, ComponentOrigin<'a>>,
@@ -284,27 +306,26 @@ impl<'a> Origins<'a> {
         for component in &project.components {
             let lines = component.source.as_deref().map(LineIndex::new);
             let source_id = component.source_id().to_string();
-            let origin = match &component.component {
-                Component::Context(context) => ComponentOrigin {
-                    source_id,
-                    lines,
-                    own: Origin {
-                        comment: context.comment.as_deref(),
-                        span: context.span,
-                    },
-                    syntax: Syntax::Context(context),
+            let own = match &component.component {
+                Component::Context(context) => Origin {
+                    comment: context.comment.as_deref(),
+                    span: context.span,
                 },
-                Component::Machine(machine) => ComponentOrigin {
-                    source_id,
-                    lines,
-                    own: Origin {
-                        comment: machine.comment.as_deref(),
-                        span: machine.span,
-                    },
-                    syntax: Syntax::Machine(machine),
+                Component::Machine(machine) => Origin {
+                    comment: machine.comment.as_deref(),
+                    span: machine.span,
                 },
             };
-            by_name.insert(component.component.name(), origin);
+            by_name.insert(
+                component.component.name(),
+                ComponentOrigin {
+                    source_id,
+                    lines,
+                    own,
+                    component: &component.component,
+                    events: events_of(&component.component),
+                },
+            );
         }
         Origins { by_name }
     }

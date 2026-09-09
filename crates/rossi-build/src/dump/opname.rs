@@ -17,7 +17,7 @@ use rossi::formula::tag::{
     QuantPredOp, RelationalOp, UnaryExprOp,
 };
 
-pub(crate) fn relational(op: RelationalOp) -> &'static str {
+pub fn relational(op: RelationalOp) -> &'static str {
     match op {
         RelationalOp::Equal => "EQUAL",
         RelationalOp::NotEqual => "NOTEQUAL",
@@ -34,7 +34,7 @@ pub(crate) fn relational(op: RelationalOp) -> &'static str {
     }
 }
 
-pub(crate) fn binary_expr(op: BinaryExprOp) -> &'static str {
+pub fn binary_expr(op: BinaryExprOp) -> &'static str {
     match op {
         BinaryExprOp::Mapsto => "MAPSTO",
         BinaryExprOp::Rel => "REL",
@@ -66,14 +66,14 @@ pub(crate) fn binary_expr(op: BinaryExprOp) -> &'static str {
     }
 }
 
-pub(crate) fn binary_pred(op: BinaryPredOp) -> &'static str {
+pub fn binary_pred(op: BinaryPredOp) -> &'static str {
     match op {
         BinaryPredOp::LImp => "LIMP",
         BinaryPredOp::LEqv => "LEQV",
     }
 }
 
-pub(crate) fn assoc_expr(op: AssocExprOp) -> &'static str {
+pub fn assoc_expr(op: AssocExprOp) -> &'static str {
     match op {
         AssocExprOp::BUnion => "BUNION",
         AssocExprOp::BInter => "BINTER",
@@ -85,14 +85,14 @@ pub(crate) fn assoc_expr(op: AssocExprOp) -> &'static str {
     }
 }
 
-pub(crate) fn assoc_pred(op: AssocPredOp) -> &'static str {
+pub fn assoc_pred(op: AssocPredOp) -> &'static str {
     match op {
         AssocPredOp::LAnd => "LAND",
         AssocPredOp::LOr => "LOR",
     }
 }
 
-pub(crate) fn atomic(op: AtomicOp) -> &'static str {
+pub fn atomic(op: AtomicOp) -> &'static str {
     match op {
         AtomicOp::Integer => "INTEGER",
         AtomicOp::Natural => "NATURAL",
@@ -109,14 +109,14 @@ pub(crate) fn atomic(op: AtomicOp) -> &'static str {
     }
 }
 
-pub(crate) fn literal_pred(op: LiteralPredOp) -> &'static str {
+pub fn literal_pred(op: LiteralPredOp) -> &'static str {
     match op {
         LiteralPredOp::BTrue => "BTRUE",
         LiteralPredOp::BFalse => "BFALSE",
     }
 }
 
-pub(crate) fn unary_expr(op: UnaryExprOp) -> &'static str {
+pub fn unary_expr(op: UnaryExprOp) -> &'static str {
     match op {
         UnaryExprOp::KCard => "KCARD",
         UnaryExprOp::Pow => "POW",
@@ -132,7 +132,7 @@ pub(crate) fn unary_expr(op: UnaryExprOp) -> &'static str {
     }
 }
 
-pub(crate) fn quant_expr(op: QuantExprOp) -> &'static str {
+pub fn quant_expr(op: QuantExprOp) -> &'static str {
     match op {
         QuantExprOp::QUnion => "QUNION",
         QuantExprOp::QInter => "QINTER",
@@ -140,12 +140,31 @@ pub(crate) fn quant_expr(op: QuantExprOp) -> &'static str {
     }
 }
 
-pub(crate) fn quant_pred(op: QuantPredOp) -> &'static str {
+pub fn quant_pred(op: QuantPredOp) -> &'static str {
     match op {
         QuantPredOp::Forall => "FORALL",
         QuantPredOp::Exists => "EXISTS",
     }
 }
+
+/// The operator names the converter writes directly, having no operator enum
+/// to draw them from.
+///
+/// Together with the tables above this is the whole vocabulary a document can
+/// contain, which is what the published schema's operator list has to match.
+pub const FIXED: &[&str] = &[
+    "FREE_IDENT",
+    "BOUND_IDENT_DECL",
+    "BOUND_IDENT",
+    "INTLIT",
+    "SETEXT",
+    "PREDICATE_VARIABLE",
+    "KBOOL",
+    "KFINITE",
+    "NOT",
+    "KPARTITION",
+    "EXTENDED",
+];
 
 #[cfg(test)]
 mod tests {
