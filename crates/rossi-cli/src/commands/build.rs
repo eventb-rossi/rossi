@@ -126,13 +126,15 @@ fn build_one(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
         if text_files.is_empty() {
             return Err(format!("no Event-B files found in {}", input.display()).into());
         }
-        return build_from_text_files(&dir_project_name(input), &text_files);
+        return build_from_text_files(&eventb_io::dir_project_name(input), &text_files);
     }
 
     match eventb_io::classify_file(input)? {
-        InputKind::Text => build_from_text_files(&file_project_name(input), &[input.to_path_buf()]),
+        InputKind::Text => {
+            build_from_text_files(&eventb_io::file_project_name(input), &[input.to_path_buf()])
+        }
         InputKind::RodinXml => build_from_components(
-            &file_project_name(input),
+            &eventb_io::file_project_name(input),
             vec![eventb_io::parse_rodin_xml_file(input)?],
         ),
         InputKind::RodinZip => build_from_zip(input),
@@ -186,7 +188,7 @@ fn build_from_components(
 /// Build a project from a Rodin `.zip` archive on disk.
 fn build_from_zip(input: &Path) -> Result<BuildOutcome, Box<dyn std::error::Error>> {
     let bytes = std::fs::read(input)?;
-    build_zip_bytes(&file_project_name(input), bytes)
+    build_zip_bytes(&eventb_io::file_project_name(input), bytes)
 }
 
 /// Discover every project bundled in `bytes`, build each independently, and
@@ -209,24 +211,6 @@ fn build_zip_bytes(
         results,
         archive_bytes: Some(bytes),
     })
-}
-
-/// Project name for a single-file input (its file stem).
-fn file_project_name(input: &Path) -> String {
-    input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("project")
-        .to_string()
-}
-
-/// Project name for a directory input (its final path component).
-fn dir_project_name(input: &Path) -> String {
-    input
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("project")
-        .to_string()
 }
 
 fn write_output(
