@@ -57,7 +57,7 @@ sudo dnf install rossi
 | `export`   | Export `.eventb` / `.txt` / directory into a Rodin `.zip` archive; `--build` adds checked XML and proof obligations, `--proofs[=PATH]` carries local proofs. |
 | `fmt`      | Reformat Event-B in place (operator convention, indentation). |
 | `build`    | Static-check a Rodin project and emit `.bcc` / `.bcm` checked XML. |
-| `dump`     | Write a checked project as a `rossi-model` JSON document: the checked model with its formulas as typed trees in Rodin's vocabulary; `--schema` prints the format's JSON Schema. |
+| `dump`     | Write a checked project as a `rossi-model` JSON document: the checked model with its formulas as typed trees in Rodin's vocabulary; `--component` narrows it to one component and its dependencies, `--schema` prints the format's JSON Schema. |
 | `prove`    | Check a project's stored proofs against its obligations, by reuse and (with `--replay`) by re-running the reasoners. |
 | `clean`    | Drop the stored proofs whose obligation no longer exists (`--purge`), and empty the ones that no longer apply (`--broken`, `--reset`, `--component`, `--all`); `--check` reports without writing. |
 | `completions` | Print a shell completion script to stdout (run `rossi completions --help` for the supported shells). |

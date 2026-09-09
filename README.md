@@ -413,6 +413,9 @@ rossi dump ./src --output model.json
 # Choose a project from an archive holding several
 rossi dump many.zip --project inventory
 
+# Restrict the document to one machine and what it depends on
+rossi dump ./src --component controller
+
 # Indent it for reading
 rossi dump counter.eventb --pretty
 
@@ -473,6 +476,14 @@ it, so a consumer wanting only one machine's own declarations can filter on
 that.
 
 Spans are absent for Rodin XML input, which carries no source text.
+
+`--component` narrows the document to the named components and everything they
+depend on: the contexts that declare the names their formulas use, and the
+machines they refine, which their elements cite as the origin of what they
+inherit. Every name a restricted document mentions therefore still resolves
+inside it. Findings about components left out are left out too, so the exit
+code reports only what the document contains. The flag is repeatable, and a
+name matching no component is an error listing the ones that exist.
 
 #### Exit codes
 

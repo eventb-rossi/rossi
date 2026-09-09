@@ -640,3 +640,220 @@ fn a_before_after_predicate_is_the_models_own() {
     }
     assert!(compared > 0, "no action was compared");
 }
+
+/// A project with two independent branches over a shared context, so a
+/// selection has something to keep and something to drop.
+const SHARED_CONTEXT: &str = "\
+context shared
+sets S
+end
+";
+
+const OTHER_CONTEXT: &str = "\
+context other
+sets T
+end
+";
+
+const BRANCH_A: &str = "\
+machine a
+sees shared
+variables
+    x
+invariants
+    @inv1 x ∈ S
+events
+event INITIALISATION
+then
+    @act1 x :∈ S
+end
+end
+";
+
+const BRANCH_B: &str = "\
+machine b
+sees other
+variables
+    y
+invariants
+    @inv1 y ∈ T
+events
+event INITIALISATION
+then
+    @act1 y :∈ T
+end
+end
+";
+
+fn selected(files: &[(&str, &str)], components: &[&str]) -> Model {
+    let project = project(files);
+    let (build, sc) = rossi_build::check_with_model(&project);
+    let options = dump::Options {
+        components: Some(components.iter().map(|c| (*c).to_string()).collect()),
+        ..dump::Options::default()
+    };
+    dump::model(&project, &sc, &build, &options)
+}
+
+const BRANCHED: &[(&str, &str)] = &[
+    ("shared.buc", SHARED_CONTEXT),
+    ("other.buc", OTHER_CONTEXT),
+    ("a.bum", BRANCH_A),
+    ("b.bum", BRANCH_B),
+];
+
+#[test]
+fn a_selection_keeps_what_it_depends_on_and_drops_the_rest() {
+    let model = selected(BRANCHED, &["a"]);
+
+    assert_eq!(
+        model
+            .machines
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
+    // The context `a` sees comes with it; the one only `b` sees does not.
+    assert_eq!(
+        model
+            .contexts
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["shared"]
+    );
+}
+
+#[test]
+fn a_selection_pulls_in_the_machines_it_refines() {
+    // A refined machine is not optional: the refining machine's own elements
+    // name it as the origin of what they inherit, so leaving it out would
+    // make the document cite something it does not contain.
+    let model = selected(&[("base.bum", ABSTRACT), ("ref.bum", EXTENDED)], &["ref"]);
+
+    let mut names: Vec<&str> = model.machines.iter().map(|m| m.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["base", "ref"]);
+}
+
+#[test]
+fn every_name_a_selection_mentions_resolves_inside_it() {
+    // This is the property the closure exists for, so it is asserted rather
+    // than assumed: nothing in a restricted document refers outside itself.
+    let model = selected(BRANCHED, &["a"]);
+    let contexts: Vec<&str> = model.contexts.iter().map(|c| c.name.as_str()).collect();
+    let machines: Vec<&str> = model.machines.iter().map(|m| m.name.as_str()).collect();
+
+    for context in &model.contexts {
+        for name in context.extends.iter().chain(&context.ancestors) {
+            assert!(
+                contexts.contains(&name.as_str()),
+                "{name} is cited but absent"
+            );
+        }
+    }
+    for machine in &model.machines {
+        for name in machine.sees.iter().chain(&machine.internal_contexts) {
+            assert!(
+                contexts.contains(&name.as_str()),
+                "{name} is cited but absent"
+            );
+        }
+        for name in machine.refines.iter().chain(&machine.ancestors) {
+            assert!(
+                machines.contains(&name.as_str()),
+                "{name} is cited but absent"
+            );
+        }
+        for invariant in &machine.invariants {
+            if let Some(owner) = &invariant.inherited_from {
+                assert!(
+                    machines.contains(&owner.as_str()),
+                    "{owner} is cited but absent"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_selection_reports_only_what_it_contains() {
+    // `b` names something undeclared, so the whole project fails checking.
+    // Selecting `a` asks about `a`, and a finding about `b` could not be
+    // explained by a document that does not contain `b`.
+    let broken_b = "\
+machine b
+variables
+    y
+invariants
+    @inv1 y ∈ undeclared
+events
+event INITIALISATION
+then
+    @act1 y ≔ 0
+end
+end
+";
+    let files: &[(&str, &str)] = &[
+        ("shared.buc", SHARED_CONTEXT),
+        ("a.bum", BRANCH_A),
+        ("b.bum", broken_b),
+    ];
+
+    let whole = model(files);
+    assert!(whole.has_errors(), "the project as a whole should fail");
+
+    let part = selected(files, &["a"]);
+    assert!(!part.has_errors(), "errors: {:?}", errors(&part));
+}
+
+#[test]
+fn a_selection_lists_only_the_sources_it_kept() {
+    let model = selected(BRANCHED, &["a"]);
+
+    let mut ids: Vec<&str> = model.sources.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["a.bum", "shared.buc"]);
+}
+
+#[test]
+fn selecting_several_components_keeps_all_their_closures() {
+    let model = selected(BRANCHED, &["a", "b"]);
+
+    let mut contexts: Vec<&str> = model.contexts.iter().map(|c| c.name.as_str()).collect();
+    contexts.sort_unstable();
+    assert_eq!(contexts, ["other", "shared"]);
+    assert_eq!(model.machines.len(), 2);
+}
+
+#[test]
+fn selecting_nothing_keeps_the_whole_project() {
+    let whole = model(BRANCHED);
+
+    assert_eq!(whole.contexts.len(), 2);
+    assert_eq!(whole.machines.len(), 2);
+}
+
+#[test]
+fn a_name_that_matches_no_component_selects_nothing_of_its_own() {
+    // The library takes the names as given; reporting a typo is the caller's
+    // job, since only a caller knows what the user typed.
+    let model = selected(BRANCHED, &["nonexistent"]);
+
+    assert!(model.contexts.is_empty());
+    assert!(model.machines.is_empty());
+}
+
+#[test]
+fn a_selection_carries_only_the_types_it_uses() {
+    let whole = model(BRANCHED);
+    let part = selected(BRANCHED, &["a"]);
+
+    assert!(whole.types.contains_key("ℙ(T)"), "the whole project uses T");
+    assert!(
+        !part.types.contains_key("ℙ(T)"),
+        "a selection without T should not carry its type"
+    );
+    assert!(part.types.contains_key("ℙ(S)"));
+}

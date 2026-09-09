@@ -299,3 +299,137 @@ fn the_fixture_helper_makes_a_usable_directory() {
     assert!(Path::new(&dir).join("c.eventb").exists());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A second context and machine, independent of `c` and `m`, so a selection
+/// has something to leave out.
+const OTHER_CONTEXT: &str = "\
+CONTEXT other
+SETS
+    T
+END
+";
+
+const OTHER_MACHINE: &str = "\
+MACHINE n
+SEES
+    other
+VARIABLES
+    w
+INVARIANTS
+    @inv1 w : T
+EVENTS
+    EVENT INITIALISATION
+    THEN
+        @act1 w :: T
+    END
+END
+";
+
+fn branched(prefix: &str) -> PathBuf {
+    fixture_dir(
+        prefix,
+        &[
+            ("c.eventb", CONTEXT),
+            ("m.eventb", MACHINE),
+            ("other.eventb", OTHER_CONTEXT),
+            ("n.eventb", OTHER_MACHINE),
+        ],
+    )
+}
+
+#[test]
+fn a_component_selection_keeps_its_closure_and_drops_the_rest() {
+    let dir = branched("rossi-cli-dump-component");
+    let output = dump(&[dir.to_str().unwrap(), "--component", "m"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let document = parse(&output);
+    let machines: Vec<&str> = document["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    let contexts: Vec<&str> = document["contexts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(machines, ["m"]);
+    // The context `m` sees comes along; the unrelated one does not.
+    assert_eq!(contexts, ["c"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn several_component_selections_accumulate() {
+    let dir = branched("rossi-cli-dump-components");
+    let output = dump(&[
+        dir.to_str().unwrap(),
+        "--component",
+        "m",
+        "--component",
+        "n",
+    ]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let document = parse(&output);
+    assert_eq!(document["machines"].as_array().unwrap().len(), 2);
+    assert_eq!(document["contexts"].as_array().unwrap().len(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_unknown_component_is_a_usage_error_naming_what_there_is() {
+    let dir = branched("rossi-cli-dump-component-typo");
+    let output = dump(&[dir.to_str().unwrap(), "--component", "M"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "nothing should reach stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("'M'"), "stderr: {stderr}");
+    // The available names are listed, so a typo is fixable from the message.
+    assert!(
+        stderr.contains('m') && stderr.contains('n'),
+        "stderr: {stderr}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_selection_reports_only_the_components_it_kept() {
+    // The unselected machine fails checking, so the project as a whole does.
+    // Asking about `m` should not fail on something `m` has nothing to do
+    // with, and the document could not explain such a finding anyway.
+    let dir = fixture_dir(
+        "rossi-cli-dump-component-errors",
+        &[
+            ("c.eventb", CONTEXT),
+            ("m.eventb", MACHINE),
+            ("broken.eventb", BROKEN),
+        ],
+    );
+    let path = dir.to_str().unwrap();
+
+    let whole = dump(&[path]);
+    assert_eq!(whole.status.code(), Some(1));
+
+    let selection = dump(&[path, "--component", "m"]);
+    assert_eq!(
+        selection.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&selection.stderr)
+    );
+    let document = parse(&selection);
+    let errors = document["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["severity"] == "error")
+        .count();
+    assert_eq!(errors, 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
