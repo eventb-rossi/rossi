@@ -475,7 +475,9 @@ contexts it sees transitively. Anything inherited names the machine that wrote
 it, so a consumer wanting only one machine's own declarations can filter on
 that.
 
-Spans are absent for Rodin XML input, which carries no source text.
+Spans are absent for Rodin XML input, which carries no source text. An
+inherited element names the file it was written in, since its offsets index
+that machine's text rather than the text of the machine carrying it.
 
 `--component` narrows the document to the named components and everything they
 depend on: the contexts that declare the names their formulas use, and the

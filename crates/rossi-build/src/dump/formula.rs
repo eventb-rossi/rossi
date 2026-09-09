@@ -55,7 +55,13 @@ pub enum TypeNode {
 }
 
 impl TypeNode {
-    fn of(ty: &Type) -> TypeNode {
+    /// The document form of a type.
+    ///
+    /// Public so a consumer, or a test checking the type table against the
+    /// canonical strings that key it, can rebuild an entry without restating
+    /// the mapping.
+    #[must_use]
+    pub fn of(ty: &Type) -> TypeNode {
         match ty {
             Type::Int => TypeNode::INT,
             Type::Bool => TypeNode::BOOL,
@@ -114,7 +120,9 @@ pub struct Node {
     pub ty: Option<String>,
     /// Where the node is written. Absent when the component was imported
     /// from Rodin XML, which carries no source text, and on the nodes a
-    /// before-after predicate synthesizes.
+    /// before-after predicate synthesizes. A node inherited from another
+    /// component names that component's file, since its offsets index that
+    /// component's text.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub span: Option<SpanDump>,
     /// The identifier: a free identifier's name, a declaration's name, the
@@ -188,45 +196,53 @@ pub struct AssignmentNode {
     pub pred: Option<Node>,
 }
 
-/// What the converter accumulates across one document.
-pub struct Ctx<'a> {
-    /// The line table of the component being converted, when it has source
-    /// text. `None` means the component came from Rodin XML.
+/// What the converter accumulates while converting one element's formulas.
+pub(crate) struct Ctx<'a> {
+    /// The line table of the text the formula's spans index, when there is
+    /// one. `None` means the formula came from Rodin XML, which carries no
+    /// source text.
     lines: Option<&'a LineIndex<'a>>,
+    /// The file to name on every node span, when it is not the file the
+    /// enclosing element belongs to.
+    ///
+    /// A formula inherited from another component indexes that component's
+    /// text. Naming it is what lets the position be reported at all: without
+    /// a file, a reader would resolve the offsets against the wrong text and
+    /// get a plausible but wrong region. Within one component the file is
+    /// left off, since the element above already names it.
+    file: Option<String>,
     types: &'a mut BTreeMap<String, TypeNode>,
     extensions: &'a mut BTreeMap<String, ExtensionInfo>,
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(
+    pub(crate) fn new(
         lines: Option<&'a LineIndex<'a>>,
+        file: Option<String>,
         types: &'a mut BTreeMap<String, TypeNode>,
         extensions: &'a mut BTreeMap<String, ExtensionInfo>,
     ) -> Self {
         Ctx {
             lines,
+            file,
             types,
             extensions,
         }
     }
 
-    /// The dump form of a span, if this component has text to resolve it
-    /// against.
+    /// The dump form of a span, if there is text to resolve it against.
     ///
-    /// The test is on the component, not on the span. Formulas parsed out of
-    /// Rodin XML attributes do carry spans, but they index the attribute
-    /// string, which the consumer never sees; emitting them would be worse
-    /// than emitting nothing.
+    /// The test is on the text, not on the span. Formulas parsed out of Rodin
+    /// XML attributes do carry spans, but they index the attribute string,
+    /// which the consumer never sees; emitting those would be worse than
+    /// emitting nothing.
     fn span(&self, span: Option<Span>) -> Option<SpanDump> {
-        match (self.lines, span) {
-            (Some(lines), Some(span)) => Some(lines.span(span, None)),
-            _ => None,
-        }
+        Some(self.lines?.span(span?, self.file.clone()))
     }
 
     /// Record a type and return its canonical string, which is its key in the
     /// document's type table.
-    pub fn register_type(&mut self, ty: &Type) -> String {
+    pub(crate) fn register_type(&mut self, ty: &Type) -> String {
         let key = ty.to_rodin_canonical();
         if !self.types.contains_key(&key) {
             self.types.insert(key.clone(), TypeNode::of(ty));
@@ -361,7 +377,7 @@ fn declaration(ctx: &mut Ctx<'_>, decl: &BoundIdentDecl, name: &str) -> Node {
 }
 
 /// Convert one expression.
-pub fn expression(ctx: &mut Ctx<'_>, expr: &Expression, scope: &mut Vec<String>) -> Node {
+pub(crate) fn expression(ctx: &mut Ctx<'_>, expr: &Expression, scope: &mut Vec<String>) -> Node {
     let mut node = Node::leaf(expr.tag(), "");
     node.ty = expr.ty().map(|t| ctx.register_type(t));
     node.span = ctx.span(expr.span());
@@ -409,7 +425,7 @@ pub fn expression(ctx: &mut Ctx<'_>, expr: &Expression, scope: &mut Vec<String>)
 }
 
 /// Convert one predicate.
-pub fn predicate(ctx: &mut Ctx<'_>, pred: &Predicate, scope: &mut Vec<String>) -> Node {
+pub(crate) fn predicate(ctx: &mut Ctx<'_>, pred: &Predicate, scope: &mut Vec<String>) -> Node {
     let mut node = Node::leaf(pred.tag(), "");
     node.span = ctx.span(pred.span());
 
@@ -451,7 +467,7 @@ fn expressions(ctx: &mut Ctx<'_>, exprs: &[Expression], scope: &mut Vec<String>)
 }
 
 /// Convert one assignment.
-pub fn assignment(ctx: &mut Ctx<'_>, assign: &Assignment) -> AssignmentNode {
+pub(crate) fn assignment(ctx: &mut Ctx<'_>, assign: &Assignment) -> AssignmentNode {
     let mut node = AssignmentNode {
         tag: assign.tag(),
         op: "",
@@ -527,7 +543,7 @@ mod tests {
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
         let node = {
-            let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+            let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
             predicate(&mut ctx, &typed, &mut Vec::new())
         };
         (node, types)
@@ -655,7 +671,7 @@ mod tests {
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
         let node = {
-            let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+            let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
             predicate(&mut ctx, &quantified, &mut Vec::new())
         };
 
@@ -724,7 +740,7 @@ mod tests {
 
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         let node = expression(&mut ctx, &literal, &mut Vec::new());
 
         assert_eq!(node.value.as_deref(), Some(huge.to_string().as_str()));
@@ -746,7 +762,7 @@ mod tests {
     fn a_product_type_nests_both_sides() {
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         let ty = Type::pow(Type::prod(Type::Int, Type::given("COLORS")));
         let key = ctx.register_type(&ty);
 
@@ -768,7 +784,7 @@ mod tests {
     fn a_registered_type_string_parses_back_to_the_same_type() {
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         let ty = Type::pow(Type::prod(Type::Int, Type::Bool));
         let key = ctx.register_type(&ty);
 
@@ -789,7 +805,7 @@ mod tests {
     fn convert_assignment(assign: &Assignment) -> AssignmentNode {
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         assignment(&mut ctx, assign)
     }
 
@@ -889,7 +905,7 @@ mod tests {
         let ba = assign.ba_predicate();
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         let node = predicate(&mut ctx, &ba, &mut Vec::new());
 
         assert_eq!(node.op, "EQUAL");
@@ -905,7 +921,7 @@ mod tests {
         let lines = LineIndex::new(source);
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(Some(&lines), &mut types, &mut extensions);
+        let mut ctx = Ctx::new(Some(&lines), None, &mut types, &mut extensions);
         let node = predicate(&mut ctx, &typed, &mut Vec::new());
 
         let left = child(&node, &[0]).span.expect("the left operand is placed");
@@ -974,7 +990,7 @@ mod serde_tests {
         );
         let mut types = BTreeMap::new();
         let mut extensions = BTreeMap::new();
-        let mut ctx = Ctx::new(None, &mut types, &mut extensions);
+        let mut ctx = Ctx::new(None, None, &mut types, &mut extensions);
         let node = assignment(&mut ctx, &assign);
         let json = serde_json::to_value(&node).expect("an assignment serializes");
 

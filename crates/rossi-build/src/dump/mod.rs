@@ -63,6 +63,13 @@
 //! XML, which carries no source text, and on the nodes a before-after
 //! predicate synthesizes.
 //!
+//! A span names its `file` on an element, and on a node only when that node
+//! was inherited from another component. Offsets mean nothing without the
+//! text they index, and an inherited formula indexes the text of the machine
+//! that wrote it, so naming that file is what makes the position usable
+//! rather than merely omitted. Within one component the nodes leave the file
+//! off, since the element above them already names it.
+//!
 //! # Two things deliberately not in the document
 //!
 //! Type ascriptions are unwrapped. They spell a type the node already
@@ -83,9 +90,9 @@
 //! change. An extension's tag is assigned per process and is never its
 //! identity; `extension.id` is.
 
-pub mod element;
-pub mod formula;
-pub mod location;
+mod element;
+mod formula;
+mod location;
 mod opname;
 mod origin;
 
@@ -93,9 +100,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::deps::DependencyGraph;
 
-use crate::BuildResult;
-use crate::project::Project;
+use crate::handles::HandleUri;
+use crate::project::{Project, ProjectComponent};
 use crate::sc_model::ScModel;
+use crate::xml_out::in_tag;
+use crate::{BuildResult, Severity};
 
 pub use element::{
     ActionDump, ContextDump, DiagnosticDump, EventDump, IdentDump, MachineDump, PredicateDump,
@@ -103,6 +112,19 @@ pub use element::{
 };
 pub use formula::{AssignmentNode, ExtensionInfo, ExtensionRef, Node, TypeNode};
 pub use location::SpanDump;
+
+/// The Rodin constant names a document's operators are written with.
+///
+/// Exposed so the published schema's operator list can be checked against the
+/// vocabulary the converter can actually emit, rather than against whichever
+/// operators a test model happens to contain.
+pub use opname::{
+    FIXED as FIXED_OP_NAMES, assoc_expr as op_name_assoc_expr, assoc_pred as op_name_assoc_pred,
+    atomic as op_name_atomic, binary_expr as op_name_binary_expr,
+    binary_pred as op_name_binary_pred, literal_pred as op_name_literal_pred,
+    quant_expr as op_name_quant_expr, quant_pred as op_name_quant_pred,
+    relational as op_name_relational, unary_expr as op_name_unary_expr,
+};
 
 /// The document format's name, written into every document.
 pub const FORMAT: &str = "rossi-model";
@@ -208,7 +230,7 @@ impl Model {
     pub fn has_errors(&self) -> bool {
         self.diagnostics
             .iter()
-            .any(|d| d.severity == element::SEVERITY_ERROR)
+            .any(|d| d.severity == Severity::Error.as_str())
     }
 }
 
@@ -242,7 +264,6 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
         {
             continue;
         }
-        let component_origin = origins.get(name);
         sources.push(SourceInfo {
             id: component.source_id().to_string(),
             path: options
@@ -253,18 +274,13 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
             kind: source_kind(&component.filename, component.source.is_some()),
         });
 
-        let mut builder = element::Builder {
-            ctx: formula::Ctx::new(
-                component_origin.and_then(|c| c.lines.as_ref()),
-                &mut types,
-                &mut extensions,
-            ),
-            origin: component_origin,
-        };
+        let mut builder = element::Builder::new(&origins, name, &mut types, &mut extensions);
         if let Some(checked) = sc.contexts.get(name) {
-            contexts.push(element::context(&mut builder, checked));
+            let source = component_handle(project, component, in_tag::CONTEXT_FILE);
+            contexts.push(element::context(&mut builder, source, checked));
         } else if let Some(checked) = sc.machines.get(name) {
-            machines.push(element::machine(&mut builder, sc, checked));
+            let source = component_handle(project, component, in_tag::MACHINE_FILE);
+            machines.push(element::machine(&mut builder, source, sc, checked));
         }
     }
 
@@ -298,6 +314,22 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
     }
 }
 
+/// A component's own Rodin handle, which every handle inside it extends.
+///
+/// The checked record stores only its declarations' handles, so the component's
+/// own is built here from the same three parts they are: the project name, the
+/// source filename, and the component name. Deriving it from a declaration
+/// instead would leave a component that declares nothing with no handle at all.
+fn component_handle(project: &Project, component: &ProjectComponent, root_type: &str) -> String {
+    HandleUri::root(
+        &project.name,
+        &component.filename,
+        root_type,
+        component.component.name(),
+    )
+    .into()
+}
+
 /// The components a document keeps: the requested ones and everything they
 /// depend on, or every component when nothing was requested.
 fn retained_components(
@@ -328,11 +360,7 @@ fn reports_on_retained(
     let Some(retained) = retained else {
         return true;
     };
-    let component = diagnostic
-        .origin
-        .split('.')
-        .next()
-        .unwrap_or(&diagnostic.origin);
+    let component = diagnostic.component();
     if origins.get(component).is_none() {
         return true;
     }

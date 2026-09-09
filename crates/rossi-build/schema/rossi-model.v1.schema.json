@@ -152,13 +152,13 @@
       }
     },
     "span": {
-      "description": "Byte offsets with an exclusive end, plus 1-based lines and character columns.",
+      "description": "Byte offsets with an exclusive end, plus 1-based lines and character columns. Absent when the component came from Rodin XML, which carries no source text, on an element inherited from another component, whose positions belong to that component's text, and on the nodes a before-after predicate synthesizes.",
       "type": "object",
       "additionalProperties": false,
       "required": ["start", "end", "line", "col", "end_line", "end_col"],
       "properties": {
         "file": {
-          "description": "The source id. Present on an element, omitted on the nodes below it, which share it.",
+          "description": "The source id. Present on an element; on a node only when it was inherited from another component, whose text its offsets index. A node that leaves it off belongs to the file its element names.",
           "type": "string"
         },
         "start": { "type": "integer", "minimum": 0 },
