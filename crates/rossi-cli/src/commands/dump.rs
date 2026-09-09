@@ -1,6 +1,6 @@
 //! `rossi dump` — write a checked project as a `rossi-model` JSON document.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -28,6 +28,12 @@ pub struct DumpArgs {
     /// archive prefix)
     #[arg(long, value_name = "NAME", conflicts_with = "schema")]
     project: Option<String>,
+
+    /// Restrict the document to this component and what it depends on
+    /// (repeatable). Findings about components left out are left out with
+    /// them, so the exit code reports only what the document contains.
+    #[arg(long, value_name = "NAME", conflicts_with = "schema")]
+    component: Vec<String>,
 
     /// Indent the document so it can be read
     ///
@@ -65,6 +71,14 @@ pub fn run(args: DumpArgs) -> ExitCode {
         }
     };
 
+    let components = match selected_components(&loaded.project, &args.component) {
+        Ok(components) => components,
+        Err(failure) => {
+            eprintln!("rossi dump: {}", failure.message);
+            return ExitCode::from(failure.code);
+        }
+    };
+
     let (mut build, sc) = rossi_build::check_with_model(&loaded.project);
     // The checker renders each component's checked XML into a string on the
     // way past. A document is built from the model and the findings, so those
@@ -75,6 +89,7 @@ pub fn run(args: DumpArgs) -> ExitCode {
         input: Some(input.display().to_string()),
         prefix: loaded.prefix,
         source_paths: loaded.source_paths,
+        components,
     };
     let model = dump::model(&loaded.project, &sc, &build, &options);
     // The document is written whatever it contains; a rejected project still
@@ -127,6 +142,42 @@ fn write_schema(output: Option<&Path>) -> ExitCode {
         .and_then(|()| report.flush());
 
     finish_structured_output("dump", written, ExitCode::SUCCESS, &mut io::stderr().lock())
+}
+
+/// The components asked for, checked against the project.
+///
+/// An unknown name is a usage mistake rather than an empty document: it is
+/// almost always a typo or a stale name, and silently returning nothing would
+/// look like the component had no content.
+fn selected_components(
+    project: &Project,
+    requested: &[String],
+) -> Result<Option<BTreeSet<String>>, Failure> {
+    if requested.is_empty() {
+        return Ok(None);
+    }
+    let available: BTreeSet<String> = project
+        .components
+        .iter()
+        .map(|pc| pc.component.name().to_string())
+        .collect();
+    let unknown: Vec<&str> = requested
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !available.contains(*name))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(Failure::usage(format!(
+            "No component named {} in this project. Available: {}",
+            unknown
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            available.iter().cloned().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    Ok(Some(requested.iter().cloned().collect()))
 }
 
 /// Why an input could not be dumped, and what that should exit with.

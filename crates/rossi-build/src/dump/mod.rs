@@ -21,6 +21,12 @@
 //! machine wrote it, so a consumer that wants only what one machine declared
 //! can still recover that.
 //!
+//! A document can be narrowed to some components and what they depend on.
+//! The closure is not a convenience: a machine's formulas name what its
+//! contexts declare, and its elements cite the machines it refines as the
+//! origin of what they inherit, so anything less would leave the document
+//! citing what it does not contain.
+//!
 //! # The node vocabulary
 //!
 //! Every expression, predicate and declaration is one node object. It states
@@ -83,7 +89,9 @@ pub mod location;
 mod opname;
 mod origin;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use rossi::deps::DependencyGraph;
 
 use crate::BuildResult;
 use crate::project::Project;
@@ -125,6 +133,17 @@ pub struct Options {
     /// would name it, so that handles match what a build writes, and this is
     /// what says where it actually came from.
     pub source_paths: BTreeMap<String, String>,
+    /// Restrict the document to these components and what they depend on.
+    /// `None` keeps the whole project.
+    ///
+    /// The closure is what makes the result readable on its own: a machine
+    /// needs the contexts that declare the names its formulas use, and the
+    /// machines it refines, which its own elements cite as the origin of what
+    /// they inherit. Every name the retained elements mention therefore
+    /// resolves inside the document. Names that match no component are
+    /// ignored here; a caller that wants them reported should check them
+    /// against the project first.
+    pub components: Option<BTreeSet<String>>,
 }
 
 /// What produced a document.
@@ -207,6 +226,7 @@ impl Model {
 /// looked up here, never iterated.
 #[must_use]
 pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Options) -> Model {
+    let retained = retained_components(project, options.components.as_ref());
     let origins = origin::Origins::build(project);
     let mut types = BTreeMap::new();
     let mut extensions = BTreeMap::new();
@@ -217,6 +237,11 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
 
     for component in &project.components {
         let name = component.component.name();
+        if let Some(retained) = &retained
+            && !retained.contains(name)
+        {
+            continue;
+        }
         let component_origin = origins.get(name);
         sources.push(SourceInfo {
             id: component.source_id().to_string(),
@@ -243,10 +268,12 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
         }
     }
 
+    let lints = crate::lint::run(project);
     let diagnostics = build
         .diagnostics
         .iter()
-        .chain(crate::lint::run(project).iter())
+        .chain(lints.iter())
+        .filter(|d| reports_on_retained(d, retained.as_ref(), &origins))
         .map(|d| element::diagnostic(d, &origins))
         .collect();
 
@@ -269,6 +296,47 @@ pub fn model(project: &Project, sc: &ScModel, build: &BuildResult, options: &Opt
         machines,
         diagnostics,
     }
+}
+
+/// The components a document keeps: the requested ones and everything they
+/// depend on, or every component when nothing was requested.
+fn retained_components(
+    project: &Project,
+    requested: Option<&BTreeSet<String>>,
+) -> Option<BTreeSet<String>> {
+    let requested = requested?;
+    let graph = DependencyGraph::from_components(project.components.iter().map(|pc| &pc.component));
+    let mut retained = BTreeSet::new();
+    for name in requested {
+        retained.insert(name.clone());
+        retained.extend(graph.all_reachable(name));
+    }
+    Some(retained)
+}
+
+/// Whether a finding belongs in a restricted document.
+///
+/// A finding names the component it is about, so one about a component the
+/// document does not contain would be unexplainable in it. A finding that
+/// names no component of this project is about the project as a whole and is
+/// always kept.
+fn reports_on_retained(
+    diagnostic: &crate::Diagnostic,
+    retained: Option<&BTreeSet<String>>,
+    origins: &origin::Origins<'_>,
+) -> bool {
+    let Some(retained) = retained else {
+        return true;
+    };
+    let component = diagnostic
+        .origin
+        .split('.')
+        .next()
+        .unwrap_or(&diagnostic.origin);
+    if origins.get(component).is_none() {
+        return true;
+    }
+    retained.contains(component)
 }
 
 /// What kind of file a component's spans point into.
