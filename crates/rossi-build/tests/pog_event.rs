@@ -95,3 +95,36 @@ fn inherited_guards_are_not_reproved() {
     // Its hypothesis cuts after the inherited guards.
     assert!(contents.contains(r#"org.eventb.core.predicate="p≠0""#));
 }
+
+/// A machine whose event grows a set that an invariant unions with
+/// another.
+const NESTED: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_s" org.eventb.core.identifier="s"/>
+<org.eventb.core.variable name="_t" org.eventb.core.identifier="t"/>
+<org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="s ⊆ ℤ"/>
+<org.eventb.core.invariant name="_i2" org.eventb.core.label="inv2" org.eventb.core.predicate="t ⊆ ℤ"/>
+<org.eventb.core.invariant name="_i3" org.eventb.core.label="inv3" org.eventb.core.predicate="s ∪ t ⊆ ℕ"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_ia" org.eventb.core.assignment="s, t ≔ ∅, ∅" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_evt" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="evt">
+<org.eventb.core.parameter name="_p" org.eventb.core.identifier="p"/>
+<org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="p ∈ ℕ"/>
+<org.eventb.core.action name="_ea" org.eventb.core.assignment="s ≔ s ∪ {p}" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+#[test]
+fn substituted_goal_keeps_a_nested_union_parenthesized() {
+    let files = generate("prj", vec![xml("M0.bum", NESTED)]);
+    let contents = &find(&files, "M0.bpo").contents;
+
+    // Substituting `s ∪ {p}` for `s` in `s ∪ t ⊆ ℕ` nests a union under a
+    // union. Rodin keeps that node and parenthesizes it, so the goal must
+    // read the same way: a flat `s∪{p}∪t` re-stamps the sequent.
+    assert!(
+        contents.contains(r#"org.eventb.core.predicate="(s∪{p})∪t⊆ℕ""#),
+        "goal of evt/inv3/INV in:\n{contents}"
+    );
+}

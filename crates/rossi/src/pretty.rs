@@ -1849,6 +1849,15 @@ impl PrettyPrinter {
         if fm_above_pair(child.kind()) || self.rodin_parenthesizes_operand(child.kind()) {
             return true;
         }
+        // A nested child of the same associative operator keeps its
+        // parentheses on either side, as in Rodin (`(A∪B)∪C`): the parser
+        // flattens a left-nested chain, so one that reaches the printer was
+        // built, by a substitution for instance, and its structure is kept.
+        if let FExprKind::Associative { op, .. } = child.kind()
+            && legacy_assoc(*op) == parent_op
+        {
+            return true;
+        }
         if matches!(
             child.kind(),
             FExprKind::Unary {

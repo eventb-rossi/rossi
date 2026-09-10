@@ -46,6 +46,19 @@ fn readable_and_canonical_spacing() {
 }
 
 #[test]
+fn nested_same_associative_operator_keeps_its_parentheses() {
+    // A parse flattens `(a ∪ b) ∪ c`, so a nested child of the same
+    // operator only ever comes from construction (a substitution); Rodin
+    // parenthesizes it on either side, and so does every mode here.
+    let union = |children| ff().associative_expression(AssocExprOp::BUnion, children, None);
+    let left = union(vec![union(vec![fid("a"), fid("b")]), fid("c")]);
+    assert_eq!(readable().print_formula_expression(&left), "(a ∪ b) ∪ c");
+    assert_eq!(canonical().print_formula_expression(&left), "(a∪b)∪c");
+    let right = union(vec![fid("a"), union(vec![fid("b"), fid("c")])]);
+    assert_eq!(canonical().print_formula_expression(&right), "a∪(b∪c)");
+}
+
+#[test]
 fn canonical_spaces_binary_and_tightens_associative_operators() {
     // Rodin prints its associative operators tight and every binary
     // expression operator spaced, the Cartesian product included: `×` is
