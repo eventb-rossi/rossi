@@ -4,9 +4,11 @@
 
 mod common;
 
-use rossi_build::ScFile;
 use rossi_build::po_view::PoView;
-use rossi_build::pog::reconcile::{reconcile_pair, reset_stale_statuses};
+use rossi_build::pog::reconcile::{
+    HASH_ORDERED, reconcile_build_files, reconcile_pair, reset_stale_statuses,
+};
+use rossi_build::{Project, ScFile};
 
 /// Build a one-machine project and return its `(bpo, bps)` contents.
 fn generate(machine: &str) -> (String, String) {
@@ -47,6 +49,66 @@ fn base() -> (String, String) {
     generate(&machine("a &lt; 10", ""))
 }
 
+/// Two variables and an event with two parameters assigning both, so
+/// the machine's identifier set and the event's (parameters and primed
+/// variables) each hold more than one name.
+fn two_variable_machine(guard: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_a" org.eventb.core.identifier="a"/>
+<org.eventb.core.variable name="_b" org.eventb.core.identifier="b"/>
+<org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="a ≥ 0"/>
+<org.eventb.core.invariant name="_i2" org.eventb.core.label="inv2" org.eventb.core.predicate="b ≥ 0"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_ia" org.eventb.core.assignment="a, b ≔ 0, 0" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_evt" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="evt">
+<org.eventb.core.parameter name="_p" org.eventb.core.identifier="p"/>
+<org.eventb.core.parameter name="_q" org.eventb.core.identifier="q"/>
+<org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="{guard}"/>
+<org.eventb.core.guard name="_g2" org.eventb.core.label="grd2" org.eventb.core.predicate="q &gt; 0"/>
+<org.eventb.core.action name="_ea" org.eventb.core.assignment="a, b ≔ a + p, b + q" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#
+    )
+}
+
+/// Whether an emitted line declares one of the kinds Rodin orders by
+/// hash table.
+fn is_declaration(line: &str) -> bool {
+    HASH_ORDERED
+        .iter()
+        .any(|tag| line.trim_start().starts_with(&format!("<{tag} ")))
+}
+
+/// The declared names of every run, in document order.
+fn declaration_runs(xml: &str) -> Vec<Vec<String>> {
+    let mut runs = Vec::new();
+    let mut run = Vec::new();
+    for line in xml.lines() {
+        if is_declaration(line) {
+            let rest = &line[line.find(" name=\"").unwrap() + 7..];
+            run.push(rest[..rest.find('"').unwrap()].to_string());
+        } else if !run.is_empty() {
+            runs.push(std::mem::take(&mut run));
+        }
+    }
+    runs
+}
+
+/// What Rodin would have written: every run reversed, and every line
+/// indented, since that is how its writer lays a file out.
+fn as_rodin_wrote_it(xml: &str) -> String {
+    let mut lines: Vec<String> = xml.lines().map(|line| format!("    {line}")).collect();
+    for run in lines.chunk_by_mut(|a, b| is_declaration(a) && is_declaration(b)) {
+        if is_declaration(&run[0]) {
+            run.reverse();
+        }
+    }
+    lines.join("\n") + "\n"
+}
+
 #[test]
 fn no_previous_state_leaves_output_untouched() {
     let (bpo, bps) = base();
@@ -73,6 +135,105 @@ fn unchanged_model_passes_previous_bytes_through() {
     let (bpo_out, bps_out) = reconcile_pair(Some(&old_bpo), Some(&old_bps), &bpo, &bps);
     assert_eq!(bpo_out, old_bpo, "unchanged obligations keep the old bytes");
     assert_eq!(bps_out, old_bps, "unchanged statuses keep the old bytes");
+}
+
+#[test]
+fn changed_guard_keeps_previous_identifier_order() {
+    // The previous file lists every identifier set the other way round,
+    // as Rodin's hash tables might. The changed guard makes the file
+    // regenerate rather than pass through, and the regenerated sets
+    // keep the previous order while the stamps move as before.
+    let (old_bpo, old_bps) = generate(&two_variable_machine("p &gt; 0"));
+    let old_bpo = as_rodin_wrote_it(&old_bpo);
+    let (new_bpo, new_bps) = generate(&two_variable_machine("p &gt; 1"));
+    assert_ne!(declaration_runs(&old_bpo), declaration_runs(&new_bpo));
+
+    let (bpo_out, _) = reconcile_pair(Some(&old_bpo), Some(&old_bps), &new_bpo, &new_bps);
+
+    assert_eq!(declaration_runs(&bpo_out), declaration_runs(&old_bpo));
+    assert!(
+        !bpo_out.contains("    <"),
+        "Rodin's indentation must not leak in"
+    );
+    let view = PoView::from_xml(&bpo_out).unwrap();
+    assert_eq!(view.stamp.as_deref(), Some("1"));
+    assert_eq!(view.sequents["evt/inv1/INV"].stamp.as_deref(), Some("1"));
+    assert_eq!(
+        view.sequents["INITIALISATION/inv1/INV"].stamp.as_deref(),
+        Some("0")
+    );
+}
+
+#[test]
+fn checked_files_follow_previous_order() {
+    // Rodin's static checker orders carrier sets and constants (one
+    // mixed sequence), variables and event parameters by hash table;
+    // rossi sorts them. Regenerating over Rodin's files keeps its order
+    // in the context, the machine's copy of it, the variables and each
+    // event's parameters.
+    let context = common::xml(
+        "C.buc",
+        r#"<?xml version="1.0"?>
+<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.carrierSet name="_S" org.eventb.core.identifier="S"/>
+<org.eventb.core.carrierSet name="_T" org.eventb.core.identifier="T"/>
+<org.eventb.core.constant name="_c" org.eventb.core.identifier="c"/>
+<org.eventb.core.axiom name="_a1" org.eventb.core.label="axm1" org.eventb.core.predicate="c ∈ S"/>
+</org.eventb.core.contextFile>"#,
+    );
+    let machine = common::xml(
+        "M.bum",
+        r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.seesContext name="_sees" org.eventb.core.target="C"/>
+<org.eventb.core.variable name="_a" org.eventb.core.identifier="a"/>
+<org.eventb.core.variable name="_b" org.eventb.core.identifier="b"/>
+<org.eventb.core.invariant name="_i1" org.eventb.core.label="inv1" org.eventb.core.predicate="a ∈ S"/>
+<org.eventb.core.invariant name="_i2" org.eventb.core.label="inv2" org.eventb.core.predicate="b ∈ T"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_ia" org.eventb.core.assignment="a :∈ S" org.eventb.core.label="act1"/>
+<org.eventb.core.action name="_ib" org.eventb.core.assignment="b :∈ T" org.eventb.core.label="act2"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_evt" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="evt">
+<org.eventb.core.parameter name="_p" org.eventb.core.identifier="p"/>
+<org.eventb.core.parameter name="_q" org.eventb.core.identifier="q"/>
+<org.eventb.core.guard name="_g1" org.eventb.core.label="grd1" org.eventb.core.predicate="p ∈ S ∧ q ∈ T"/>
+<org.eventb.core.action name="_ea" org.eventb.core.assignment="a, b ≔ p, q" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#,
+    );
+    let result = rossi_build::build(&Project::new("prj", vec![context, machine]));
+    assert!(result.is_ok(), "diagnostics: {:?}", result.diagnostics);
+    let mut files = result.files;
+    let previous: std::collections::HashMap<String, String> = files
+        .iter()
+        .filter(|file| file.filename.ends_with(".bcc") || file.filename.ends_with(".bcm"))
+        .map(|file| (file.filename.clone(), as_rodin_wrote_it(&file.contents)))
+        .collect();
+    // Three runs in the machine (the copied context, the variables, the
+    // event's parameters) and one in the context, all of more than one
+    // name, so reversing them is a real reorder.
+    assert_eq!(declaration_runs(&previous["M.bcm"]).len(), 3);
+    assert!(
+        declaration_runs(&previous["M.bcm"])
+            .iter()
+            .all(|run| run.len() > 1)
+    );
+
+    reconcile_build_files(&mut files, |name| previous.get(name).cloned());
+
+    for name in ["C.bcc", "M.bcm"] {
+        let out = &common::find(&files, name).contents;
+        assert_eq!(
+            declaration_runs(out),
+            declaration_runs(&previous[name]),
+            "{name}"
+        );
+        assert!(
+            !out.contains("    <"),
+            "{name}: Rodin's indentation must not leak in"
+        );
+    }
 }
 
 #[test]

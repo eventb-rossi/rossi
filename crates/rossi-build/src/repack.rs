@@ -96,11 +96,11 @@ fn repackage_archive<'a, R: Read + Seek>(
         .map_err(zip_to_io)?;
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    // The previous `.bpo` / `.bps` contents, for reconciling the
-    // generated files against (unreadable entries count as absent),
-    // and the archive index of every kept `.bpr` proof — decompressed
-    // only when a component's status update asks for it, since proof
-    // files can reach hundreds of megabytes.
+    // The previous contents of every file about to be regenerated, for
+    // reconciling the generated files against (unreadable entries count
+    // as absent), and the archive index of every kept `.bpr` proof —
+    // decompressed only when a component's status update asks for it,
+    // since proof files can reach hundreds of megabytes.
     let mut previous = std::collections::HashMap::new();
     let mut proof_index = std::collections::HashMap::new();
 
@@ -130,11 +130,9 @@ fn repackage_archive<'a, R: Read + Seek>(
         let mut entry = archive.by_index(i).map_err(zip_to_io)?;
         if replaced(entry.name()) {
             let name = entry.name().to_string();
-            if name.ends_with(".bpo") || name.ends_with(".bps") {
-                let mut text = String::new();
-                if entry.read_to_string(&mut text).is_ok() {
-                    previous.insert(name, text);
-                }
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                previous.insert(name, text);
             }
             continue;
         }
@@ -347,6 +345,40 @@ mod tests {
              <org.eventb.core.psStatus name=\"evt/inv1/INV\" org.eventb.core.confidence=\"{confidence}\" org.eventb.core.poStamp=\"{stamp}\" org.eventb.core.psManual=\"false\"/>\n\
              </org.eventb.core.psFile>\n"
         )
+    }
+
+    #[test]
+    fn checked_files_keep_the_previous_declaration_order() {
+        // A `.bcm` Rodin wrote lists the variables in its hash order;
+        // the regenerated one lists them sorted and must come out in
+        // Rodin's order, since Rodin compares children positionally.
+        let previous = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n\
+             <org.eventb.core.scMachineFile org.eventb.core.accurate=\"true\">\n\
+                 <org.eventb.core.scVariable org.eventb.core.type=\"ℤ\" name=\"b\"/>\n\
+                 <org.eventb.core.scVariable org.eventb.core.type=\"ℤ\" name=\"a\"/>\n\
+             </org.eventb.core.scMachineFile>\n";
+        let generated = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <org.eventb.core.scMachineFile org.eventb.core.accurate=\"true\">\n\
+             <org.eventb.core.scVariable name=\"a\" org.eventb.core.type=\"ℤ\"/>\n\
+             <org.eventb.core.scVariable name=\"b\" org.eventb.core.type=\"ℤ\"/>\n\
+             </org.eventb.core.scMachineFile>\n";
+        let input = make_zip(&[("m/M.bum", b"<m/>"), ("m/M.bcm", previous.as_bytes())]);
+        let br = BuildResult {
+            files: vec![ScFile {
+                filename: "M.bcm".into(),
+                contents: generated.into(),
+                accurate: true,
+            }],
+            diagnostics: vec![],
+        };
+
+        let out = repackage_zip_bytes(&input, &br).unwrap();
+        let bcm = String::from_utf8(read_entry(&out, "m/M.bcm")).unwrap();
+        let b = bcm.find("name=\"b\"").unwrap();
+        let a = bcm.find("name=\"a\"").unwrap();
+        assert!(b < a, "previous order lost:\n{bcm}");
+        // Rossi's own layout, not Rodin's, is what gets written.
+        assert!(!bcm.contains("    <"));
     }
 
     #[test]
