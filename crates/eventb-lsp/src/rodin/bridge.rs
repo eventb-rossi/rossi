@@ -729,6 +729,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reloads_the_components_a_build_rewrote() {
+        let (port, seen) = fake_bridge(greeting(json!([RELOAD]), |message| {
+            Some(ok(message, json!({})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-reload", port);
+
+        let bridge = Bridge::connect(dir.path()).await.unwrap();
+        assert!(bridge.supports(RELOAD));
+        bridge
+            .reload("proj", &["M0.bum".to_string(), "C0.buc".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(methods(&seen).await, ["bridge/hello", RELOAD]);
+        // The plug-in reloads by project and bare file name, not by path.
+        let sent = seen.lock().await;
+        let params = &sent.last().unwrap()["params"];
+        assert_eq!(params["project"], json!("proj"));
+        assert_eq!(params["files"], json!(["M0.bum", "C0.buc"]));
+    }
+
+    #[tokio::test]
     async fn a_plugin_without_the_method_reports_so() {
         // An older plug-in answers the handshake but offers less; the caller
         // must be able to see that before asking.
