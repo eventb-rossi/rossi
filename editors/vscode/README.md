@@ -353,11 +353,14 @@ default). When the lens runs, `.bpr`/`.bps`/`.bpo` files sitting next to the
 copied into the Rodin project before Rodin opens; when Rodin exits, the
 project's proof files are copied back next to the sources, so proof work
 lands in version control without a manual `rossi export --proofs`. The
-checkout wins at session start and the workspace at session end: a proof
+checkout wins at session start and the workspace at session end: a `.bpr`
 deleted in Rodin is deleted next to the sources too, while deleting a proof
 file only in git does not stick — it returns from the workspace when the
-session ends. Commit all three extensions. The exit mirror relies on the
-Eclipse workspace lock probe and is unavailable on Windows.
+session ends. A derived `.bpo`/`.bps` is never deleted from the checkout:
+Rodin's builder removes those before regenerating them, so a session that
+ends mid-build leaves them missing with nothing wrong. Commit all three
+extensions. The exit mirror relies on the Eclipse workspace lock probe and is
+unavailable on Windows.
 
 ## Contributing
 

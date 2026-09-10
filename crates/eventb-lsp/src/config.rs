@@ -312,8 +312,9 @@ pub struct RodinConfig {
     /// files sitting next to the sources are copied into the Rodin project
     /// when the lens runs (the checkout wins; nothing in the workspace is
     /// deleted), and the project's files are copied back next to the
-    /// sources when the launched Rodin exits (the workspace wins; a proof
-    /// deleted in Rodin is deleted next to the sources too). Captured when
+    /// sources when the launched Rodin exits (the workspace wins; a `.bpr`
+    /// deleted in Rodin is deleted next to the sources too, while a derived
+    /// `.bpo`/`.bps` missing from the workspace never is). Captured when
     /// the lens runs — flipping it mid-session does not stop an armed
     /// mirror. The exit mirror needs the Eclipse workspace lock probe and
     /// is unavailable on Windows. On by default.

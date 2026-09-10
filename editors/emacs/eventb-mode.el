@@ -397,8 +397,9 @@ left alone until they settle."
 At Open in Rodin session boundaries: proof files (.bpr/.bps/.bpo) next
 to the .eventb sources are copied into the Rodin project when the lens
 runs (the checkout wins), and the project's proof files are copied back
-next to the sources when Rodin exits (the workspace wins; a proof
-deleted in Rodin is deleted next to the sources too)."
+next to the sources when Rodin exits (the workspace wins; a .bpr
+deleted in Rodin is deleted next to the sources too, while a derived
+.bpo/.bps missing from the workspace never is)."
   :type 'boolean
   :group 'eventb)
 

@@ -146,8 +146,15 @@ pub(crate) struct MirrorReport {
 ///
 /// With `allow_deletions` — granted only when this session's seed ran, so
 /// every text-side proof file provably had a workspace counterpart at
-/// session start — a text-side file whose workspace counterpart vanished
+/// session start — a text-side `.bpr` whose workspace counterpart vanished
 /// was deleted in Rodin and is deleted next to the sources too.
+///
+/// Only a `.bpr`. A proof file disappears from the workspace for one reason
+/// (someone discarded that proof), but `.bpo` and `.bps` are derived: Rodin's
+/// builder deletes them before regenerating them, and a session torn down
+/// mid-build leaves them missing with nothing wrong. Reading that absence as
+/// intent is how a transient workspace state became a deletion in the
+/// checkout. They are still copied back whenever the workspace has them.
 pub(crate) fn mirror_back_project(
     workspace_dir: &Path,
     project_name: &str,
@@ -216,7 +223,7 @@ pub(crate) fn mirror_back_project(
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .is_some_and(|stem| dir_by_stem.contains_key(stem));
-                if !known || project_dir.join(name).exists() {
+                if !known || !name.ends_with(".bpr") || project_dir.join(name).exists() {
                     continue;
                 }
                 match std::fs::remove_file(&path) {
@@ -542,6 +549,25 @@ mod tests {
         assert_eq!(report.deleted, ["M0.bpr"]);
         assert!(!src.join("M0.bpr").exists());
         assert!(src.join("Z9.bpr").exists());
+    }
+
+    #[test]
+    fn mirror_never_deletes_derived_obligation_files() {
+        let tmp = TempDir::new("rossi-proof-mirror-derived");
+        let (src, ws, project) = mirror_fixture(&tmp);
+        // What a Rodin session torn down mid-build leaves behind: the proof
+        // survives in the workspace, the files its builder derives do not.
+        std::fs::write(project.join("M0.bpr"), "ws-m0").unwrap();
+        std::fs::write(src.join("M0.bpo"), "obligations").unwrap();
+        std::fs::write(src.join("M0.bps"), "statuses").unwrap();
+
+        let report = mirror_back_project(&ws, "proj", true).unwrap().unwrap();
+
+        // Regenerable, and absent for a reason that is not the user's: both
+        // stay in the checkout.
+        assert!(report.deleted.is_empty(), "{:?}", report.deleted);
+        assert_eq!(std::fs::read(src.join("M0.bpo")).unwrap(), b"obligations");
+        assert_eq!(std::fs::read(src.join("M0.bps")).unwrap(), b"statuses");
     }
 
     #[test]
