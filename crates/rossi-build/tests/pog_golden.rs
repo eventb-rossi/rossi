@@ -117,21 +117,21 @@ fn generated_obligations_match_rodin() {
     }
 }
 
-/// Erase the three differences between the reference `.bpo` and ours that the
+/// Erase the two differences between the reference `.bpo` and ours that the
 /// verbatim comparison is not meant to police, so every other byte is
 /// compared as written:
 ///
 /// 1. Indentation — the reference writer indents four spaces per level,
 ///    rossi's emitter writes each element flush left.
-/// 2. `poIdentifier` order within a predicate set — the reference emits
-///    them in hash order, rossi sorted.
-/// 3. The ascribed empty set — the reference writes `x≠(∅ ⦂ ℙ(T))` where rossi's
-///    canonical printer emits bare `∅`. Unlike the first two this is not a
-///    serializer artifact but a real divergence, inherited from the checked
-///    machine file: `normalize::ascribe_empty_set_values` ascribes `∅` only
-///    in assignments, never in predicate positions. Erasing it here drops the
-///    ascribed type too, so this comparison cannot police that type either;
-///    the divergence is tracked for the generator, not for this gate.
+/// 2. `poIdentifier` order within a predicate set — Rodin's static checker
+///    emits carrier sets, constants, variables and parameters in the
+///    iteration order of its symbol tables, its generator copies that order
+///    and adds an event's primed variables in the order of two more
+///    `java.util.HashSet`s; rossi sorts. Deterministic, not yet reproduced.
+///
+/// Everything Rodin's builder compares by string is compared here as
+/// written, the ascribed generic atoms included: Rodin re-stamps a sequent
+/// over any character that differs, so the reference decides the spelling.
 ///
 /// Line splitting also erases a trailing-newline or CRLF difference, neither
 /// of which either writer produces.
@@ -139,37 +139,10 @@ fn normalize(xml: &str) -> String {
     let is_identifier = |line: &String| line.contains("org.eventb.core.poIdentifier");
     let mut lines: Vec<String> = xml
         .lines()
-        .map(|line| strip_empty_set_ascriptions(line.trim_start()))
+        .map(|line| line.trim_start().to_string())
         .collect();
     for run in lines.chunk_by_mut(|a, b| is_identifier(a) && is_identifier(b)) {
         run.sort();
     }
     lines.join("\n")
-}
-
-/// Rewrite every `(∅ ⦂ <type>)` as `∅`, closing on the matching parenthesis
-/// so that a parenthesised type such as `ℙ(COLOURS)` does not end it early.
-fn strip_empty_set_ascriptions(line: &str) -> String {
-    const OPEN: &str = "(∅ ⦂ ";
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(at) = rest.find(OPEN) {
-        out.push_str(&rest[..at]);
-        out.push('∅');
-        rest = &rest[at + OPEN.len()..];
-        let mut depth = 1usize;
-        while let Some(i) = rest.find(['(', ')']) {
-            if rest[i..].starts_with('(') {
-                depth += 1;
-            } else {
-                depth -= 1;
-            }
-            rest = &rest[i + 1..];
-            if depth == 0 {
-                break;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
 }
