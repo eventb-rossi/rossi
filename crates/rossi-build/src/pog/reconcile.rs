@@ -15,7 +15,11 @@
 //!   its recorded stamp); rows for vanished obligations are dropped
 //!   and new obligations get fresh unattempted rows;
 //! - when nothing changed at all, the previous bytes pass through
-//!   verbatim, so rebuilding an unchanged model is byte-stable.
+//!   verbatim, so rebuilding an unchanged model is byte-stable;
+//! - the declarations Rodin writes in hash order keep the order the
+//!   previous copy of each file had ([`preserve_child_order`]), in the
+//!   checked files as much as here, since Rodin's builder compares an
+//!   element's children positionally.
 //!
 //! A status row whose recorded stamp differs from its sequent's stamp
 //! is exactly the signal proof managers use to re-check the stored
@@ -41,7 +45,8 @@ use crate::xml_out::{DOC_HEADER, attr, tag as xtag};
 
 /// Reconcile every generated `.bpo` / `.bps` pair in `files` against
 /// the previous contents supplied by `old` (keyed by the generated
-/// filename; `None` when no previous file exists).
+/// filename; `None` when no previous file exists), and keep every
+/// `.bcc` / `.bcm` in the declaration order of its previous copy.
 ///
 /// Returns, per `.bps` filename, the names of the rows that were
 /// synthesized fresh rather than carried from a previous row — the
@@ -52,6 +57,13 @@ pub fn reconcile_build_files(
     files: &mut [ScFile],
     mut old: impl FnMut(&str) -> Option<String>,
 ) -> HashMap<String, HashSet<String>> {
+    for file in files.iter_mut() {
+        if (file.filename.ends_with(".bcc") || file.filename.ends_with(".bcm"))
+            && let Some(previous) = old(&file.filename)
+        {
+            file.contents = preserve_child_order(&file.contents, &previous);
+        }
+    }
     let mut synthesized = HashMap::new();
     for (i, j) in bpo_bps_pairs(files) {
         let old_bpo = old(&files[i].filename);
@@ -125,10 +137,14 @@ pub fn reconcile_pair(
             .map(|old| plan_stamps(&old, &new_view));
     }
 
+    // The stamp plan compares sets and sequents order-blind, so the
+    // previous file's declaration order is restored only where the
+    // generated text is emitted, never for the unchanged pass-through.
+    let reordered = || preserve_child_order(new_bpo, old_bpo.unwrap_or(""));
     let bpo_out = match &plan {
         Some(plan) if plan.all_unchanged => old_bpo.expect("plan implies old file").to_string(),
-        Some(plan) => rewrite_stamps(new_bpo, plan),
-        None => new_bpo.to_string(),
+        Some(plan) => rewrite_stamps(&reordered(), plan),
+        None => reordered(),
     };
 
     let old_rows = old_bps.map(parse_status_rows).unwrap_or_default();
@@ -499,6 +515,153 @@ fn replace_stamp(line: &str, stamp: &str) -> String {
     )
 }
 
+/// The element kinds Rodin writes in the iteration order of a Java hash
+/// table and rossi writes sorted: carrier sets and constants (one mixed
+/// run in Rodin's files), variables, event parameters, and the
+/// identifiers of a proof-obligation predicate set. These are the only
+/// sibling orders reconciled; every other kind follows source order on
+/// both sides.
+pub const HASH_ORDERED: [&str; 5] = [
+    xtag::SC_CARRIER_SET,
+    xtag::SC_CONSTANT,
+    xtag::SC_VARIABLE,
+    xtag::SC_PARAMETER,
+    xtag::PO_IDENTIFIER,
+];
+
+/// Reorder the hash-ordered declarations of a freshly generated `.bcc`,
+/// `.bcm` or `.bpo` to follow the previous copy of the same file.
+///
+/// Rodin's builder compares an element's children positionally, so a
+/// reorder alone re-stamps every obligation whose hypothesis chain
+/// crosses the set, and Rodin's own order is that of its hash tables,
+/// which nothing can reproduce sanely. Keeping the previous file's order
+/// is exact from the first time Rodin wrote the file on. Within each
+/// container (the file root, an internal context, an event, a predicate
+/// set) every contiguous run of `HASH_ORDERED` leaves is stably sorted
+/// by the name's position among the previous container's children;
+/// names the previous file lacks follow in generated order. A container
+/// or file without a previous counterpart, and previous text yielding no
+/// order at all, leave the generated text byte-identical.
+///
+/// Text surgery on the emitter's layout, like `rewrite_stamps`: one
+/// element per line, flush left, values escaped. The previous file,
+/// usually Rodin's, is read as XML and may be indented and spell its
+/// attributes in any order.
+pub fn preserve_child_order(generated: &str, previous: &str) -> String {
+    let order = previous_child_order(previous);
+    if order.is_empty() {
+        return generated.to_string();
+    }
+    let flush = |run: &mut Vec<(String, &str)>, path: &[String], out: &mut String| {
+        if run.is_empty() {
+            return;
+        }
+        if let Some(positions) = path.last().and_then(|key| order.get(key)) {
+            run.sort_by_key(|(name, _)| positions.get(name).copied().unwrap_or(usize::MAX));
+        }
+        for (_, line) in run.drain(..) {
+            out.push_str(line);
+        }
+    };
+    let mut out = String::with_capacity(generated.len());
+    let mut path: Vec<String> = Vec::new();
+    let mut run: Vec<(String, &str)> = Vec::new();
+    for line in generated.split_inclusive('\n') {
+        let tag = start_tag(line);
+        let leaf = line.trim_end().ends_with("/>");
+        if let Some(tag) = tag
+            && leaf
+            && HASH_ORDERED.contains(&tag)
+            && let Some(name) = emitted_name(line)
+        {
+            run.push((name, line));
+            continue;
+        }
+        flush(&mut run, &path, &mut out);
+        match tag {
+            Some(tag) if !leaf => {
+                let name = emitted_name(line).unwrap_or_default();
+                path.push(child_key(path.last(), tag, &name));
+            }
+            _ if line.starts_with("</") => {
+                path.pop();
+            }
+            _ => {}
+        }
+        out.push_str(line);
+    }
+    flush(&mut run, &path, &mut out);
+    out
+}
+
+/// Per container, the position of every [`HASH_ORDERED`] child of a
+/// previous file, by unescaped name. An attribute scan like
+/// [`sequent_stamps`]: no formula parsing; malformed input stops the scan
+/// and keeps what was seen, so a damaged previous file reorders nothing
+/// past the damage rather than failing the build.
+fn previous_child_order(xml: &str) -> HashMap<String, HashMap<String, usize>> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut order: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut path: Vec<String> = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        let (element, opens) = match &event {
+            Ok(Event::Start(e)) => (e, true),
+            Ok(Event::Empty(e)) => (e, false),
+            Ok(Event::End(_)) => {
+                path.pop();
+                buf.clear();
+                continue;
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {
+                buf.clear();
+                continue;
+            }
+        };
+        let tag = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+        let name = attribute(element, attr::NAME).unwrap_or_default();
+        if HASH_ORDERED.contains(&tag.as_str())
+            && let Some(parent) = path.last()
+        {
+            let children = order.entry(parent.clone()).or_default();
+            let position = children.len();
+            children.entry(name.clone()).or_insert(position);
+        }
+        if opens {
+            path.push(child_key(path.last(), &tag, &name));
+        }
+        buf.clear();
+    }
+    order
+}
+
+/// The key both walkers give a container: the path of `(tag, name)` from
+/// the root, so a name reused under different parents (every sequent's
+/// `SEQHYP`) never aliases another.
+fn child_key(parent: Option<&String>, tag: &str, name: &str) -> String {
+    format!("{}|{tag}#{name}", parent.map_or("", String::as_str))
+}
+
+/// The tag of an emitted start or empty-element line; `None` for an end
+/// tag, the XML declaration, or anything that is not an element.
+fn start_tag(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix('<')?;
+    if rest.starts_with(['/', '?', '!']) {
+        return None;
+    }
+    let end = rest.find([' ', '/', '>', '\n']).unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The `name` attribute of an emitted line, unescaped. Values escape raw
+/// quotes, so the first ` name="` is the attribute itself.
+fn emitted_name(line: &str) -> Option<String> {
+    line_name(&line[line.find(" name=\"")?..], " name=\"")
+}
+
 /// The element name at the start of an emitted line, unescaped.
 fn line_name(line: &str, prefix: &str) -> Option<String> {
     let rest = line.strip_prefix(prefix)?;
@@ -599,4 +762,264 @@ pub fn assemble_status(rows: &[String]) -> String {
         out.push_str(&format!("</{}>\n", xtag::PS_FILE));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    const RODIN_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n";
+    const MACHINE: &str = "org.eventb.core.scMachineFile";
+    const CONTEXT: &str = "org.eventb.core.scContextFile";
+
+    /// An emitted declaration, as the generator spells it.
+    fn leaf(tag: &str, name: &str) -> String {
+        format!("<{tag} name=\"{name}\" org.eventb.core.type=\"ℤ\"/>\n")
+    }
+
+    /// The same declaration as Rodin writes it: indented, `name` last.
+    fn rodin_leaf(depth: usize, tag: &str, name: &str) -> String {
+        let indent = "    ".repeat(depth);
+        format!("{indent}<{tag} org.eventb.core.type=\"ℤ\" name=\"{name}\"/>\n")
+    }
+
+    fn open(tag: &str, name: Option<&str>) -> String {
+        match name {
+            Some(name) => format!("<{tag} name=\"{name}\">\n"),
+            None => format!("<{tag}>\n"),
+        }
+    }
+
+    fn close(tag: &str) -> String {
+        format!("</{tag}>\n")
+    }
+
+    /// The names of every tracked run, in document order.
+    fn runs(xml: &str) -> Vec<Vec<String>> {
+        let mut runs = Vec::new();
+        let mut run = Vec::new();
+        for line in xml.lines() {
+            let line = line.trim_start();
+            match start_tag(line) {
+                Some(tag) if HASH_ORDERED.contains(&tag) => run.push(emitted_name(line).unwrap()),
+                _ if !run.is_empty() => runs.push(std::mem::take(&mut run)),
+                _ => {}
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        runs
+    }
+
+    #[test]
+    fn a_run_follows_the_previous_file_and_keeps_the_generated_layout() {
+        let var = xtag::SC_VARIABLE;
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}",
+            open(MACHINE, None),
+            leaf(var, "a"),
+            leaf(var, "b"),
+            leaf(var, "c"),
+            close(MACHINE)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}{}{}{}{}",
+            open(MACHINE, None),
+            rodin_leaf(1, var, "c"),
+            rodin_leaf(1, var, "a"),
+            rodin_leaf(1, var, "b"),
+            close(MACHINE)
+        );
+        let expected = format!(
+            "{HEADER}{}{}{}{}{}",
+            open(MACHINE, None),
+            leaf(var, "c"),
+            leaf(var, "a"),
+            leaf(var, "b"),
+            close(MACHINE)
+        );
+        assert_eq!(preserve_child_order(&generated, &previous), expected);
+    }
+
+    #[test]
+    fn carrier_sets_and_constants_interleave_as_the_previous_file_did() {
+        // Rodin writes one mixed sequence; the generator writes the sets
+        // first. Both kinds are one run.
+        let (set, constant) = (xtag::SC_CARRIER_SET, xtag::SC_CONSTANT);
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}{}",
+            open(CONTEXT, None),
+            leaf(set, "S"),
+            leaf(set, "T"),
+            leaf(constant, "c"),
+            leaf(constant, "d"),
+            close(CONTEXT)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}{}{}{}{}{}",
+            open(CONTEXT, None),
+            rodin_leaf(1, constant, "c"),
+            rodin_leaf(1, set, "S"),
+            rodin_leaf(1, constant, "d"),
+            rodin_leaf(1, set, "T"),
+            close(CONTEXT)
+        );
+        assert_eq!(
+            runs(&preserve_child_order(&generated, &previous)),
+            [["c", "S", "d", "T"]]
+        );
+    }
+
+    #[test]
+    fn names_the_previous_file_lacks_follow_in_generated_order() {
+        let var = xtag::SC_VARIABLE;
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}",
+            open(MACHINE, None),
+            leaf(var, "a"),
+            leaf(var, "b"),
+            leaf(var, "c"),
+            close(MACHINE)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}{}{}",
+            open(MACHINE, None),
+            rodin_leaf(1, var, "b"),
+            close(MACHINE)
+        );
+        assert_eq!(
+            runs(&preserve_child_order(&generated, &previous)),
+            [["b", "a", "c"]]
+        );
+    }
+
+    #[test]
+    fn containers_are_matched_by_their_path() {
+        // The same parameter names under two events: each event follows
+        // its own previous order, and an event the previous file lacks
+        // is left as generated.
+        let (event, param) = (xtag::SC_EVENT, xtag::SC_PARAMETER);
+        let params = |names: &[&str]| -> String { names.iter().map(|n| leaf(param, n)).collect() };
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}{}{}{}{}{}{}",
+            open(MACHINE, None),
+            open(event, Some("e1")),
+            params(&["x", "y"]),
+            close(event),
+            open(event, Some("e2")),
+            params(&["x", "y"]),
+            close(event),
+            open(event, Some("e3")),
+            params(&["x", "y"]),
+            close(event),
+            close(MACHINE)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}    {}{}{}    {}    {}{}{}    {}{}",
+            open(MACHINE, None),
+            open(event, Some("e1")),
+            rodin_leaf(2, param, "y"),
+            rodin_leaf(2, param, "x"),
+            close(event),
+            open(event, Some("e2")),
+            rodin_leaf(2, param, "x"),
+            rodin_leaf(2, param, "y"),
+            close(event),
+            close(MACHINE)
+        );
+        assert_eq!(
+            runs(&preserve_child_order(&generated, &previous)),
+            [["y", "x"], ["x", "y"], ["x", "y"]]
+        );
+    }
+
+    #[test]
+    fn runs_never_cross_other_kinds() {
+        // A hypothesis set over two contexts lays out identifiers and
+        // predicates in turn; each identifier run follows the set's
+        // whole previous order and the predicates keep their lines.
+        let (set, ident) = (xtag::PO_PREDICATE_SET, xtag::PO_IDENTIFIER);
+        let predicate = |name: &str| {
+            format!(
+                "<{} name=\"{name}\" org.eventb.core.predicate=\"⊤\"/>\n",
+                xtag::PO_PREDICATE
+            )
+        };
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}{}{}{}{}{}",
+            open(xtag::PO_FILE, None),
+            open(set, Some("CTXHYP")),
+            leaf(ident, "S"),
+            leaf(ident, "c"),
+            predicate("PRD0"),
+            leaf(ident, "T"),
+            leaf(ident, "d"),
+            predicate("PRD1"),
+            close(set),
+            close(xtag::PO_FILE)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}    {}{}{}{}{}    {}{}",
+            open(xtag::PO_FILE, None),
+            open(set, Some("CTXHYP")),
+            rodin_leaf(2, ident, "d"),
+            rodin_leaf(2, ident, "c"),
+            rodin_leaf(2, ident, "T"),
+            rodin_leaf(2, ident, "S"),
+            close(set),
+            close(xtag::PO_FILE)
+        );
+        let out = preserve_child_order(&generated, &previous);
+        assert_eq!(runs(&out), [["c", "S"], ["d", "T"]]);
+        // Header, root, set, two identifiers, a predicate, two more, a predicate.
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[5].starts_with(&format!("<{} name=\"PRD0\"", xtag::PO_PREDICATE)));
+        assert!(lines[8].starts_with(&format!("<{} name=\"PRD1\"", xtag::PO_PREDICATE)));
+    }
+
+    #[test]
+    fn a_previous_file_yielding_no_order_leaves_the_bytes_alone() {
+        for previous in ["", "OLD", "<?xml version=\"1.0\"?>\n<x/>"] {
+            assert_eq!(preserve_child_order("NEW-BCM", previous), "NEW-BCM");
+            let generated = format!(
+                "{HEADER}{}{}{}",
+                open(MACHINE, None),
+                leaf(xtag::SC_VARIABLE, "a"),
+                close(MACHINE)
+            );
+            assert_eq!(preserve_child_order(&generated, previous), generated);
+        }
+    }
+
+    #[test]
+    fn names_compare_unescaped() {
+        // The generator escapes `>` in an internal name and writes a
+        // primed identifier's quote raw; another writer may do the
+        // reverse.
+        let (event, param) = (xtag::SC_EVENT, xtag::SC_PARAMETER);
+        let generated = format!(
+            "{HEADER}{}{}{}{}{}{}",
+            open(MACHINE, None),
+            open(event, Some("&gt;")),
+            leaf(param, "x'"),
+            leaf(param, "y'"),
+            close(event),
+            close(MACHINE)
+        );
+        let previous = format!(
+            "{RODIN_HEADER}{}    {}{}{}    {}{}",
+            open(MACHINE, None),
+            open(event, Some(">")),
+            rodin_leaf(2, param, "y&apos;"),
+            rodin_leaf(2, param, "x&apos;"),
+            close(event),
+            close(MACHINE)
+        );
+        assert_eq!(
+            runs(&preserve_child_order(&generated, &previous)),
+            [["y'", "x'"]]
+        );
+    }
 }
