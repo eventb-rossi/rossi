@@ -571,7 +571,7 @@ mod inherited_param_scope {
         let variant_typed = variant.typed.as_ref().expect("variant type-checks");
         assert_eq!(
             canonical_typed_expression(variant_typed),
-            "card({x⦂USERS·x∈registered∣x} ∖ registered)"
+            "card({x⦂USERS·x∈registered ∣ x} ∖ registered)"
         );
 
         let event = model.machines["M1"]

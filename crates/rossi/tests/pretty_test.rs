@@ -132,7 +132,9 @@ fn rodin_canonical_binary_spacing_is_exhaustive() {
     use rossi::operators::OperatorId;
 
     // Every infix expression operator, keyed by the operator table's id so
-    // the expected spelling cannot drift from the table. FunImage/RelImage
+    // the expected spelling cannot drift from the table. The rule is
+    // Rodin's own printer's: its associative operators are tight and every
+    // binary one spaced (`×` is tight only inside a type). FunImage/RelImage
     // print as application forms, not infix, so they have no row.
     let assoc_cases = [
         (AssocExprOp::Plus, OperatorId::Add, true),
@@ -140,8 +142,8 @@ fn rodin_canonical_binary_spacing_is_exhaustive() {
         (AssocExprOp::BUnion, OperatorId::Union, true),
         (AssocExprOp::BInter, OperatorId::Intersection, true),
         (AssocExprOp::Ovr, OperatorId::Overwrite, true),
-        (AssocExprOp::FComp, OperatorId::Semicolon, false),
-        (AssocExprOp::BComp, OperatorId::Composition, false),
+        (AssocExprOp::FComp, OperatorId::Semicolon, true),
+        (AssocExprOp::BComp, OperatorId::Composition, true),
     ];
     let binary_cases = [
         (BinaryExprOp::Minus, OperatorId::Subtract, false),
@@ -150,7 +152,7 @@ fn rodin_canonical_binary_spacing_is_exhaustive() {
         (BinaryExprOp::Expn, OperatorId::Exponent, false),
         (BinaryExprOp::UpTo, OperatorId::Range, false),
         (BinaryExprOp::SetMinus, OperatorId::Difference, false),
-        (BinaryExprOp::CProd, OperatorId::CartesianProduct, true),
+        (BinaryExprOp::CProd, OperatorId::CartesianProduct, false),
         (BinaryExprOp::Rel, OperatorId::Relation, false),
         (BinaryExprOp::TRel, OperatorId::TotalRelation, false),
         (BinaryExprOp::SRel, OperatorId::SurjectiveRelation, false),
@@ -287,10 +289,24 @@ fn rodin_canonical_ascii_keeps_word_operator_boundaries() {
         parse_predicate_str(&printed).expect("printed predicate reparses"),
         predicate
     );
+
+    // A tight expression operator spelled as a word too: `p circ q`, never
+    // the identifier `pcircq`.
+    let composed = parse_expression_str("p ∘ q").expect("expression parses");
+    let printed = printer.print_formula_expression(&composed);
+    assert_eq!(printed, "p circ q");
+    assert_eq!(
+        parse_expression_str(&printed).expect("printed expression reparses"),
+        composed
+    );
 }
 
 #[test]
-fn rodin_canonical_preserves_root_specific_type_ascription_spacing() {
+fn rodin_canonical_spaces_and_parenthesizes_type_ascriptions() {
+    // Rodin appends an expression's ascription with spaces in every
+    // context (only a bound declaration's is tight) and parenthesizes it
+    // wherever it is an operand rather than a bare argument or value: its
+    // checked files read `S≠(∅ ⦂ ℙ(T))` and `x ≔ ∅ ⦂ ℙ(T)`.
     let printer = PrettyPrinter::rodin_canonical();
     let expression = parse_expression_str("a ⦂ b").expect("expression parses");
     let predicate = parse_predicate_str("a ⦂ b = c").expect("predicate parses");
@@ -298,10 +314,10 @@ fn rodin_canonical_preserves_root_specific_type_ascription_spacing() {
     let action = parse_action_str("x ≔ a ⦂ b").expect("action parses");
 
     assert_eq!(printer.print_formula_expression(&expression), "a ⦂ b");
-    assert_eq!(printer.print_formula_predicate(&predicate), "a⦂b=c");
+    assert_eq!(printer.print_formula_predicate(&predicate), "(a ⦂ b)=c");
     assert_eq!(
         printer.print_formula_expression(&bool_expression),
-        "bool(a ⦂ b=c)"
+        "bool((a ⦂ b)=c)"
     );
     assert_eq!(printer.print_action_body(&action), "x ≔ a ⦂ b");
 }

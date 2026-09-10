@@ -828,12 +828,12 @@ mod setcomp_lowering {
             "expected long-form binder `y⦂USERS·` in emitted action:\n{bcm}"
         );
         assert!(
-            bcm.contains("∣y}"),
-            "expected `∣y}}` (binder name as member) in emitted action:\n{bcm}"
+            bcm.contains(" ∣ y}"),
+            "expected ` ∣ y}}` (binder name as member) in emitted action:\n{bcm}"
         );
         assert!(
-            !bcm.contains("{y∣"),
-            "basic short form `{{y∣` must not survive into the .bcm:\n{bcm}"
+            !bcm.contains("{y ∣"),
+            "basic short form `{{y ∣` must not survive into the .bcm:\n{bcm}"
         );
     }
 }

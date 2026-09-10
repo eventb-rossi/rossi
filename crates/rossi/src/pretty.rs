@@ -186,13 +186,13 @@ pub enum FormulaSpacing {
     RodinFormulaString,
 }
 
-/// The top-level formula being rendered. Rodin formats binary type
-/// ascriptions differently in predicates than in expressions and actions.
+/// The top-level formula being rendered, or the type after a `⦂`: Rodin
+/// spells a type through `Type.toString()`, where the Cartesian product is
+/// tight, and an expression through its operator table, where it is spaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaContext {
-    Predicate,
-    Expression,
-    Action,
+    Formula,
+    Type,
 }
 
 /// Configuration for the pretty printer
@@ -1206,73 +1206,6 @@ impl PrettyPrinter {
         }
     }
 
-    #[inline]
-    fn binary_separator(&self, op: BinaryOp, context: FormulaContext) -> &'static str {
-        match self.formula_spacing {
-            FormulaSpacing::Readable => " ",
-            FormulaSpacing::RodinCanonical if self.rodin_binary_is_tight(op, context) => "",
-            FormulaSpacing::RodinFormulaString if self.formula_string_binary_is_tight(op) => "",
-            FormulaSpacing::RodinCanonical | FormulaSpacing::RodinFormulaString => " ",
-        }
-    }
-
-    fn formula_string_binary_is_tight(&self, op: BinaryOp) -> bool {
-        matches!(
-            op,
-            BinaryOp::Add
-                | BinaryOp::Multiply
-                | BinaryOp::Union
-                | BinaryOp::Intersection
-                | BinaryOp::Overwrite
-                | BinaryOp::Composition
-                | BinaryOp::Semicolon
-        )
-    }
-
-    /// Whether Rodin removes whitespace around this binary expression
-    /// operator. Keep this match exhaustive so a new AST operator cannot gain
-    /// an accidental default spacing policy.
-    fn rodin_binary_is_tight(&self, op: BinaryOp, context: FormulaContext) -> bool {
-        match op {
-            BinaryOp::Add
-            | BinaryOp::Multiply
-            | BinaryOp::Union
-            | BinaryOp::Intersection
-            | BinaryOp::CartesianProduct
-            | BinaryOp::Overwrite => true,
-            // Rodin tightens a binary type ascription in a predicate, while
-            // standalone expressions and assignments retain spaces. ASCII
-            // `oftype` needs word-separating whitespace in every context.
-            BinaryOp::OfType => self.use_unicode && context == FormulaContext::Predicate,
-            BinaryOp::Subtract
-            | BinaryOp::Divide
-            | BinaryOp::Modulo
-            | BinaryOp::Exponent
-            | BinaryOp::Range
-            | BinaryOp::Difference
-            | BinaryOp::Relation
-            | BinaryOp::TotalRelation
-            | BinaryOp::SurjectiveRelation
-            | BinaryOp::TotalSurjectiveRelation
-            | BinaryOp::TotalFunction
-            | BinaryOp::PartialFunction
-            | BinaryOp::TotalInjection
-            | BinaryOp::PartialInjection
-            | BinaryOp::TotalSurjection
-            | BinaryOp::PartialSurjection
-            | BinaryOp::Bijection
-            | BinaryOp::Composition
-            | BinaryOp::Semicolon
-            | BinaryOp::DomainRestriction
-            | BinaryOp::DomainSubtraction
-            | BinaryOp::RangeRestriction
-            | BinaryOp::RangeSubtraction
-            | BinaryOp::DirectProduct
-            | BinaryOp::ParallelProduct
-            | BinaryOp::Maplet => false,
-        }
-    }
-
     /// Pick between a Unicode and ASCII symbol based on the printer mode.
     #[inline]
     fn sym(&self, unicode: &'static str, ascii: &'static str) -> &'static str {
@@ -1528,13 +1461,13 @@ impl PrettyPrinter {
     /// Convert a formula-model expression to text.
     pub fn print_formula_expression(&self, expr: &formula::Expression) -> String {
         let mut names = Vec::new();
-        self.fm_expr(expr, FormulaContext::Expression, &mut names)
+        self.fm_expr(expr, FormulaContext::Formula, &mut names)
     }
 
     /// Convert a formula-model predicate to text.
     pub fn print_formula_predicate(&self, pred: &formula::Predicate) -> String {
         let mut names = Vec::new();
-        self.fm_pred(pred, FormulaContext::Predicate, &mut names)
+        self.fm_pred(pred, FormulaContext::Formula, &mut names)
     }
 
     /// The display name of a bound occurrence; an index without an
@@ -1567,13 +1500,12 @@ impl PrettyPrinter {
         &self,
         decls: &[formula::BoundIdentDecl],
         resolved: &[String],
-        context: FormulaContext,
         names: &mut Vec<String>,
     ) -> String {
         decls
             .iter()
             .zip(resolved)
-            .map(|(decl, name)| self.fm_decl(decl, name, context, names))
+            .map(|(decl, name)| self.fm_decl(decl, name, names))
             .collect::<Vec<_>>()
             .join(self.comma_separator())
     }
@@ -1585,10 +1517,9 @@ impl PrettyPrinter {
         &self,
         decl: &formula::BoundIdentDecl,
         name: &str,
-        context: FormulaContext,
         names: &mut Vec<String>,
     ) -> String {
-        match self.fm_decl_annotation(decl, context, names) {
+        match self.fm_decl_annotation(decl, names) {
             Some(annotation) => format!("{}{}{}", name, self.oftype_annotation(), annotation),
             None => name.to_string(),
         }
@@ -1597,20 +1528,20 @@ impl PrettyPrinter {
     fn fm_decl_annotation(
         &self,
         decl: &formula::BoundIdentDecl,
-        context: FormulaContext,
         names: &mut Vec<String>,
     ) -> Option<String> {
         if self.formula_spacing == FormulaSpacing::RodinFormulaString {
             return None;
         }
+        // A declaration's annotation is a type, whichever way it arrived.
         if self.typed_decls {
             if let Some(ty) = decl.ty() {
                 let spelled = ty.to_expression(decl.factory());
-                return Some(self.fm_expr(&spelled, context, &mut Vec::new()));
+                return Some(self.fm_expr(&spelled, FormulaContext::Type, &mut Vec::new()));
             }
         }
         decl.annotation()
-            .map(|annotation| self.fm_expr(annotation, context, names))
+            .map(|annotation| self.fm_expr(annotation, FormulaContext::Type, names))
     }
 
     fn fm_expr(
@@ -1686,7 +1617,8 @@ impl PrettyPrinter {
             FExprKind::Associative { op, children } => {
                 let old = legacy_assoc(*op);
                 let op_str = self.op(operators::binary_op_id(old));
-                let separator = self.binary_separator(old, context);
+                // Rodin's `AssociativeExpression` operators print tight.
+                let separator = self.tight_operator_separator(operators::binary_op_id(old));
                 let joint = format!("{separator}{op_str}{separator}");
                 children
                     .iter()
@@ -1743,7 +1675,10 @@ impl PrettyPrinter {
                     names,
                 );
                 let mid = self.op(OperatorId::Dot);
-                let bar = if self.formula_spacing == FormulaSpacing::RodinFormulaString {
+                let bar = if matches!(
+                    self.formula_spacing,
+                    FormulaSpacing::RodinCanonical | FormulaSpacing::RodinFormulaString
+                ) {
                     format!(" {} ", self.op(OperatorId::Bar))
                 } else {
                     self.op(OperatorId::Bar).to_string()
@@ -1771,7 +1706,7 @@ impl PrettyPrinter {
                             };
                             let lambda = self.op(OperatorId::Lambda);
                             let pattern_str =
-                                self.fm_lambda_pattern(pattern, decls, &resolved, context, names);
+                                self.fm_lambda_pattern(pattern, decls, &resolved, names);
                             names.extend(resolved.iter().cloned());
                             let pred_str = self.fm_pred(pred, context, names);
                             let body_str = self.fm_expr(body, context, names);
@@ -1786,14 +1721,14 @@ impl PrettyPrinter {
                             format!("{{{value_str}{bar}{pred_str}}}")
                         }
                         Form::IdentList => {
-                            let ids = self.fm_decls(decls, &resolved, context, names);
+                            let ids = self.fm_decls(decls, &resolved, names);
                             names.extend(resolved.iter().cloned());
                             let pred_str = self.fm_pred(pred, context, names);
                             names.truncate(names.len() - decls.len());
                             format!("{{{ids}{bar}{pred_str}}}")
                         }
                         Form::Explicit => {
-                            let ids = self.fm_decls(decls, &resolved, context, names);
+                            let ids = self.fm_decls(decls, &resolved, names);
                             names.extend(resolved.iter().cloned());
                             let pred_str = self.fm_pred(pred, context, names);
                             let value_str = self.fm_expr(value, context, names);
@@ -1809,7 +1744,7 @@ impl PrettyPrinter {
                             QuantExprOp::QInter => OperatorId::QuantifiedIntersection,
                             QuantExprOp::CSet => unreachable!(),
                         });
-                        let ids = self.fm_decls(decls, &resolved, context, names);
+                        let ids = self.fm_decls(decls, &resolved, names);
                         names.extend(resolved.iter().cloned());
                         let pred_str = self.fm_pred(pred, context, names);
                         let value_str = self.fm_expr(value, context, names);
@@ -1863,9 +1798,25 @@ impl PrettyPrinter {
         names: &mut Vec<String>,
     ) -> String {
         let op_str = self.op(operators::binary_op_id(old));
-        let separator = self.binary_separator(old, context);
+        // Every `BinaryExpression` operator prints spaced in Rodin (its
+        // `Operators` default is `isSpaced`), the type ascription included:
+        // Rodin appends `⦂` with spaces to an ascribed expression and without
+        // to a bound declaration, which is spelled elsewhere. Only the
+        // Cartesian product inside a type is tight, as `Type.toString()`
+        // spells it: `ℙ(A×B)` after a `⦂`, `A × B` anywhere else.
+        let separator = if old == BinaryOp::CartesianProduct && context == FormulaContext::Type {
+            self.tight_operator_separator(operators::binary_op_id(old))
+        } else {
+            " "
+        };
         let left_str = self.fm_child_expr(left, old, false, context, names);
-        let right_str = self.fm_child_expr(right, old, true, context, names);
+        // What follows a `⦂` is a type.
+        let right_context = if old == BinaryOp::OfType {
+            FormulaContext::Type
+        } else {
+            context
+        };
+        let right_str = self.fm_child_expr(right, old, true, right_context, names);
         format!("{left_str}{separator}{op_str}{separator}{right_str}")
     }
 
@@ -1895,7 +1846,7 @@ impl PrettyPrinter {
         is_right: bool,
     ) -> bool {
         let child = self.visible_expr(child);
-        if fm_above_pair(child.kind()) {
+        if fm_above_pair(child.kind()) || self.rodin_parenthesizes_operand(child.kind()) {
             return true;
         }
         if matches!(
@@ -1977,11 +1928,19 @@ impl PrettyPrinter {
         names: &mut Vec<String>,
     ) -> String {
         let expr = self.visible_expr(expr);
-        if fm_above_pair(expr.kind()) {
+        if fm_above_pair(expr.kind()) || self.rodin_parenthesizes_operand(expr.kind()) {
             format!("({})", self.fm_expr(expr, context, names))
         } else {
             self.fm_expr(expr, context, names)
         }
+    }
+
+    /// Rodin's printer parenthesizes an ascribed expression used as an
+    /// operand (`x≠(∅ ⦂ ℙ(T))`); as a bare argument or value it stays
+    /// unwrapped. Readable text keeps whatever the source wrote.
+    fn rodin_parenthesizes_operand(&self, kind: &FExprKind) -> bool {
+        self.formula_spacing != FormulaSpacing::Readable
+            && matches!(kind, FExprKind::Ascription { .. })
     }
 
     /// Renders a lambda pattern from its maplet tree: leaves are the
@@ -1991,14 +1950,13 @@ impl PrettyPrinter {
         pattern: &formula::Expression,
         decls: &[formula::BoundIdentDecl],
         resolved: &[String],
-        context: FormulaContext,
         names: &mut Vec<String>,
     ) -> String {
         let pattern = self.visible_expr(pattern);
         match pattern.kind() {
             FExprKind::BoundIdentifier(index) => {
                 let position = decls.len() - 1 - *index as usize;
-                self.fm_decl(&decls[position], &resolved[position], context, names)
+                self.fm_decl(&decls[position], &resolved[position], names)
             }
             FExprKind::Binary {
                 op: BinaryExprOp::Mapsto,
@@ -2006,7 +1964,7 @@ impl PrettyPrinter {
                 right,
             } => {
                 let maplet = self.op(OperatorId::Maplet);
-                let left_str = self.fm_lambda_pattern(left, decls, resolved, context, names);
+                let left_str = self.fm_lambda_pattern(left, decls, resolved, names);
                 let right = self.visible_expr(right);
                 let right_str = match right.kind() {
                     FExprKind::Binary {
@@ -2014,9 +1972,9 @@ impl PrettyPrinter {
                         ..
                     } => format!(
                         "({})",
-                        self.fm_lambda_pattern(right, decls, resolved, context, names)
+                        self.fm_lambda_pattern(right, decls, resolved, names)
                     ),
-                    _ => self.fm_lambda_pattern(right, decls, resolved, context, names),
+                    _ => self.fm_lambda_pattern(right, decls, resolved, names),
                 };
                 format!("{left_str} {maplet} {right_str}")
             }
@@ -2096,7 +2054,7 @@ impl PrettyPrinter {
                     QuantPredOp::Exists => operators::quantifier_id(Quantifier::Exists),
                 });
                 let mid = self.op(OperatorId::Dot);
-                let ids = self.fm_decls(decls, &resolved, context, names);
+                let ids = self.fm_decls(decls, &resolved, names);
                 names.extend(resolved.iter().cloned());
                 let body_str = self.fm_pred(body, context, names);
                 names.truncate(names.len() - decls.len());
@@ -2214,7 +2172,7 @@ impl PrettyPrinter {
 
     pub fn print_formula_assignment(&self, assign: &formula::Assignment) -> String {
         use formula::AssignmentKind as K;
-        let context = FormulaContext::Action;
+        let context = FormulaContext::Formula;
         let mut names = Vec::new();
         let targets = |idents: &[formula::Expression]| self.assignment_targets(idents);
         match assign.kind() {
@@ -2306,7 +2264,7 @@ impl PrettyPrinter {
         }
         let wc = self.wrap_ctx(base_col);
         let mut names = Vec::new();
-        self.wrap_pred(pred, start_col, &wc, FormulaContext::Predicate, &mut names)
+        self.wrap_pred(pred, start_col, &wc, FormulaContext::Formula, &mut names)
     }
 
     /// Convert a formula-model predicate to text starting at column 0,
@@ -2333,7 +2291,7 @@ impl PrettyPrinter {
         }
         let wc = self.wrap_ctx(base_col);
         let mut names = Vec::new();
-        self.wrap_expr(expr, start_col, &wc, FormulaContext::Expression, &mut names)
+        self.wrap_expr(expr, start_col, &wc, FormulaContext::Formula, &mut names)
     }
 
     /// [`Self::print_predicate_at`] for action bodies.
@@ -2462,7 +2420,7 @@ impl PrettyPrinter {
                     let parts: Vec<String> = decls
                         .iter()
                         .zip(&resolved)
-                        .map(|(decl, name)| self.fm_decl(decl, name, context, names))
+                        .map(|(decl, name)| self.fm_decl(decl, name, names))
                         .collect();
                     // The `·` after the declarations shares their last line.
                     self.fill_parts(&parts, col + quantifier.chars().count(), &wc.narrowed(1))
@@ -2755,8 +2713,7 @@ impl PrettyPrinter {
                             unreachable!("lambda form implies a maplet expression")
                         };
                         let lambda = self.op(OperatorId::Lambda);
-                        let pattern_str =
-                            self.fm_lambda_pattern(pattern, decls, &resolved, context, names);
+                        let pattern_str = self.fm_lambda_pattern(pattern, decls, &resolved, names);
                         names.extend(resolved.iter().cloned());
                         let body_col = wc.nest(col);
                         let pred_str = self.wrap_pred(pred, body_col, wc, context, names);
@@ -2781,7 +2738,7 @@ impl PrettyPrinter {
                         )
                     }
                     Form::IdentList => {
-                        let ids = self.fm_decls(decls, &resolved, context, names);
+                        let ids = self.fm_decls(decls, &resolved, names);
                         names.extend(resolved.iter().cloned());
                         let pred_col = inner + bar.chars().count() + 1;
                         let pred_str =
@@ -2790,7 +2747,7 @@ impl PrettyPrinter {
                         format!("{{{ids}{cont}{bar} {pred_str}}}", cont = cont_line(inner))
                     }
                     Form::Explicit => {
-                        let ids = self.fm_decls(decls, &resolved, context, names);
+                        let ids = self.fm_decls(decls, &resolved, names);
                         names.extend(resolved.iter().cloned());
                         let pred_str = self.wrap_pred(pred, inner, wc, context, names);
                         let value_col = inner + bar.chars().count() + 1;
@@ -2810,7 +2767,7 @@ impl PrettyPrinter {
                     QuantExprOp::QInter => OperatorId::QuantifiedIntersection,
                     QuantExprOp::CSet => unreachable!(),
                 });
-                let ids = self.fm_decls(decls, &resolved, context, names);
+                let ids = self.fm_decls(decls, &resolved, names);
                 names.extend(resolved.iter().cloned());
                 let body_col = wc.nest(col);
                 let pred_str = self.wrap_pred(pred, body_col, wc, context, names);
@@ -2917,7 +2874,7 @@ impl PrettyPrinter {
         if wc.fits(col, &flat) {
             return flat;
         }
-        let context = FormulaContext::Action;
+        let context = FormulaContext::Formula;
         let mut names = Vec::new();
         let targets = |idents: &[formula::Expression]| self.assignment_targets(idents);
         match assign.kind() {
