@@ -46,6 +46,58 @@ fn readable_and_canonical_spacing() {
 }
 
 #[test]
+fn canonical_spaces_binary_and_tightens_associative_operators() {
+    // Rodin prints its associative operators tight and every binary
+    // expression operator spaced, the Cartesian product included: `×` is
+    // tight only inside a type. Both Rodin modes share the rule.
+    let product = ff().binary_expression(BinaryExprOp::CProd, fid("A"), fid("B"), None);
+    assert_eq!(canonical().print_formula_expression(&product), "A × B");
+    assert_eq!(formula_string().print_formula_expression(&product), "A × B");
+    let composed = ff().associative_expression(AssocExprOp::FComp, vec![fid("p"), fid("q")], None);
+    assert_eq!(canonical().print_formula_expression(&composed), "p;q");
+    let union = ff().associative_expression(AssocExprOp::BUnion, vec![fid("s"), fid("t")], None);
+    assert_eq!(canonical().print_formula_expression(&union), "s∪t");
+
+    // An ascribed operand is parenthesized under an operator, as Rodin's
+    // `S∪(∅ ⦂ ℙ(T))`, and left bare as an argument.
+    let empty = ff().ascription(
+        ff().atomic_expression(AtomicOp::EmptySet, None, None),
+        ff().unary_expression(UnaryExprOp::Pow, fid("T"), None),
+        None,
+    );
+    let joined =
+        ff().associative_expression(AssocExprOp::BUnion, vec![fid("S"), empty.clone()], None);
+    assert_eq!(
+        canonical().print_formula_expression(&joined),
+        "S∪(∅ ⦂ ℙ(T))"
+    );
+    let applied = ff().binary_expression(BinaryExprOp::FunImage, fid("f"), empty.clone(), None);
+    assert_eq!(
+        canonical().print_formula_expression(&applied),
+        "f(∅ ⦂ ℙ(T))"
+    );
+    // Under a binary operator too: Rodin's checked files read
+    // `{x ↦ (∅ ⦂ ℙ(T))}`.
+    let pair = ff().binary_expression(BinaryExprOp::Mapsto, fid("x"), empty, None);
+    assert_eq!(
+        canonical().print_formula_expression(&pair),
+        "x ↦ (∅ ⦂ ℙ(T))"
+    );
+
+    // After the `⦂` comes a type, and Rodin spells a type with a tight
+    // product: `ℙ(A×B)` there, `A × B` as an expression.
+    let typed_empty = ff().ascription(
+        ff().atomic_expression(AtomicOp::EmptySet, None, None),
+        ff().unary_expression(UnaryExprOp::Pow, product.clone(), None),
+        None,
+    );
+    assert_eq!(
+        canonical().print_formula_expression(&typed_empty),
+        "∅ ⦂ ℙ(A×B)"
+    );
+}
+
+#[test]
 fn rodin_formula_string_matches_diagnostic_parenthesization_and_spacing() {
     let relation = ff().binary_expression(
         BinaryExprOp::RanRes,
@@ -308,7 +360,10 @@ fn typed_mode_escalates_short_comprehensions_to_explicit() {
         None,
         Form::IdentList,
     );
-    assert_eq!(printer.print_formula_expression(&ident_list), "{x⦂ℤ·x=1∣x}");
+    assert_eq!(
+        printer.print_formula_expression(&ident_list),
+        "{x⦂ℤ·x=1 ∣ x}"
+    );
 
     // Same for {E∣P}.
     let implicit = ff().quantified_expression(
@@ -319,7 +374,10 @@ fn typed_mode_escalates_short_comprehensions_to_explicit() {
         None,
         Form::Implicit,
     );
-    assert_eq!(printer.print_formula_expression(&implicit), "{x⦂ℤ·x=1∣x+1}");
+    assert_eq!(
+        printer.print_formula_expression(&implicit),
+        "{x⦂ℤ·x=1 ∣ x+1}"
+    );
 
     // The lambda spelling annotates its pattern leaves instead.
     let lambda = ff().quantified_expression(
@@ -330,7 +388,7 @@ fn typed_mode_escalates_short_comprehensions_to_explicit() {
         None,
         Form::Lambda,
     );
-    assert_eq!(printer.print_formula_expression(&lambda), "λ x⦂ℤ·x=1∣2");
+    assert_eq!(printer.print_formula_expression(&lambda), "λ x⦂ℤ·x=1 ∣ 2");
 }
 
 #[test]
@@ -457,9 +515,10 @@ fn literals_and_special_predicates() {
         ),
         None,
     );
-    // Predicate context tightens the ascription in canonical mode.
+    // Rodin spaces an expression ascription (a bound declaration's is the
+    // tight one) and parenthesizes it as an operand.
     let inside = eq_pred(fid("x"), ascribed.clone());
-    assert_eq!(canonical().print_formula_predicate(&inside), "x=∅⦂ℙ(ℤ)");
+    assert_eq!(canonical().print_formula_predicate(&inside), "x=(∅ ⦂ ℙ(ℤ))");
     assert_eq!(readable().print_formula_expression(&ascribed), "∅ ⦂ ℙ(ℤ)");
 }
 
