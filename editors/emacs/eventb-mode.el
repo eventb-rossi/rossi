@@ -402,6 +402,15 @@ deleted in Rodin is deleted next to the sources too)."
   :type 'boolean
   :group 'eventb)
 
+(defcustom lsp-rossi-rodin-proving-perspective nil
+  "Open Rodin in its Proving perspective, not the Event-B modelling one.
+On a Rodin workspace that has been opened before this needs the bridge
+plug-in, which switches the perspective inside the running instance.
+Without it only a workspace Rodin has never opened is affected, since
+Rodin otherwise restores the perspective that was last active there."
+  :type 'boolean
+  :group 'eventb)
+
 (with-eval-after-load 'lsp-mode
   (lsp-register-client
    (make-lsp-client
@@ -432,7 +441,9 @@ deleted in Rodin is deleted next to the sources too)."
                          :sync ,(if lsp-rossi-rodin-sync t :json-false)
                          :bridge ,(if lsp-rossi-rodin-bridge t :json-false)
                          :liveSync ,(if lsp-rossi-rodin-live-sync t :json-false)
-                         :mirrorProofs ,(if lsp-rossi-rodin-mirror-proofs t :json-false))))))))
+                         :mirrorProofs ,(if lsp-rossi-rodin-mirror-proofs t :json-false)
+                         :provingPerspective ,(if lsp-rossi-rodin-proving-perspective
+                                                  t :json-false))))))))
 
 ;;; Unicode input method
 

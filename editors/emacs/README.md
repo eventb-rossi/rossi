@@ -190,6 +190,7 @@ All settings can be customized via Emacs customization interface (`M-x customize
 (setq lsp-rossi-rodin-bridge t)              ; Use a running Rodin's bridge plug-in when present
 (setq lsp-rossi-rodin-live-sync nil)         ; Merge Rodin's unsaved edits as they are typed
 (setq lsp-rossi-rodin-mirror-proofs t)       ; Carry proof files checkout <-> workspace
+(setq lsp-rossi-rodin-proving-perspective nil) ; Open Rodin in the Proving perspective (bridge plug-in)
 ```
 
 ### Pinned LSP Client Defaults

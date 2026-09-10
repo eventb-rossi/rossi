@@ -41,6 +41,7 @@ interface RossiConfiguration {
         bridge: boolean;
         liveSync: boolean;
         mirrorProofs: boolean;
+        provingPerspective: boolean;
     };
     animate: {
         path: string;
@@ -81,6 +82,7 @@ function getRossiConfiguration(): RossiConfiguration {
             bridge: config.get<boolean>('rodin.bridge', true),
             liveSync: config.get<boolean>('rodin.liveSync', false),
             mirrorProofs: config.get<boolean>('rodin.mirrorProofs', true),
+            provingPerspective: config.get<boolean>('rodin.provingPerspective', false),
         },
         animate: {
             path: config.get<string>('animate.path', ''),

@@ -290,6 +290,11 @@
           "default": true,
           "description": "Bridge proof files (.bpr/.bps/.bpo) between the checkout and the Rodin workspace at Open in Rodin session boundaries: files next to the .eventb sources are copied into the Rodin project when the lens runs (the checkout wins), and the project's proof files are copied back next to the sources when Rodin exits (the workspace wins; a proof deleted in Rodin is deleted next to the sources too). The exit mirror is unavailable on Windows."
         },
+        "rossi.rodin.provingPerspective": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open Rodin in its Proving perspective rather than the Event-B modelling one, when the Open in Rodin lens runs. On a Rodin workspace that has been opened before, this needs the bridge plug-in from the eventb-rossi bundle, which switches the perspective inside the running instance; without it only a workspace Rodin has never opened is affected, because Eclipse otherwise restores the perspective that was last active there."
+        },
         "rossi.animate.path": {
           "type": "string",
           "scope": "machine",

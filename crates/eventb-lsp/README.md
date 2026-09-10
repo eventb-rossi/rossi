@@ -604,6 +604,8 @@ interface RossiConfig {
     bridge: boolean;                       // use the plug-in; default: true
     liveSync: boolean;                     // merge unsaved edits; default: false
     mirrorProofs: boolean;                 // default: true
+    provingPerspective: boolean;           // Proving perspective; default: false
+                                           // (needs the bridge past the first open)
   };
   animate: {
     path: string;                          // default: "" (resolve on PATH)

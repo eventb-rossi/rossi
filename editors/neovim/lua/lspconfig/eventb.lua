@@ -148,6 +148,10 @@ return {
           -- Merge Rodin's unsaved edits into the buffer as they are typed,
           -- rather than waiting for Ctrl+S in Rodin. Needs the bridge plug-in.
           liveSync = false,
+          -- Open Rodin in the Proving perspective rather than the
+          -- Event-B one; needs the bridge plug-in for a workspace
+          -- Rodin has opened before
+          provingPerspective = false,
         },
       },
     },
