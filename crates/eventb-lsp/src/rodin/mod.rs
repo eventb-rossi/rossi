@@ -33,8 +33,9 @@ pub const COMMAND_OPEN: &str = "rossi.rodin.open";
 const ALREADY_RUNNING: &str = "Rodin is already running on this workspace:";
 
 /// Refreshing a project's files does not reload an editor Rodin already has
-/// open on a component, whichever way the files got there, so every arm that
-/// reports a rebuilt project has to say this.
+/// open on a component, whichever way the files got there. Every arm that
+/// reports a rebuilt project says this unless it reloaded those editors
+/// itself, which only the bridge can do.
 const REOPEN_NOTE: &str = "Editors already open on a component show the new \
      content after reopening it (or F5 inside the editor; the Explorer's F5 \
      does not reload files).";
@@ -269,11 +270,13 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     // that is the only proof to be had where the lock cannot be probed at all
     // (Windows), so the attempt follows the same "not demonstrably free" rule
     // as `lock::rebuild_on_save_wanted` rather than waiting for `Held`.
+    let components = reloadable_components(&outcome);
     let bridged = if request.bridge && lock_state != lock::LockState::Free {
         register_through_bridge(
             &request.workspace_dir,
             &project_dir,
             &project_name,
+            &components,
             request.proving_perspective,
         )
         .await
@@ -304,11 +307,16 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
         // workspace. Say so instead of promising an automatic pickup that
         // will never happen.
         let (level, text) = match bridged {
-            Some(registered) => (
+            Some((registered, reloaded)) => (
                 MessageType::INFO,
                 format!(
                     "{ALREADY_RUNNING} project '{registered}' was rebuilt and \
-                     registered in it through the Rodin bridge. {REOPEN_NOTE}"
+                     registered in it through the Rodin bridge.{}",
+                    if reloaded {
+                        String::new()
+                    } else {
+                        format!(" {REOPEN_NOTE}")
+                    }
                 ),
             ),
             None if launch::project_registered(&request.workspace_dir, &project_name) => (
@@ -386,10 +394,12 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     }
     // Spawned: waiting for the bridge to appear must not extend the
     // single-flight guard the lens is held by.
-    if request.proving_perspective && request.bridge {
+    if request.bridge {
         let workspace_dir = request.workspace_dir.clone();
+        let name = project_name.clone();
+        let proving_perspective = request.proving_perspective;
         tokio::spawn(async move {
-            show_proving_perspective(&workspace_dir).await;
+            greet_booted_rodin(&workspace_dir, &name, &components, proving_perspective).await;
         });
     }
 
@@ -432,14 +442,7 @@ pub(crate) async fn reload_in_rodin(
     project_name: &str,
     outcome: &build::BuildOutcome,
 ) {
-    // Only the sources Rodin reads; the checked and proof files it regenerates
-    // itself, and reloading an editor on them means nothing.
-    let files: Vec<String> = outcome
-        .written
-        .iter()
-        .filter(|(path, _)| rossi_build::project::is_xml_component(path))
-        .filter_map(|(path, _)| Some(path.file_name()?.to_str()?.to_string()))
-        .collect();
+    let files = reloadable_components(outcome);
     if files.is_empty() {
         return;
     }
@@ -450,23 +453,54 @@ pub(crate) async fn reload_in_rodin(
             return;
         }
     };
+    reload_through(&bridge, project_name, &files).await;
+}
+
+/// The component files a build wrote, as bare names for the bridge: only the
+/// sources Rodin reads, since the checked and proof files it regenerates
+/// itself and reloading an editor on them means nothing.
+fn reloadable_components(outcome: &build::BuildOutcome) -> Vec<String> {
+    outcome
+        .written
+        .iter()
+        .filter(|(path, _)| rossi_build::project::is_xml_component(path))
+        .filter_map(|(path, _)| Some(path.file_name()?.to_str()?.to_string()))
+        .collect()
+}
+
+/// Ask a connected bridge to reload `files`, reporting whether it did.
+///
+/// `false` when there was nothing to reload, and in the cases the caller
+/// still has to warn the user about: a plug-in too old to offer the method,
+/// and a request that failed.
+async fn reload_through(bridge: &bridge::Bridge, project_name: &str, files: &[String]) -> bool {
+    if files.is_empty() {
+        return false;
+    }
     if !bridge.supports(bridge::RELOAD) {
         tracing::info!(
             "the Rodin {} bridge does not offer {}",
             bridge.rodin_version(),
             bridge::RELOAD
         );
-        return;
+        return false;
     }
-    match bridge.reload(project_name, &files).await {
-        Ok(()) => tracing::debug!("reloaded {} component(s) in Rodin", files.len()),
-        Err(message) => tracing::info!("the Rodin bridge could not reload: {message}"),
+    match bridge.reload(project_name, files).await {
+        Ok(()) => {
+            tracing::debug!("reloaded {} component(s) in Rodin", files.len());
+            true
+        }
+        Err(message) => {
+            tracing::info!("the Rodin bridge could not reload: {message}");
+            false
+        }
     }
 }
 
 /// Register and reveal the project through a running Rodin's bridge plug-in,
-/// answering the name the workspace registered it under, and switch that Rodin
-/// to the Proving perspective when `proving_perspective` asks for it.
+/// answering the name the workspace registered it under together with whether
+/// the editors open on `files` were reloaded, and switch that Rodin to the
+/// Proving perspective when `proving_perspective` asks for it.
 ///
 /// The switch rides this connection rather than making its own: the workspace
 /// this Rodin restored decided its perspective, so the preference
@@ -482,8 +516,9 @@ async fn register_through_bridge(
     workspace_dir: &Path,
     project_dir: &Path,
     project_name: &str,
+    files: &[String],
     proving_perspective: bool,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let bridge = match bridge::Bridge::connect(workspace_dir).await {
         Ok(bridge) => bridge,
         Err(message) => {
@@ -517,6 +552,11 @@ async fn register_through_bridge(
     if let Err(message) = bridge.reveal_project(&registered).await {
         tracing::info!("the Rodin bridge could not reveal the project: {message}");
     }
+    // The rebuild landed under any editor already open on a component, which
+    // goes on rendering what it loaded until told otherwise. Reported back,
+    // because the message this caller shows has to stop telling the user to
+    // reopen tabs that were just reloaded.
+    let reloaded = reload_through(&bridge, &registered, files).await;
     // Cosmetic next to the registration too, and under the same rule: an
     // older plug-in simply does not offer the method.
     if proving_perspective
@@ -527,23 +567,36 @@ async fn register_through_bridge(
     {
         tracing::info!("the Rodin bridge could not switch the perspective: {message}");
     }
-    Some(registered)
+    Some((registered, reloaded))
 }
 
-/// Ask a Rodin that is still booting to switch to the Proving perspective,
-/// waiting for it to publish its bridge.
+/// Wait for a Rodin that is still booting to publish its bridge, then do what
+/// only the running instance can: reload the editors it restored onto the
+/// components this build rewrote, and switch to the Proving perspective when
+/// the setting asks for it.
 ///
-/// This is where `rossi.rodin.provingPerspective` is honoured for a workspace
-/// Rodin has opened before. The preference [`launch::seed_workspace_prefs`]
-/// writes decides only how a workspace with no saved perspective state comes
-/// up; every later launch restores the perspective that was last active
-/// there, and nothing outside the process can override that. Best effort
-/// throughout, exactly like the reveal: stock Rodin publishes no bridge, and
-/// an older plug-in does not offer the method.
+/// Both need the instance to exist, so they share one wait and one
+/// connection. The reload matters most on exactly this path: Eclipse restores
+/// an editor from its persisted workbench state before the project is
+/// refreshed from disk, so it renders what was there last time and never
+/// re-reads on its own.
+///
+/// The perspective half is where `rossi.rodin.provingPerspective` is honoured
+/// for a workspace Rodin has opened before. The preference
+/// [`launch::seed_workspace_prefs`] writes decides only how a workspace with
+/// no saved perspective state comes up; every later launch restores the
+/// perspective that was last active there, and nothing outside the process
+/// can override that. Best effort throughout, exactly like the reveal: stock
+/// Rodin publishes no bridge, and an older plug-in offers neither method.
 ///
 /// A Rodin that is already up is served by [`register_through_bridge`]
 /// instead, on the connection it already holds.
-async fn show_proving_perspective(workspace_dir: &Path) {
+async fn greet_booted_rodin(
+    workspace_dir: &Path,
+    project_name: &str,
+    files: &[String],
+    proving_perspective: bool,
+) {
     // The same window the launch gives Rodin to take the workspace lock: the
     // bridge comes later than the lock, but both are waits on one boot, and
     // `ensure_rodin_live` already retries its own connect against this one.
@@ -553,13 +606,17 @@ async fn show_proving_perspective(workspace_dir: &Path) {
             Ok(bridge) => break bridge,
             Err(message) => {
                 if tokio::time::Instant::now() >= deadline {
-                    tracing::info!("no Rodin bridge to switch the perspective through: {message}");
+                    tracing::info!("no Rodin bridge after the launch: {message}");
                     return;
                 }
                 tokio::time::sleep(POLL).await;
             }
         }
     };
+    reload_through(&bridge, project_name, files).await;
+    if !proving_perspective {
+        return;
+    }
     if !bridge.supports(bridge::PERSPECTIVE) {
         tracing::info!(
             "the Rodin {} bridge does not offer {}",
@@ -608,6 +665,28 @@ async fn wait_for_workspace_lock(workspace_dir: &Path, timeout: Duration) -> loc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_component_sources_are_worth_reloading() {
+        // A build writes checked and proof files beside the components;
+        // reloading an editor on those means nothing, and Rodin regenerates
+        // them itself. Bare names, because that is what the bridge takes.
+        let outcome = build::BuildOutcome {
+            error_diagnostics: Vec::new(),
+            written: [
+                "/ws/proj/M0.bum",
+                "/ws/proj/C0.buc",
+                "/ws/proj/M0.bcm",
+                "/ws/proj/M0.bpo",
+                "/ws/proj/M0.bps",
+                "/ws/proj/.project",
+            ]
+            .iter()
+            .map(|p| (PathBuf::from(p), 0))
+            .collect(),
+        };
+        assert_eq!(reloadable_components(&outcome), ["M0.bum", "C0.buc"]);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn boot_lock_wait_is_bounded_on_a_free_workspace() {
