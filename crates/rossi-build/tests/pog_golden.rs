@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use rossi_build::po_view::PoView;
+use rossi_build::pog::reconcile::preserve_child_order;
 use rossi_build::project::discover_projects;
 
 /// The example archives locked here. Their components are whatever the
@@ -107,7 +108,11 @@ fn generated_obligations_match_rodin() {
             let their_view = PoView::from_xml(reference)
                 .unwrap_or_else(|e| panic!("{file}: parse reference: {e}"));
             common::diff_po_views(&file, &their_view, &our_view, MAX_PROBLEMS, &mut problems);
-            verbatim.push((file, normalize(reference), normalize(generated)));
+            verbatim.push((
+                file,
+                strip_indent(reference),
+                strip_indent(&preserve_child_order(generated, reference)),
+            ));
         }
     }
     problems.truncate(MAX_PROBLEMS);
@@ -117,32 +122,22 @@ fn generated_obligations_match_rodin() {
     }
 }
 
-/// Erase the two differences between the reference `.bpo` and ours that the
-/// verbatim comparison is not meant to police, so every other byte is
-/// compared as written:
-///
-/// 1. Indentation — the reference writer indents four spaces per level,
-///    rossi's emitter writes each element flush left.
-/// 2. `poIdentifier` order within a predicate set — Rodin's static checker
-///    emits carrier sets, constants, variables and parameters in the
-///    iteration order of its symbol tables, its generator copies that order
-///    and adds an event's primed variables in the order of two more
-///    `java.util.HashSet`s; rossi sorts. Deterministic, not yet reproduced.
-///
-/// Everything Rodin's builder compares by string is compared here as
-/// written, the ascribed generic atoms included: Rodin re-stamps a sequent
-/// over any character that differs, so the reference decides the spelling.
+/// Erase the one difference between the reference `.bpo` and ours that the
+/// verbatim comparison is not meant to police: the reference writer
+/// indents four spaces per level, rossi's emitter writes each element flush
+/// left. Every other byte is compared as written, the ascribed generic
+/// atoms and the identifier order included: Rodin's static checker and
+/// generator write identifiers in the iteration order of their hash
+/// tables, and rossi reproduces it the only way it can, by keeping the
+/// order of the previous copy of the file, which is what the reference
+/// stands in for above. Rodin re-stamps a sequent over any character that
+/// differs, so the reference decides everything.
 ///
 /// Line splitting also erases a trailing-newline or CRLF difference, neither
 /// of which either writer produces.
-fn normalize(xml: &str) -> String {
-    let is_identifier = |line: &String| line.contains("org.eventb.core.poIdentifier");
-    let mut lines: Vec<String> = xml
-        .lines()
-        .map(|line| line.trim_start().to_string())
-        .collect();
-    for run in lines.chunk_by_mut(|a, b| is_identifier(a) && is_identifier(b)) {
-        run.sort();
-    }
-    lines.join("\n")
+fn strip_indent(xml: &str) -> String {
+    xml.lines()
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
