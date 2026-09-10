@@ -24,6 +24,9 @@ const IMPORTER_CLASS_RELATIVE: &str = "org/rossi/vscode/RodinProjectImportTask.c
 /// classpath and `build.xml` for the duration of one registration run.
 pub const IMPORTER_DIR_NAME: &str = ".rossi-importer";
 
+/// Rodin's Proving perspective, as `org.eventb.ide` declares it.
+pub(crate) const PROVING_PERSPECTIVE_ID: &str = "org.eventb.ui.perspective.proving";
+
 /// Host platform, passed explicitly so every variant is unit-testable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -199,7 +202,14 @@ pub fn project_registered(workspace_dir: &Path, project_name: &str) -> bool {
 /// upserts our keys and preserves every other line; this workspace is
 /// tool-managed, so re-asserting our keys over a manual change is intended.
 /// Best effort — a preference must never block opening Rodin.
-pub fn seed_workspace_prefs(workspace_dir: &Path) {
+///
+/// `proving_perspective` additionally selects Rodin's Proving perspective
+/// over the one its product defaults to. Eclipse reads that preference
+/// only when it opens a window with no perspective state to restore, so it
+/// decides how a workspace Rodin has never opened comes up and nothing after
+/// that; the key is therefore only ever written, never removed, since a
+/// removal would also discard a default the user chose inside Rodin.
+pub fn seed_workspace_prefs(workspace_dir: &Path, proving_perspective: bool) {
     let settings_dir = workspace_dir
         .join(".metadata")
         .join(".plugins")
@@ -214,7 +224,11 @@ pub fn seed_workspace_prefs(workspace_dir: &Path) {
             tracing::info!("could not seed {file}: {e}");
         }
     };
-    seed("org.eclipse.ui.prefs", &[("showIntro", "false")]);
+    let mut ui_keys = vec![("showIntro", "false")];
+    if proving_perspective {
+        ui_keys.push(("defaultPerspectiveId", PROVING_PERSPECTIVE_ID));
+    }
+    seed("org.eclipse.ui.prefs", &ui_keys);
     seed(
         "org.eclipse.core.resources.prefs",
         &[
@@ -363,7 +377,7 @@ mod tests {
     #[test]
     fn seeding_a_fresh_workspace_writes_both_prefs_files() {
         let dir = crate::test_util::TempDir::new("rossi-prefs-fresh");
-        seed_workspace_prefs(dir.path());
+        seed_workspace_prefs(dir.path(), false);
 
         let settings = dir
             .path()
@@ -371,6 +385,7 @@ mod tests {
         let ui = std::fs::read_to_string(settings.join("org.eclipse.ui.prefs")).unwrap();
         assert!(ui.contains("eclipse.preferences.version=1\n"));
         assert!(ui.contains("showIntro=false\n"));
+        assert!(!ui.contains("defaultPerspectiveId"));
         let resources =
             std::fs::read_to_string(settings.join("org.eclipse.core.resources.prefs")).unwrap();
         assert!(resources.contains("eclipse.preferences.version=1\n"));
@@ -393,8 +408,8 @@ mod tests {
         )
         .unwrap();
 
-        seed_workspace_prefs(dir.path());
-        seed_workspace_prefs(dir.path()); // idempotent
+        seed_workspace_prefs(dir.path(), false);
+        seed_workspace_prefs(dir.path(), false); // idempotent
 
         let resources =
             std::fs::read_to_string(settings.join("org.eclipse.core.resources.prefs")).unwrap();
@@ -404,6 +419,25 @@ mod tests {
         let occurrences = |needle: &str| resources.matches(needle).count();
         assert_eq!(occurrences("refresh.enabled=true\n"), 1);
         assert_eq!(occurrences("refresh.lightweight.enabled=true\n"), 1);
+    }
+
+    #[test]
+    fn seeding_the_proving_perspective_adds_one_key_beside_the_others() {
+        let dir = crate::test_util::TempDir::new("rossi-prefs-perspective");
+        seed_workspace_prefs(dir.path(), true);
+        seed_workspace_prefs(dir.path(), true); // idempotent
+
+        let ui = std::fs::read_to_string(
+            dir.path()
+                .join(".metadata/.plugins/org.eclipse.core.runtime/.settings/org.eclipse.ui.prefs"),
+        )
+        .unwrap();
+        assert!(ui.contains("showIntro=false\n"));
+        assert_eq!(
+            ui.matches("defaultPerspectiveId=org.eventb.ui.perspective.proving\n")
+                .count(),
+            1
+        );
     }
 
     #[test]

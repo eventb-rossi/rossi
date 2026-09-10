@@ -91,6 +91,9 @@ pub const RELOAD: &str = "model/reload";
 /// component's in-memory tree.
 pub const DIRTY: &str = "model/dirty";
 
+/// Switch the running workbench to a perspective.
+pub const PERSPECTIVE: &str = "ui/perspective";
+
 /// A message the plug-in sent without being asked.
 #[derive(Debug, Clone)]
 pub struct Notification {
@@ -206,6 +209,18 @@ impl Bridge {
     pub async fn reveal_project(&self, project_name: &str) -> Result<(), String> {
         self.transport
             .request(REVEAL, json!({ "project": project_name }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Switch the running workbench to the perspective with `id`.
+    ///
+    /// The only way to choose the perspective of a workspace Rodin has opened
+    /// before: it restores the one that was last active there and never
+    /// consults the `defaultPerspectiveId` preference the launch seeds.
+    pub async fn show_perspective(&self, id: &str) -> Result<(), String> {
+        self.transport
+            .request(PERSPECTIVE, json!({ "id": id }))
             .await
             .map(|_| ())
     }
@@ -688,6 +703,29 @@ mod tests {
         bridge.reveal_project("proj").await.unwrap();
 
         assert_eq!(methods(&seen).await, ["bridge/hello", REGISTER, REVEAL]);
+    }
+
+    #[tokio::test]
+    async fn asks_for_a_perspective_by_id() {
+        let (port, seen) = fake_bridge(greeting(json!([PERSPECTIVE]), |message| {
+            Some(ok(message, json!({"perspective": "p"})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-perspective", port);
+
+        let bridge = Bridge::connect(dir.path()).await.unwrap();
+        assert!(bridge.supports(PERSPECTIVE));
+        bridge
+            .show_perspective("org.eventb.ui.perspective.proving")
+            .await
+            .unwrap();
+
+        assert_eq!(methods(&seen).await, ["bridge/hello", PERSPECTIVE]);
+        // The id the plug-in switches to travels as `id`, not by position.
+        assert_eq!(
+            seen.lock().await.last().unwrap()["params"]["id"],
+            json!("org.eventb.ui.perspective.proving")
+        );
     }
 
     #[tokio::test]

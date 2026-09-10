@@ -847,6 +847,7 @@ impl RossiLanguageServer {
             written: Arc::clone(&self.rodin_written),
             mirror_proofs: config.rodin.mirror_proofs,
             bridge: config.rodin.bridge,
+            proving_perspective: config.rodin.proving_perspective,
             session_monitor: Arc::clone(&self.rodin_session_monitor),
             analyzer: self.analyzer.clone(),
         };

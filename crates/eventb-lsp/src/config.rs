@@ -338,6 +338,17 @@ pub struct RodinConfig {
     /// user is typing in.
     #[serde(default = "default_live_sync")]
     pub live_sync: bool,
+
+    /// Open Rodin in its Proving perspective rather than the Event-B
+    /// modelling one it defaults to. Applied two ways, because Eclipse reads
+    /// the perspective preference the launch seeds only for a workspace with
+    /// no saved perspective state: on a workspace Rodin has opened before,
+    /// the running instance is asked directly through the bridge plug-in.
+    /// Without that plug-in only a never-opened workspace is affected, since
+    /// Rodin otherwise restores the perspective last active there. Off by
+    /// default.
+    #[serde(default)]
+    pub proving_perspective: bool,
 }
 
 impl Default for RodinConfig {
@@ -349,6 +360,7 @@ impl Default for RodinConfig {
             mirror_proofs: default_mirror_proofs(),
             bridge: default_bridge(),
             live_sync: default_live_sync(),
+            proving_perspective: false,
         }
     }
 }
@@ -871,13 +883,15 @@ mod tests {
         assert_eq!(config.rodin.path, "");
         assert_eq!(config.rodin.workspace, "");
         assert!(config.rodin.sync);
+        assert!(!config.rodin.proving_perspective);
 
         let settings = serde_json::json!({
             "rossi": {
                 "rodin": {
                     "path": "/Applications/Rodin.app",
                     "workspace": "/tmp/rodin-ws",
-                    "sync": false
+                    "sync": false,
+                    "provingPerspective": true
                 }
             }
         });
@@ -885,6 +899,7 @@ mod tests {
         assert_eq!(config.rodin.path, "/Applications/Rodin.app");
         assert_eq!(config.rodin.workspace, "/tmp/rodin-ws");
         assert!(!config.rodin.sync);
+        assert!(config.rodin.proving_perspective);
 
         // An absent key keeps sync on.
         let settings = serde_json::json!({ "rossi": { "rodin": {} } });

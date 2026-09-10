@@ -108,6 +108,12 @@ pub struct OpenRequest {
     /// The `rossi.rodin.bridge` setting: talk to a running Rodin's bridge
     /// plug-in when one is published, instead of only writing files at it.
     pub bridge: bool,
+    /// The `rossi.rodin.provingPerspective` setting: seed Rodin's Proving
+    /// perspective as the workspace's default perspective, and ask a Rodin
+    /// that publishes a bridge for it directly, which is the only thing a
+    /// workspace Rodin has opened before answers to. That second half rides
+    /// the bridge and so needs [`Self::bridge`].
+    pub proving_perspective: bool,
     /// Slot for the per-workspace Rodin session stop monitor.
     pub(crate) session_monitor: proof_mirror::SessionMonitorSlot,
     /// Analysis handles, for refreshing the proof-status overlay after the
@@ -264,7 +270,13 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     // (Windows), so the attempt follows the same "not demonstrably free" rule
     // as `lock::rebuild_on_save_wanted` rather than waiting for `Held`.
     let bridged = if request.bridge && lock_state != lock::LockState::Free {
-        register_through_bridge(&request.workspace_dir, &project_dir, &project_name).await
+        register_through_bridge(
+            &request.workspace_dir,
+            &project_dir,
+            &project_name,
+            request.proving_perspective,
+        )
+        .await
     } else {
         None
     };
@@ -360,7 +372,7 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
                 .await;
         }
     }
-    launch::seed_workspace_prefs(&request.workspace_dir);
+    launch::seed_workspace_prefs(&request.workspace_dir, request.proving_perspective);
 
     progress.report("launching Rodin").await;
     let (command, args) = launch::launch_command(&rodin_path, &request.workspace_dir, platform);
@@ -372,6 +384,15 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             )
             .await;
     }
+    // Spawned: waiting for the bridge to appear must not extend the
+    // single-flight guard the lens is held by.
+    if request.proving_perspective && request.bridge {
+        let workspace_dir = request.workspace_dir.clone();
+        tokio::spawn(async move {
+            show_proving_perspective(&workspace_dir).await;
+        });
+    }
+
     progress
         .finish(
             MessageType::INFO,
@@ -444,7 +465,13 @@ pub(crate) async fn reload_in_rodin(
 }
 
 /// Register and reveal the project through a running Rodin's bridge plug-in,
-/// answering the name the workspace registered it under.
+/// answering the name the workspace registered it under, and switch that Rodin
+/// to the Proving perspective when `proving_perspective` asks for it.
+///
+/// The switch rides this connection rather than making its own: the workspace
+/// this Rodin restored decided its perspective, so the preference
+/// [`launch::seed_workspace_prefs`] seeds had no say, and the instance that
+/// has just been registered into is the one that can still be asked.
 ///
 /// `None` means no bridge answered, whether because there is no plug-in, an
 /// older one, or a descriptor left behind by a Rodin that was killed; the
@@ -455,6 +482,7 @@ async fn register_through_bridge(
     workspace_dir: &Path,
     project_dir: &Path,
     project_name: &str,
+    proving_perspective: bool,
 ) -> Option<String> {
     let bridge = match bridge::Bridge::connect(workspace_dir).await {
         Ok(bridge) => bridge,
@@ -489,7 +517,66 @@ async fn register_through_bridge(
     if let Err(message) = bridge.reveal_project(&registered).await {
         tracing::info!("the Rodin bridge could not reveal the project: {message}");
     }
+    // Cosmetic next to the registration too, and under the same rule: an
+    // older plug-in simply does not offer the method.
+    if proving_perspective
+        && bridge.supports(bridge::PERSPECTIVE)
+        && let Err(message) = bridge
+            .show_perspective(launch::PROVING_PERSPECTIVE_ID)
+            .await
+    {
+        tracing::info!("the Rodin bridge could not switch the perspective: {message}");
+    }
     Some(registered)
+}
+
+/// Ask a Rodin that is still booting to switch to the Proving perspective,
+/// waiting for it to publish its bridge.
+///
+/// This is where `rossi.rodin.provingPerspective` is honoured for a workspace
+/// Rodin has opened before. The preference [`launch::seed_workspace_prefs`]
+/// writes decides only how a workspace with no saved perspective state comes
+/// up; every later launch restores the perspective that was last active
+/// there, and nothing outside the process can override that. Best effort
+/// throughout, exactly like the reveal: stock Rodin publishes no bridge, and
+/// an older plug-in does not offer the method.
+///
+/// A Rodin that is already up is served by [`register_through_bridge`]
+/// instead, on the connection it already holds.
+async fn show_proving_perspective(workspace_dir: &Path) {
+    // The same window the launch gives Rodin to take the workspace lock: the
+    // bridge comes later than the lock, but both are waits on one boot, and
+    // `ensure_rodin_live` already retries its own connect against this one.
+    let deadline = tokio::time::Instant::now() + BOOT_LOCK_TIMEOUT;
+    let bridge = loop {
+        match bridge::Bridge::connect(workspace_dir).await {
+            Ok(bridge) => break bridge,
+            Err(message) => {
+                if tokio::time::Instant::now() >= deadline {
+                    tracing::info!("no Rodin bridge to switch the perspective through: {message}");
+                    return;
+                }
+                tokio::time::sleep(POLL).await;
+            }
+        }
+    };
+    if !bridge.supports(bridge::PERSPECTIVE) {
+        tracing::info!(
+            "the Rodin {} bridge does not offer {}",
+            bridge.rodin_version(),
+            bridge::PERSPECTIVE
+        );
+        return;
+    }
+    match bridge
+        .show_perspective(launch::PROVING_PERSPECTIVE_ID)
+        .await
+    {
+        Ok(()) => tracing::debug!("asked Rodin for the Proving perspective"),
+        Err(message) => {
+            tracing::info!("the Rodin bridge could not switch the perspective: {message}")
+        }
+    }
 }
 
 /// How long a just-launched Rodin gets to take the workspace lock before
@@ -498,6 +585,9 @@ async fn register_through_bridge(
 /// bounded, so a Rodin that failed to come up re-enables the lens.
 pub(crate) const BOOT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How often either boot wait in this module looks again.
+const POLL: Duration = Duration::from_secs(1);
+
 /// Poll the workspace lock until it leaves [`lock::LockState::Free`] or the
 /// timeout passes, returning the state that ended the wait (`Free` on
 /// timeout). `Held` means the launched instance owns the workspace;
@@ -505,7 +595,6 @@ pub(crate) const BOOT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 /// observe more there, and on Windows the `.lock` file appearing is itself
 /// the boot signal that moves the state off `Free`.
 async fn wait_for_workspace_lock(workspace_dir: &Path, timeout: Duration) -> lock::LockState {
-    const POLL: Duration = Duration::from_secs(1);
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let state = lock::workspace_lock_state(workspace_dir);
