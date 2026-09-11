@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.2.2](https://github.com/eventb-rossi/rossi/compare/v0.2.1...v0.2.2) - 2026-09-11
+
+### Added
+- *(cli)* Restrict a dump to named components
+- *(cli)* Add the dump subcommand
+- *(fmt)* Add an opt-in private-use-glyph output mode
+- *(build)* Reject a declared name that carries a prime
+- *(cli)* Clean orphaned and broken proofs from a project
+- *(formula)* Expose binder-name resolution
+- *(xml)* Declare UTF-8 encoding in exported Rodin projects
+- *(pretty)* Keep comments where the source put them
+- *(parse)* Give variants a comment field
+- *(ast)* Record where a skip action is written
+- *(ast)* Give a machine variant its source span
+- *(build)* Locate WD conditions by source
+- *(ast)* Identify the source a span indexes
+- *(formula)* Enumerate a predicate's propositional leaves
+- *(prove)* Rewrite a proof file's entries in place
+- *(build)* Keep a previous file's declaration order when regenerating
+- *(build)* Publish the rossi-model JSON schema
+- *(build)* Assemble the checked model into a dump document
+- *(build)* Add the rossi-model formula converter
+- *(editors)* Expose the rossi.rodin.provingPerspective setting
+- *(lsp)* Open Rodin in the Proving perspective on request
+- *(editors)* Expose the rossi.rodin.liveSync setting
+- *(lsp)* Merge Rodin's unsaved edits into the buffer
+- *(lsp)* Receive what the Rodin bridge pushes
+- *(lsp)* Register the Rodin project through its bridge plug-in
+- *(lsp)* Honour privateUseGlyphs across formatting and assistance
+- *(lsp)* Filter operator completions on word aliases
+
+### Changed
+- *(build)* Name the component a finding and a severity belong to
+- *(cli)* Share the project-name helpers between build and dump
+- *(cli)* Move the structured-output report to its own module
+- *(cli)* Share the prove command's obligation classification
+- *(pretty)* Thread an output sink through the print helpers
+- *(lsp)* Take a merge's inputs rather than reading them
+- *(lsp)* Resolve document symbols through the line index
+
+### Fixed
+- *(parse)* Preserve camille labels verbatim
+- *(build)* Report a primed identifier nothing can declare
+- *(pretty)* Keep a nested same-operator child parenthesized
+- *(pretty)* Space Rodin's binary operators the way its printer does
+- *(xml)* Emit the comment attribute on witnesses
+- *(parse)* Span the primed declarations an action's lowering derives
+- *(parse)* Reject an annotation that does not denote a type
+- *(formula)* Read a type spelling the way Rodin's parser does
+- *(lsp)* Mask names by the grammar's own list and whitespace rules
+- *(lsp)* Keep component and event names out of the operator rewrite
+- *(parse)* Treat bool as the closed operator word it is
+- *(parse)* Reject a math keyword as a predicate-application head
+- *(build)* Ascribe generic atoms the way Rodin's typed printer does
+- *(build)* Place an inherited element in the file that wrote it
+- *(lsp)* Reload Rodin's editors when the lens rebuilds
+- *(lsp)* Keep a Rodin session from deleting derived proof files
+- *(lsp)* Preserve complete label names
+- *(lsp)* Point the variant outline row at the variant
+- *(lsp)* Point declaration symbols at their declaration
+
+### Documentation
+- Correct the subcommand tables
+- Describe rossi clean in the READMEs
+- *(lsp)* Document the documentSymbol and settings contract
+
 ## [0.2.1](https://github.com/eventb-rossi/rossi/compare/v0.2.0...v0.2.1) - 2026-09-03
 
 ### Added
