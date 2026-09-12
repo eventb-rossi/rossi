@@ -20,6 +20,8 @@
 //!   that no textual notation can represent
 //! - **EB031** non-portable whitespace — a structural position separates two
 //!   names with a Unicode space stock Camille cannot read
+//! - **EB034** section out of order — a section is written after one stock
+//!   Camille requires it to precede
 //!
 //! EB019 (duplicate component names) and EB021/EB022 (duplicate
 //! identifiers / labels) are project- and component-integrity failures,
@@ -33,7 +35,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use rossi::ast::Span;
 use rossi::formula::tag::{AssocPredOp, RelationalOp};
-use rossi::keywords::{DeclSite, camille_unreadable_separator, clause_holds_only_names};
+use rossi::keywords::{DeclSite, KeywordId, camille_unreadable_separator, clause_holds_only_names};
 use rossi::{
     Component, ComponentId, DependencyGraph, Event, ExpressionKind, InitialisationEvent, Machine,
     Predicate, PredicateKind,
@@ -126,6 +128,59 @@ pub fn run_component(component: &Component) -> Vec<Diagnostic> {
         }
         diags.extend(keyword_name_diag(origin, kind, name, site, span));
     });
+    diags.extend(section_order_diags(component));
+    diags
+}
+
+/// EB034: a section written after one stock Camille requires it to precede.
+///
+/// Event-B has no structural syntax (Abrial) and Rodin cannot express a
+/// section order — `contextFile.dtd` models a component's children as
+/// `( extends | set | constant | axiom )*`, the item-relations registry is a
+/// type whitelist with no priority, and the static checker fetches children by
+/// type — so rossi accepts any order and keeps doing so. Stock Camille is the
+/// one reader that does not: its lexer walks a fixed index list and refuses a
+/// keyword that moves backwards along it, which stops the file opening in
+/// Rodin's text editor. Warn where the model is unreadable to it.
+///
+/// `clauses()` is the sections in source order for a strict parse, and empty
+/// for a Rodin-XML import — an imported model has no section order to be wrong
+/// about, and is silent here for free. Error recovery rebuilds the list in the
+/// canonical order instead, so a component that failed the strict parse is
+/// silent here too, and stays silent until the parse error is fixed. The
+/// order comes from [`rossi::keywords::context_clause_boundary`] and its
+/// machine sibling, picked by the component because `THEOREMS` sits in both
+/// lists at different positions. A repeated section is not this rule's
+/// business: the parser already rejects one as a duplicate clause.
+fn section_order_diags(component: &Component) -> Vec<Diagnostic> {
+    let boundary: fn(KeywordId) -> &'static [KeywordId] = match component {
+        Component::Context(_) => rossi::keywords::context_clause_boundary,
+        Component::Machine(_) => rossi::keywords::machine_clause_boundary,
+    };
+    let mut seen: Vec<KeywordId> = Vec::new();
+    let mut diags = Vec::new();
+    for clause in component.clauses() {
+        let follows = boundary(clause.keyword);
+        // The earliest section already read that this one should have come
+        // before. Reporting every misplaced section rather than stopping at
+        // the first is what lets one `rossi fmt -i` answer the whole file.
+        if let Some(&before) = seen.iter().find(|k| follows.contains(k)) {
+            diags.push(Diagnostic {
+                severity: RuleId::SectionOutOfOrder.default_severity(),
+                origin: component.name().to_string(),
+                message: format!(
+                    "`{}` is written after `{}`, which stock Camille requires it to \
+                     precede, so Rodin's text editor cannot open the file — run \
+                     `rossi fmt -i` to reorder the sections",
+                    rossi::keywords::spell(clause.keyword),
+                    rossi::keywords::spell(before)
+                ),
+                rule_id: Some(RuleId::SectionOutOfOrder),
+                span: Some(clause.span),
+            });
+        }
+        seen.push(clause.keyword);
+    }
     diags
 }
 
@@ -2640,5 +2695,137 @@ mod tests {
         let diags = ws_findings(source);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].origin, "C1");
+    }
+    // ---- EB034: section order -------------------------------------------
+    //
+    // Camille's order comes from `EventBLexer.checkClauseOrders` in
+    // probparsers/eventbstruct, which walks a fixed index list and throws on a
+    // keyword that moves backwards along it. Rodin has no order at all:
+    // `contextFile.dtd` is `( extends | set | constant | axiom )*`.
+
+    /// EB034 findings over a probe, routed through the production wiring the
+    /// CLI and the LSP both reach.
+    fn order_findings(source: &str) -> Vec<Diagnostic> {
+        let components =
+            ProjectComponent::from_eventb("probe.eventb", source).expect("probe must parse");
+        components
+            .iter()
+            .flat_map(|pc| run_component(&pc.component))
+            .filter(|d| d.rule_id == Some(RuleId::SectionOutOfOrder))
+            .collect()
+    }
+
+    #[test]
+    fn a_context_section_written_too_late_warns_at_the_section() {
+        // Camille: "Set declarations are only allowed before the constants
+        // declarations" (EB004), so the file will not open in Rodin's text
+        // editor. rossi parses it, and keeps parsing it.
+        let source = "context C\naxioms\n  @a 1 = 1\nsets\n  S\nend\n";
+        assert!(rossi::parse(source).is_ok(), "the parser still accepts it");
+        let diags = order_findings(source);
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert_eq!(diags[0].severity, Severity::Warning);
+        assert_eq!(diags[0].origin, "C");
+        let span = diags[0].span.expect("EB034 anchors on the section");
+        assert_eq!(&source[span.start..span.end], "sets\n  S");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`SETS` is written after `AXIOMS`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn a_machine_section_written_too_late_warns_at_the_section() {
+        let source = "machine M\ninvariants\n  @i x ∈ ℤ\nvariables\n  x\n\
+                      events\n  event INITIALISATION\n  then\n    @a x ≔ 0\n  end\nend\n";
+        let diags = order_findings(source);
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`VARIABLES` is written after `INVARIANTS`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn a_machine_theorems_section_is_judged_against_the_machine_order() {
+        // THEOREMS is in both section lists, after AXIOMS in a context and
+        // between INVARIANTS and VARIANT in a machine. Only the machine list
+        // puts anything after it, so only there can it be written too late.
+        let machine = "machine M\nvariables\n  x\ninvariants\n  @i x ∈ ℤ\nvariant\n  x\n\
+                       theorems\n  @t x = x\nevents\n  event INITIALISATION\n  then\n\
+                           @a x ≔ 0\n  end\nend\n";
+        let diags = order_findings(machine);
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`THEOREMS` is written after `VARIANT`"),
+            "{}",
+            diags[0].message
+        );
+        // The same section last in a context is where it belongs.
+        let context = "context C\nsets\n  S\naxioms\n  @a 1 = 1\ntheorems\n  @t 2 = 2\nend\n";
+        assert!(order_findings(context).is_empty());
+    }
+
+    #[test]
+    fn every_misplaced_section_is_reported() {
+        // One `rossi fmt -i` answers the whole file, so the advisory names
+        // every section that moves rather than stopping at the first.
+        let source = "context C\naxioms\n  @a 1 = 1\nconstants\n  c\nsets\n  S\nend\n";
+        let diags = order_findings(source);
+        assert_eq!(diags.len(), 2, "{diags:#?}");
+    }
+
+    #[test]
+    fn a_canonical_component_stays_silent() {
+        for source in [
+            "context C\nextends D\nsets\n  S\nconstants\n  c\naxioms\n  @a c ∈ ℤ\nend\n",
+            "machine M\nsees C\nvariables\n  x\ninvariants\n  @i x ∈ ℤ\nvariant\n  x\n\
+             events\n  event INITIALISATION\n  then\n    @a x ≔ 0\n  end\nend\n",
+        ] {
+            let diags = order_findings(source);
+            assert!(diags.is_empty(), "{diags:#?}");
+        }
+    }
+
+    #[test]
+    fn formatted_output_never_trips_the_rule() {
+        // `rossi fmt -i` is what the advisory tells the user to run, so the
+        // printer's emission order has to be the order this rule reads off the
+        // keyword table. Nothing else pins the two together: the grammar
+        // accepts any order, so it cannot be scraped for the canonical one.
+        let source = "context C\naxioms\n  @a 1 = 1\nconstants\n  c\nsets\n  S\nend\n\
+                      machine M\ninvariants\n  @i x ∈ ℤ\nvariables\n  x\n\
+                      events\n  event INITIALISATION\n  then\n    @a x ≔ 0\n  end\nend\n";
+        assert!(
+            !order_findings(source).is_empty(),
+            "the probe proves nothing"
+        );
+        let formatted = rossi::format_str(source, &rossi::pretty::PrettyPrinter::default())
+            .expect("the probe parses");
+        let diags = order_findings(&formatted);
+        assert!(diags.is_empty(), "{formatted}\n{diags:#?}");
+    }
+
+    #[test]
+    fn an_imported_model_has_no_section_order_to_judge() {
+        // A Rodin-XML import carries no clause regions, because Rodin's format
+        // has no sections to order. The rule must not invent findings for one.
+        let c = Context::new("C".into());
+        assert!(c.clauses.is_empty());
+        let diags = run_component(&Component::Context(c));
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.rule_id == Some(RuleId::SectionOutOfOrder)),
+            "{diags:#?}"
+        );
     }
 }

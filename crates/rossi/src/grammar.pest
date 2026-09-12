@@ -824,6 +824,10 @@ machine_clause_events = {
 // exception: it is a list of `EVENT … END` closed by the machine `END`, so it is
 // the final section. Keeping it terminal is what lets a parse error inside the
 // block report just `EVENT`/`END` instead of every clause keyword.
+//
+// Stock Camille is stricter and fixes the order in its lexer, so an order it
+// refuses is a portability problem rather than a syntax one: rule EB034
+// (`rossi_build::lint`) reports it, and `rossi fmt` rewrites it.
 machine_body = {
     (machine_clause_refines | machine_clause_sees | machine_clause_variables
      | machine_clause_invariants | machine_clause_theorems | machine_clause_variant)*

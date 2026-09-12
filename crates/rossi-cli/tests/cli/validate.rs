@@ -1812,6 +1812,37 @@ fn validate_stdin_clause_out_of_order_reports_eb030() {
 }
 
 #[test]
+fn validate_stdin_section_out_of_order_reports_eb034() {
+    // EB034 is advice, not a rejection: the parser accepts the file, so the
+    // run stays green and `--no-lints` silences the row.
+    let source = "CONTEXT c\nAXIOMS\n    @a 1 = 1\nSETS\n    S\nEND\n";
+    let output = run_cli_with_stdin(&["validate", "--format", "json", "-"], source);
+    assert!(output.status.success(), "EB034 is a Warning, not an Error");
+    let rows: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON output should be valid");
+    let row = rows
+        .as_array()
+        .expect("rows array")
+        .iter()
+        .find(|row| row["rule_id"] == "EB034")
+        .unwrap_or_else(|| panic!("expected an EB034 row: {rows}"));
+    assert_eq!(row["severity"], "warning");
+    assert_eq!(row["region"]["start_line"], 4);
+
+    let quiet = run_cli_with_stdin(&["validate", "--format", "json", "--no-lints", "-"], source);
+    let rows: serde_json::Value =
+        serde_json::from_slice(&quiet.stdout).expect("JSON output should be valid");
+    assert!(
+        !rows
+            .as_array()
+            .expect("rows array")
+            .iter()
+            .any(|row| row["rule_id"] == "EB034"),
+        "EB034 should be suppressed under --no-lints: {rows}"
+    );
+}
+
+#[test]
 fn validate_stdin_missing_label_reports_eb032_at_the_item() {
     let source =
         "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT e\n    THEN\n        x ≔ 1\n    END\nEND\n";
