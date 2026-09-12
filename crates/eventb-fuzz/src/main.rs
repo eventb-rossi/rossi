@@ -53,18 +53,27 @@ struct GenArgs {
     #[arg(long = "suppress", value_name = "RULE")]
     suppressed: Vec<String>,
     /// Emit the Unicode spelling of every operator, which is what
-    /// eventb-checker accepts. Pair with `--lowercase-keywords`.
+    /// eventb-checker accepts. Implied by `--normalize`.
     #[arg(long)]
     unicode: bool,
     /// Emit every structural keyword in lower case, which is what Camille
-    /// accepts. Pair with `--unicode`.
+    /// accepts. Implied by `--normalize`.
     #[arg(long)]
     lowercase_keywords: bool,
     /// Write each component's sections, and each event's clauses, in the
-    /// canonical order, which is the order Camille requires. Pair with the
-    /// two above.
+    /// canonical order, which is the order Camille requires. Implied by
+    /// `--normalize`.
     #[arg(long)]
     ordered_clauses: bool,
+    /// Every emission convention at once: what a Camille gate actually needs
+    /// fed to it.
+    ///
+    /// Each convention exists to stop one documented divergence from being
+    /// reported in place of a finding, and they are only useful together:
+    /// Unicode operators buy nothing while the keyword case still stops the
+    /// file at its first line.
+    #[arg(long)]
+    normalize: bool,
 }
 
 fn main() -> ExitCode {
@@ -98,9 +107,9 @@ fn generate(args: GenArgs) -> ExitCode {
         max_depth: args.max_depth,
         max_tokens: args.max_tokens,
         suppressed: args.suppressed.clone(),
-        unicode_operators: args.unicode,
-        lowercase_keywords: args.lowercase_keywords,
-        ordered_clauses: args.ordered_clauses,
+        unicode_operators: args.unicode || args.normalize,
+        lowercase_keywords: args.lowercase_keywords || args.normalize,
+        ordered_clauses: args.ordered_clauses || args.normalize,
         ..Config::default()
     };
     let generator = Generator::new(&grammar, config);
