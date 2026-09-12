@@ -9,11 +9,11 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB033"`); gaps are
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB034"`); gaps are
 /// rules not yet implemented in rossi (EB020 unknown
 /// type) or removed as valueless (EB013 dead
 /// constant — every hit was already an EB006 typing Error). EB023, EB024,
-/// EB028 and EB031 are rossi-only extensions; EB025 is a refinement
+/// EB028, EB031 and EB034 are rossi-only extensions; EB025 is a refinement
 /// static-check emitted by `crate::build`; EB029, EB030 and EB032 are
 /// structural parse errors raised by the Camille grammar
 /// (`rossi::ParseError`), not by a check.
@@ -102,10 +102,14 @@ pub enum RuleId {
     /// EB033 — A declared name carries the after-state prime (`c'`), which
     /// only a witness label may.
     PrimedDeclaredName,
+    /// EB034 — A context or machine section is written after one it must
+    /// precede (`SETS` below `AXIOMS`, say). rossi accepts it, as Rodin and
+    /// CamilleX do; stock Camille does not. (rossi-only.)
+    SectionOutOfOrder,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB032"`).
+    /// Stable string code (`"EB001"`..`"EB034"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -140,6 +144,7 @@ impl RuleId {
             RuleId::NonPortableWhitespace => "EB031",
             RuleId::MissingLabel => "EB032",
             RuleId::PrimedDeclaredName => "EB033",
+            RuleId::SectionOutOfOrder => "EB034",
         }
     }
 
@@ -178,6 +183,7 @@ impl RuleId {
             RuleId::NonPortableWhitespace => "Non-portable whitespace",
             RuleId::MissingLabel => "Missing label",
             RuleId::PrimedDeclaredName => "Primed declared name",
+            RuleId::SectionOutOfOrder => "Section out of order",
         }
     }
 
@@ -274,6 +280,9 @@ impl RuleId {
             RuleId::PrimedDeclaredName => {
                 "A carrier set, constant, variable or event parameter is declared with the after-state prime (`c'`). The prime names the post-value of an assigned variable, so it belongs to a formula and never to a declaration: Rodin parses every declaration with primes disallowed and reports `InvalidIdentifierError`, dropping the name from the checked model. Only a witness label may be primed. Rename the declaration without the prime."
             }
+            RuleId::SectionOutOfOrder => {
+                "A context or machine writes a section after one it must precede — `SETS` below `AXIOMS`, `VARIABLES` below `INVARIANTS`. Rodin stores a component's children as an unordered set and cannot express an order, so rossi accepts any, but stock Camille fixes the order in its lexer and refuses to open the file (\"Set declarations are only allowed before the constants declarations\"). Run `rossi fmt -i` to reorder the sections."
+            }
         }
     }
 
@@ -312,7 +321,8 @@ impl RuleId {
             | RuleId::ProofFileParseError
             | RuleId::ShadowedName
             | RuleId::KeywordName
-            | RuleId::NonPortableWhitespace => Severity::Warning,
+            | RuleId::NonPortableWhitespace
+            | RuleId::SectionOutOfOrder => Severity::Warning,
         }
     }
 
@@ -372,6 +382,7 @@ impl RuleId {
             RuleId::NonPortableWhitespace,
             RuleId::MissingLabel,
             RuleId::PrimedDeclaredName,
+            RuleId::SectionOutOfOrder,
         ]
     }
 }
@@ -418,6 +429,7 @@ mod tests {
         assert_eq!(RuleId::NonPortableWhitespace.code(), "EB031");
         assert_eq!(RuleId::MissingLabel.code(), "EB032");
         assert_eq!(RuleId::PrimedDeclaredName.code(), "EB033");
+        assert_eq!(RuleId::SectionOutOfOrder.code(), "EB034");
     }
 
     /// `all()` is a hand-maintained array with no exhaustiveness check, unlike
@@ -429,8 +441,8 @@ mod tests {
     /// order also subsumes the uniqueness and length checks.
     #[test]
     fn all_lists_every_rule() {
-        // `EB001`..`EB033` minus the two documented gaps (EB013, EB020).
-        let expected: Vec<String> = (1..=33)
+        // `EB001`..`EB034` minus the two documented gaps (EB013, EB020).
+        let expected: Vec<String> = (1..=34)
             .filter(|n| !matches!(n, 13 | 20))
             .map(|n| format!("EB{n:03}"))
             .collect();
