@@ -1055,6 +1055,185 @@ fn eb030_move_stays_inside_its_own_event() {
 }
 
 #[test]
+fn eb034_offers_to_move_the_section_above_the_one_it_must_precede() {
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c\nAXIOMS\n    @a 1 = 1\nSETS\n    S\nEND\n";
+    // The diagnostic spans the whole misplaced section, as the lint emits it.
+    let section = Range {
+        start: Position::new(3, 0),
+        end: Position::new(4, 5),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered for EB034");
+    assert_eq!(fix.title, "Move SETS above AXIOMS");
+    assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
+    let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///c.eventb").unwrap()];
+    assert_eq!(edits.len(), 2, "{edits:?}");
+    assert_eq!(
+        edits[0].range,
+        Range {
+            start: Position::new(1, 0),
+            end: Position::new(1, 0),
+        }
+    );
+    assert_eq!(edits[0].new_text, "SETS\n    S\n");
+    assert_eq!(
+        edits[1].range,
+        Range {
+            start: Position::new(3, 0),
+            end: Position::new(5, 0),
+        }
+    );
+}
+
+#[test]
+fn eb034_reads_a_machine_theorems_section_against_the_machine_order() {
+    // THEOREMS is in both section lists at different positions, so the order
+    // comes from the enclosing component header, not from the keyword.
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @i x ∈ ℤ\nVARIANT\n    x\nTHEOREMS\n    @t x = x\nEND\n";
+    let section = Range {
+        start: Position::new(7, 0),
+        end: Position::new(8, 12),
+    };
+    let params = diagnostic_params("file:///m.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
+    assert_eq!(fix.title, "Move THEOREMS above VARIANT");
+}
+
+#[test]
+fn eb034_move_stays_inside_its_own_component() {
+    // The scan stops at the component header, and at the END of the component
+    // above it, so a section is never lifted into the previous component.
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c1\nSETS\n    T\nEND\nCONTEXT c2\nAXIOMS\n    @a 1 = 1\nSETS\n    S\nEND\n";
+    let section = Range {
+        start: Position::new(7, 0),
+        end: Position::new(8, 5),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
+    let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///c.eventb").unwrap()];
+    assert_eq!(
+        edits[0].range.start,
+        Position::new(5, 0),
+        "the section moves above its own AXIOMS, not the previous component's SETS"
+    );
+}
+
+#[test]
+fn eb034_carries_an_attached_comment_with_the_section() {
+    // Only a top-level clause carries a `ClauseRegion`, so a comment written
+    // above a section header is anchored to that section and has to travel
+    // with it. A blank line is not a comment and stays where it is.
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c\nAXIOMS\n    @a 1 = 1\n\n// the carrier sets\nSETS\n    S\nEND\n";
+    let section = Range {
+        start: Position::new(5, 0),
+        end: Position::new(6, 5),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
+    let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///c.eventb").unwrap()];
+    assert_eq!(edits[0].new_text, "// the carrier sets\nSETS\n    S\n");
+    assert_eq!(
+        edits[1].range,
+        Range {
+            start: Position::new(4, 0),
+            end: Position::new(7, 0),
+        },
+        "the comment line is deleted with the section, the blank line is not"
+    );
+}
+
+#[test]
+fn eb034_leaves_the_target_section_with_its_own_comment() {
+    // The insert lands above the destination's comment, not between it and
+    // its header: a comment above a section is that section's, so dropping
+    // SETS in between would re-file the AXIOMS comment onto SETS.
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c\n// the axioms\nAXIOMS\n    @a 1 = 1\nSETS\n    S\nEND\n";
+    let section = Range {
+        start: Position::new(4, 0),
+        end: Position::new(5, 5),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
+    let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///c.eventb").unwrap()];
+    assert_eq!(
+        edits[0].range.start,
+        Position::new(1, 0),
+        "the section goes above the AXIOMS comment, not below it"
+    );
+}
+
+#[test]
+fn eb034_never_splits_a_comment_opened_on_a_code_line() {
+    // The lines above the section are the tail of a block comment the axiom
+    // line opened, so they are that line's trailing comment, not the
+    // section's. Moving them would leave an unterminated `/*` behind.
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c\nAXIOMS\n    @a 1 = 1 /* trailing\n    comment */\nSETS\n    S\nEND\n";
+    let section = Range {
+        start: Position::new(4, 0),
+        end: Position::new(5, 5),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
+    let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
+        [&Url::parse("file:///c.eventb").unwrap()];
+    assert_eq!(edits[0].new_text, "SETS\n    S\n");
+    assert_eq!(
+        edits[1].range.start,
+        Position::new(4, 0),
+        "the comment stays with the axiom line that opened it"
+    );
+}
+
+#[test]
+fn eb034_offers_nothing_when_the_section_shares_its_last_line() {
+    // Whole lines move, so a section that does not own its last line would
+    // drag the component's END along with it.
+    let provider = CodeActionProvider::new();
+    let text = "CONTEXT c\nAXIOMS\n    @a 1 = 1\nSETS S END\n";
+    let section = Range {
+        start: Position::new(3, 0),
+        end: Position::new(3, 6),
+    };
+    let params = diagnostic_params("file:///c.eventb", section, "EB034");
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    assert!(
+        action_titled(&actions, "Move").is_none(),
+        "the END shares the line: {actions:?}"
+    );
+}
+
+#[test]
 fn eb030_offers_nothing_when_the_clause_shares_its_last_line() {
     // Whole lines move, so a clause that does not own its last line would
     // drag the event's END along with it.

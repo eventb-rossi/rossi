@@ -212,8 +212,8 @@ fn parse_error_range(error: &rossi::ParseError, text: &str) -> Range {
 /// resolution, and no type inference — the component-local errors from
 /// `rossi_build::component_semantic_diagnostics` (duplicate identifiers and
 /// labels, EB021/EB022; a primed declaration or a primed use, EB033/EB018),
-/// the shadowed-name (EB023) and keyword-name (EB028) lints from
-/// `rossi_build::lint::run_component`, and the non-portable-whitespace
+/// the shadowed-name (EB023), keyword-name (EB028) and section-order (EB034)
+/// lints from `rossi_build::lint::run_component`, and the non-portable-whitespace
 /// advisory (EB031) from `rossi_build::lint::run_source`, which reads `text`
 /// directly because whitespace sits between AST nodes rather than inside one
 /// — so they are safe to recompute on every keystroke alongside the parse
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(d.range.end.character, 14);
     }
 
-    // --- single-component lints (EB021-023, EB028, EB033) --------------------
+    // --- single-component lints (EB021-023, EB028, EB033, EB034) -------------
     //
     // These exercise the run_component pass surfaced through the LSP. The
     // snippets parse cleanly (strict `rossi::parse`), so every diagnostic comes
@@ -901,6 +901,21 @@ mod tests {
         assert_eq!(diags[0].range.start.line, 2);
         assert_eq!(diags[0].range.start.character, 4);
         assert_eq!(diags[0].range.end.character, 7);
+    }
+
+    #[test]
+    fn section_out_of_order_is_eb034_warning() {
+        // `SETS` below `AXIOMS` parses here and will not open in Rodin's text
+        // editor, so it reaches the buffer as a Warning underlining the whole
+        // section — the range the move quick fix keys on.
+        let text = "CONTEXT c\nAXIOMS\n    @axm1 1 = 1\nSETS\n    S\nEND\n";
+        let diags = lint_for(text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(code_of(&diags[0]), Some("EB034"));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diags[0].range.start.line, 3);
+        assert_eq!(diags[0].range.start.character, 0);
+        assert_eq!(diags[0].range.end.line, 4);
     }
 
     #[test]

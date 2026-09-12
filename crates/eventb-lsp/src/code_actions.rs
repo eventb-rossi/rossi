@@ -23,6 +23,101 @@ use std::collections::{HashMap, HashSet};
 /// reformatting the document the way `textDocument/formatting` would.
 pub const FIX_ALL_KIND: CodeActionKind = CodeActionKind::new("source.fixAll.rossi");
 
+/// Which nesting a misplaced clause sits in, and so which order names its
+/// destination and which keywords the upward scan must not cross.
+#[derive(Clone, Copy)]
+enum MoveScope {
+    /// An event's clauses (EB030): `ANY`, `WHERE`, `WITH`, `WITNESS`, `THEN`.
+    EventClause,
+    /// A context's or machine's sections (EB034).
+    ComponentSection,
+}
+
+impl MoveScope {
+    /// The keywords `clause` must precede, given the lines above it.
+    ///
+    /// A section is judged against its own component's list, found by scanning
+    /// up for the header: `THEOREMS` is in both lists at different positions,
+    /// so the keyword alone does not say which order applies. A section can
+    /// never sit below the `EVENTS` block — the grammar pins it last — so the
+    /// scan never crosses an event `END` on its way to the header.
+    fn boundary(
+        self,
+        lines: &[&str],
+        first: usize,
+        clause: KeywordId,
+    ) -> Option<&'static [KeywordId]> {
+        match self {
+            MoveScope::EventClause => Some(rossi::keywords::event_clause_boundary(clause)),
+            MoveScope::ComponentSection => lines[..first]
+                .iter()
+                .rev()
+                .filter_map(|line| line_keyword(line))
+                .find_map(|keyword| match keyword {
+                    KeywordId::Context => Some(rossi::keywords::context_clause_boundary(clause)),
+                    KeywordId::Machine => Some(rossi::keywords::machine_clause_boundary(clause)),
+                    _ => None,
+                }),
+        }
+    }
+
+    /// The keywords that close the region the clause may move within.
+    fn stop_keywords(self) -> &'static [KeywordId] {
+        match self {
+            MoveScope::EventClause => &[KeywordId::Event, KeywordId::Events, KeywordId::End],
+            MoveScope::ComponentSection => {
+                &[KeywordId::Context, KeywordId::Machine, KeywordId::End]
+            }
+        }
+    }
+
+    /// Whether a comment above the clause header belongs to the clause and so
+    /// has to move with it. Only a top-level clause carries a `ClauseRegion`
+    /// for `rossi::comment_place` to anchor one to.
+    fn carries_leading_comments(self) -> bool {
+        matches!(self, MoveScope::ComponentSection)
+    }
+}
+
+/// Whether the line at `index` holds a comment and nothing else.
+///
+/// `mask_comments_chars` is position-preserving and blanks every comment byte,
+/// so such a line is blank in `masked` and not in `raw`. Comparing the two is
+/// what tells it from an ordinary blank line, which must not be dragged along.
+fn is_comment_only(raw: &[&str], masked: &[&str], index: usize) -> bool {
+    masked.get(index).is_some_and(|line| line.trim().is_empty())
+        && raw.get(index).is_some_and(|line| !line.trim().is_empty())
+}
+
+/// Whether the line at `index` opens inside a comment that started on an
+/// earlier line, so the two cannot be separated without cutting the comment in
+/// half. The byte before the line is its predecessor's newline, which a block
+/// comment spanning both covers.
+fn continues_a_comment(text: &str, index: usize) -> bool {
+    index > 0
+        && crate::position::position_to_offset(text, Position::new(index as u32, 0)).is_some_and(
+            |offset| rossi::comments::offset_in_comment(text, offset.saturating_sub(1)),
+        )
+}
+
+/// The line the section headed at `index` really begins on: the comment lines
+/// written above it, which `rossi::comment_place` anchors to the section, move
+/// with it.
+///
+/// A block comment opened on a code line is that line's trailing comment and
+/// not the section's, so the lines it spans are given back: moving them would
+/// split the comment.
+fn section_start(text: &str, raw: &[&str], masked: &[&str], index: usize) -> usize {
+    let mut start = index;
+    while start > 0 && is_comment_only(raw, masked, start - 1) {
+        start -= 1;
+    }
+    while start < index && continues_a_comment(text, start) {
+        start += 1;
+    }
+    start
+}
+
 /// The operator style a conversion direction targets, as spelled in titles.
 fn style_name(to_unicode: bool) -> &'static str {
     if to_unicode { "Unicode" } else { "ASCII" }
@@ -548,9 +643,29 @@ impl CodeActionProvider {
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::ClauseOutOfOrder.code()))
         {
-            if let Some(action) =
-                self.create_move_clause_action(&params.text_document.uri, diagnostic, text)
-            {
+            if let Some(action) = self.create_move_clause_action(
+                &params.text_document.uri,
+                diagnostic,
+                text,
+                MoveScope::EventClause,
+            ) {
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+        }
+
+        // Move a section written below one it must precede (EB034).
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::SectionOutOfOrder.code()))
+        {
+            if let Some(action) = self.create_move_clause_action(
+                &params.text_document.uri,
+                diagnostic,
+                text,
+                MoveScope::ComponentSection,
+            ) {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
         }
@@ -723,19 +838,21 @@ impl CodeActionProvider {
         })
     }
 
-    /// Quick fix for EB030 (an event clause written out of order): move the
-    /// clause above the earliest clause it must precede.
+    /// Quick fix for EB030 (an event clause written out of order) and EB034
+    /// (a component section): move the clause above the earliest one it must
+    /// precede.
     ///
     /// The diagnostic spans the whole clause, so the lines it covers are what
-    /// moves. The destination comes from the grammar's own clause order
-    /// ([`rossi::keywords::event_clause_boundary`]), scanning up only to the
-    /// line that opens or closes the enclosing event, so a clause is never
-    /// lifted out of it.
+    /// moves. The destination comes from the clause order the parser and the
+    /// lint already read ([`rossi::keywords::event_clause_boundary`] and its
+    /// component siblings), scanning up only to the line that opens or closes
+    /// the enclosing region, so a clause is never lifted out of it.
     fn create_move_clause_action(
         &self,
         uri: &Url,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
+        scope: MoveScope,
     ) -> Option<CodeAction> {
         let masked = rossi::comments::mask_comments_chars(text);
         let lines: Vec<&str> = masked.lines().collect();
@@ -759,27 +876,45 @@ impl CodeActionProvider {
         {
             return None;
         }
-        let follows = rossi::keywords::event_clause_boundary(clause);
+        let follows = scope.boundary(&lines, first, clause)?;
+        let stop = scope.stop_keywords();
         let mut target = None;
         for (index, line) in lines[..first].iter().enumerate().rev() {
             let Some(keyword) = line_keyword(line) else {
                 continue;
             };
-            // The event this clause belongs to starts here, so the scan stops:
-            // `END` closes the event above (an inline status — `convergent
-            // EVENT e` — hides the header keyword, so `EVENT` alone is not
-            // enough to stay inside the event), and `EVENTS` opens the block.
-            if matches!(
-                keyword,
-                KeywordId::Event | KeywordId::Events | KeywordId::End
-            ) {
+            // The region this clause belongs to starts here, so the scan
+            // stops. For an event: `END` closes the event above (an inline
+            // status — `convergent EVENT e` — hides the header keyword, so
+            // `EVENT` alone is not enough to stay inside the event), and
+            // `EVENTS` opens the block. For a section: the component header,
+            // or the `END` of the component above it in a multi-component
+            // file.
+            if stop.contains(&keyword) {
                 break;
             }
             if follows.contains(&keyword) {
                 target = Some((index, keyword));
             }
         }
-        let (target_line, target_keyword) = target?;
+        let (mut target_line, target_keyword) = target?;
+        // A comment written above a section header belongs to that section —
+        // only a top-level clause carries a `ClauseRegion` for
+        // `rossi::comment_place` to anchor one to — so it has to travel with
+        // it, or the move re-files it under whatever ends up there instead.
+        // The destination is read the same way, or the insert lands between
+        // the target section and its own comment and re-files that one. An
+        // event's inner clause keywords carry no region, so a comment above
+        // `WHERE` is already anchored to the first guard and stays put.
+        let mut first = first;
+        if scope.carries_leading_comments() {
+            let raw: Vec<&str> = text.lines().collect();
+            first = section_start(text, &raw, &lines, first);
+            target_line = section_start(text, &raw, &lines, target_line);
+        }
+        if target_line >= first {
+            return None;
+        }
         let moved: String = text
             .lines()
             .skip(first)
