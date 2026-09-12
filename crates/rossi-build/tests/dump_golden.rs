@@ -6,7 +6,8 @@
 //! is what `dump_model.rs` and `dump_schema.rs` are for. What they catch is
 //! drift: any change to a field, an order, a name or a position shows up here
 //! as a diff, so a change to the format is always a deliberate one with the
-//! reference updated in the same commit.
+//! reference updated in the same commit. The one value they do not lock is
+//! the crate version the document stamps; see [`MASKED_VERSION`].
 //!
 //! See `tests/fixtures/dump_golden/README.md` for how to regenerate them.
 #![cfg(feature = "serde")]
@@ -33,12 +34,37 @@ fn fixtures_dir() -> PathBuf {
     common::workspace_root().join("crates/rossi-build/tests/fixtures/dump_golden")
 }
 
+/// What the reference holds where the document stamps the crate version.
+///
+/// `generator.version` is the crate's own version, which is bumped by the
+/// release automation rather than by anyone editing this format. Storing it
+/// would fail every release for a change that is not drift; masking it keeps
+/// the field, its name and its position locked and leaves only the value to
+/// the manifest.
+const MASKED_VERSION: &str = "{crate-version}";
+
+/// Replace the stamped crate version with [`MASKED_VERSION`].
+///
+/// The needle quotes the value, so it cannot match the document's own numeric
+/// `version`. Exactly one occurrence is expected: none means the document has
+/// stopped stamping the crate version, more than one means the mask is about
+/// to swallow something else.
+fn mask_version(json: &str) -> String {
+    let stamped = format!("\"version\": \"{}\"", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        json.matches(&stamped).count(),
+        1,
+        "the document stamps the crate version exactly once"
+    );
+    json.replace(&stamped, &format!("\"version\": \"{MASKED_VERSION}\""))
+}
+
 fn document(project: &Project) -> String {
     let (build, sc) = rossi_build::check_with_model(project);
     let model = dump::model(project, &sc, &build, &dump::Options::default());
     let mut json = serde_json::to_string_pretty(&model).expect("the document serializes");
     json.push('\n');
-    json
+    mask_version(&json)
 }
 
 fn archive_project(name: &str) -> Project {

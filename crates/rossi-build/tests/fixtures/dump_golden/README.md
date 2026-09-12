@@ -15,6 +15,11 @@ That makes their job drift detection. Any change to a field, an order, a name,
 a span or a type string shows up here as a diff, so no such change reaches a
 release without someone having looked at it.
 
+One value is deliberately not locked. `generator.version` is the crate's own
+version, which the release automation bumps on its own, so these files store
+`{crate-version}` in its place and the test masks it on both sides. Locking it
+would fail every release for something that is not drift.
+
 ## What the three cover
 
 - `bank_account` — a context and a machine from Event-B text, the widest

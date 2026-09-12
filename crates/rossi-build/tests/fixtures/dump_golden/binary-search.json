@@ -3,7 +3,7 @@
   "version": 1,
   "generator": {
     "name": "rossi",
-    "version": "0.2.1"
+    "version": "{crate-version}"
   },
   "project": {
     "name": "binary-search"
