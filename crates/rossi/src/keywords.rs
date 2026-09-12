@@ -429,9 +429,35 @@ pub(crate) const EVENT_CLAUSE_KEYWORDS: &[KeywordId] = EVENT_SECTION;
 /// move-a-misplaced-clause quick fix — on the one follow-set
 /// `site_terminators_match_grammar` pins to the grammar.
 pub fn event_clause_boundary(after: KeywordId) -> &'static [KeywordId] {
-    match EVENT_SECTION.iter().position(|&k| k == after) {
-        Some(index) => &EVENT_SECTION[index + 1..],
-        None => EVENT_SECTION,
+    clause_boundary(EVENT_SECTION, after)
+}
+
+/// The keywords a context section opened by `after` must precede: the suffix
+/// of the context-section list past that section. The order is the TextEditor
+/// EBNF's (`EXTENDS`, `SETS`, `CONSTANTS`, `AXIOMS`, `THEOREMS`), which is
+/// also what `rossi::pretty` emits and what stock Camille requires. The
+/// grammar does not decide it — `context_body` is a repetition over an
+/// unordered choice, deliberately — so this list is the only statement of it.
+pub fn context_clause_boundary(after: KeywordId) -> &'static [KeywordId] {
+    clause_boundary(CONTEXT_SECTION, after)
+}
+
+/// The keywords a machine section opened by `after` must precede, the machine
+/// counterpart of [`context_clause_boundary`]. `THEOREMS` is in both lists at
+/// different positions — after `AXIOMS` in a context, between `INVARIANTS` and
+/// `VARIANT` in a machine — so a caller must pick the list by the component it
+/// is reading, not by the keyword alone.
+pub fn machine_clause_boundary(after: KeywordId) -> &'static [KeywordId] {
+    clause_boundary(MACHINE_SECTION, after)
+}
+
+/// The suffix of `order` past `after`, or the whole list when `after` is not
+/// in it — a clause that opens the body before the list starts is bounded by
+/// all of it.
+fn clause_boundary(order: &'static [KeywordId], after: KeywordId) -> &'static [KeywordId] {
+    match order.iter().position(|&k| k == after) {
+        Some(index) => &order[index + 1..],
+        None => order,
     }
 }
 
@@ -930,6 +956,35 @@ mod tests {
         }
         // The wider set the THEN-body recovery uses is that same list.
         assert_eq!(EVENT_CLAUSE_KEYWORDS, EVENT_SECTION);
+    }
+
+    #[test]
+    fn section_boundary_is_the_suffix_after_each_section() {
+        // Rule EB034 reads the section order off these two lists, and nothing
+        // else states it: `context_body` and `machine_body` are repetitions
+        // over an unordered choice, so the grammar cannot be scraped for it
+        // the way `event_clause_order_matches_the_grammar` scrapes `event_body`.
+        assert_eq!(
+            context_clause_boundary(Sets),
+            [Constants, Axioms, Theorems, End].as_slice()
+        );
+        assert_eq!(context_clause_boundary(Axioms), [Theorems, End].as_slice());
+        assert_eq!(context_clause_boundary(Theorems), [End].as_slice());
+        assert_eq!(
+            machine_clause_boundary(Sees),
+            [Variables, Invariants, Theorems, Variant, Events, End].as_slice()
+        );
+        // THEOREMS sits in both lists at different positions, which is why a
+        // caller picks the list by the component rather than by the keyword.
+        assert_eq!(
+            machine_clause_boundary(Theorems),
+            [Variant, Events, End].as_slice()
+        );
+        assert_eq!(machine_clause_boundary(Events), [End].as_slice());
+        // A keyword the list does not hold is bounded by all of it, the same
+        // fallback `event_clause_boundary` makes for STATUS / REFINES / ANY.
+        assert_eq!(context_clause_boundary(Variables), CONTEXT_SECTION);
+        assert_eq!(machine_clause_boundary(Sets), MACHINE_SECTION);
     }
 
     #[test]
