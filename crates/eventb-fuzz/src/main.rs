@@ -60,6 +60,11 @@ struct GenArgs {
     /// accepts. Pair with `--unicode`.
     #[arg(long)]
     lowercase_keywords: bool,
+    /// Write each component's sections, and each event's clauses, in the
+    /// canonical order, which is the order Camille requires. Pair with the
+    /// two above.
+    #[arg(long)]
+    ordered_clauses: bool,
 }
 
 fn main() -> ExitCode {
@@ -95,6 +100,7 @@ fn generate(args: GenArgs) -> ExitCode {
         suppressed: args.suppressed.clone(),
         unicode_operators: args.unicode,
         lowercase_keywords: args.lowercase_keywords,
+        ordered_clauses: args.ordered_clauses,
         ..Config::default()
     };
     let generator = Generator::new(&grammar, config);

@@ -74,6 +74,23 @@ pub struct Config {
     /// [`Self::unicode_operators`]; `lookup` is case-insensitive, so layout
     /// never saw the case in the first place.
     pub lowercase_keywords: bool,
+    /// Write each component's sections, and each event's clauses, in the
+    /// canonical order.
+    ///
+    /// The tree-sitter grammar takes them in any order, as rossi does, because
+    /// Rodin cannot express an order at all. Camille fixes it in its lexer and
+    /// refuses a keyword that moves backwards along its index list, so a
+    /// differential run against eventb-checker books that documented
+    /// divergence (rule EB034) instead of a finding. Measured as the third
+    /// residual Camille blocker, behind hyphenated names and comment
+    /// placement.
+    ///
+    /// Unlike the two above this is not a spelling: it reorders whole runs of
+    /// tokens before layout. It is still corpus-preserving, for a different
+    /// reason — every run opens with a keyword that starts a line, which draws
+    /// nothing, so no layout decision straddles a run boundary and the token
+    /// count is unchanged.
+    pub ordered_clauses: bool,
 }
 
 impl Default for Config {
@@ -85,6 +102,7 @@ impl Default for Config {
             suppressed: Vec::new(),
             unicode_operators: false,
             lowercase_keywords: false,
+            ordered_clauses: false,
         }
     }
 }
@@ -742,8 +760,161 @@ impl<'a, 'b> Walk<'a, 'b> {
             out.push_str(&text);
         }
         out.push('\n');
+        if self.config.ordered_clauses {
+            out = order_clauses(&out);
+        }
         out
     }
+}
+
+/// Rewrite `text` so every component's sections, and every event's clauses,
+/// stand in the canonical order.
+///
+/// This runs on the rendered text rather than on the token list, and that is
+/// the whole trick: `render` draws a byte wherever two tokens may touch, so a
+/// pass that moves tokens moves those draws onto different pairs and the same
+/// seed stops yielding the same corpus. Rendering first leaves the choice
+/// stream untouched, and costs nothing, because every clause opens a line
+/// anyway ([`starts_a_line`]) — a run is a block of whole lines either way.
+///
+/// The order comes from `rossi::keywords`, the same deference
+/// [`is_structural_keyword`] already makes, so the fuzzer cannot drift from
+/// the parser it tests. The sort is stable, so a run the order does not name —
+/// a repeated section, which rossi rejects as a duplicate anyway — stays where
+/// it was written.
+fn order_clauses(text: &str) -> String {
+    use rossi::keywords::KeywordId;
+
+    const CONTEXT_ORDER: &[KeywordId] = &[
+        KeywordId::Extends,
+        KeywordId::Sets,
+        KeywordId::Constants,
+        KeywordId::Axioms,
+        KeywordId::Theorems,
+    ];
+    const MACHINE_ORDER: &[KeywordId] = &[
+        KeywordId::Refines,
+        KeywordId::Sees,
+        KeywordId::Variables,
+        KeywordId::Invariants,
+        KeywordId::Theorems,
+        KeywordId::Variant,
+        KeywordId::Events,
+    ];
+    const EVENT_ORDER: &[KeywordId] = &[
+        KeywordId::Any,
+        KeywordId::Where,
+        KeywordId::With,
+        KeywordId::Witness,
+        KeywordId::Then,
+    ];
+
+    // A region whose runs are being collected: the order its runs sort by, and
+    // the line each run so far began on.
+    struct Frame {
+        order: &'static [KeywordId],
+        runs: Vec<(usize, usize)>,
+        run_start: Option<usize>,
+    }
+
+    // A comment may be emitted between a line's indent and its first token, so
+    // read keywords off comment-masked text. Masking preserves positions, so
+    // the two line lists stay parallel. `ctx0-end` is one whitespace-delimited
+    // token and looks up as no keyword, which is what keeps a hyphenated
+    // component name from closing a region.
+    let masked = rossi::comments::mask_comments_chars(text);
+    let lines: Vec<&str> = text.lines().collect();
+    let keywords: Vec<Option<KeywordId>> = masked
+        .lines()
+        .map(|line| {
+            line.split_whitespace()
+                .next()
+                .and_then(rossi::keywords::lookup)
+                .map(|keyword| keyword.id)
+        })
+        .collect();
+
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    let mut stack: Vec<Frame> = Vec::new();
+    let close_run = |frame: &mut Frame, end: usize| {
+        if let Some(start) = frame.run_start.take() {
+            frame.runs.push((start, end));
+        }
+    };
+    for (index, keyword) in keywords.iter().enumerate() {
+        match keyword {
+            // A component header or an event opens a region. An enclosing
+            // machine's `EVENTS` run stays open across the event, so it covers
+            // the whole block: closing it here would leave the event bodies in
+            // no run, and a section written after the block would then make
+            // the machine's runs non-contiguous.
+            Some(KeywordId::Context) => stack.push(Frame {
+                order: CONTEXT_ORDER,
+                runs: Vec::new(),
+                run_start: None,
+            }),
+            Some(KeywordId::Machine) => stack.push(Frame {
+                order: MACHINE_ORDER,
+                runs: Vec::new(),
+                run_start: None,
+            }),
+            Some(KeywordId::Event) => stack.push(Frame {
+                order: EVENT_ORDER,
+                runs: Vec::new(),
+                run_start: None,
+            }),
+            Some(KeywordId::End) => {
+                if let Some(mut frame) = stack.pop() {
+                    close_run(&mut frame, index);
+                    apply_order(&mut order, &frame.runs, &keywords, frame.order);
+                }
+            }
+            Some(keyword) => {
+                if let Some(frame) = stack.last_mut()
+                    && frame.order.contains(keyword)
+                {
+                    close_run(frame, index);
+                    frame.run_start = Some(index);
+                }
+            }
+            None => {}
+        }
+    }
+
+    let mut out = String::with_capacity(text.len());
+    for index in order {
+        out.push_str(lines[index]);
+        out.push('\n');
+    }
+    out
+}
+
+/// Permute `order` so the line runs of one region stand in `canonical` order.
+///
+/// `runs` tile the region's lines: each ends where the next begins, and the
+/// last at the region's `END`, so the block they cover can be rewritten in
+/// place. Lines a run does not cover — the region's own header, and an event
+/// body inside an enclosing machine's `EVENTS` run — are never touched.
+fn apply_order(
+    order: &mut [usize],
+    runs: &[(usize, usize)],
+    keywords: &[Option<rossi::keywords::KeywordId>],
+    canonical: &[rossi::keywords::KeywordId],
+) {
+    let Some(&(first, _)) = runs.first() else {
+        return;
+    };
+    let mut sorted: Vec<&(usize, usize)> = runs.iter().collect();
+    sorted.sort_by_key(|(start, _)| {
+        keywords[*start]
+            .and_then(|keyword| canonical.iter().position(|k| *k == keyword))
+            .unwrap_or(usize::MAX)
+    });
+    let permuted: Vec<usize> = sorted
+        .iter()
+        .flat_map(|(start, end)| order[*start..*end].iter().copied())
+        .collect();
+    order[first..first + permuted.len()].copy_from_slice(&permuted);
 }
 
 /// The field a comma-separated repetition fills, when the repeated group names
@@ -937,11 +1108,21 @@ mod tests {
         }
     }
 
-    /// Both conventions at once: what a checker gate actually feeds Camille.
+    /// The clause order alone, with every spelling left as derived.
+    fn ordered_config() -> Config {
+        Config {
+            ordered_clauses: true,
+            ..Config::default()
+        }
+    }
+
+    /// Every convention at once: what a checker gate actually feeds Camille,
+    /// and what `gen --normalize` turns on.
     fn normalized_config() -> Config {
         Config {
             unicode_operators: true,
             lowercase_keywords: true,
+            ordered_clauses: true,
             ..Config::default()
         }
     }
@@ -1163,7 +1344,8 @@ mod tests {
         for (config, what) in [
             (unicode_config(), "--unicode"),
             (lowercase_config(), "--lowercase-keywords"),
-            (normalized_config(), "both flags"),
+            (ordered_config(), "--ordered-clauses"),
+            (normalized_config(), "every flag"),
         ] {
             let normalized = generate_all_with(200, config);
             let mut differing = 0;
@@ -1245,9 +1427,149 @@ mod tests {
     fn normalized_models_parse_or_are_rejected_cleanly() {
         assert_parses_or_rejects_cleanly(&generate_all_with(200, unicode_config()), "Unicode");
         assert_parses_or_rejects_cleanly(&generate_all_with(200, lowercase_config()), "lower-case");
+        assert_parses_or_rejects_cleanly(&generate_all_with(200, ordered_config()), "ordered");
         assert_parses_or_rejects_cleanly(
             &generate_all_with(200, normalized_config()),
             "normalized",
+        );
+    }
+
+    /// The canonical position of each section keyword of `component`, in the
+    /// order the lines of `text` write them.
+    fn section_ranks(text: &str) -> Vec<Vec<usize>> {
+        use rossi::keywords::KeywordId;
+        let context = [
+            KeywordId::Extends,
+            KeywordId::Sets,
+            KeywordId::Constants,
+            KeywordId::Axioms,
+            KeywordId::Theorems,
+        ];
+        let machine = [
+            KeywordId::Refines,
+            KeywordId::Sees,
+            KeywordId::Variables,
+            KeywordId::Invariants,
+            KeywordId::Theorems,
+            KeywordId::Variant,
+            KeywordId::Events,
+        ];
+        let masked = rossi::comments::mask_comments_chars(text);
+        let mut components: Vec<Vec<usize>> = Vec::new();
+        let mut order: &[KeywordId] = &[];
+        let mut in_event = false;
+        for line in masked.lines() {
+            let Some(keyword) = line
+                .split_whitespace()
+                .next()
+                .and_then(rossi::keywords::lookup)
+                .map(|keyword| keyword.id)
+            else {
+                continue;
+            };
+            match keyword {
+                KeywordId::Context => {
+                    order = &context;
+                    components.push(Vec::new());
+                }
+                KeywordId::Machine => {
+                    order = &machine;
+                    components.push(Vec::new());
+                }
+                // An event's own clauses share spellings with nothing in the
+                // section lists except by accident, but its END must not be
+                // read as the component's.
+                KeywordId::Event => in_event = true,
+                KeywordId::End => in_event = false,
+                _ => {
+                    if !in_event
+                        && let Some(rank) = order.iter().position(|k| *k == keyword)
+                        && let Some(component) = components.last_mut()
+                    {
+                        component.push(rank);
+                    }
+                }
+            }
+        }
+        components
+    }
+
+    #[test]
+    fn ordered_generation_writes_every_section_in_canonical_order() {
+        let plain = generate_all(200);
+        if plain.is_empty() {
+            return;
+        }
+        let ordered = generate_all_with(200, ordered_config());
+        // Camille refuses a section keyword that moves backwards along its
+        // index list, so the ranks must never decrease.
+        let mut probed = false;
+        for model in &ordered {
+            for component in section_ranks(&model.text) {
+                assert!(
+                    component.windows(2).all(|pair| pair[0] <= pair[1]),
+                    "sections out of order: {component:?} in\n{}",
+                    model.text
+                );
+            }
+        }
+        for model in &plain {
+            probed |= section_ranks(&model.text)
+                .iter()
+                .any(|component| component.windows(2).any(|pair| pair[0] > pair[1]));
+        }
+        assert!(
+            probed,
+            "no model was generated out of order, so this proves nothing"
+        );
+    }
+
+    #[test]
+    fn a_hyphenated_name_ending_in_a_keyword_closes_nothing() {
+        // `ctx0-end` is one component name. Reading keywords off whole
+        // whitespace-delimited tokens is what keeps its tail from closing the
+        // component and stranding the sections that follow.
+        let text = "context ctx0-end\naxioms\n    @a 1 = 1\nsets\n    S\nend\n";
+        let ordered = order_clauses(text);
+        assert_eq!(
+            ordered,
+            "context ctx0-end\nsets\n    S\naxioms\n    @a 1 = 1\nend\n"
+        );
+    }
+
+    #[test]
+    fn a_comment_before_a_section_keyword_does_not_hide_it() {
+        // `render` may emit a comment between a line's indent and its first
+        // token, so keywords are read off comment-masked text.
+        let text = "context c\n/* x */ axioms\n    @a 1 = 1\n/* y */ sets\n    S\nend\n";
+        let ordered = order_clauses(text);
+        assert_eq!(
+            ordered,
+            "context c\n/* y */ sets\n    S\n/* x */ axioms\n    @a 1 = 1\nend\n"
+        );
+    }
+
+    #[test]
+    fn an_events_block_moves_whole() {
+        // The machine's EVENTS run stays open across the events, so the block
+        // travels with its keyword and a section written after it still sorts
+        // ahead of the whole thing.
+        let text =
+            "machine m\nevents\n  event e\n  then\n    @a x ≔ 1\n  end\nvariables\n  x\nend\n";
+        let ordered = order_clauses(text);
+        assert_eq!(
+            ordered,
+            "machine m\nvariables\n  x\nevents\n  event e\n  then\n    @a x ≔ 1\n  end\nend\n"
+        );
+    }
+
+    #[test]
+    fn an_event_clause_written_out_of_order_moves_too() {
+        let text = "machine m\nevents\n  event e\n  then\n    @a x ≔ 1\n  where\n    @g x > 0\n  end\nend\n";
+        let ordered = order_clauses(text);
+        assert_eq!(
+            ordered,
+            "machine m\nevents\n  event e\n  where\n    @g x > 0\n  then\n    @a x ≔ 1\n  end\nend\n"
         );
     }
 
