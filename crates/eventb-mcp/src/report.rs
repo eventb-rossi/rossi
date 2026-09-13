@@ -349,3 +349,126 @@ pub struct ProofStatusReport {
     pub summary: ProofSummary,
     pub components: Vec<ComponentProofs>,
 }
+
+/// One identifier of a state with the tool's rendering of its value.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct BindingRecord {
+    pub name: String,
+    pub value: String,
+}
+
+/// An invariant the model checker found violated, mapped back to its
+/// declaration when the rendering or the label matched one.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ViolatedInvariant {
+    /// The predicate as the tool printed it.
+    pub text: String,
+    pub component: Option<String>,
+    pub label: Option<String>,
+}
+
+/// The trace to a violating state.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CounterexampleRecord {
+    /// The events fired, the constants setup and INITIALISATION first.
+    pub transitions: Vec<String>,
+    /// The violating state as the tool printed it.
+    pub violating_state: String,
+    pub violated_invariants: Vec<ViolatedInvariant>,
+    /// The violating state, one binding per variable.
+    pub bindings: Vec<BindingRecord>,
+    /// How many transitions the trace has.
+    pub steps: usize,
+}
+
+/// What a model check concluded.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct VerdictRecord {
+    /// `ok`, `incomplete`, `invariant_violation`, `deadlock`, `finding`,
+    /// `load_error` or `engine_error`.
+    pub kind: String,
+    /// Why the search ended (`exhaustive`, `state_limit`, `time_limit`, ...)
+    /// for `ok` and `incomplete`.
+    pub reason: Option<String>,
+    /// How many states an `ok` search explored.
+    pub states: Option<u64>,
+    /// The tool's finding category for `finding`.
+    pub category: Option<String>,
+    /// The tool's message for a finding or an error.
+    pub message: Option<String>,
+}
+
+/// The `model_check` tool's document.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ModelCheckReport {
+    pub machine: String,
+    /// The bounds the run was constrained by.
+    pub bounds: Vec<String>,
+    /// The tool's status: `ok`, `violation`, `incomplete` or `error`.
+    pub status: String,
+    pub message: String,
+    pub verdict: VerdictRecord,
+    pub counterexample: Option<CounterexampleRecord>,
+    /// The tool's exit code; absent when a signal killed it.
+    pub exit_code: Option<i32>,
+}
+
+/// One check of a run: an event's preservation, an obligation, the
+/// well-definedness gate.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CheckRecord {
+    pub name: String,
+    /// `passed`, `failed`, `error` or `skipped`.
+    pub outcome: String,
+    pub message: Option<String>,
+    /// The counterexample state, when the check found one.
+    pub bindings: Vec<BindingRecord>,
+}
+
+/// The document of `check_invariants_cbc` and `check_wd`.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CheckRunReport {
+    pub machine: String,
+    pub bounds: Vec<String>,
+    /// The tool's status: `ok`, `violation`, `incomplete` or `error`.
+    pub status: String,
+    pub message: String,
+    pub checks: Vec<CheckRecord>,
+    pub exit_code: Option<i32>,
+}
+
+/// One obligation the disprover refuted.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DisproofRecord {
+    /// The qualified name, `<component>/<obligation>`.
+    pub name: String,
+    pub message: String,
+    pub bindings: Vec<BindingRecord>,
+}
+
+/// What a disprover run concluded.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DisproveVerdict {
+    /// `disproved`, `no_counterexample`, `ok` or `error`.
+    pub kind: String,
+    pub disproved: Vec<DisproofRecord>,
+    /// Obligations still open after the run.
+    pub open: usize,
+    /// Obligations the run looked at.
+    pub total: usize,
+    /// Counterexamples under the selected hypotheses only, which may be
+    /// spurious.
+    pub spurious: usize,
+    pub message: Option<String>,
+}
+
+/// The `disprove_po` tool's document.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DisproveReport {
+    pub machine: String,
+    pub status: String,
+    pub message: String,
+    pub verdict: DisproveVerdict,
+    pub checks: Vec<CheckRecord>,
+    pub exit_code: Option<i32>,
+}

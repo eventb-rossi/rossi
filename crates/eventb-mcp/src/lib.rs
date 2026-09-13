@@ -14,6 +14,7 @@
 //! ones under `.rossi/build/<project>/`, so obligations keep their stamps
 //! and statuses across edits whether or not a caller asks to write them.
 
+pub mod animate;
 pub mod report;
 pub mod server;
 pub mod workspace;
