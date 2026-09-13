@@ -27,6 +27,12 @@ Rossi covers the full author-to-Rodin path:
   parser, checker, prover, and language server.
 - **`eventb-lsp`** — Language Server Protocol implementation powering
   editor extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed.
+- **`eventb-mcp`** — Model Context Protocol server exposing validation,
+  build, proof obligations, proof status and ProB model checking as
+  tools for LLM hosts such as Claude Code (`rossi mcp`).
+- **`eventb-animate-driver`** — the contract with the `eventb-animate`
+  model checker (command lines, watchdog, JSON report), shared by the
+  language server and the MCP server.
 
 ## Features
 
@@ -57,6 +63,11 @@ Rossi covers the full author-to-Rodin path:
 - Diagnostics, completion, hover, go-to-definition, find references, rename
 - Formatting, semantic highlighting, code actions, folding, and signature help
 - Extensions for VS Code, Neovim, Emacs, Sublime Text, and Zed
+
+**Agent integration (MCP)**
+- `rossi mcp` serves a project directory to an LLM host over stdio
+- Tools for validation, build, proof obligations and their status, and
+  ProB model checking, each returning one JSON document
 
 ## Installation
 
@@ -161,6 +172,7 @@ the `rossi-build` static checker (the language server is the separate
 | `dump`     | Write a checked project as a `rossi-model` JSON document: the typed formula trees in Rodin's vocabulary. |
 | `prove`    | Check a project's stored proofs against its proof obligations. |
 | `clean`    | Drop the stored proofs whose obligation no longer exists, and empty the ones that no longer apply. |
+| `mcp`      | Serve a project's verification tools to an LLM host over stdio (Model Context Protocol). |
 | `completions` | Print a shell completion script to stdout (run `rossi completions --help` for the supported shells). |
 
 ### Validate
@@ -498,6 +510,60 @@ a usage mistake such as an archive holding several projects with no
 checker rejected is absent from the elements, and `diagnostics` says why. When
 the input cannot be read at all nothing reaches stdout, so a consumer never
 parses a truncated document.
+
+### MCP server (agent tools)
+
+`rossi mcp` serves the Event-B project under a directory to an LLM host
+that speaks the Model Context Protocol, such as Claude Code. The host edits
+the `.eventb` files with its own tools; the server only reads them and
+answers with one JSON document per call.
+
+```bash
+# Serve the current directory over stdio (the host starts this command)
+rossi mcp --root .
+
+# Point the model-checking tools at a specific eventb-animate
+rossi mcp --root . --animate /opt/eventb-animate/bin/eventb-animate
+```
+
+Register it with Claude Code in the project's `.mcp.json`; the timeout
+leaves room for a model check, which the client would otherwise cut off
+after 60 seconds:
+
+```json
+{
+  "mcpServers": {
+    "rossi": {
+      "type": "stdio",
+      "command": "rossi",
+      "args": ["mcp", "--root", "${CLAUDE_PROJECT_DIR}"],
+      "timeout": 600000
+    }
+  }
+}
+```
+
+The tools:
+
+| Tool | Answers |
+|---|---|
+| `project` | the components, their files, and their SEES/EXTENDS/REFINES edges |
+| `validate` | every finding with its `EBnnn` rule, component, element, file and region |
+| `build` | the checked and proof files written under `.rossi/build/<project>/`, obligation counts, proof summary |
+| `list_pos` | one page of proof obligations with nature, source elements and recorded status |
+| `get_po` | one obligation's sequent: typed identifiers, hypotheses, goal |
+| `proof_status` | the status buckets, in all and per component |
+| `model_check` | ProB's verdict with the counterexample trace, state and violated invariants |
+| `check_invariants_cbc` | per-event invariant preservation by constraint solving |
+| `check_wd` | ProB's discharge of the well-definedness obligations |
+| `disprove_po` | counterexamples to open proof obligations |
+
+The four model-checking tools need `eventb-animate` (a Java tool);
+`model_check` and `check_invariants_cbc` also take `bounds`, predicates
+over the constants such as `n < 5`, that constrain a run without changing
+the model. The project is reloaded whenever a file
+under the root changes; the generated proof files are reconciled with the
+previous build so obligations keep their stamps and statuses across edits.
 
 ### Shell completions
 
