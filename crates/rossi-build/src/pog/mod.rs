@@ -14,6 +14,7 @@ mod model;
 pub mod natures;
 pub mod obligations;
 pub mod reconcile;
+pub mod sources;
 pub mod status;
 mod tables;
 
