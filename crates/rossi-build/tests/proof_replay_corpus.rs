@@ -595,13 +595,13 @@ fn replay_reproduces_recorded_rules() {
         for (id, model_counts) in model_reasoners {
             per_reasoner.entry(id).or_default().add(&model_counts);
         }
-        if let Some(base) = baseline.get(&model) {
-            if counts.replayed_eq < *base {
-                problems.push(format!(
-                    "replayed_eq regressed: {} < baseline {base}",
-                    counts.replayed_eq
-                ));
-            }
+        if let Some(base) = baseline.get(&model)
+            && counts.replayed_eq < *base
+        {
+            problems.push(format!(
+                "replayed_eq regressed: {} < baseline {base}",
+                counts.replayed_eq
+            ));
         }
         let verdict = if counts.replayed_diff > 0 || counts.error > 0 || !problems.is_empty() {
             match prove_known_divergence(&corpus, &model) {

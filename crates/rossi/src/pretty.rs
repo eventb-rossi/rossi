@@ -1534,11 +1534,11 @@ impl PrettyPrinter {
             return None;
         }
         // A declaration's annotation is a type, whichever way it arrived.
-        if self.typed_decls {
-            if let Some(ty) = decl.ty() {
-                let spelled = ty.to_expression(decl.factory());
-                return Some(self.fm_expr(&spelled, FormulaContext::Type, &mut Vec::new()));
-            }
+        if self.typed_decls
+            && let Some(ty) = decl.ty()
+        {
+            let spelled = ty.to_expression(decl.factory());
+            return Some(self.fm_expr(&spelled, FormulaContext::Type, &mut Vec::new()));
         }
         decl.annotation()
             .map(|annotation| self.fm_expr(annotation, FormulaContext::Type, names))

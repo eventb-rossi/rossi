@@ -405,15 +405,15 @@ async fn sync_model_edits(
             // parse would permanently disable sync for this file. The old
             // base stays until the user resolves the markers and a clean
             // state lands.
-            if !matches!(outcome, MergeOutcome::Conflict(_)) {
-                if let Err(e) = model_sync::update_base_source(
+            if !matches!(outcome, MergeOutcome::Conflict(_))
+                && let Err(e) = model_sync::update_base_source(
                     workspace_dir,
                     &manifest.project_name,
                     &relative,
                     text,
-                ) {
-                    tracing::info!("could not advance base snapshot: {e}");
-                }
+                )
+            {
+                tracing::info!("could not advance base snapshot: {e}");
             }
             match outcome {
                 MergeOutcome::Merged(_) => {
