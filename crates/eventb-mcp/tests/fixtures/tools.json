@@ -266,6 +266,472 @@
     }
   },
   {
+    "name": "get_po",
+    "description": "Show one proof obligation as the prover sees it: the typed identifiers in scope, the hypotheses (marked when the obligation's hints select them), and the goal, in Event-B notation, with the obligation's nature, sources and status.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "description": "The component whose obligation file holds the obligation.",
+          "type": "string"
+        },
+        "max_hypotheses": {
+          "default": 200,
+          "description": "At most this many hypotheses (default 200); the document says how\nmany there are in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "name"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "HypothesisRecord": {
+          "description": "One hypothesis of a sequent.",
+          "properties": {
+            "index": {
+              "description": "The hypothesis's position among all of the sequent's hypotheses.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "selected": {
+              "description": "Whether the obligation's selection hints select it for the prover.",
+              "type": "boolean"
+            },
+            "text": {
+              "description": "The predicate, in Event-B notation.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "index",
+            "text",
+            "selected"
+          ],
+          "type": "object"
+        },
+        "ObligationRecord": {
+          "description": "One proof obligation.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element the obligation depends on passed its checks.",
+              "type": "boolean"
+            },
+            "component": {
+              "type": "string"
+            },
+            "description": {
+              "description": "The human description (`Invariant  preservation`).",
+              "type": "string"
+            },
+            "name": {
+              "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+              "type": "string"
+            },
+            "nature": {
+              "description": "The nature's name (`InvariantPreservation`, `GuardStrengtheningSplit`,\n...), or the description verbatim when it is not one of the generator's.",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/SourceRecord"
+              },
+              "type": "array"
+            },
+            "stamp": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "component",
+            "name",
+            "nature",
+            "description",
+            "accurate",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "SourceRecord": {
+          "description": "One element an obligation traces back to.",
+          "properties": {
+            "component": {
+              "description": "The component that declares the element.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event a guard, action, parameter or witness belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`invariant`, `guard`, `action`, `event`, `axiom`, ...",
+              "type": "string"
+            },
+            "name": {
+              "description": "The element's label, identifier or target.",
+              "type": "string"
+            },
+            "role": {
+              "description": "`DEFAULT`, `ABSTRACT` or `CONCRETE`: the part the element plays.",
+              "type": "string"
+            },
+            "theorem": {
+              "description": "Whether a labelled predicate is a theorem.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "role",
+            "component",
+            "kind",
+            "name",
+            "theorem"
+          ],
+          "type": "object"
+        },
+        "StatusRecord": {
+          "description": "The recorded proof status of one obligation.",
+          "properties": {
+            "broken": {
+              "description": "Whether the stored proof no longer applies to the obligation.",
+              "type": "boolean"
+            },
+            "bucket": {
+              "description": "`discharged`, `reviewed`, `pending` or `unattempted`.",
+              "type": "string"
+            },
+            "confidence": {
+              "description": "The recorded confidence, when the row carries one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "manual": {
+              "description": "Whether the proof is marked as made by hand.",
+              "type": "boolean"
+            },
+            "stale": {
+              "description": "Whether the verdict is due for recomputation.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "bucket",
+            "broken",
+            "manual",
+            "stale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "goal": {
+          "description": "The goal, in Event-B notation.",
+          "type": "string"
+        },
+        "hypotheses": {
+          "description": "The hypotheses, up to the requested cap, with the well-definedness\nconjuncts the prover adds.",
+          "items": {
+            "$ref": "#/$defs/HypothesisRecord"
+          },
+          "type": "array"
+        },
+        "hypotheses_total": {
+          "description": "How many hypotheses the sequent has in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "identifiers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The typed identifiers in scope, name to type.",
+          "type": "object"
+        },
+        "obligation": {
+          "$ref": "#/$defs/ObligationRecord"
+        },
+        "truncated": {
+          "description": "Whether `hypotheses` stops short of `hypotheses_total`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "obligation",
+        "identifiers",
+        "hypotheses",
+        "hypotheses_total",
+        "truncated",
+        "goal"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "list_pos",
+    "description": "List the proof obligations, one page at a time: each with its nature, the elements it traces back to (invariant, guard, action, event, axiom, ...), and its recorded proof status. Filter by component, nature, status bucket (or `open`) and element.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Only the obligations of this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "default": null,
+          "description": "Only the obligations that trace back to this element: a label or\nidentifier (`inv1`, `evt`), or `event/label` for an element of an\nevent (`evt/grd1`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 100,
+          "description": "The page size (default 100).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nature": {
+          "default": null,
+          "description": "Only the obligations of this nature, by name\n(`InvariantPreservation`, `GuardStrengtheningSplit`, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset": {
+          "default": 0,
+          "description": "The first obligation of the page (default 0).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "default": null,
+          "description": "Only the obligations in this status bucket (`discharged`,\n`reviewed`, `pending`, `unattempted`), or `open` for every bucket\nbut `discharged`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ObligationRecord": {
+          "description": "One proof obligation.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element the obligation depends on passed its checks.",
+              "type": "boolean"
+            },
+            "component": {
+              "type": "string"
+            },
+            "description": {
+              "description": "The human description (`Invariant  preservation`).",
+              "type": "string"
+            },
+            "name": {
+              "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+              "type": "string"
+            },
+            "nature": {
+              "description": "The nature's name (`InvariantPreservation`, `GuardStrengtheningSplit`,\n...), or the description verbatim when it is not one of the generator's.",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/SourceRecord"
+              },
+              "type": "array"
+            },
+            "stamp": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "component",
+            "name",
+            "nature",
+            "description",
+            "accurate",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "SourceRecord": {
+          "description": "One element an obligation traces back to.",
+          "properties": {
+            "component": {
+              "description": "The component that declares the element.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event a guard, action, parameter or witness belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`invariant`, `guard`, `action`, `event`, `axiom`, ...",
+              "type": "string"
+            },
+            "name": {
+              "description": "The element's label, identifier or target.",
+              "type": "string"
+            },
+            "role": {
+              "description": "`DEFAULT`, `ABSTRACT` or `CONCRETE`: the part the element plays.",
+              "type": "string"
+            },
+            "theorem": {
+              "description": "Whether a labelled predicate is a theorem.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "role",
+            "component",
+            "kind",
+            "name",
+            "theorem"
+          ],
+          "type": "object"
+        },
+        "StatusRecord": {
+          "description": "The recorded proof status of one obligation.",
+          "properties": {
+            "broken": {
+              "description": "Whether the stored proof no longer applies to the obligation.",
+              "type": "boolean"
+            },
+            "bucket": {
+              "description": "`discharged`, `reviewed`, `pending` or `unattempted`.",
+              "type": "string"
+            },
+            "confidence": {
+              "description": "The recorded confidence, when the row carries one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "manual": {
+              "description": "Whether the proof is marked as made by hand.",
+              "type": "boolean"
+            },
+            "stale": {
+              "description": "Whether the verdict is due for recomputation.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "bucket",
+            "broken",
+            "manual",
+            "stale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "next_offset": {
+          "description": "The offset of the next page, when there is one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "obligations": {
+          "items": {
+            "$ref": "#/$defs/ObligationRecord"
+          },
+          "type": "array"
+        },
+        "offset": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "description": "How many obligations match the filters in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "obligations",
+        "total",
+        "offset"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "project",
     "description": "Describe the Event-B project under the root: its components, the files they come from, their SEES/EXTENDS/REFINES edges, and how many findings it has.",
     "inputSchema": {
@@ -386,6 +852,110 @@
         "components",
         "edges",
         "diagnostics"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "proof_status",
+    "description": "Sum up the recorded proof status of the obligations: how many are discharged, reviewed, pending, unattempted or broken, in all and per component.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Only this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ComponentProofs": {
+          "description": "The status summary of one component.",
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/$defs/ProofSummary"
+            }
+          },
+          "required": [
+            "component",
+            "summary"
+          ],
+          "type": "object"
+        },
+        "ProofSummary": {
+          "description": "The recorded status of the obligations, as buckets.",
+          "properties": {
+            "broken": {
+              "description": "Obligations whose stored proof no longer applies; counted in the\nbucket their capped confidence puts them in as well.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "discharged": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reviewed": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unattempted": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "discharged",
+            "reviewed",
+            "pending",
+            "unattempted",
+            "broken"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentProofs"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/ProofSummary"
+        }
+      },
+      "required": [
+        "summary",
+        "components"
       ],
       "type": "object"
     },

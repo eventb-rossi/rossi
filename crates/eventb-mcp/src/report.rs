@@ -246,3 +246,106 @@ pub struct Failure {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiagnosticRecord>,
 }
+
+/// One element an obligation traces back to.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct SourceRecord {
+    /// `DEFAULT`, `ABSTRACT` or `CONCRETE`: the part the element plays.
+    pub role: String,
+    /// The component that declares the element.
+    pub component: String,
+    /// `invariant`, `guard`, `action`, `event`, `axiom`, ...
+    pub kind: String,
+    /// The element's label, identifier or target.
+    pub name: String,
+    /// The event a guard, action, parameter or witness belongs to.
+    pub event: Option<String>,
+    /// Whether a labelled predicate is a theorem.
+    pub theorem: bool,
+}
+
+/// The recorded proof status of one obligation.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct StatusRecord {
+    /// `discharged`, `reviewed`, `pending` or `unattempted`.
+    pub bucket: String,
+    /// The recorded confidence, when the row carries one.
+    pub confidence: Option<i32>,
+    /// Whether the stored proof no longer applies to the obligation.
+    pub broken: bool,
+    /// Whether the proof is marked as made by hand.
+    pub manual: bool,
+    /// Whether the verdict is due for recomputation.
+    pub stale: bool,
+}
+
+/// One proof obligation.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ObligationRecord {
+    pub component: String,
+    /// The obligation's name, e.g. `evt/inv1/INV`.
+    pub name: String,
+    /// The nature's name (`InvariantPreservation`, `GuardStrengtheningSplit`,
+    /// ...), or the description verbatim when it is not one of the generator's.
+    pub nature: String,
+    /// The human description (`Invariant  preservation`).
+    pub description: String,
+    /// Whether every element the obligation depends on passed its checks.
+    pub accurate: bool,
+    pub stamp: Option<String>,
+    pub sources: Vec<SourceRecord>,
+    pub status: Option<StatusRecord>,
+}
+
+/// The `list_pos` tool's document: one page of obligations.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ListPosReport {
+    pub obligations: Vec<ObligationRecord>,
+    /// How many obligations match the filters in all.
+    pub total: usize,
+    pub offset: usize,
+    /// The offset of the next page, when there is one.
+    pub next_offset: Option<usize>,
+}
+
+/// One hypothesis of a sequent.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HypothesisRecord {
+    /// The hypothesis's position among all of the sequent's hypotheses.
+    pub index: usize,
+    /// The predicate, in Event-B notation.
+    pub text: String,
+    /// Whether the obligation's selection hints select it for the prover.
+    pub selected: bool,
+}
+
+/// The `get_po` tool's document: one obligation with its sequent.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ObligationReport {
+    pub obligation: ObligationRecord,
+    /// The typed identifiers in scope, name to type.
+    pub identifiers: BTreeMap<String, String>,
+    /// The hypotheses, up to the requested cap, with the well-definedness
+    /// conjuncts the prover adds.
+    pub hypotheses: Vec<HypothesisRecord>,
+    /// How many hypotheses the sequent has in all.
+    pub hypotheses_total: usize,
+    /// Whether `hypotheses` stops short of `hypotheses_total`.
+    pub truncated: bool,
+    /// The goal, in Event-B notation.
+    pub goal: String,
+}
+
+/// The status summary of one component.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ComponentProofs {
+    pub component: String,
+    pub summary: ProofSummary,
+}
+
+/// The `proof_status` tool's document.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ProofStatusReport {
+    pub summary: ProofSummary,
+    pub components: Vec<ComponentProofs>,
+}
