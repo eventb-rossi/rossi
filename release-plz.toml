@@ -31,7 +31,7 @@ changelog_update = true
 # `changelog_path` is a per-package key (release-plz rejects it under [workspace]);
 # point rossi-cli's changelog at the repo root so the suite has one combined file.
 changelog_path = "./CHANGELOG.md"
-changelog_include = ["rossi", "rossi-prove", "rossi-build", "eventb-animate-driver", "eventb-lsp"]
+changelog_include = ["rossi", "rossi-prove", "rossi-build", "eventb-animate-driver", "eventb-lsp", "eventb-mcp"]
 
 # Curated "keep a changelog" format. Group feat->Added, refactor->Changed,
 # revert->Removed, fix->Fixed, perf->Performance, docs->Documentation; skip
