@@ -1,28 +1,130 @@
-//! eventb-animate binary resolution, command construction, and the watchdog
-//! that keeps a hung JVM from wedging the lens.
+//! Driving `eventb-animate`, the ProB-backed model checker of the Event-B
+//! toolchain: which binary to spawn, the command line of each run mode, the
+//! watchdog that keeps a hung JVM from wedging its caller, and the verdicts
+//! read out of the tool's JSON report ([`report`]).
+//!
+//! Every run uses `--json -`: stdout carries exactly one JSON document and
+//! all human output goes to stderr, so a caller classifies the run from the
+//! document and the exit code together. The language server and the MCP
+//! server both drive the tool this way; this crate is the one place the
+//! contract with the tool is written down.
+
+pub mod report;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::AnimateConfig;
+use serde::{Deserialize, Serialize};
 
-use super::{AnimateError, AnimateMode};
-
-/// The bare command an empty `rossi.animate.path` resolves via PATH.
-pub(crate) const TOOL_NAME: &str = "eventb-animate";
+/// The bare command an empty path setting resolves via PATH.
+pub const TOOL_NAME: &str = "eventb-animate";
 
 /// Watchdog headroom past the tool's own internal limits. Deliberately
 /// generous: the very first run on a machine extracts ProB into `~/.prob`
 /// (tens of seconds, outside `--time-limit`), and every run pays a cold JVM
 /// start. A genuinely hung process still dies.
-pub(crate) const GRACE: Duration = Duration::from_secs(90);
+pub const GRACE: Duration = Duration::from_secs(90);
+
+/// How to run the tool: where it is and how long it may work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnimateConfig {
+    /// eventb-animate executable path or bare command name. Empty resolves
+    /// `eventb-animate` via PATH when a run starts.
+    #[serde(default)]
+    pub path: String,
+
+    /// `--time-limit` (seconds) for a model check; the watchdog that kills
+    /// a hung tool derives from it. `0` selects the default.
+    #[serde(default = "default_time_limit_secs")]
+    pub time_limit_secs: u32,
+
+    /// `--disprove-timeout` (milliseconds) per proof obligation for a
+    /// disprover run; also feeds that run's watchdog. `0` selects the
+    /// default.
+    #[serde(default = "default_disprove_timeout_ms")]
+    pub disprove_timeout_ms: u32,
+}
+
+impl AnimateConfig {
+    /// The effective `--time-limit`, with `0` mapped back to the default.
+    pub fn effective_time_limit_secs(&self) -> u32 {
+        if self.time_limit_secs == 0 {
+            default_time_limit_secs()
+        } else {
+            self.time_limit_secs
+        }
+    }
+
+    /// The effective `--disprove-timeout`, with `0` mapped back to the
+    /// default.
+    pub fn effective_disprove_timeout_ms(&self) -> u32 {
+        if self.disprove_timeout_ms == 0 {
+            default_disprove_timeout_ms()
+        } else {
+            self.disprove_timeout_ms
+        }
+    }
+}
+
+impl Default for AnimateConfig {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            time_limit_secs: default_time_limit_secs(),
+            disprove_timeout_ms: default_disprove_timeout_ms(),
+        }
+    }
+}
+
+fn default_time_limit_secs() -> u32 {
+    120
+}
+
+fn default_disprove_timeout_ms() -> u32 {
+    1000
+}
+
+/// Which of the two run modes a request runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnimateMode {
+    /// Explicit-state model check (invariants + deadlock).
+    Check,
+    /// `po --disprove`: attempt a ProB disproof of every open obligation.
+    Po,
+}
+
+/// Everything that can end a tool run without a report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolError {
+    /// The tool is not installed where the configuration points.
+    Missing(String),
+    /// The tool ran but failed or produced no parseable report.
+    Failed(String),
+    /// The watchdog killed a run that outlived its deadline (seconds).
+    Timeout(u64),
+    /// The caller cancelled the run and its process group was killed.
+    Cancelled,
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolError::Missing(program) => write!(f, "eventb-animate was not found ({program})"),
+            ToolError::Failed(message) => write!(f, "eventb-animate failed: {message}"),
+            ToolError::Timeout(secs) => write!(f, "eventb-animate timed out after {secs} s"),
+            ToolError::Cancelled => write!(f, "eventb-animate was cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for ToolError {}
 
 /// The program string to spawn: the configured value, or [`TOOL_NAME`] when
 /// the setting is empty.
-pub(crate) fn effective_tool(configured: &str) -> String {
+pub fn effective_tool(configured: &str) -> String {
     let trimmed = configured.trim();
     if trimmed.is_empty() {
         TOOL_NAME.to_string()
@@ -33,16 +135,17 @@ pub(crate) fn effective_tool(configured: &str) -> String {
 
 /// The concrete filesystem location a tool setting denotes, when it denotes
 /// one. `None` for bare names, which only the spawn's PATH lookup can
-/// resolve — the shared classification rule (`launch::has_path_separator`),
-/// so the existence pre-check can never disagree with the spawn.
-pub(crate) fn concrete_path(program: &str) -> Option<PathBuf> {
-    crate::rodin::launch::has_path_separator(program).then(|| PathBuf::from(program))
+/// resolve: a setting that contains a path separator is a path, anything
+/// else is a name, and an existence pre-check must classify exactly as the
+/// spawn does.
+pub fn concrete_path(program: &str) -> Option<PathBuf> {
+    (program.contains('/') || program.contains('\\')).then(|| PathBuf::from(program))
 }
 
 /// The tool invocation for one run. `--json -` puts the report alone on
-/// stdout; `-m` pins the clicked machine so the tool's own most-refined
+/// stdout; `-m` pins the machine so the tool's own most-refined
 /// auto-selection never picks a different one.
-pub(crate) fn command_args(
+pub fn command_args(
     mode: AnimateMode,
     config: &AnimateConfig,
     machine: &str,
@@ -71,11 +174,11 @@ pub(crate) fn command_args(
 
 /// The outer deadline for one run. Check is bounded by its own
 /// `--time-limit`; po runs one solver attempt per open obligation, so the
-/// deadline scales with `po_count` — the still-open count once recorded
-/// proof state is merged (every generated sequent when there is none),
+/// deadline scales with `po_count` (the still-open count once recorded
+/// proof state is merged; every generated sequent when there is none),
 /// doubled for slack around solver setup per obligation. An all-discharged
 /// run leaves [`GRACE`] alone, ample for the gate-only pass.
-pub(crate) fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usize) -> Duration {
+pub fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usize) -> Duration {
     match mode {
         AnimateMode::Check => {
             GRACE + Duration::from_secs(u64::from(config.effective_time_limit_secs()))
@@ -89,8 +192,9 @@ pub(crate) fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usiz
     }
 }
 
+/// What a finished run left behind.
 #[derive(Debug)]
-pub(crate) struct ToolOutput {
+pub struct ToolOutput {
     pub stdout: String,
     pub stderr: String,
     /// The process exit code, or `None` when a signal killed the tool.
@@ -99,17 +203,18 @@ pub(crate) struct ToolOutput {
     pub code: Option<i32>,
 }
 
-/// Spawn the tool and wait for it under `watchdog`, or until `cancel` fires.
-/// On either the whole process group is killed (unix) — the packaged tool
-/// is a launcher script that may not `exec` its JVM, and `kill_on_drop`
-/// alone would only reap the launcher; elsewhere `kill_on_drop` is the
-/// fallback.
-pub(crate) async fn run_tool(
+/// Spawn the tool and wait for it under `watchdog`, or until `cancel`
+/// resolves. On either the whole process group is killed (unix): the
+/// packaged tool is a launcher script that may not `exec` its JVM, and
+/// `kill_on_drop` alone would only reap the launcher; elsewhere
+/// `kill_on_drop` is the fallback. A caller that cannot cancel passes
+/// [`std::future::pending`].
+pub async fn run_tool(
     program: &str,
     args: &[OsString],
     watchdog: Duration,
-    cancel: Option<&Arc<crate::progress::Cancel>>,
-) -> Result<ToolOutput, AnimateError> {
+    cancel: impl Future<Output = ()>,
+) -> Result<ToolOutput, ToolError> {
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
@@ -122,10 +227,10 @@ pub(crate) async fn run_tool(
     let child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AnimateError::ToolMissing(program.to_string()));
+            return Err(ToolError::Missing(program.to_string()));
         }
         Err(error) => {
-            return Err(AnimateError::ToolFailed(format!(
+            return Err(ToolError::Failed(format!(
                 "failed to start '{program}': {error}"
             )));
         }
@@ -143,12 +248,6 @@ pub(crate) async fn run_tool(
         #[cfg(not(unix))]
         let _ = pid;
     };
-    let cancelled = async {
-        match cancel {
-            Some(cancel) => cancel.cancelled().await,
-            None => std::future::pending().await,
-        }
-    };
     tokio::select! {
         waited = tokio::time::timeout(watchdog, child.wait_with_output()) => match waited {
             Ok(Ok(output)) => Ok(ToolOutput {
@@ -156,17 +255,17 @@ pub(crate) async fn run_tool(
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 code: output.status.code(),
             }),
-            Ok(Err(error)) => Err(AnimateError::ToolFailed(format!(
+            Ok(Err(error)) => Err(ToolError::Failed(format!(
                 "waiting for '{program}' failed: {error}"
             ))),
             Err(_elapsed) => {
                 kill_group();
-                Err(AnimateError::Timeout(watchdog.as_secs()))
+                Err(ToolError::Timeout(watchdog.as_secs()))
             }
         },
-        () = cancelled => {
+        () = cancel => {
             kill_group();
-            Err(AnimateError::Cancelled)
+            Err(ToolError::Cancelled)
         }
     }
 }
@@ -229,7 +328,18 @@ mod tests {
     }
 
     #[test]
-    fn bare_names_and_concrete_paths_are_classified_like_rodin() {
+    fn zero_settings_select_the_defaults() {
+        let config = AnimateConfig {
+            time_limit_secs: 0,
+            disprove_timeout_ms: 0,
+            ..AnimateConfig::default()
+        };
+        assert_eq!(config.effective_time_limit_secs(), 120);
+        assert_eq!(config.effective_disprove_timeout_ms(), 1000);
+    }
+
+    #[test]
+    fn bare_names_and_concrete_paths_are_told_apart() {
         assert_eq!(effective_tool(""), TOOL_NAME);
         assert_eq!(effective_tool("  "), TOOL_NAME);
         assert_eq!(effective_tool("my-animate"), "my-animate");
@@ -250,10 +360,10 @@ mod tests {
             "rossi-test-definitely-not-installed",
             &[],
             Duration::from_secs(5),
-            None,
+            std::future::pending(),
         )
         .await
         .unwrap_err();
-        assert!(matches!(error, AnimateError::ToolMissing(_)), "{error:?}");
+        assert!(matches!(error, ToolError::Missing(_)), "{error:?}");
     }
 }

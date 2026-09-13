@@ -319,6 +319,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eventb-animate-driver"
+version = "0.2.3"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "eventb-fuzz"
 version = "0.2.3"
 dependencies = [
@@ -336,6 +346,7 @@ dependencies = [
  "clap",
  "dashmap",
  "diffy",
+ "eventb-animate-driver",
  "futures",
  "libc",
  "notify",
