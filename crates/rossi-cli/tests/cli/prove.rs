@@ -113,3 +113,37 @@ fn prove_replay_summarises_an_example_archive() {
     assert!(stdout.contains("Replay: "), "{stdout}");
     assert!(stdout.contains(", 0 failed"), "{stdout}");
 }
+
+#[test]
+fn prove_json_lists_every_obligation_with_its_verdict() {
+    let dir = project_dir("rossi-cli-prove-json", BPR_HYP);
+    let output = rossi_command()
+        .args([
+            "prove",
+            "--replay",
+            "--format",
+            "json",
+            dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+    assert_eq!(report["summary"]["discharged"], 1, "{report}");
+    assert_eq!(report["summary"]["replayed"], 1, "{report}");
+    assert_eq!(
+        report["obligations"],
+        serde_json::json!([{
+            "component": "M0",
+            "name": "evt/inv1/INV",
+            "status": "discharged",
+            "replay": {"outcome": "replayed"},
+        }]),
+        "{report}"
+    );
+    assert_eq!(report["messages"], serde_json::json!([]), "{report}");
+}

@@ -394,6 +394,9 @@ rossi build project.zip --output project-checked.zip
 
 # Or emit loose files into a directory
 rossi build project.zip --output ./out
+
+# Report the written files and diagnostics as one JSON document on stdout
+rossi build --format json project.zip --output ./out
 ```
 
 ### Dump (checked model as JSON)

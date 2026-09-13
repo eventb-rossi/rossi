@@ -41,7 +41,7 @@ pub(crate) fn report_diagnostics(results: &[(String, BuildResult)]) {
 
 /// Labels of the projects that failed outright — duplicate component names
 /// (EB019) or a dependency cycle (EB007/EB008) — and so produced nothing.
-fn failed_labels(results: &[(String, BuildResult)]) -> Vec<&str> {
+pub(crate) fn failed_labels(results: &[(String, BuildResult)]) -> Vec<&str> {
     results
         .iter()
         .filter(|(_, r)| r.failed_outright())
