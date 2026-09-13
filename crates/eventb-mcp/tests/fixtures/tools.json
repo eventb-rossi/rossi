@@ -1,0 +1,567 @@
+[
+  {
+    "name": "build",
+    "description": "Static-check the model, generate its proof obligations, reconcile their recorded proof status with the previous build, and write the checked files (.bcc/.bcm) and proof files (.bpo/.bps) under the output directory. Reports the files, the findings, the obligation counts by nature, and the proof status summary.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "write": {
+          "default": true,
+          "description": "Write the checked and proof files under the output directory\n(default `true`); `false` only reports what a build produces.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "DiagnosticRecord": {
+          "description": "One finding about the project.",
+          "properties": {
+            "component": {
+              "description": "The component the finding is about, when it is about one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "element": {
+              "description": "The element inside the component (`inv1`, `evt/grd1`), when the\nfinding names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file": {
+              "description": "The source file, relative to the root, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Region"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in `file` the finding is, when the source text is known."
+            },
+            "rule_id": {
+              "description": "The stable `EBnnn` rule code, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "severity": {
+              "description": "`error`, `warning` or `info`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "message"
+          ],
+          "type": "object"
+        },
+        "FileRecord": {
+          "description": "One file a build wrote or would write.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element in the file passed its checks.",
+              "type": "boolean"
+            },
+            "filename": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "accurate"
+          ],
+          "type": "object"
+        },
+        "ObligationCounts": {
+          "description": "How many obligations a build generated.",
+          "properties": {
+            "by_nature": {
+              "additionalProperties": {
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "description": "Obligations per nature, keyed by the nature's name\n(`InvariantPreservation`, `GuardStrengtheningSplit`, ...).",
+              "type": "object"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "by_nature"
+          ],
+          "type": "object"
+        },
+        "ProofSummary": {
+          "description": "The recorded status of the obligations, as buckets.",
+          "properties": {
+            "broken": {
+              "description": "Obligations whose stored proof no longer applies; counted in the\nbucket their capped confidence puts them in as well.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "discharged": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reviewed": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unattempted": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "discharged",
+            "reviewed",
+            "pending",
+            "unattempted",
+            "broken"
+          ],
+          "type": "object"
+        },
+        "Region": {
+          "description": "A 1-indexed position range in a source file, in characters.",
+          "properties": {
+            "end_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "end_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticRecord"
+          },
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileRecord"
+          },
+          "type": "array"
+        },
+        "obligations": {
+          "$ref": "#/$defs/ObligationCounts"
+        },
+        "output_dir": {
+          "description": "Where the files went, or would go.",
+          "type": "string"
+        },
+        "proofs": {
+          "$ref": "#/$defs/ProofSummary"
+        },
+        "written": {
+          "description": "Whether the files were written by this call.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output_dir",
+        "written",
+        "files",
+        "diagnostics",
+        "counts",
+        "obligations",
+        "proofs"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "project",
+    "description": "Describe the Event-B project under the root: its components, the files they come from, their SEES/EXTENDS/REFINES edges, and how many findings it has.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ComponentRecord": {
+          "description": "One component of the project.",
+          "properties": {
+            "file": {
+              "description": "The source file, relative to the root.",
+              "type": "string"
+            },
+            "kind": {
+              "description": "`context` or `machine`.",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "file"
+          ],
+          "type": "object"
+        },
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "EdgeRecord": {
+          "description": "One dependency between components.",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "`sees`, `extends` or `refines`.",
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentRecord"
+          },
+          "type": "array"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/EdgeRecord"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "description": "`text` for a folder of `.eventb` files, `rodin` for a folder of\n`.bum`/`.buc` files.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The project name every handle starts with.",
+          "type": "string"
+        },
+        "output_dir": {
+          "description": "Where builds write their checked and proof files.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The root directory the server reads.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "name",
+        "kind",
+        "output_dir",
+        "components",
+        "edges",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "validate",
+    "description": "Check the model and report its findings: parse errors, undeclared identifiers, type errors, broken cross-references, refinement errors, and advisory lints, each with its EBnnn rule code, the component and element it is about, and its source region.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Report only the findings about this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_wd": {
+          "default": false,
+          "description": "Also report the non-trivial well-definedness conditions (rule\nEB010, severity `info`).",
+          "type": "boolean"
+        },
+        "severity": {
+          "default": null,
+          "description": "The least severity to report: `error`, `warning` or `info`\n(default `warning`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "DiagnosticRecord": {
+          "description": "One finding about the project.",
+          "properties": {
+            "component": {
+              "description": "The component the finding is about, when it is about one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "element": {
+              "description": "The element inside the component (`inv1`, `evt/grd1`), when the\nfinding names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file": {
+              "description": "The source file, relative to the root, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Region"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in `file` the finding is, when the source text is known."
+            },
+            "rule_id": {
+              "description": "The stable `EBnnn` rule code, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "severity": {
+              "description": "`error`, `warning` or `info`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "message"
+          ],
+          "type": "object"
+        },
+        "Region": {
+          "description": "A 1-indexed position range in a source file, in characters.",
+          "properties": {
+            "end_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "end_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "diagnostics",
+        "counts"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  }
+]
