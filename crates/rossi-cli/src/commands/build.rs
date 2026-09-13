@@ -12,20 +12,22 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
+use serde::Serialize;
 
 use rossi_build::pog::reconcile::reconcile_build_files;
 use rossi_build::pog::status::update_statuses;
 use rossi_build::project::{duplicate_component_name, project_from_text_components};
-use rossi_build::{BuildResult, Project, ScFile, build, is_normal_path_component};
+use rossi_build::{BuildResult, Diagnostic, Project, ScFile, build, is_normal_path_component};
 
 use rossi::NamedComponent;
 
 use super::build_common::{
-    build_archive_projects, eb019_result, error_diagnostic_count, gate_after_write,
+    build_archive_projects, eb019_result, error_diagnostic_count, failed_labels, gate_after_write,
     gate_before_write, repack_results, report_diagnostics,
 };
 use super::eventb_io::{self, InputKind};
+use super::report::Report;
 
 #[derive(Args)]
 pub struct BuildArgs {
@@ -40,10 +42,22 @@ pub struct BuildArgs {
     /// Defaults to `<input-stem>.regen.zip` next to the input.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+    /// Report format: the human lines, or one JSON document on standard
+    /// output with every project's diagnostics and written files.
+    #[arg(short, long, value_enum, default_value = "text")]
+    pub format: BuildFormat,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum BuildFormat {
+    /// Human-readable text output
+    Text,
+    /// JSON output
+    Json,
 }
 
 pub fn run_build_command(args: BuildArgs) -> ExitCode {
-    match run_build(&args.input, args.output.as_deref()) {
+    match run_build(&args.input, args.output.as_deref(), args.format) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("rossi build: {e}");
@@ -52,10 +66,39 @@ pub fn run_build_command(args: BuildArgs) -> ExitCode {
     }
 }
 
-fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
-    let outcome = build_one(input)?;
+/// The JSON report of a build: what was checked, what was written, and
+/// what the checker had to say.
+#[derive(Serialize)]
+struct BuildReport<'a> {
+    input: String,
+    /// Where the checked output went; absent when no project produced
+    /// any and nothing was written.
+    output: Option<String>,
+    projects: Vec<ProjectReport<'a>>,
+    /// Error diagnostics across every project.
+    errors: usize,
+}
 
-    let failed = gate_before_write(&outcome.results)?;
+#[derive(Serialize)]
+struct ProjectReport<'a> {
+    /// The project's archive prefix; empty for a flat input.
+    prefix: &'a str,
+    files: Vec<FileReport<'a>>,
+    diagnostics: &'a [Diagnostic],
+}
+
+#[derive(Serialize)]
+struct FileReport<'a> {
+    filename: &'a str,
+    accurate: bool,
+}
+
+fn run_build(
+    input: &Path,
+    output: Option<&Path>,
+    format: BuildFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let outcome = build_one(input)?;
 
     let default_out;
     let out_path = match output {
@@ -73,6 +116,11 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
         }
     };
 
+    if format == BuildFormat::Json {
+        return run_build_json(input, out_path, &outcome);
+    }
+
+    let failed = gate_before_write(&outcome.results)?;
     write_output(input, out_path, &outcome)?;
     report_diagnostics(&outcome.results);
 
@@ -86,6 +134,51 @@ fn run_build(input: &Path, output: Option<&Path>) -> Result<(), Box<dyn std::err
         outcome.results.len(),
         errors
     );
+    gate_after_write(&outcome.results, &failed, "checked output")
+}
+
+/// The JSON flow: the same writes and gates as the human one, with the
+/// diagnostics carried in the document instead of on standard error.
+/// When no project produced checked output nothing is written, but the
+/// document still reports why, which is what a consumer needs most.
+fn run_build_json(
+    input: &Path,
+    out_path: &Path,
+    outcome: &BuildOutcome,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let failed = failed_labels(&outcome.results);
+    let nothing_to_write = !failed.is_empty() && failed.len() == outcome.results.len();
+    if !nothing_to_write {
+        write_output(input, out_path, outcome)?;
+    }
+    let report = BuildReport {
+        input: input.display().to_string(),
+        output: (!nothing_to_write).then(|| out_path.display().to_string()),
+        projects: outcome
+            .results
+            .iter()
+            .map(|(prefix, result)| ProjectReport {
+                prefix,
+                files: result
+                    .files
+                    .iter()
+                    .map(|f| FileReport {
+                        filename: &f.filename,
+                        accurate: f.accurate,
+                    })
+                    .collect(),
+                diagnostics: &result.diagnostics,
+            })
+            .collect(),
+        errors: error_diagnostic_count(&outcome.results),
+    };
+    Report::Console.structured(|out| {
+        serde_json::to_writer_pretty(&mut *out, &report)?;
+        writeln!(out)
+    })?;
+    if nothing_to_write {
+        return Err("no project produced checked output; see the diagnostics in the report".into());
+    }
     gate_after_write(&outcome.results, &failed, "checked output")
 }
 

@@ -162,6 +162,14 @@ impl ProofStatus {
     }
 }
 
+/// A status serializes as the word [`ProofStatus::label`] prints, so
+/// the JSON and the human report never disagree.
+impl serde::Serialize for ProofStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.label())
+    }
+}
+
 /// A stored proof judged against its obligation.
 pub(crate) struct Classified {
     pub(crate) status: ProofStatus,
