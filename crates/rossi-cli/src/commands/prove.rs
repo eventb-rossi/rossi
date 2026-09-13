@@ -123,13 +123,12 @@ pub fn run(args: ProveArgs) -> ExitCode {
 fn missing_reasoner(skel: &Skeleton) -> Option<String> {
     let mut stack = vec![skel];
     while let Some(node) = stack.pop() {
-        if let Some(stored) = &node.rule {
-            if RegistryProvider
+        if let Some(stored) = &node.rule
+            && RegistryProvider
                 .implementation(&stored.rule.reasoner)
                 .is_none()
-            {
-                return Some(stored.rule.reasoner.id().to_string());
-            }
+        {
+            return Some(stored.rule.reasoner.id().to_string());
         }
         stack.extend(node.children.iter());
     }
