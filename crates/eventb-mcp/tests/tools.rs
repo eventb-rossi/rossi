@@ -80,7 +80,17 @@ async fn the_server_lists_its_tools() {
         .map(|tool| tool.name.to_string())
         .collect();
     names.sort();
-    assert_eq!(names, ["build", "project", "validate"]);
+    assert_eq!(
+        names,
+        [
+            "build",
+            "get_po",
+            "list_pos",
+            "project",
+            "proof_status",
+            "validate"
+        ]
+    );
     client.cancel().await.unwrap();
 }
 
@@ -276,5 +286,146 @@ async fn the_tool_schemas_are_the_committed_ones() {
         "the tool schemas changed; review the diff and rerun with \
          EVENTB_MCP_SCHEMA_REGENERATE=1 to accept it"
     );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn obligations_are_listed_shown_and_summed_up() {
+    let root = root_with(
+        "pos",
+        &["bank_account_ctx.eventb", "bank_account_machine.eventb"],
+    );
+    let client = connect(root).await;
+    let (_, build) = call(&client, "build", json!({"write": false})).await;
+    let total = build["obligations"]["total"].as_u64().unwrap() as usize;
+    assert!(total > 2, "{build}");
+
+    // A page, then the whole list.
+    let (error, page) = call(&client, "list_pos", json!({"limit": 2})).await;
+    assert!(!error, "{page}");
+    assert_eq!(page["total"], total);
+    assert_eq!(page["obligations"].as_array().unwrap().len(), 2);
+    assert_eq!(page["next_offset"], 2);
+    let (_, all) = call(&client, "list_pos", json!({"limit": 1000})).await;
+    let listed = all["obligations"].as_array().unwrap();
+    assert_eq!(listed.len(), total, "{all}");
+    assert!(all["next_offset"].is_null());
+    for record in listed {
+        assert_eq!(record["status"]["bucket"], "unattempted", "{record}");
+        let sources = record["sources"].as_array().unwrap();
+        assert!(!sources.is_empty(), "{record}");
+        assert!(
+            sources.iter().all(|s| s["component"].is_string()
+                && s["kind"].is_string()
+                && s["name"].is_string()),
+            "{record}"
+        );
+    }
+
+    // Filters: nature, element, status bucket.
+    let inv = listed
+        .iter()
+        .find(|r| r["nature"] == "InvariantPreservation")
+        .expect("an invariant preservation obligation");
+    let (_, by_nature) = call(
+        &client,
+        "list_pos",
+        json!({"nature": "InvariantPreservation"}),
+    )
+    .await;
+    let natures = by_nature["obligations"].as_array().unwrap();
+    assert!(!natures.is_empty());
+    assert!(
+        natures
+            .iter()
+            .all(|r| r["nature"] == "InvariantPreservation")
+    );
+    let label = inv["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "invariant")
+        .expect("the invariant source")["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (_, by_element) = call(&client, "list_pos", json!({"element": label})).await;
+    let elements = by_element["obligations"].as_array().unwrap();
+    assert!(!elements.is_empty(), "{by_element}");
+    assert!(
+        elements.iter().all(|r| r["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == label)),
+        "{by_element}"
+    );
+    let (_, open) = call(
+        &client,
+        "list_pos",
+        json!({"status": "open", "limit": 1000}),
+    )
+    .await;
+    assert_eq!(open["total"], total);
+    let (_, discharged) = call(&client, "list_pos", json!({"status": "discharged"})).await;
+    assert_eq!(discharged["total"], 0);
+    let (error, bad) = call(&client, "list_pos", json!({"status": "closed"})).await;
+    assert!(error, "{bad}");
+
+    // One obligation, whole and capped.
+    let (error, po) = call(
+        &client,
+        "get_po",
+        json!({"component": inv["component"], "name": inv["name"]}),
+    )
+    .await;
+    assert!(!error, "{po}");
+    assert_eq!(po["obligation"]["name"], inv["name"]);
+    assert!(
+        po["goal"].as_str().is_some_and(|goal| !goal.is_empty()),
+        "{po}"
+    );
+    assert!(po["identifiers"]["balances"].is_string(), "{po}");
+    let hypotheses_total = po["hypotheses_total"].as_u64().unwrap();
+    assert!(hypotheses_total >= 1, "{po}");
+    assert_eq!(po["truncated"], false);
+    assert_eq!(
+        po["hypotheses"].as_array().unwrap().len() as u64,
+        hypotheses_total
+    );
+    let (_, capped) = call(
+        &client,
+        "get_po",
+        json!({"component": inv["component"], "name": inv["name"], "max_hypotheses": 1}),
+    )
+    .await;
+    assert_eq!(capped["hypotheses"].as_array().unwrap().len(), 1);
+    assert_eq!(capped["truncated"], hypotheses_total > 1);
+    let (error, missing) = call(
+        &client,
+        "get_po",
+        json!({"component": "bank_account", "name": "no/such/PO"}),
+    )
+    .await;
+    assert!(error, "{missing}");
+    assert!(missing["error"].as_str().unwrap().contains("no obligation"));
+
+    // The summary agrees with the list.
+    let (error, status) = call(&client, "proof_status", json!({})).await;
+    assert!(!error, "{status}");
+    assert_eq!(status["summary"]["total"], total);
+    assert_eq!(status["summary"]["unattempted"], total);
+    let machine_total = listed
+        .iter()
+        .filter(|r| r["component"] == "bank_account")
+        .count();
+    let machine = status["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["component"] == "bank_account")
+        .expect("the machine's summary");
+    assert_eq!(machine["summary"]["total"], machine_total);
+
     client.cancel().await.unwrap();
 }

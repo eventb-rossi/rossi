@@ -10,12 +10,16 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use rossi::pretty::PrettyPrinter;
 use rossi_build::Severity;
+use rossi_build::pog::obligations::{Obligation, Obligations};
+use rossi_build::pog::sources::{ElementKind, SourceIndex};
 use rossi_prove::confidence::Bucket;
 
 use crate::report::{
-    BuildReport, DiagnosticCounts, DiagnosticRecord, Failure, FileRecord, ObligationCounts,
-    ProjectReport, ProofSummary, ValidateReport,
+    BuildReport, ComponentProofs, DiagnosticCounts, DiagnosticRecord, Failure, FileRecord,
+    HypothesisRecord, ListPosReport, ObligationCounts, ObligationRecord, ObligationReport,
+    ProjectReport, ProofStatusReport, ProofSummary, SourceRecord, StatusRecord, ValidateReport,
 };
 use crate::workspace::{Loaded, Workspace, obligation_counts, write_build};
 
@@ -27,6 +31,9 @@ Author or edit the `.eventb` files there with your own tools; the server only re
 and source regions; a finding of severity `error` means the model does not check. \
 `build` static-checks the model, generates its proof obligations, reconciles their recorded \
 status with the previous build, and writes the checked files under `.rossi/build/<project>/`. \
+`list_pos` pages through the proof obligations with their nature, the elements they come from \
+and their recorded status; `get_po` shows one obligation's sequent; `proof_status` sums up the \
+recorded statuses. \
 Every result is one JSON document; a failed call returns a document with an `error` field.";
 
 /// The MCP server over one root directory.
@@ -69,6 +76,157 @@ impl Default for BuildArgs {
 
 fn default_true() -> bool {
     true
+}
+
+/// Arguments of `list_pos`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ListPosArgs {
+    /// Only the obligations of this component.
+    #[serde(default)]
+    pub component: Option<String>,
+    /// Only the obligations of this nature, by name
+    /// (`InvariantPreservation`, `GuardStrengtheningSplit`, ...).
+    #[serde(default)]
+    pub nature: Option<String>,
+    /// Only the obligations in this status bucket (`discharged`,
+    /// `reviewed`, `pending`, `unattempted`), or `open` for every bucket
+    /// but `discharged`.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Only the obligations that trace back to this element: a label or
+    /// identifier (`inv1`, `evt`), or `event/label` for an element of an
+    /// event (`evt/grd1`).
+    #[serde(default)]
+    pub element: Option<String>,
+    /// The first obligation of the page (default 0).
+    #[serde(default)]
+    pub offset: usize,
+    /// The page size (default 100).
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize {
+    100
+}
+
+/// Arguments of `get_po`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetPoArgs {
+    /// The component whose obligation file holds the obligation.
+    pub component: String,
+    /// The obligation's name, e.g. `evt/inv1/INV`.
+    pub name: String,
+    /// At most this many hypotheses (default 200); the document says how
+    /// many there are in all.
+    #[serde(default = "default_max_hypotheses")]
+    pub max_hypotheses: usize,
+}
+
+fn default_max_hypotheses() -> usize {
+    200
+}
+
+/// Arguments of `proof_status`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ProofStatusArgs {
+    /// Only this component.
+    #[serde(default)]
+    pub component: Option<String>,
+}
+
+fn bucket_name(bucket: Bucket) -> &'static str {
+    match bucket {
+        Bucket::Discharged => "discharged",
+        Bucket::Reviewed => "reviewed",
+        Bucket::Pending => "pending",
+        Bucket::Unattempted => "unattempted",
+    }
+}
+
+fn kind_name(kind: ElementKind) -> &'static str {
+    match kind {
+        ElementKind::Context => "context",
+        ElementKind::Machine => "machine",
+        ElementKind::CarrierSet => "carrier_set",
+        ElementKind::Constant => "constant",
+        ElementKind::Axiom => "axiom",
+        ElementKind::Extends => "extends",
+        ElementKind::Sees => "sees",
+        ElementKind::Refines => "refines",
+        ElementKind::Variable => "variable",
+        ElementKind::Invariant => "invariant",
+        ElementKind::Variant => "variant",
+        ElementKind::Event => "event",
+        ElementKind::RefinesEvent => "refines_event",
+        ElementKind::Parameter => "parameter",
+        ElementKind::Guard => "guard",
+        ElementKind::Action => "action",
+        ElementKind::Witness => "witness",
+    }
+}
+
+/// One obligation as the documents carry it, its sources resolved.
+fn obligation_record(po: &Obligation<'_>, sources: Option<&SourceIndex>) -> ObligationRecord {
+    ObligationRecord {
+        component: po.component.to_string(),
+        name: po.name.to_string(),
+        nature: po.nature.map_or_else(
+            || po.description.to_string(),
+            |nature| format!("{nature:?}"),
+        ),
+        description: po.description.to_string(),
+        accurate: po.accurate,
+        stamp: po.stamp.map(str::to_string),
+        sources: po
+            .sources
+            .iter()
+            .filter_map(|(role, handle)| {
+                let element = sources?.resolve(handle.as_deref()?)?;
+                Some(SourceRecord {
+                    role: role.clone(),
+                    component: element.component,
+                    kind: kind_name(element.kind).to_string(),
+                    name: element.name,
+                    event: element.event,
+                    theorem: element.theorem,
+                })
+            })
+            .collect(),
+        status: po.status.map(|status| StatusRecord {
+            bucket: bucket_name(status.bucket).to_string(),
+            confidence: status.confidence,
+            broken: status.broken,
+            manual: status.manual,
+            stale: status.stale,
+        }),
+    }
+}
+
+/// The status buckets of the obligations `select` admits.
+fn proof_summary<'a>(
+    obligations: &'a Obligations,
+    select: impl Fn(&Obligation<'a>) -> bool,
+) -> ProofSummary {
+    let mut proofs = ProofSummary::default();
+    for po in obligations.iter().filter(select) {
+        proofs.total += 1;
+        match po.status {
+            Some(status) => {
+                match status.bucket {
+                    Bucket::Discharged => proofs.discharged += 1,
+                    Bucket::Reviewed => proofs.reviewed += 1,
+                    Bucket::Pending => proofs.pending += 1,
+                    Bucket::Unattempted => proofs.unattempted += 1,
+                }
+                if status.broken {
+                    proofs.broken += 1;
+                }
+            }
+            None => proofs.unattempted += 1,
+        }
+    }
+    proofs
 }
 
 /// A tool-level failure: the document the client gets instead of the
@@ -182,25 +340,12 @@ impl RossiServer {
         }
         let counts = DiagnosticCounts::of(&diagnostics);
         let by_nature = obligation_counts(&loaded);
-        let mut proofs = ProofSummary::default();
-        if let Some(obligations) = &loaded.obligations {
-            for po in obligations.iter() {
-                proofs.total += 1;
-                if let Some(status) = po.status {
-                    match status.bucket {
-                        Bucket::Discharged => proofs.discharged += 1,
-                        Bucket::Reviewed => proofs.reviewed += 1,
-                        Bucket::Pending => proofs.pending += 1,
-                        Bucket::Unattempted => proofs.unattempted += 1,
-                    }
-                    if status.broken {
-                        proofs.broken += 1;
-                    }
-                } else {
-                    proofs.unattempted += 1;
-                }
-            }
-        }
+        let proofs = loaded
+            .obligations
+            .as_ref()
+            .map_or_else(ProofSummary::default, |obligations| {
+                proof_summary(obligations, |_| true)
+            });
         Ok(Json(BuildReport {
             output_dir: loaded.output_dir.display().to_string(),
             written: args.write,
@@ -219,6 +364,177 @@ impl RossiServer {
                 by_nature,
             },
             proofs,
+        }))
+    }
+
+    /// The obligations of the load, or the failure to report instead.
+    fn obligations<'a>(&self, loaded: &'a Loaded) -> Result<&'a Obligations, CallToolResult> {
+        loaded.obligations.as_ref().ok_or_else(|| {
+            failure(
+                "no proof obligations: the model does not check",
+                loaded.diagnostics(false),
+            )
+        })
+    }
+
+    #[tool(
+        name = "list_pos",
+        description = "List the proof obligations, one page at a time: each with its nature, the elements it traces back to (invariant, guard, action, event, axiom, ...), and its recorded proof status. Filter by component, nature, status bucket (or `open`) and element.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn list_pos(
+        &self,
+        Parameters(args): Parameters<ListPosArgs>,
+    ) -> Result<Json<ListPosReport>, CallToolResult> {
+        let loaded = self.loaded().await?;
+        let obligations = self.obligations(&loaded)?;
+        let sources = loaded.sources.as_ref();
+        let status_filter = match args.status.as_deref() {
+            None => None,
+            Some(name @ ("discharged" | "reviewed" | "pending" | "unattempted" | "open")) => {
+                Some(name)
+            }
+            Some(other) => {
+                return Err(failure(
+                    format!(
+                        "unknown status `{other}`: use discharged, reviewed, pending, unattempted or open"
+                    ),
+                    Vec::new(),
+                ));
+            }
+        };
+        let matching: Vec<ObligationRecord> = obligations
+            .iter()
+            .filter(|po| {
+                args.component
+                    .as_deref()
+                    .is_none_or(|wanted| po.component == wanted)
+            })
+            .map(|po| obligation_record(&po, sources))
+            .filter(|record| args.nature.as_deref().is_none_or(|n| record.nature == n))
+            .filter(|record| {
+                status_filter.is_none_or(|wanted| {
+                    let bucket = record
+                        .status
+                        .as_ref()
+                        .map_or("unattempted", |s| s.bucket.as_str());
+                    if wanted == "open" {
+                        bucket != "discharged"
+                    } else {
+                        bucket == wanted
+                    }
+                })
+            })
+            .filter(|record| {
+                args.element.as_deref().is_none_or(|wanted| {
+                    record.sources.iter().any(|source| {
+                        source.name == wanted
+                            || source
+                                .event
+                                .as_deref()
+                                .is_some_and(|event| format!("{event}/{}", source.name) == wanted)
+                    })
+                })
+            })
+            .collect();
+        let total = matching.len();
+        let limit = args.limit.max(1);
+        let page: Vec<ObligationRecord> =
+            matching.into_iter().skip(args.offset).take(limit).collect();
+        let next_offset = (args.offset + page.len() < total).then(|| args.offset + page.len());
+        Ok(Json(ListPosReport {
+            obligations: page,
+            total,
+            offset: args.offset,
+            next_offset,
+        }))
+    }
+
+    #[tool(
+        name = "get_po",
+        description = "Show one proof obligation as the prover sees it: the typed identifiers in scope, the hypotheses (marked when the obligation's hints select them), and the goal, in Event-B notation, with the obligation's nature, sources and status.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn get_po(
+        &self,
+        Parameters(args): Parameters<GetPoArgs>,
+    ) -> Result<Json<ObligationReport>, CallToolResult> {
+        let loaded = self.loaded().await?;
+        let obligations = self.obligations(&loaded)?;
+        let Some(po) = obligations.get(&args.component, &args.name) else {
+            return Err(failure(
+                format!(
+                    "no obligation `{}` in component `{}`",
+                    args.name, args.component
+                ),
+                Vec::new(),
+            ));
+        };
+        let record = obligation_record(&po, loaded.sources.as_ref());
+        let sequent = obligations
+            .sequent(&args.component, &args.name)
+            .map_err(|error| {
+                failure(format!("the obligation does not load: {error}"), Vec::new())
+            })?;
+        let printer = PrettyPrinter::rodin_formula_string();
+        let identifiers = sequent
+            .type_env()
+            .iter()
+            .map(|(name, ty)| (name.to_string(), ty.to_rodin_canonical()))
+            .collect();
+        let hypotheses_total = sequent.hyp_iter().count();
+        let hypotheses: Vec<HypothesisRecord> = sequent
+            .hyp_iter()
+            .take(args.max_hypotheses)
+            .enumerate()
+            .map(|(index, hypothesis)| HypothesisRecord {
+                index,
+                text: printer.print_formula_predicate(hypothesis),
+                selected: sequent.is_selected(hypothesis),
+            })
+            .collect();
+        let truncated = hypotheses.len() < hypotheses_total;
+        Ok(Json(ObligationReport {
+            obligation: record,
+            identifiers,
+            hypotheses,
+            hypotheses_total,
+            truncated,
+            goal: printer.print_formula_predicate(sequent.goal()),
+        }))
+    }
+
+    #[tool(
+        name = "proof_status",
+        description = "Sum up the recorded proof status of the obligations: how many are discharged, reviewed, pending, unattempted or broken, in all and per component.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn proof_status(
+        &self,
+        Parameters(args): Parameters<ProofStatusArgs>,
+    ) -> Result<Json<ProofStatusReport>, CallToolResult> {
+        let loaded = self.loaded().await?;
+        let obligations = self.obligations(&loaded)?;
+        let components: Vec<ComponentProofs> = obligations
+            .components()
+            .filter(|component| {
+                args.component
+                    .as_deref()
+                    .is_none_or(|wanted| *component == wanted)
+            })
+            .map(|component| ComponentProofs {
+                component: component.to_string(),
+                summary: proof_summary(obligations, |po| po.component == component),
+            })
+            .collect();
+        let summary = proof_summary(obligations, |po| {
+            args.component
+                .as_deref()
+                .is_none_or(|wanted| po.component == wanted)
+        });
+        Ok(Json(ProofStatusReport {
+            summary,
+            components,
         }))
     }
 }
