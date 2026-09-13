@@ -6,8 +6,9 @@ mod common;
 use rossi::formula::{PredicateKind, tag};
 use rossi_build::ScFile;
 use rossi_build::po_view::PoView;
-use rossi_build::pog::obligations::Obligations;
+use rossi_build::pog::obligations::{ObligationStatus, Obligations};
 use rossi_build::project::discover_projects;
+use rossi_prove::confidence::Bucket;
 
 const MODELS: &[&str] = &[
     "base-model",
@@ -58,6 +59,21 @@ fn every_generated_obligation_is_listed_with_a_nature_and_loads() {
             let sequent = index
                 .sequent(po.component, po.name)
                 .unwrap_or_else(|e| panic!("{model}: {}/{}: {e}", po.component, po.name));
+            // A fresh build records every obligation as unattempted at
+            // its own stamp.
+            assert_eq!(
+                po.status,
+                Some(ObligationStatus {
+                    bucket: Bucket::Unattempted,
+                    confidence: Some(-99),
+                    broken: false,
+                    manual: false,
+                    stale: false,
+                }),
+                "{model}: {}/{}",
+                po.component,
+                po.name
+            );
             // The generator suppresses trivial goals, so a loaded goal
             // is never `⊤`.
             assert!(

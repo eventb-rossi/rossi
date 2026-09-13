@@ -8,22 +8,48 @@
 //! the component files a chain crosses. This index reads the generated
 //! files once and serves both, so no caller re-parses XML.
 
-use rossi_prove::ProverSequent;
+use std::collections::HashMap;
+
+use rossi_prove::confidence::Bucket;
 use rossi_prove::po_loader::{PoError, PoFile, PoProject};
+use rossi_prove::{Confidence, ProverSequent, PsStatus, read_bps};
 
 use crate::ScFile;
 use crate::error::{Error, ProjectError, Result};
 use crate::po_view::PoView;
+use crate::proofs::cap_if_broken;
 
 use super::natures::Nature;
 
 /// One component's obligation file: the normalized view for metadata,
-/// and the filename its sequents load under.
+/// the filename its sequents load under, and the rows of its status
+/// sidecar by obligation name.
 #[derive(Debug)]
 struct ComponentFile {
     component: String,
     filename: String,
     view: PoView,
+    statuses: HashMap<String, PsStatus>,
+}
+
+/// The recorded proof status of one obligation, as its `.bps` row
+/// reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObligationStatus {
+    /// The reporting bucket, a broken row's stale confidence capped to
+    /// pending the way the proof-status pass reports it.
+    pub bucket: Bucket,
+    /// The row's confidence verbatim.
+    pub confidence: Option<i32>,
+    /// Whether the stored proof no longer applies to the obligation.
+    pub broken: bool,
+    /// Whether the proof is marked as made by hand.
+    pub manual: bool,
+    /// Whether the verdict is due for recomputation: the row was
+    /// computed against another stamp than the obligation carries now,
+    /// or its proof depends on context and is re-checked on every
+    /// build.
+    pub stale: bool,
 }
 
 /// The obligations of one build, components in file order and
@@ -53,12 +79,28 @@ pub struct Obligation<'a> {
     /// `(role, handle)` provenance rows, handles with their project
     /// segment dropped as [`PoView`] normalizes them.
     pub sources: &'a [(String, Option<String>)],
+    /// The recorded status, when the status sidecar has a row for the
+    /// obligation.
+    pub status: Option<ObligationStatus>,
 }
 
 impl Obligations {
-    /// Indexes the `.bpo` files among `files`: the product of a build,
-    /// or of a repackaging that reconciled one.
+    /// Indexes the `.bpo` files among `files`, each with the rows of its
+    /// `.bps` sidecar: the product of a build, or of a repackaging that
+    /// reconciled one.
     pub fn from_files(files: &[ScFile]) -> Result<Obligations> {
+        let mut statuses = HashMap::new();
+        for file in files {
+            if let Some(component) = file.filename.strip_suffix(".bps") {
+                let rows = read_bps(file.contents.as_bytes())?;
+                let by_name: HashMap<String, PsStatus> = rows
+                    .into_iter()
+                    .map(|row| (row.name.clone(), row))
+                    .collect();
+                statuses.insert(component.to_string(), by_name);
+            }
+        }
+
         let mut index = Obligations::default();
         for file in files {
             let Some(component) = file.filename.strip_suffix(".bpo") else {
@@ -74,6 +116,7 @@ impl Obligations {
                 component: component.to_string(),
                 filename: file.filename.clone(),
                 view,
+                statuses: statuses.remove(component).unwrap_or_default(),
             });
         }
         Ok(index)
@@ -122,6 +165,16 @@ impl Obligations {
 
     fn describe<'a>(&'a self, c: &'a ComponentFile, name: &str) -> Option<Obligation<'a>> {
         let (name, sequent) = c.view.sequents.get_key_value(name)?;
+        let status = c.statuses.get(name).map(|row| ObligationStatus {
+            bucket: cap_if_broken(
+                Confidence::classify(row.confidence.map(i64::from)),
+                row.broken,
+            ),
+            confidence: row.confidence,
+            broken: row.broken,
+            manual: row.manual,
+            stale: row.context_dependent || row.po_stamp.as_deref() != sequent.stamp.as_deref(),
+        });
         Some(Obligation {
             component: &c.component,
             name,
@@ -130,6 +183,117 @@ impl Obligations {
             accurate: sequent.accurate,
             stamp: sequent.stamp.as_deref(),
             sources: &sequent.sources,
+            status,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Four obligations at stamp 2.
+    const BPO: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<org.eventb.core.poFile org.eventb.core.poStamp="0">
+<org.eventb.core.poPredicateSet name="ALLHYP" org.eventb.core.poStamp="0">
+<org.eventb.core.poIdentifier name="x" org.eventb.core.type="ℤ"/>
+<org.eventb.core.poPredicate name="PRD0" org.eventb.core.predicate="x=1"/>
+</org.eventb.core.poPredicateSet>
+<org.eventb.core.poSequent name="evt/inv1/INV" org.eventb.core.accurate="true" org.eventb.core.poDesc="Invariant  preservation" org.eventb.core.poStamp="2">
+<org.eventb.core.poPredicateSet name="SEQHYP" org.eventb.core.parentSet="/P/M0.bpo|org.eventb.core.poFile#M0|org.eventb.core.poPredicateSet#ALLHYP"/>
+<org.eventb.core.poPredicate name="SEQG" org.eventb.core.predicate="x&lt;2"/>
+</org.eventb.core.poSequent>
+<org.eventb.core.poSequent name="evt/inv2/INV" org.eventb.core.accurate="true" org.eventb.core.poDesc="Invariant  preservation" org.eventb.core.poStamp="2">
+<org.eventb.core.poPredicateSet name="SEQHYP" org.eventb.core.parentSet="/P/M0.bpo|org.eventb.core.poFile#M0|org.eventb.core.poPredicateSet#ALLHYP"/>
+<org.eventb.core.poPredicate name="SEQG" org.eventb.core.predicate="x&lt;3"/>
+</org.eventb.core.poSequent>
+<org.eventb.core.poSequent name="evt/inv3/INV" org.eventb.core.accurate="true" org.eventb.core.poDesc="Invariant  preservation" org.eventb.core.poStamp="2">
+<org.eventb.core.poPredicateSet name="SEQHYP" org.eventb.core.parentSet="/P/M0.bpo|org.eventb.core.poFile#M0|org.eventb.core.poPredicateSet#ALLHYP"/>
+<org.eventb.core.poPredicate name="SEQG" org.eventb.core.predicate="x&lt;4"/>
+</org.eventb.core.poSequent>
+<org.eventb.core.poSequent name="evt/inv4/INV" org.eventb.core.accurate="true" org.eventb.core.poDesc="Invariant  preservation" org.eventb.core.poStamp="2">
+<org.eventb.core.poPredicateSet name="SEQHYP" org.eventb.core.parentSet="/P/M0.bpo|org.eventb.core.poFile#M0|org.eventb.core.poPredicateSet#ALLHYP"/>
+<org.eventb.core.poPredicate name="SEQG" org.eventb.core.predicate="x&lt;5"/>
+</org.eventb.core.poSequent>
+</org.eventb.core.poFile>
+"#;
+
+    /// inv1 discharged at the current stamp; inv2 discharged but broken;
+    /// inv3 computed against an older stamp; inv4 has no row.
+    const BPS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<org.eventb.core.psFile>
+<org.eventb.core.psStatus name="evt/inv1/INV" org.eventb.core.confidence="1000" org.eventb.core.poStamp="2" org.eventb.core.psManual="false"/>
+<org.eventb.core.psStatus name="evt/inv2/INV" org.eventb.core.confidence="1000" org.eventb.core.poStamp="2" org.eventb.core.psBroken="true" org.eventb.core.psManual="true"/>
+<org.eventb.core.psStatus name="evt/inv3/INV" org.eventb.core.confidence="1000" org.eventb.core.poStamp="1" org.eventb.core.psManual="false"/>
+</org.eventb.core.psFile>
+"#;
+
+    fn files() -> Vec<ScFile> {
+        // The status sidecar first: the index must not depend on the
+        // build's obligations-then-status file order.
+        vec![
+            ScFile {
+                filename: "M0.bps".into(),
+                contents: BPS.into(),
+                accurate: true,
+            },
+            ScFile {
+                filename: "M0.bpo".into(),
+                contents: BPO.into(),
+                accurate: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_status_row_joins_its_obligation() {
+        let index = Obligations::from_files(&files()).unwrap();
+        let status = |name: &str| index.get("M0", name).unwrap().status;
+
+        assert_eq!(
+            status("evt/inv1/INV"),
+            Some(ObligationStatus {
+                bucket: Bucket::Discharged,
+                confidence: Some(1000),
+                broken: false,
+                manual: false,
+                stale: false,
+            })
+        );
+        // A broken row keeps its recorded confidence but reports as
+        // pending, and carries its manual flag.
+        assert_eq!(
+            status("evt/inv2/INV"),
+            Some(ObligationStatus {
+                bucket: Bucket::Pending,
+                confidence: Some(1000),
+                broken: true,
+                manual: true,
+                stale: false,
+            })
+        );
+        // A row computed against another stamp is due for recomputation.
+        assert_eq!(
+            status("evt/inv3/INV"),
+            Some(ObligationStatus {
+                bucket: Bucket::Discharged,
+                confidence: Some(1000),
+                broken: false,
+                manual: false,
+                stale: true,
+            })
+        );
+        assert_eq!(status("evt/inv4/INV"), None);
+
+        let names: Vec<&str> = index.iter().map(|po| po.name).collect();
+        assert_eq!(
+            names,
+            [
+                "evt/inv1/INV",
+                "evt/inv2/INV",
+                "evt/inv3/INV",
+                "evt/inv4/INV"
+            ]
+        );
     }
 }
