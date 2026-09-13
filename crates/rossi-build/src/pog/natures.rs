@@ -30,6 +30,38 @@ pub enum Nature {
 }
 
 impl Nature {
+    /// Every nature, in declaration order.
+    pub const ALL: [Nature; 19] = [
+        Nature::ActionFeasibility,
+        Nature::ActionSimulation,
+        Nature::ActionWellDefinedness,
+        Nature::AxiomWellDefinedness,
+        Nature::CommonVariableEquality,
+        Nature::EventVariant,
+        Nature::EventNaturalNumberVariant,
+        Nature::GuardStrengtheningMerge,
+        Nature::GuardStrengtheningSplit,
+        Nature::GuardWellDefinedness,
+        Nature::InvariantEstablishment,
+        Nature::InvariantPreservation,
+        Nature::InvariantWellDefinedness,
+        Nature::Theorem,
+        Nature::TheoremWellDefinedness,
+        Nature::VariantFiniteness,
+        Nature::VariantWellDefinedness,
+        Nature::WitnessFeasibility,
+        Nature::WitnessWellDefinedness,
+    ];
+
+    /// The nature a `poDesc` attribute value names, when it is one of
+    /// the generator's.
+    #[must_use]
+    pub fn from_description(description: &str) -> Option<Nature> {
+        Nature::ALL
+            .into_iter()
+            .find(|nature| nature.description() == description)
+    }
+
     /// The `poDesc` attribute value.
     #[must_use]
     pub fn description(self) -> &'static str {
@@ -54,5 +86,18 @@ impl Nature {
             Nature::WitnessFeasibility => "Feasibility of witness",
             Nature::WitnessWellDefinedness => "Well-definedness of witness",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_description_names_its_nature_back() {
+        for nature in Nature::ALL {
+            assert_eq!(Nature::from_description(nature.description()), Some(nature));
+        }
+        assert_eq!(Nature::from_description("Invariant preservation"), None);
     }
 }
