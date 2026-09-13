@@ -21,17 +21,15 @@ pub mod workspace;
 
 pub use server::RossiServer;
 
-use std::path::PathBuf;
-
 use rmcp::ServiceExt;
 
-/// Serves the project under `root` over standard input and output until
-/// the client disconnects. Logging goes to standard error; nothing else
-/// may write to standard output while the server runs.
-pub async fn serve_stdio(root: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let running = RossiServer::new(root)
-        .serve(rmcp::transport::stdio())
-        .await?;
+/// Serves `server` over standard input and output until the client
+/// disconnects. Logging goes to standard error; nothing else may write
+/// to standard output while the server runs.
+pub async fn serve_stdio(
+    server: RossiServer,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let running = server.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
 }

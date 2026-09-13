@@ -6,6 +6,7 @@ mod dump;
 mod export_build;
 mod fmt;
 mod import_export;
+mod mcp;
 mod prove;
 mod stdin;
 mod validate;

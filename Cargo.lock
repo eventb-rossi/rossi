@@ -1487,6 +1487,8 @@ version = "0.2.3"
 dependencies = [
  "clap",
  "clap_complete",
+ "eventb-animate-driver",
+ "eventb-mcp",
  "mimalloc",
  "rayon",
  "rossi",
@@ -1494,6 +1496,8 @@ dependencies = [
  "rossi-prove",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing-subscriber",
  "zip",
 ]
 
