@@ -10,16 +10,21 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use eventb_animate_driver::report::{Verdict, classify_check, classify_po};
+use eventb_animate_driver::{AnimateConfig, ProbSettings, Run};
 use rossi::pretty::PrettyPrinter;
 use rossi_build::Severity;
 use rossi_build::pog::obligations::{Obligation, Obligations};
 use rossi_build::pog::sources::{ElementKind, SourceIndex};
 use rossi_prove::confidence::Bucket;
 
+use crate::animate;
 use crate::report::{
-    BuildReport, ComponentProofs, DiagnosticCounts, DiagnosticRecord, Failure, FileRecord,
-    HypothesisRecord, ListPosReport, ObligationCounts, ObligationRecord, ObligationReport,
-    ProjectReport, ProofStatusReport, ProofSummary, SourceRecord, StatusRecord, ValidateReport,
+    BindingRecord, BuildReport, CheckRecord, CheckRunReport, ComponentProofs, CounterexampleRecord,
+    DiagnosticCounts, DiagnosticRecord, DisproofRecord, DisproveReport, DisproveVerdict, Failure,
+    FileRecord, HypothesisRecord, ListPosReport, ModelCheckReport, ObligationCounts,
+    ObligationRecord, ObligationReport, ProjectReport, ProofStatusReport, ProofSummary,
+    SourceRecord, StatusRecord, ValidateReport, VerdictRecord,
 };
 use crate::workspace::{Loaded, Workspace, obligation_counts, write_build};
 
@@ -34,13 +39,157 @@ status with the previous build, and writes the checked files under `.rossi/build
 `list_pos` pages through the proof obligations with their nature, the elements they come from \
 and their recorded status; `get_po` shows one obligation's sequent; `proof_status` sums up the \
 recorded statuses. \
+`model_check` explores the reachable states of a machine with ProB for invariant violations and \
+deadlocks and returns the counterexample trace; `check_invariants_cbc` searches, event by event, \
+for a state from which one step breaks an invariant; `check_wd` asks ProB to discharge the \
+well-definedness obligations; `disprove_po` searches for a counterexample to each open proof \
+obligation. `model_check` and `check_invariants_cbc` take `bounds`, predicates over the constants \
+(`n < 5`) that constrain the run without changing the model. \
 Every result is one JSON document; a failed call returns a document with an `error` field.";
 
 /// The MCP server over one root directory.
 #[derive(Clone)]
 pub struct RossiServer {
     workspace: Arc<Workspace>,
+    animate: AnimateConfig,
     tool_router: ToolRouter<Self>,
+}
+
+/// A model-checking run, written out and ready to start.
+struct Prepared {
+    machine: String,
+    /// The throwaway project; removed when dropped.
+    dir: tempfile::TempDir,
+    /// The machine's obligations, for the disprover's deadline.
+    po_count: usize,
+    bounds: Vec<String>,
+}
+
+/// Arguments of `model_check`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ModelCheckArgs {
+    /// The machine to check (default: the most refined one, when the
+    /// project has exactly one).
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Wall-clock limit of the search, in seconds (default 30).
+    #[serde(default)]
+    pub time_limit_secs: Option<u32>,
+    /// Stop after this many explored states.
+    #[serde(default)]
+    pub states: Option<u64>,
+    /// ProB's default size for the carrier sets (default 4).
+    #[serde(default)]
+    pub set_size: Option<u32>,
+    /// ProB preferences, as `KEY=VALUE`.
+    #[serde(default)]
+    pub prefs: Vec<String>,
+    /// Predicates over the constants (`n < 5`) the run is constrained by;
+    /// they become axioms of a scratch context the machine sees instead
+    /// of its own, so the model is not changed.
+    #[serde(default)]
+    pub bounds: Vec<String>,
+    /// Do not search for deadlocks.
+    #[serde(default)]
+    pub no_deadlock: bool,
+    /// Do not search for invariant violations.
+    #[serde(default)]
+    pub no_invariant: bool,
+    /// Also check the theorems.
+    #[serde(default)]
+    pub assertions: bool,
+    /// Also search for a reachable state satisfying this predicate; a
+    /// hit is reported as a finding.
+    #[serde(default)]
+    pub goal: Option<String>,
+}
+
+/// Arguments of `check_invariants_cbc`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CbcArgs {
+    /// The machine to check (default: the most refined one, when the
+    /// project has exactly one).
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Only these events (default: every event).
+    #[serde(default)]
+    pub events: Vec<String>,
+    /// Also search for a deadlocking state that satisfies the invariant.
+    #[serde(default)]
+    pub deadlock: bool,
+    /// ProB's default size for the carrier sets (default 4).
+    #[serde(default)]
+    pub set_size: Option<u32>,
+    /// ProB preferences, as `KEY=VALUE`.
+    #[serde(default)]
+    pub prefs: Vec<String>,
+    /// Predicates over the constants the run is constrained by.
+    #[serde(default)]
+    pub bounds: Vec<String>,
+}
+
+/// Arguments of `check_wd`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct WdArgs {
+    /// The machine whose obligations to check (default: the most refined
+    /// one, when the project has exactly one).
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// ProB's default size for the carrier sets (default 4).
+    #[serde(default)]
+    pub set_size: Option<u32>,
+    /// ProB preferences, as `KEY=VALUE`.
+    #[serde(default)]
+    pub prefs: Vec<String>,
+}
+
+/// Arguments of `disprove_po`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct DisproveArgs {
+    /// The machine whose refinement chain to look at (default: the most
+    /// refined one, when the project has exactly one).
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Only these obligations, by qualified name
+    /// (`<component>/<obligation>`, e.g. `M1/evt/inv1/INV`).
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Only the obligations whose qualified name matches this glob
+    /// (`M1/*`, `*/INV`).
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Solver time per obligation, in milliseconds (default 1000).
+    #[serde(default)]
+    pub disprove_timeout_ms: Option<u32>,
+    /// ProB's default size for the carrier sets (default 4).
+    #[serde(default)]
+    pub set_size: Option<u32>,
+    /// ProB preferences, as `KEY=VALUE`.
+    #[serde(default)]
+    pub prefs: Vec<String>,
+}
+
+fn bindings(bindings: &[eventb_animate_driver::report::StateBinding]) -> Vec<BindingRecord> {
+    bindings
+        .iter()
+        .map(|binding| BindingRecord {
+            name: binding.name.clone(),
+            value: binding.value.clone(),
+        })
+        .collect()
+}
+
+fn checks(report: &eventb_animate_driver::report::Report) -> Vec<CheckRecord> {
+    report
+        .checks
+        .iter()
+        .map(|check| CheckRecord {
+            name: check.name.clone(),
+            outcome: check.outcome.clone(),
+            message: check.message.clone(),
+            bindings: bindings(&check.bindings),
+        })
+        .collect()
 }
 
 /// Arguments of `validate`.
@@ -245,8 +394,90 @@ impl RossiServer {
     pub fn new(root: PathBuf) -> Self {
         RossiServer {
             workspace: Arc::new(Workspace::new(root)),
+            animate: AnimateConfig::default(),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// The same server, running the model checker under `config`.
+    pub fn with_animate(mut self, config: AnimateConfig) -> Self {
+        self.animate = config;
+        self
+    }
+
+    /// The loaded project written out as a project to check, bounded when
+    /// `bounds` are given. A model that does not check is not run: the
+    /// tool would verify a different model.
+    async fn prepare(
+        &self,
+        machine: Option<String>,
+        bounds: Vec<String>,
+        recorded_status: bool,
+    ) -> Result<(Arc<Loaded>, Prepared), CallToolResult> {
+        let loaded = self.loaded().await?;
+        let checks = loaded
+            .build
+            .as_ref()
+            .is_some_and(rossi_build::BuildResult::is_ok);
+        if loaded.project.is_none() || !checks {
+            return Err(failure(
+                "the model does not check; fix the errors first",
+                loaded.diagnostics(false),
+            ));
+        }
+        let machine = animate::select_machine(&loaded, machine.as_deref())
+            .map_err(|error| failure(error, Vec::new()))?;
+        let shared = Arc::clone(&loaded);
+        let prepared = tokio::task::spawn_blocking(move || -> Result<Prepared, CallToolResult> {
+            let project = shared.project.as_ref().expect("checked above");
+            let components = animate::bounded_components(project, &machine, &bounds)
+                .map_err(|error| failure(error, Vec::new()))?;
+            let files = if bounds.is_empty() {
+                shared.files_for(recorded_status)
+            } else {
+                // A bounded run rebuilds, so its statuses are the
+                // generated ones whatever the caller wanted; only the
+                // disprover asks for the recorded ones and it takes no
+                // bounds.
+                animate::build_files(&shared.name, &components).map_err(|diagnostics| {
+                    failure(
+                        "the bounds do not check against the model",
+                        diagnostics.iter().map(|d| shared.record(d)).collect(),
+                    )
+                })?
+            };
+            let po_count = animate::obligation_count(&files, &machine);
+            let dir = animate::write_project(&shared.name, &components, &files)
+                .map_err(|error| failure(error, Vec::new()))?;
+            Ok(Prepared {
+                machine,
+                dir,
+                po_count,
+                bounds,
+            })
+        })
+        .await
+        .map_err(|e| failure(format!("the preparation task failed: {e}"), Vec::new()))??;
+        Ok((loaded, prepared))
+    }
+
+    /// Run the tool over a prepared project and read its report.
+    async fn animate(
+        &self,
+        prepared: &Prepared,
+        run: &Run,
+        settings: &ProbSettings,
+    ) -> Result<(eventb_animate_driver::report::Report, Option<i32>), CallToolResult> {
+        animate::run(
+            &self.animate,
+            run,
+            settings,
+            &prepared.machine,
+            prepared.dir.path(),
+            prepared.po_count,
+        )
+        .await
+        .map_err(|error| failure(error.to_string(), Vec::new()))
     }
 
     async fn loaded(&self) -> Result<Arc<Loaded>, CallToolResult> {
@@ -535,6 +766,281 @@ impl RossiServer {
         Ok(Json(ProofStatusReport {
             summary,
             components,
+        }))
+    }
+
+    #[tool(
+        name = "model_check",
+        description = "Model-check a machine with ProB: explore its reachable states for invariant violations and deadlocks (and a goal state or theorem violations when asked) under a time limit, and report the verdict with the counterexample trace, the violating state and the violated invariants mapped back to their labels.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn model_check(
+        &self,
+        Parameters(args): Parameters<ModelCheckArgs>,
+    ) -> Result<Json<ModelCheckReport>, CallToolResult> {
+        let (loaded, prepared) = self.prepare(args.machine, args.bounds, false).await?;
+        let run = Run::Check {
+            time_limit_secs: args.time_limit_secs.unwrap_or(30),
+            states: args.states,
+            no_deadlock: args.no_deadlock,
+            no_invariant: args.no_invariant,
+            assertions: args.assertions,
+            goal: args.goal,
+        };
+        let settings = ProbSettings {
+            set_size: args.set_size,
+            prefs: args.prefs,
+        };
+        let (report, code) = self.animate(&prepared, &run, &settings).await?;
+        let transitions = report
+            .counterexample
+            .as_ref()
+            .map(|cx| cx.transitions.clone())
+            .unwrap_or_default();
+        let verdict = |kind: &str| VerdictRecord {
+            kind: kind.to_string(),
+            reason: None,
+            states: None,
+            category: None,
+            message: None,
+        };
+        let (verdict, counterexample) = match classify_check(&report, code) {
+            Verdict::CheckOk { reason, states } => (
+                VerdictRecord {
+                    reason: Some(reason),
+                    states: Some(states),
+                    ..verdict("ok")
+                },
+                None,
+            ),
+            Verdict::CheckIncomplete { reason } => (
+                VerdictRecord {
+                    reason: Some(reason),
+                    ..verdict("incomplete")
+                },
+                None,
+            ),
+            Verdict::InvariantViolation {
+                violated,
+                state,
+                bindings: state_bindings,
+                steps,
+            } => (
+                verdict("invariant_violation"),
+                Some(CounterexampleRecord {
+                    transitions,
+                    violating_state: state,
+                    violated_invariants: animate::match_violated(
+                        &violated,
+                        &loaded.invariants,
+                        &prepared.machine,
+                    ),
+                    bindings: bindings(&state_bindings),
+                    steps,
+                }),
+            ),
+            Verdict::Deadlock {
+                state,
+                bindings: state_bindings,
+                steps,
+            } => (
+                verdict("deadlock"),
+                Some(CounterexampleRecord {
+                    transitions,
+                    violating_state: state,
+                    violated_invariants: Vec::new(),
+                    bindings: bindings(&state_bindings),
+                    steps,
+                }),
+            ),
+            Verdict::OtherFinding { category, message } => (
+                VerdictRecord {
+                    category: Some(category),
+                    message: Some(message),
+                    ..verdict("finding")
+                },
+                None,
+            ),
+            Verdict::LoadError { message } => (
+                VerdictRecord {
+                    message: Some(message),
+                    ..verdict("load_error")
+                },
+                None,
+            ),
+            Verdict::EngineError { message } => (
+                VerdictRecord {
+                    message: Some(message),
+                    ..verdict("engine_error")
+                },
+                None,
+            ),
+            // Only a po run classifies into these.
+            Verdict::PoDisproved { .. }
+            | Verdict::PoNoCounterexample { .. }
+            | Verdict::PoOk { .. }
+            | Verdict::PoError { .. } => (verdict("engine_error"), None),
+        };
+        Ok(Json(ModelCheckReport {
+            machine: prepared.machine.clone(),
+            bounds: prepared.bounds.clone(),
+            status: report.status.clone(),
+            message: report.message.clone().unwrap_or_default(),
+            verdict,
+            counterexample,
+            exit_code: code,
+        }))
+    }
+
+    #[tool(
+        name = "check_invariants_cbc",
+        description = "Check invariant preservation event by event with ProB's constraint solver, without exploring the state space: for each event, search for a state satisfying the invariant (reachable or not) from which one step violates it. A hit is a two-step counterexample; no hit is a preservation proof for the event (initialisation is not checked).",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn check_invariants_cbc(
+        &self,
+        Parameters(args): Parameters<CbcArgs>,
+    ) -> Result<Json<CheckRunReport>, CallToolResult> {
+        let (_, prepared) = self.prepare(args.machine, args.bounds, false).await?;
+        let run = Run::Cbc {
+            events: args.events,
+            deadlock: args.deadlock,
+        };
+        let settings = ProbSettings {
+            set_size: args.set_size,
+            prefs: args.prefs,
+        };
+        let (report, code) = self.animate(&prepared, &run, &settings).await?;
+        Ok(Json(CheckRunReport {
+            machine: prepared.machine.clone(),
+            bounds: prepared.bounds.clone(),
+            status: report.status.clone(),
+            message: report.message.clone().unwrap_or_default(),
+            checks: checks(&report),
+            exit_code: code,
+        }))
+    }
+
+    #[tool(
+        name = "check_wd",
+        description = "Ask ProB's well-definedness prover to discharge the machine's well-definedness obligations (partial function applications, divisions, minimum and maximum of sets); reports how many it discharged. An undischarged obligation is unproven, not disproven.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn check_wd(
+        &self,
+        Parameters(args): Parameters<WdArgs>,
+    ) -> Result<Json<CheckRunReport>, CallToolResult> {
+        let (_, prepared) = self.prepare(args.machine, Vec::new(), false).await?;
+        let settings = ProbSettings {
+            set_size: args.set_size,
+            prefs: args.prefs,
+        };
+        let (report, code) = self.animate(&prepared, &Run::Wd, &settings).await?;
+        Ok(Json(CheckRunReport {
+            machine: prepared.machine.clone(),
+            bounds: Vec::new(),
+            status: report.status.clone(),
+            message: report.message.clone().unwrap_or_default(),
+            checks: checks(&report),
+            exit_code: code,
+        }))
+    }
+
+    #[tool(
+        name = "disprove_po",
+        description = "Run ProB's constraint solver against each open proof obligation of the machine's refinement chain, looking for a counterexample to its sequent. A counterexample is a definite refutation (the obligation cannot be proved as the model stands); an obligation the solver proves passes; a timeout keeps it open.",
+        annotations(read_only_hint = true, idempotent_hint = true)
+    )]
+    async fn disprove_po(
+        &self,
+        Parameters(args): Parameters<DisproveArgs>,
+    ) -> Result<Json<DisproveReport>, CallToolResult> {
+        // The gate reads the recorded verdicts: an obligation already
+        // discharged needs no counterexample search.
+        let (_, prepared) = self.prepare(args.machine, Vec::new(), true).await?;
+        let mut filters = args.names;
+        filters.extend(args.filter);
+        let run = Run::Po {
+            disprove_timeout_ms: args.disprove_timeout_ms.unwrap_or(1000),
+            filters,
+        };
+        let settings = ProbSettings {
+            set_size: args.set_size,
+            prefs: args.prefs,
+        };
+        let (report, code) = self.animate(&prepared, &run, &settings).await?;
+        let rows = checks(&report);
+        let open = rows.iter().filter(|c| c.outcome != "passed").count();
+        let spurious = rows
+            .iter()
+            .filter(|c| {
+                c.outcome == "failed"
+                    && c.message.as_deref().is_some_and(|m| {
+                        m.starts_with("counterexample under the selected hypotheses")
+                    })
+            })
+            .count();
+        let verdict = match classify_po(&report) {
+            Verdict::PoDisproved { disproved, total } => DisproveVerdict {
+                kind: "disproved".to_string(),
+                disproved: disproved
+                    .into_iter()
+                    .map(|po| DisproofRecord {
+                        name: po.name,
+                        message: po.message,
+                        bindings: bindings(&po.bindings),
+                    })
+                    .collect(),
+                open,
+                total,
+                spurious,
+                message: None,
+            },
+            Verdict::PoNoCounterexample {
+                open,
+                total,
+                spurious,
+            } => DisproveVerdict {
+                kind: "no_counterexample".to_string(),
+                disproved: Vec::new(),
+                open,
+                total,
+                spurious,
+                message: None,
+            },
+            Verdict::PoOk { message } => DisproveVerdict {
+                kind: "ok".to_string(),
+                disproved: Vec::new(),
+                open: 0,
+                total: rows.len(),
+                spurious: 0,
+                message: Some(message),
+            },
+            Verdict::PoError { message } => DisproveVerdict {
+                kind: "error".to_string(),
+                disproved: Vec::new(),
+                open,
+                total: rows.len(),
+                spurious,
+                message: Some(message),
+            },
+            // Only a check run classifies into these.
+            other => DisproveVerdict {
+                kind: "error".to_string(),
+                disproved: Vec::new(),
+                open,
+                total: rows.len(),
+                spurious,
+                message: Some(format!("unexpected verdict {other:?}")),
+            },
+        };
+        Ok(Json(DisproveReport {
+            machine: prepared.machine.clone(),
+            status: report.status.clone(),
+            message: report.message.clone().unwrap_or_default(),
+            verdict,
+            checks: rows,
+            exit_code: code,
         }))
     }
 }

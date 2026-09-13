@@ -57,6 +57,18 @@ struct Scan {
     sources: Vec<SourceFile>,
 }
 
+/// One labelled invariant, with the renderings the model checker's
+/// printed predicates are matched against.
+#[derive(Debug, Clone)]
+pub struct InvariantInfo {
+    pub component: String,
+    pub label: String,
+    /// Whitespace-stripped renderings (canonical and ASCII) of the
+    /// predicate; the tool prints the checked file's predicate code,
+    /// which the build derives from the same tree.
+    pub renderings: Vec<String>,
+}
+
 /// The project as last loaded.
 #[derive(Debug)]
 pub struct Loaded {
@@ -79,6 +91,12 @@ pub struct Loaded {
     pub wd: Vec<Diagnostic>,
     pub obligations: Option<Obligations>,
     pub sources: Option<SourceIndex>,
+    /// Every labelled invariant of every machine.
+    pub invariants: Vec<InvariantInfo>,
+    /// The status files as generated, before reconciliation carried the
+    /// previous build's verdicts into them: one all-unattempted `.bps`
+    /// per component, by filename. See [`Loaded::files_for`].
+    fresh_statuses: HashMap<String, String>,
     /// The source file and text of each component, by component name.
     files_of: HashMap<String, (String, Option<String>)>,
 }
@@ -87,6 +105,40 @@ impl Loaded {
     /// The source file and text a component came from.
     pub fn source_of(&self, component: &str) -> Option<(String, Option<String>)> {
         self.files_of.get(component).cloned()
+    }
+
+    /// The build's files as a run of the model checker should see them.
+    ///
+    /// The disprover gate reads the recorded verdicts and skips what is
+    /// already discharged, so it wants the reconciled statuses. Every
+    /// other run must not see them: the model checker takes a discharged
+    /// invariant obligation as licence to skip re-checking that invariant
+    /// after an event, and a check that trusts a proof is not the
+    /// independent check the caller asked for. Restoring the generated
+    /// statuses also keeps an unbounded run answering exactly as the
+    /// bounded one, which is built from scratch.
+    ///
+    /// A restored status file carries the stamp it was generated with
+    /// while its obligations keep the reconciled one, so the pair reads
+    /// as stale. Nothing here minds: an unattempted row grants the model
+    /// checker nothing to skip whatever its stamp, the gate that does
+    /// read stamps is the one getting the recorded statuses, and the
+    /// files live only as long as the run.
+    pub fn files_for(&self, recorded_status: bool) -> Vec<rossi_build::ScFile> {
+        let Some(build) = &self.build else {
+            return Vec::new();
+        };
+        build
+            .files
+            .iter()
+            .map(|file| match self.fresh_statuses.get(&file.filename) {
+                Some(fresh) if !recorded_status => rossi_build::ScFile {
+                    contents: fresh.clone(),
+                    ..file.clone()
+                },
+                _ => file.clone(),
+            })
+            .collect()
     }
 
     /// A finding located in the project's sources.
@@ -263,6 +315,8 @@ impl Loaded {
             wd: Vec::new(),
             obligations: None,
             sources: None,
+            invariants: Vec::new(),
+            fresh_statuses: HashMap::new(),
             files_of: HashMap::new(),
         };
 
@@ -302,11 +356,39 @@ impl Loaded {
                     for seen in &machine.sees {
                         loaded.edge(&machine.name, seen, "sees");
                     }
+                    let ascii = rossi::pretty::PrettyPrinter::ascii();
+                    for invariant in &machine.invariants {
+                        let Some(label) = &invariant.label else {
+                            continue;
+                        };
+                        let mut renderings = vec![
+                            crate::animate::normalize_predicate(
+                                &rossi_build::normalize::canonical_predicate(&invariant.predicate),
+                            ),
+                            crate::animate::normalize_predicate(
+                                &ascii.print_formula_predicate(&invariant.predicate),
+                            ),
+                        ];
+                        renderings.dedup();
+                        loaded.invariants.push(InvariantInfo {
+                            component: machine.name.clone(),
+                            label: label.clone(),
+                            renderings,
+                        });
+                    }
                 }
             }
         }
 
         let (mut build, model) = rossi_build::build_with_model(&project);
+        // The generated statuses, kept before reconciliation overwrites
+        // them, are what a model-checking run is written with.
+        loaded.fresh_statuses = build
+            .files
+            .iter()
+            .filter(|file| file.filename.ends_with(".bps"))
+            .map(|file| (file.filename.clone(), file.contents.clone()))
+            .collect();
         // The same reconciliation and status pass a `rossi build` into the
         // directory runs: previous state is what the output directory
         // holds, `.bpr` proofs there are never touched.

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use eventb_animate_driver::AnimateConfig;
 use rmcp::model::{CallToolRequestParams, ClientInfo};
 use rmcp::service::RunningService;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
@@ -35,9 +36,14 @@ fn root_with(name: &str, files: &[&str]) -> PathBuf {
 }
 
 async fn connect(root: PathBuf) -> RunningService<RoleClient, Client> {
+    connect_with(root, AnimateConfig::default()).await
+}
+
+async fn connect_with(root: PathBuf, animate: AnimateConfig) -> RunningService<RoleClient, Client> {
     let (server_transport, client_transport) = tokio::io::duplex(1 << 16);
     tokio::spawn(async move {
         let running = RossiServer::new(root)
+            .with_animate(animate)
             .serve(server_transport)
             .await
             .expect("the server starts");
@@ -47,6 +53,15 @@ async fn connect(root: PathBuf) -> RunningService<RoleClient, Client> {
         .serve(client_transport)
         .await
         .expect("the client connects")
+}
+
+/// The model checker the end-to-end tests run: `EVENTB_ANIMATE` when set,
+/// else `eventb-animate` on PATH.
+fn animator() -> AnimateConfig {
+    AnimateConfig {
+        path: std::env::var("EVENTB_ANIMATE").unwrap_or_default(),
+        ..AnimateConfig::default()
+    }
 }
 
 /// Call a tool; the flag says whether the result was an error document.
@@ -84,11 +99,15 @@ async fn the_server_lists_its_tools() {
         names,
         [
             "build",
+            "check_invariants_cbc",
+            "check_wd",
+            "disprove_po",
             "get_po",
             "list_pos",
+            "model_check",
             "project",
             "proof_status",
-            "validate"
+            "validate",
         ]
     );
     client.cancel().await.unwrap();
@@ -428,4 +447,172 @@ async fn obligations_are_listed_shown_and_summed_up() {
     assert_eq!(machine["summary"]["total"], machine_total);
 
     client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_missing_model_checker_is_a_failure_document() {
+    let root = root_with(
+        "notool",
+        &["bank_account_ctx.eventb", "bank_account_machine.eventb"],
+    );
+    let config = AnimateConfig {
+        path: "rossi-test-definitely-not-installed".into(),
+        ..AnimateConfig::default()
+    };
+    let client = connect_with(root, config).await;
+    let (error, report) = call(&client, "model_check", json!({})).await;
+    assert!(error, "{report}");
+    assert!(
+        report["error"].as_str().unwrap().contains("was not found"),
+        "{report}"
+    );
+    // A bound over an unknown constant never reaches the tool.
+    let (error, report) = call(&client, "model_check", json!({"bounds": ["zz < 3"]})).await;
+    assert!(error, "{report}");
+    assert_eq!(report["error"], "the bounds do not check against the model");
+    assert!(!report["diagnostics"].as_array().unwrap().is_empty());
+    client.cancel().await.unwrap();
+}
+
+/// A counter that outruns its bound after three steps.
+const COUNTER_CTX: &str = "CONTEXT c\nCONSTANTS n\nAXIOMS\n    @axm1 n ∈ ℕ\n    @axm2 n = 3\nEND\n";
+const COUNTER_MACHINE: &str = "MACHINE m\nSEES c\nVARIABLES x\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 x < n\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x ≔ 0\n    END\n    EVENT inc\n    THEN\n        @act1 x ≔ x + 1\n    END\nEND\n";
+
+/// Needs `eventb-animate` (Java) installed: `cargo test -p eventb-mcp -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn the_model_checker_runs_end_to_end() {
+    let root = root_with("e2e", &[]);
+    std::fs::write(root.join("c.eventb"), COUNTER_CTX).unwrap();
+    std::fs::write(root.join("m.eventb"), COUNTER_MACHINE).unwrap();
+    let client = connect_with(root, animator()).await;
+
+    // The violation, its trace, and the invariant mapped back to its label.
+    let (error, check) = call(&client, "model_check", json!({"time_limit_secs": 20})).await;
+    assert!(!error, "{check}");
+    assert_eq!(check["machine"], "m");
+    assert_eq!(check["verdict"]["kind"], "invariant_violation", "{check}");
+    let counterexample = &check["counterexample"];
+    assert_eq!(counterexample["steps"], 5, "{check}");
+    assert_eq!(
+        counterexample["violated_invariants"],
+        json!([{"text": "x<n", "component": "m", "label": "inv2"}]),
+        "{check}"
+    );
+    assert!(
+        counterexample["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["name"] == "x" && b["value"] == "3"),
+        "{check}"
+    );
+
+    // A bound consistent with the axioms keeps the verdict; one that
+    // contradicts them leaves ProB no constants, which is an error, not
+    // a silent pass.
+    let (error, bounded) = call(
+        &client,
+        "model_check",
+        json!({"time_limit_secs": 20, "bounds": ["n > 1"]}),
+    )
+    .await;
+    assert!(!error, "{bounded}");
+    assert_eq!(
+        bounded["verdict"]["kind"], "invariant_violation",
+        "{bounded}"
+    );
+    assert_eq!(bounded["bounds"], json!(["n > 1"]));
+    let (error, contradicted) = call(
+        &client,
+        "model_check",
+        json!({"time_limit_secs": 20, "bounds": ["n < 2"]}),
+    )
+    .await;
+    assert!(!error, "{contradicted}");
+    assert_eq!(contradicted["status"], "error", "{contradicted}");
+
+    // The constraint-based check finds the same step without the search.
+    let (error, cbc) = call(&client, "check_invariants_cbc", json!({})).await;
+    assert!(!error, "{cbc}");
+    assert_eq!(cbc["status"], "violation", "{cbc}");
+    assert!(
+        cbc["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "invariant/inc" && c["outcome"] == "failed"),
+        "{cbc}"
+    );
+
+    let (error, wd) = call(&client, "check_wd", json!({})).await;
+    assert!(!error, "{wd}");
+    assert_eq!(wd["status"], "ok", "{wd}");
+
+    // The obligation the model cannot satisfy is refuted by name.
+    let (error, disproof) = call(
+        &client,
+        "disprove_po",
+        json!({"names": ["m/inc/inv2/INV"], "disprove_timeout_ms": 2000}),
+    )
+    .await;
+    assert!(!error, "{disproof}");
+    assert_eq!(disproof["verdict"]["kind"], "disproved", "{disproof}");
+    assert_eq!(
+        disproof["verdict"]["disproved"][0]["name"], "m/inc/inv2/INV",
+        "{disproof}"
+    );
+
+    client.cancel().await.unwrap();
+}
+
+/// The disprover skips what is already discharged, so it is written the
+/// recorded verdicts; every other run must see the generated ones, or the
+/// model checker would take a discharged invariant obligation as licence
+/// to stop re-checking that invariant.
+#[tokio::test]
+async fn only_the_disprover_is_written_the_recorded_proof_status() {
+    let root = root_with("status", &[]);
+    std::fs::write(root.join("c.eventb"), COUNTER_CTX).unwrap();
+    std::fs::write(root.join("m.eventb"), COUNTER_MACHINE).unwrap();
+
+    // A build writes the generated statuses, all unattempted.
+    let loaded = eventb_mcp::workspace::Workspace::new(root.clone())
+        .load()
+        .await
+        .expect("the project loads");
+    eventb_mcp::workspace::write_build(&loaded).expect("the build is written");
+    let status_file = loaded.output_dir.join("m.bps");
+    let generated = std::fs::read_to_string(&status_file).unwrap();
+    assert!(generated.contains(r#"confidence="-99""#), "{generated}");
+
+    // Someone proved one of them: the row keeps its stamp, so the next
+    // load carries the verdict forward.
+    std::fs::write(
+        &status_file,
+        generated.replacen(r#"confidence="-99""#, r#"confidence="1000""#, 1),
+    )
+    .unwrap();
+    let loaded = eventb_mcp::workspace::Workspace::new(root)
+        .load()
+        .await
+        .expect("the project loads again");
+
+    let status_of = |files: Vec<rossi_build::ScFile>| {
+        files
+            .into_iter()
+            .find(|file| file.filename == "m.bps")
+            .expect("the machine's status file")
+            .contents
+    };
+    assert!(
+        status_of(loaded.files_for(true)).contains(r#"confidence="1000""#),
+        "the disprover sees the recorded verdict"
+    );
+    let fresh = status_of(loaded.files_for(false));
+    assert!(
+        !fresh.contains(r#"confidence="1000""#),
+        "a model check must not see it: {fresh}"
+    );
+    assert_eq!(fresh, generated, "it sees the generated statuses");
 }
