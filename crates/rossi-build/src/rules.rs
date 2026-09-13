@@ -393,6 +393,15 @@ impl std::fmt::Display for RuleId {
     }
 }
 
+/// A rule serializes as its stable code (`"EB011"`), the spelling every
+/// report already uses, rather than as the variant name.
+#[cfg(feature = "serde")]
+impl serde::Serialize for RuleId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.code())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

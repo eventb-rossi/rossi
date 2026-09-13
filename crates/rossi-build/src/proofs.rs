@@ -35,6 +35,7 @@ use crate::{Diagnostic, Severity, error::Result};
 /// Proof-obligation counts across the whole input, mirroring
 /// eventb-checker's `proofSummary` JSON object.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProofSummary {
     pub total: usize,
     pub discharged: usize,
@@ -49,6 +50,7 @@ pub struct ProofSummary {
 
 /// The outcome of the proof-status pass.
 #[derive(Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProofReport {
     /// EB017 parse errors first, then EB015 per undischarged obligation,
     /// then EB016 per broken proof — eventb-checker's emission order.
