@@ -14,7 +14,6 @@
 pub mod closure;
 pub mod diagnostics;
 pub mod report;
-pub(crate) mod tool;
 
 use std::sync::Arc;
 
@@ -23,6 +22,8 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::lsp_types::*;
 use crate::progress::Progress;
+pub use eventb_animate_driver::AnimateMode;
+use eventb_animate_driver::ToolError;
 use tower_lsp::Client;
 
 /// The `workspace/executeCommand` command behind the "Model-check" lens.
@@ -31,22 +32,11 @@ pub const COMMAND_CHECK: &str = "rossi.animate.check";
 /// The `workspace/executeCommand` command behind the "Disprove POs" lens.
 pub const COMMAND_PO: &str = "rossi.animate.po";
 
-/// Which of the two lens flows a request runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AnimateMode {
-    /// Explicit-state model check (invariants + deadlock).
-    Check,
-    /// `po --disprove`: attempt a ProB disproof of every open obligation.
-    Po,
-}
-
-impl AnimateMode {
-    /// The flow title shown in progress and messages.
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            AnimateMode::Check => "Model-check",
-            AnimateMode::Po => "Disprove POs",
-        }
+/// The flow title shown in progress and messages.
+pub(crate) fn mode_title(mode: AnimateMode) -> &'static str {
+    match mode {
+        AnimateMode::Check => "Model-check",
+        AnimateMode::Po => "Disprove POs",
     }
 }
 
@@ -73,6 +63,17 @@ pub enum AnimateError {
     ToolFailed(String),
     /// The watchdog killed a run that outlived its deadline (seconds).
     Timeout(u64),
+}
+
+/// A tool failure keeps its kind; the message gains the setting to fix.
+impl From<ToolError> for AnimateError {
+    fn from(error: ToolError) -> Self {
+        match error {
+            ToolError::Missing(program) => AnimateError::ToolMissing(program),
+            ToolError::Failed(message) => AnimateError::ToolFailed(message),
+            ToolError::Timeout(secs) => AnimateError::Timeout(secs),
+        }
+    }
 }
 
 impl std::fmt::Display for AnimateError {
@@ -223,7 +224,7 @@ pub async fn run(client: Client, request: AnimateRequest) {
         analyzer,
     } = request;
     let mode = input.mode;
-    let title = mode.title();
+    let title = mode_title(mode);
     let machine = input.machine.clone();
     let documents = Arc::clone(&input.documents);
     let disprove_timeout_ms = input.config.effective_disprove_timeout_ms();
@@ -324,8 +325,8 @@ async fn execute_with_progress(
     // Preflight before any build work: a configured concrete path that does
     // not exist fails fast with the setting's name. Bare names are left to
     // the spawn — only PATH resolution can tell whether they exist.
-    let program = tool::effective_tool(&input.config.path);
-    if let Some(concrete) = tool::concrete_path(&program)
+    let program = eventb_animate_driver::effective_tool(&input.config.path);
+    if let Some(concrete) = eventb_animate_driver::concrete_path(&program)
         && !concrete.exists()
     {
         return Err(AnimateError::ToolMissing(program));
@@ -372,14 +373,14 @@ async fn execute_with_progress(
             }
         }
     }
-    let args = tool::command_args(
+    let args = eventb_animate_driver::command_args(
         input.mode,
         &input.config,
         &input.machine,
         prepared.temp_dir.path(),
     );
-    let watchdog = tool::watchdog(input.mode, &input.config, prepared.po_count);
-    let output = tool::run_tool(&program, &args, watchdog).await;
+    let watchdog = eventb_animate_driver::watchdog(input.mode, &input.config, prepared.po_count);
+    let output = eventb_animate_driver::run_tool(&program, &args, watchdog).await;
     // The temp project must outlive the tool run; drop it before the
     // (allocation-heavy) classification, not after.
     let closure = prepared.closure;

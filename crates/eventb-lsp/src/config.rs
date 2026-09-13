@@ -383,65 +383,9 @@ fn default_mirror_proofs() -> bool {
 }
 
 /// eventb-animate integration configuration ("Model-check" / "Disprove POs"
-/// code lenses)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnimateConfig {
-    /// eventb-animate executable path or bare command name. Empty resolves
-    /// `eventb-animate` via PATH when a lens runs.
-    #[serde(default)]
-    pub path: String,
-
-    /// `--time-limit` (seconds) for the model-check lens; the watchdog that
-    /// kills a hung tool derives from it. `0` selects the default.
-    #[serde(default = "default_time_limit_secs")]
-    pub time_limit_secs: u32,
-
-    /// `--disprove-timeout` (milliseconds) per proof obligation for the
-    /// Disprove POs lens; also feeds that lens's watchdog. `0` selects the
-    /// default.
-    #[serde(default = "default_disprove_timeout_ms")]
-    pub disprove_timeout_ms: u32,
-}
-
-impl AnimateConfig {
-    /// The effective `--time-limit`, with `0` mapped back to the default.
-    pub fn effective_time_limit_secs(&self) -> u32 {
-        if self.time_limit_secs == 0 {
-            default_time_limit_secs()
-        } else {
-            self.time_limit_secs
-        }
-    }
-
-    /// The effective `--disprove-timeout`, with `0` mapped back to the
-    /// default.
-    pub fn effective_disprove_timeout_ms(&self) -> u32 {
-        if self.disprove_timeout_ms == 0 {
-            default_disprove_timeout_ms()
-        } else {
-            self.disprove_timeout_ms
-        }
-    }
-}
-
-impl Default for AnimateConfig {
-    fn default() -> Self {
-        Self {
-            path: String::new(),
-            time_limit_secs: default_time_limit_secs(),
-            disprove_timeout_ms: default_disprove_timeout_ms(),
-        }
-    }
-}
-
-fn default_time_limit_secs() -> u32 {
-    120
-}
-
-fn default_disprove_timeout_ms() -> u32 {
-    1000
-}
+/// code lenses): the driver's settings, read from the client's
+/// `rossi.animate` section.
+pub use eventb_animate_driver::AnimateConfig;
 
 /// Inlay hints configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

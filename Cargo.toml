@@ -6,6 +6,7 @@ members = [
     "crates/rossi-cli",
     "crates/rossi-prove",
     "crates/eventb-lsp",
+    "crates/eventb-animate-driver",
     "crates/eventb-fuzz",
     "crates/xtask",
 ]
@@ -79,6 +80,7 @@ rossi = { version = "0.2.2", path = "crates/rossi" }
 rossi-build = { version = "0.2.2", path = "crates/rossi-build" }
 rossi-prove = { version = "0.2.2", path = "crates/rossi-prove" }
 eventb-lsp = { version = "0.2.2", path = "crates/eventb-lsp" }
+eventb-animate-driver = { version = "0.2.2", path = "crates/eventb-animate-driver" }
 
 [profile.release]
 opt-level = 3
