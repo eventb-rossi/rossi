@@ -139,27 +139,143 @@ pub fn concrete_path(program: &str) -> Option<PathBuf> {
     (program.contains('/') || program.contains('\\')).then(|| PathBuf::from(program))
 }
 
+/// ProB settings every run mode accepts: the default set size and the
+/// preferences.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProbSettings {
+    /// `-z`: the default size of ProB's deferred sets.
+    pub set_size: Option<u32>,
+    /// `-p KEY=VALUE` entries, verbatim.
+    pub prefs: Vec<String>,
+}
+
+/// One run of the tool: the subcommand and the options a caller may set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Run {
+    /// Explicit-state model check (invariants + deadlock).
+    Check {
+        /// `--time-limit`, in seconds.
+        time_limit_secs: u32,
+        /// `--states`: stop after this many explored states.
+        states: Option<u64>,
+        no_deadlock: bool,
+        no_invariant: bool,
+        /// `--assertions`: also check the theorems.
+        assertions: bool,
+        /// `--goal`: also search for a state satisfying this predicate.
+        goal: Option<String>,
+    },
+    /// `po --disprove`: attempt a ProB disproof of every open obligation
+    /// whose qualified name matches one of `filters` (every obligation
+    /// when there are none).
+    Po {
+        /// `--disprove-timeout`, in milliseconds per obligation.
+        disprove_timeout_ms: u32,
+        /// `--filter` globs over `<component>/<obligation>` names.
+        filters: Vec<String>,
+    },
+    /// `cbc`: constraint-based invariant preservation, event by event.
+    Cbc {
+        /// `--events`: only these events (every event when empty).
+        events: Vec<String>,
+        /// `--deadlock`: also search for a deadlocking state.
+        deadlock: bool,
+    },
+    /// `wd`: ProB's well-definedness prover over the obligations.
+    Wd,
+}
+
+impl Run {
+    /// The run one of the two editor modes makes under `config`.
+    pub fn of_mode(mode: AnimateMode, config: &AnimateConfig) -> Run {
+        match mode {
+            AnimateMode::Check => Run::Check {
+                time_limit_secs: config.effective_time_limit_secs(),
+                states: None,
+                no_deadlock: false,
+                no_invariant: false,
+                assertions: false,
+                goal: None,
+            },
+            AnimateMode::Po => Run::Po {
+                disprove_timeout_ms: config.effective_disprove_timeout_ms(),
+                filters: Vec::new(),
+            },
+        }
+    }
+}
+
 /// The tool invocation for one run. `--json -` puts the report alone on
 /// stdout; `-m` pins the machine so the tool's own most-refined
 /// auto-selection never picks a different one.
-pub fn command_args(
-    mode: AnimateMode,
-    config: &AnimateConfig,
+pub fn run_args(
+    run: &Run,
+    settings: &ProbSettings,
     machine: &str,
     project_dir: &Path,
 ) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
-    match mode {
-        AnimateMode::Check => {
+    match run {
+        Run::Check {
+            time_limit_secs,
+            states,
+            no_deadlock,
+            no_invariant,
+            assertions,
+            goal,
+        } => {
             args.push("--time-limit".into());
-            args.push(config.effective_time_limit_secs().to_string().into());
+            args.push(time_limit_secs.to_string().into());
+            if let Some(states) = states {
+                args.push("--states".into());
+                args.push(states.to_string().into());
+            }
+            if *no_deadlock {
+                args.push("--no-deadlock".into());
+            }
+            if *no_invariant {
+                args.push("--no-invariant".into());
+            }
+            if *assertions {
+                args.push("--assertions".into());
+            }
+            if let Some(goal) = goal {
+                args.push("--goal".into());
+                args.push(goal.into());
+            }
         }
-        AnimateMode::Po => {
+        Run::Po {
+            disprove_timeout_ms,
+            filters,
+        } => {
             args.push("po".into());
             args.push("--disprove".into());
             args.push("--disprove-timeout".into());
-            args.push(config.effective_disprove_timeout_ms().to_string().into());
+            args.push(disprove_timeout_ms.to_string().into());
+            for filter in filters {
+                args.push("--filter".into());
+                args.push(filter.into());
+            }
         }
+        Run::Cbc { events, deadlock } => {
+            args.push("cbc".into());
+            if !events.is_empty() {
+                args.push("--events".into());
+                args.push(events.join(",").into());
+            }
+            if *deadlock {
+                args.push("--deadlock".into());
+            }
+        }
+        Run::Wd => args.push("wd".into()),
+    }
+    if let Some(size) = settings.set_size {
+        args.push("-z".into());
+        args.push(size.to_string().into());
+    }
+    for pref in &settings.prefs {
+        args.push("-p".into());
+        args.push(pref.into());
     }
     args.push("--json".into());
     args.push("-".into());
@@ -169,24 +285,47 @@ pub fn command_args(
     args
 }
 
-/// The outer deadline for one run. Check is bounded by its own
+/// [`run_args`] for one of the two editor modes under `config`, with no
+/// ProB settings.
+pub fn command_args(
+    mode: AnimateMode,
+    config: &AnimateConfig,
+    machine: &str,
+    project_dir: &Path,
+) -> Vec<OsString> {
+    run_args(
+        &Run::of_mode(mode, config),
+        &ProbSettings::default(),
+        machine,
+        project_dir,
+    )
+}
+
+/// The outer deadline for one run. A check is bounded by its own
 /// `--time-limit`; po runs one solver attempt per open obligation, so the
 /// deadline scales with `po_count` (the still-open count once recorded
 /// proof state is merged; every generated sequent when there is none),
-/// doubled for slack around solver setup per obligation. An all-discharged
-/// run leaves [`GRACE`] alone, ample for the gate-only pass.
-pub fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usize) -> Duration {
-    match mode {
-        AnimateMode::Check => {
-            GRACE + Duration::from_secs(u64::from(config.effective_time_limit_secs()))
-        }
-        AnimateMode::Po => {
-            GRACE
-                + Duration::from_millis(
-                    2 * po_count as u64 * u64::from(config.effective_disprove_timeout_ms()),
-                )
-        }
+/// doubled for slack around solver setup per obligation, and an
+/// all-discharged run leaves [`GRACE`] alone, ample for the gate-only
+/// pass. The constraint-based check and the well-definedness prover set
+/// no limit of their own, so they get a fixed budget on top of the grace.
+pub fn run_watchdog(run: &Run, po_count: usize) -> Duration {
+    match run {
+        Run::Check {
+            time_limit_secs, ..
+        } => GRACE + Duration::from_secs(u64::from(*time_limit_secs)),
+        Run::Po {
+            disprove_timeout_ms,
+            ..
+        } => GRACE + Duration::from_millis(2 * po_count as u64 * u64::from(*disprove_timeout_ms)),
+        Run::Cbc { .. } => GRACE + Duration::from_secs(300),
+        Run::Wd => GRACE + Duration::from_secs(120),
     }
+}
+
+/// [`run_watchdog`] for one of the two editor modes under `config`.
+pub fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usize) -> Duration {
+    run_watchdog(&Run::of_mode(mode, config), po_count)
 }
 
 /// What a finished run left behind.
@@ -292,6 +431,110 @@ mod tests {
                 "/tmp/proj"
             ]
         );
+    }
+
+    #[test]
+    fn every_run_mode_has_its_command_line() {
+        let settings = ProbSettings {
+            set_size: Some(3),
+            prefs: vec!["SYMMETRY_MODE=off".into()],
+        };
+        let dir = Path::new("/tmp/proj");
+        let render = |run: &Run| -> Vec<String> {
+            run_args(run, &settings, "M1", dir)
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            render(&Run::Check {
+                time_limit_secs: 20,
+                states: Some(50),
+                no_deadlock: true,
+                no_invariant: false,
+                assertions: true,
+                goal: Some("x > 1".into()),
+            }),
+            [
+                "--time-limit",
+                "20",
+                "--states",
+                "50",
+                "--no-deadlock",
+                "--assertions",
+                "--goal",
+                "x > 1",
+                "-z",
+                "3",
+                "-p",
+                "SYMMETRY_MODE=off",
+                "--json",
+                "-",
+                "-m",
+                "M1",
+                "/tmp/proj"
+            ]
+        );
+        assert_eq!(
+            render(&Run::Po {
+                disprove_timeout_ms: 500,
+                filters: vec!["M1/*".into()],
+            }),
+            [
+                "po",
+                "--disprove",
+                "--disprove-timeout",
+                "500",
+                "--filter",
+                "M1/*",
+                "-z",
+                "3",
+                "-p",
+                "SYMMETRY_MODE=off",
+                "--json",
+                "-",
+                "-m",
+                "M1",
+                "/tmp/proj"
+            ]
+        );
+        assert_eq!(
+            render(&Run::Cbc {
+                events: vec!["inc".into(), "reset".into()],
+                deadlock: true,
+            }),
+            [
+                "cbc",
+                "--events",
+                "inc,reset",
+                "--deadlock",
+                "-z",
+                "3",
+                "-p",
+                "SYMMETRY_MODE=off",
+                "--json",
+                "-",
+                "-m",
+                "M1",
+                "/tmp/proj"
+            ]
+        );
+        assert_eq!(
+            render(&Run::Wd),
+            [
+                "wd",
+                "-z",
+                "3",
+                "-p",
+                "SYMMETRY_MODE=off",
+                "--json",
+                "-",
+                "-m",
+                "M1",
+                "/tmp/proj"
+            ]
+        );
+        assert_eq!(run_watchdog(&Run::Wd, 0), GRACE + Duration::from_secs(120));
     }
 
     #[test]
