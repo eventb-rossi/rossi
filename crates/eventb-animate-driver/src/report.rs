@@ -256,6 +256,42 @@ pub fn classify_check(report: &Report, code: Option<i32>) -> Verdict {
     }
 }
 
+/// How a disprover run's obligations came out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoCounts {
+    /// Obligations the run looked at.
+    pub total: usize,
+    /// Obligations still not discharged after it.
+    pub open: usize,
+    /// Counterexamples found under the selected hypotheses only, which
+    /// may be spurious.
+    pub spurious: usize,
+}
+
+/// The counts behind a po-mode verdict. Kept beside [`classify_po`],
+/// which reads the same messages, so the words the tool prints are
+/// matched in one place.
+#[must_use]
+pub fn po_counts(report: &Report) -> PoCounts {
+    PoCounts {
+        total: report.checks.len(),
+        open: report
+            .checks
+            .iter()
+            .filter(|c| c.outcome != "passed")
+            .count(),
+        spurious: report
+            .checks
+            .iter()
+            .filter(|c| c.outcome == "failed" && check_message(c).starts_with(SPURIOUS_PREFIX))
+            .count(),
+    }
+}
+
+/// The disprover's word for a counterexample that satisfies only the
+/// obligation's selected hypotheses, so it may not be one at all.
+const SPURIOUS_PREFIX: &str = "counterexample under the selected hypotheses";
+
 /// Classify a po-mode report. A *disproof* is a `failed` check whose message
 /// starts with `disproved` — the only definite negative the disprover emits;
 /// `no counterexample found …` and `counterexample under the selected
@@ -273,14 +309,7 @@ pub fn classify_po(report: &Report) -> Verdict {
             bindings: c.bindings.clone(),
         })
         .collect();
-    let spurious = report
-        .checks
-        .iter()
-        .filter(|c| {
-            c.outcome == "failed"
-                && check_message(c).starts_with("counterexample under the selected hypotheses")
-        })
-        .count();
+    let spurious = po_counts(report).spurious;
     match report.status.as_str() {
         "violation" if !disproved.is_empty() => Verdict::PoDisproved { disproved, total },
         "ok" => Verdict::PoOk {
@@ -291,11 +320,7 @@ pub fn classify_po(report: &Report) -> Verdict {
         // conservative no-counterexample verdict instead of the catch-all
         // error arm below.
         "violation" | "incomplete" => Verdict::PoNoCounterexample {
-            open: report
-                .checks
-                .iter()
-                .filter(|c| c.outcome != "passed")
-                .count(),
+            open: po_counts(report).open,
             total,
             spurious,
         },
@@ -310,6 +335,69 @@ pub fn classify_po(report: &Report) -> Verdict {
 
 fn check_message(check: &Check) -> &str {
     check.message.as_deref().unwrap_or_default()
+}
+
+/// One invariant a caller declared, as the matcher needs to see it.
+pub trait DeclaredInvariant {
+    /// The machine that declares it.
+    fn component(&self) -> &str;
+    /// Its label.
+    fn label(&self) -> &str;
+    /// The spellings of its predicate the tool may print, raw; the
+    /// matcher compares them whitespace-insensitively.
+    fn renderings(&self) -> &[String];
+}
+
+/// A predicate rendering stripped of whitespace, which is the only
+/// difference between the tool's printed form and the caller's own.
+#[must_use]
+pub fn normalize_predicate(predicate: &str) -> String {
+    predicate.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// The declarations each printed violated predicate names, in the order
+/// the tool printed them; an empty entry is a string nothing matched,
+/// which a caller must report as it was printed rather than drop.
+///
+/// A predicate matches by rendering first. Identical renderings keep
+/// every hit: byte-equal predicates really are all violated by the same
+/// state. Failing that, the tool may have printed a bare label (older
+/// versions do, and the documentation's fixtures do); labels are unique
+/// only within a machine, so an ambiguous one resolves to `machine`'s
+/// own declaration, and only when that machine has none are all the
+/// candidates kept — flagging an unrelated same-labelled invariant in an
+/// ancestor would point at a predicate the counterexample never
+/// violated, and dropping the finding would hide a real one.
+pub fn match_violated<'a, T: DeclaredInvariant>(
+    violated: &[String],
+    invariants: &'a [T],
+    machine: &str,
+) -> Vec<Vec<&'a T>> {
+    violated
+        .iter()
+        .map(|printed| {
+            let normalized = normalize_predicate(printed);
+            let hits: Vec<&T> = invariants
+                .iter()
+                .filter(|info| {
+                    info.renderings()
+                        .iter()
+                        .any(|rendering| normalize_predicate(rendering) == normalized)
+                })
+                .collect();
+            if !hits.is_empty() {
+                return hits;
+            }
+            let by_label: Vec<&T> = invariants
+                .iter()
+                .filter(|info| info.label() == printed.trim())
+                .collect();
+            match by_label.iter().find(|info| info.component() == machine) {
+                Some(own) if by_label.len() > 1 => vec![*own],
+                _ => by_label,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -523,6 +611,72 @@ mod tests {
             classify_po(&po_report("error", "")),
             Verdict::PoError { .. }
         ));
+    }
+
+    /// A declaration as the matcher sees it.
+    struct Invariant {
+        component: &'static str,
+        label: &'static str,
+        renderings: Vec<String>,
+    }
+
+    impl DeclaredInvariant for Invariant {
+        fn component(&self) -> &str {
+            self.component
+        }
+
+        fn label(&self) -> &str {
+            self.label
+        }
+
+        fn renderings(&self) -> &[String] {
+            &self.renderings
+        }
+    }
+
+    fn invariant(component: &'static str, label: &'static str, renderings: &[&str]) -> Invariant {
+        Invariant {
+            component,
+            label,
+            renderings: renderings.iter().map(|r| (*r).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn violated_invariants_match_by_rendering_then_label() {
+        let invariants = vec![
+            invariant("m0", "inv1", &["x ∈ ℕ", "x : NAT"]),
+            invariant("m1", "inv1", &["x<3"]),
+        ];
+        let named = |printed: &[&str], machine: &str| -> Vec<Option<(String, String)>> {
+            let violated: Vec<String> = printed.iter().map(|p| (*p).to_string()).collect();
+            match_violated(&violated, &invariants, machine)
+                .into_iter()
+                .map(|hits| {
+                    hits.first()
+                        .map(|hit| (hit.component.to_string(), hit.label.to_string()))
+                })
+                .collect()
+        };
+        // A rendering matches whatever the whitespace, and an ambiguous
+        // bare label resolves to the machine being checked.
+        assert_eq!(
+            named(&["x < 3", "x:NAT", "inv1", "y=0"], "m1"),
+            [
+                Some(("m1".into(), "inv1".into())),
+                Some(("m0".into(), "inv1".into())),
+                Some(("m1".into(), "inv1".into())),
+                None,
+            ]
+        );
+        // When the checked machine declares no such label, every
+        // candidate is kept rather than the finding dropped.
+        assert_eq!(
+            match_violated(&["inv1".to_string()], &invariants, "m2")
+                .first()
+                .map(Vec::len),
+            Some(2)
+        );
     }
 
     #[test]

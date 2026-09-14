@@ -387,16 +387,17 @@ async fn execute_with_progress(
             }
         }
     }
-    let args = eventb_animate_driver::command_args(
-        input.mode,
-        &input.config,
+    let run = eventb_animate_driver::Run::of_mode(input.mode, &input.config);
+    let args = eventb_animate_driver::run_args(
+        &run,
+        &eventb_animate_driver::ProbSettings::default(),
         &input.machine,
         prepared.temp_dir.path(),
     );
     if progress.is_some_and(Progress::is_cancelled) {
         return Err(AnimateError::Cancelled);
     }
-    let watchdog = eventb_animate_driver::watchdog(input.mode, &input.config, prepared.po_count);
+    let watchdog = eventb_animate_driver::run_watchdog(&run, prepared.po_count);
     let cancelled = async {
         match progress {
             Some(progress) => progress.cancel().cancelled().await,
