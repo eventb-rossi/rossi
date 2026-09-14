@@ -23,11 +23,11 @@ use rossi_build::{BuildResult, Diagnostic, Project, ScFile, build, is_normal_pat
 use rossi::NamedComponent;
 
 use super::build_common::{
-    build_archive_projects, eb019_result, error_diagnostic_count, failed_labels, gate_after_write,
-    gate_before_write, repack_results, report_diagnostics,
+    build_archive_projects, eb019_result, error_diagnostic_count, gate_after_write,
+    gate_before_write, repack_results, report_diagnostics, write_decision,
 };
 use super::eventb_io::{self, InputKind};
-use super::report::Report;
+use super::report::{Report, finish_structured_output};
 
 #[derive(Args)]
 pub struct BuildArgs {
@@ -58,7 +58,7 @@ pub enum BuildFormat {
 
 pub fn run_build_command(args: BuildArgs) -> ExitCode {
     match run_build(&args.input, args.output.as_deref(), args.format) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit) => exit,
         Err(e) => {
             eprintln!("rossi build: {e}");
             ExitCode::from(1)
@@ -97,7 +97,7 @@ fn run_build(
     input: &Path,
     output: Option<&Path>,
     format: BuildFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let outcome = build_one(input)?;
 
     let default_out;
@@ -134,7 +134,8 @@ fn run_build(
         outcome.results.len(),
         errors
     );
-    gate_after_write(&outcome.results, &failed, "checked output")
+    gate_after_write(&outcome.results, &failed, "checked output")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// The JSON flow: the same writes and gates as the human one, with the
@@ -145,9 +146,8 @@ fn run_build_json(
     input: &Path,
     out_path: &Path,
     outcome: &BuildOutcome,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let failed = failed_labels(&outcome.results);
-    let nothing_to_write = !failed.is_empty() && failed.len() == outcome.results.len();
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let (failed, nothing_to_write) = write_decision(&outcome.results);
     if !nothing_to_write {
         write_output(input, out_path, outcome)?;
     }
@@ -172,14 +172,27 @@ fn run_build_json(
             .collect(),
         errors: error_diagnostic_count(&outcome.results),
     };
-    Report::Console.structured(|out| {
+    // The document is the report, so a gate failure is an exit code
+    // rather than a message: printing one beside the document would put
+    // the same finding in two places. A closed pipe keeps the code the
+    // run earned, as it does for every other structured output.
+    let exit = match nothing_to_write {
+        true => ExitCode::from(1),
+        false => match gate_after_write(&outcome.results, &failed, "checked output") {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
+    };
+    let written = Report::Console.structured(|out| {
         serde_json::to_writer_pretty(&mut *out, &report)?;
         writeln!(out)
-    })?;
-    if nothing_to_write {
-        return Err("no project produced checked output; see the diagnostics in the report".into());
-    }
-    gate_after_write(&outcome.results, &failed, "checked output")
+    });
+    Ok(finish_structured_output(
+        "build",
+        written,
+        exit,
+        &mut std::io::stderr(),
+    ))
 }
 
 struct BuildOutcome {

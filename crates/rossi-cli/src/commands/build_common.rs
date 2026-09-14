@@ -86,18 +86,29 @@ pub(crate) fn repack_results(
     )
 }
 
-/// The pre-write gate: when **no** project produced checked output there is
-/// nothing worth writing — report the diagnostics and fail. Otherwise return
-/// the outright-failed labels for [`gate_after_write`]. Healthy sibling
-/// projects in a multi-project archive still get their output written.
-pub(crate) fn gate_before_write(results: &[(String, BuildResult)]) -> CmdResult<Vec<&str>> {
+/// The pre-write decision: the outright-failed labels, and whether they
+/// are every project, in which case there is nothing worth writing.
+/// Healthy sibling projects in a multi-project archive still get their
+/// output written.
+pub(crate) fn write_decision(results: &[(String, BuildResult)]) -> (Vec<&str>, bool) {
     let failed = failed_labels(results);
-    if results.len() == failed.len() && !failed.is_empty() {
+    let nothing_to_write = !failed.is_empty() && failed.len() == results.len();
+    (failed, nothing_to_write)
+}
+
+/// The pre-write gate of the human flow: [`write_decision`], with the
+/// diagnostics reported on the way out when nothing will be written.
+pub(crate) fn gate_before_write(results: &[(String, BuildResult)]) -> CmdResult<Vec<&str>> {
+    let (failed, nothing_to_write) = write_decision(results);
+    if nothing_to_write {
         report_diagnostics(results);
-        return Err("no project produced checked output; see the diagnostics above".into());
+        return Err(NOTHING_WRITTEN.into());
     }
     Ok(failed)
 }
+
+/// Why a build wrote nothing at all.
+pub(crate) const NOTHING_WRITTEN: &str = "no project produced checked output; see the diagnostics";
 
 /// The post-write exit gate: fail on outright-failed sibling projects, then
 /// on any error diagnostic, so a broken project cannot slide through CI.
