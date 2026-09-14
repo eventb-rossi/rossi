@@ -373,13 +373,14 @@ async fn execute_with_progress(
             }
         }
     }
-    let args = eventb_animate_driver::command_args(
-        input.mode,
-        &input.config,
+    let run = eventb_animate_driver::Run::of_mode(input.mode, &input.config);
+    let args = eventb_animate_driver::run_args(
+        &run,
+        &eventb_animate_driver::ProbSettings::default(),
         &input.machine,
         prepared.temp_dir.path(),
     );
-    let watchdog = eventb_animate_driver::watchdog(input.mode, &input.config, prepared.po_count);
+    let watchdog = eventb_animate_driver::run_watchdog(&run, prepared.po_count);
     let output = eventb_animate_driver::run_tool(&program, &args, watchdog).await;
     // The temp project must outlive the tool run; drop it before the
     // (allocation-heavy) classification, not after.

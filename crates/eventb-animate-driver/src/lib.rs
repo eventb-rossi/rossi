@@ -285,22 +285,6 @@ pub fn run_args(
     args
 }
 
-/// [`run_args`] for one of the two editor modes under `config`, with no
-/// ProB settings.
-pub fn command_args(
-    mode: AnimateMode,
-    config: &AnimateConfig,
-    machine: &str,
-    project_dir: &Path,
-) -> Vec<OsString> {
-    run_args(
-        &Run::of_mode(mode, config),
-        &ProbSettings::default(),
-        machine,
-        project_dir,
-    )
-}
-
 /// The outer deadline for one run. A check is bounded by its own
 /// `--time-limit`; po runs one solver attempt per open obligation, so the
 /// deadline scales with `po_count` (the still-open count once recorded
@@ -321,11 +305,6 @@ pub fn run_watchdog(run: &Run, po_count: usize) -> Duration {
         Run::Cbc { .. } => GRACE + Duration::from_secs(300),
         Run::Wd => GRACE + Duration::from_secs(120),
     }
-}
-
-/// [`run_watchdog`] for one of the two editor modes under `config`.
-pub fn watchdog(mode: AnimateMode, config: &AnimateConfig, po_count: usize) -> Duration {
-    run_watchdog(&Run::of_mode(mode, config), po_count)
 }
 
 /// What a finished run left behind.
@@ -397,6 +376,19 @@ pub async fn run_tool(
 mod tests {
     use super::*;
 
+    /// The command line of one of the editor's two modes.
+    fn mode_args(mode: AnimateMode, config: &AnimateConfig, dir: &Path) -> Vec<String> {
+        run_args(
+            &Run::of_mode(mode, config),
+            &ProbSettings::default(),
+            "M1",
+            dir,
+        )
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+    }
+
     #[test]
     fn command_lines_match_the_tool_contract() {
         let config = AnimateConfig {
@@ -405,18 +397,12 @@ mod tests {
             ..AnimateConfig::default()
         };
         let dir = Path::new("/tmp/proj");
-        let check: Vec<_> = command_args(AnimateMode::Check, &config, "M1", dir)
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
+        let check = mode_args(AnimateMode::Check, &config, dir);
         assert_eq!(
             check,
             ["--time-limit", "30", "--json", "-", "-m", "M1", "/tmp/proj"]
         );
-        let po: Vec<_> = command_args(AnimateMode::Po, &config, "M1", dir)
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
+        let po = mode_args(AnimateMode::Po, &config, dir);
         assert_eq!(
             po,
             [
@@ -545,11 +531,11 @@ mod tests {
             ..AnimateConfig::default()
         };
         assert_eq!(
-            watchdog(AnimateMode::Check, &config, 0),
+            run_watchdog(&Run::of_mode(AnimateMode::Check, &config), 0),
             GRACE + Duration::from_secs(10)
         );
         assert_eq!(
-            watchdog(AnimateMode::Po, &config, 5),
+            run_watchdog(&Run::of_mode(AnimateMode::Po, &config), 5),
             GRACE + Duration::from_secs(10)
         );
     }

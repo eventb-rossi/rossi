@@ -8,18 +8,16 @@
 pub use eventb_animate_driver::report::{PoResult, Report, StateBinding, Verdict};
 pub(crate) use eventb_animate_driver::report::{classify_check, classify_po, parse};
 
-use super::closure::{InvariantInfo, normalize_predicate};
+use super::closure::InvariantInfo;
 
-/// Map the tool's printed violated-invariant strings back to declarations:
-/// whitespace-stripped comparison against the closure's renderings, with a
-/// bare-label fallback. Unmatched strings are returned for the section-level
-/// fallback diagnostic — a violation is never silently dropped.
+/// Map the tool's printed violated-invariant strings back to the
+/// closure's declarations, and collect the strings nothing matched so a
+/// violation is never silently dropped.
 ///
-/// Labels are only unique per machine, so when the bare-label fallback hits
-/// several machines of the closure, the clicked `machine` wins — flagging an
-/// unrelated same-labeled invariant in an ancestor would point the user at a
-/// predicate the counterexample never violated. Identical *renderings* keep
-/// all hits: byte-equal predicates really are all violated by the same state.
+/// The matching rule itself is the driver's
+/// ([`eventb_animate_driver::report::match_violated`]); this keeps the
+/// editor's shape, where every hit becomes one diagnostic and the
+/// leftovers become a section-level one.
 pub(crate) fn match_violated<'a>(
     violated: &[String],
     invariants: &'a [InvariantInfo],
@@ -27,26 +25,8 @@ pub(crate) fn match_violated<'a>(
 ) -> (Vec<&'a InvariantInfo>, Vec<String>) {
     let mut matched: Vec<&InvariantInfo> = Vec::new();
     let mut unmatched = Vec::new();
-    for printed in violated {
-        let normalized = normalize_predicate(printed);
-        let hits: Vec<&InvariantInfo> = invariants
-            .iter()
-            .filter(|info| info.renderings.contains(&normalized))
-            .collect();
-        let hits = if hits.is_empty() {
-            // The docs' fixtures (and possibly future tool versions) report
-            // labels instead of predicate code.
-            let label_hits: Vec<&InvariantInfo> = invariants
-                .iter()
-                .filter(|info| info.label == printed.trim())
-                .collect();
-            match label_hits.iter().find(|info| info.component == machine) {
-                Some(own) if label_hits.len() > 1 => vec![*own],
-                _ => label_hits,
-            }
-        } else {
-            hits
-        };
+    let hits = eventb_animate_driver::report::match_violated(violated, invariants, machine);
+    for (printed, hits) in violated.iter().zip(hits) {
         if hits.is_empty() {
             unmatched.push(printed.clone());
             continue;

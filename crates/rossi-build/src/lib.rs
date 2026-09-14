@@ -176,6 +176,25 @@ pub fn is_normal_path_component(value: &str) -> bool {
         && parts.next().is_none()
 }
 
+/// Write generated files into `dir`, which must already exist.
+///
+/// Every filename is checked with [`is_normal_path_component`] first: a
+/// generated name is data, and a name that is a path would write outside
+/// the directory the caller chose. One writer means one place that check
+/// can be got wrong.
+pub fn write_sc_files(dir: &std::path::Path, files: &[ScFile]) -> std::io::Result<()> {
+    for file in files {
+        if !is_normal_path_component(&file.filename) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsafe generated filename {:?}", file.filename),
+            ));
+        }
+        std::fs::write(dir.join(&file.filename), &file.contents)?;
+    }
+    Ok(())
+}
+
 /// A single diagnostic — a type error, a missing reference, a cycle, etc.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
