@@ -463,7 +463,7 @@ fn validate_text_source(
             let mut results: Vec<ValidationResult> = recovered
                 .errors
                 .iter()
-                .filter_map(precise_formula_error)
+                .filter_map(ParseError::precise_formula_cause)
                 .map(|(err, absolute_span)| {
                     let mut result = error_result(
                         input,
@@ -499,26 +499,6 @@ fn validate_text_source(
 /// Return a precise loose-text formula error and, when it came from recovery,
 /// its source-absolute span. Recovery sources use segment-relative coordinates;
 /// the outer envelope anchors that segment in the document.
-fn precise_formula_error(err: &ParseError) -> Option<(&ParseError, Option<rossi::ast::Span>)> {
-    match err {
-        ParseError::AssignmentInPredicate { .. } | ParseError::AssignmentArityMismatch { .. } => {
-            Some((err, None))
-        }
-        ParseError::RecoverableError {
-            span: Some(recovery_span),
-            source: Some(source),
-            ..
-        } if matches!(source.as_ref(), ParseError::AssignmentArityMismatch { .. }) => {
-            let absolute_span = source.span().map_or(*recovery_span, |mut span| {
-                span.shift(recovery_span.start);
-                span
-            });
-            Some((source, Some(absolute_span)))
-        }
-        _ => None,
-    }
-}
-
 /// Validate a Rodin `.zip`, project by project.
 ///
 /// A Rodin archive may bundle several top-level projects (an Eclipse "Archive
@@ -1032,7 +1012,9 @@ fn error_result(
 fn parse_error_region(err: &ParseError, source: &str) -> Option<Region> {
     let (start_line, start_column) = err.position()?;
     let (end_line, end_column) = match err.span() {
-        Some(span) if span.end > span.start => line_col_1_indexed(source, span.end),
+        Some(span) if span.end > span.start => {
+            rossi::ast::Span::line_col_1_indexed(source, span.end)
+        }
         _ => (start_line, start_column),
     };
     Some(Region {
@@ -1043,24 +1025,12 @@ fn parse_error_region(err: &ParseError, source: &str) -> Option<Region> {
     })
 }
 
-/// 1-indexed (line, column) of `byte_offset` in `source` — the SARIF/Camille
-/// convention. [`Span::to_line_col`] reads only the start, so a point span at
-/// the offset yields its position.
-fn line_col_1_indexed(source: &str, byte_offset: usize) -> (usize, usize) {
-    let (line, col) = rossi::ast::Span {
-        start: byte_offset,
-        end: byte_offset,
-    }
-    .to_line_col(source);
-    (line + 1, col + 1)
-}
-
 /// Resolve an AST byte [`span`](rossi::ast::Span) to a 1-indexed source
 /// [`Region`]. Both ends are mapped through `source`; a zero-width span yields
 /// a point region.
 fn span_to_region(source: &str, span: rossi::ast::Span) -> Region {
-    let (start_line, start_column) = line_col_1_indexed(source, span.start);
-    let (end_line, end_column) = line_col_1_indexed(source, span.end);
+    let (start_line, start_column) = rossi::ast::Span::line_col_1_indexed(source, span.start);
+    let (end_line, end_column) = rossi::ast::Span::line_col_1_indexed(source, span.end);
     Region {
         start_line,
         start_column,
@@ -1401,7 +1371,8 @@ mod tests {
             "unexpected errors: {recovered:?}"
         );
 
-        let (error, span) = precise_formula_error(&recovered.errors[0])
+        let (error, span) = recovered.errors[0]
+            .precise_formula_cause()
             .expect("recovery retains the precise arity cause");
         assert!(matches!(
             error,
