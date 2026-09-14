@@ -92,12 +92,11 @@ impl Summary {
     }
 }
 
-/// One obligation's verdict, as reported.
+/// One obligation's verdict, as reported. The component it belongs to
+/// is its [`ComponentReport`]'s, so a clean archive does not allocate
+/// the same stem once per obligation.
 #[derive(Serialize)]
 struct ObligationRow {
-    /// The component stem, prefixed by its archive directory when the
-    /// archive nests projects.
-    component: String,
     name: String,
     status: ProofStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +125,9 @@ impl ObligationRow {
 /// One component's obligations checked: file-level messages, one row
 /// per obligation, and the counts.
 struct ComponentReport {
+    /// The component stem, prefixed by its archive directory when the
+    /// archive nests projects.
+    component: String,
     messages: Vec<String>,
     obligations: Vec<ObligationRow>,
     summary: Summary,
@@ -142,9 +144,17 @@ struct ProveReport {
 struct ProveDocument<'a> {
     input: String,
     summary: &'a Summary,
-    obligations: Vec<&'a ObligationRow>,
+    obligations: Vec<ObligationEntry<'a>>,
     /// File-level problems, such as an unreadable proof file.
     messages: Vec<&'a str>,
+}
+
+/// One obligation of the document, under the component it belongs to.
+#[derive(Serialize)]
+struct ObligationEntry<'a> {
+    component: &'a str,
+    #[serde(flatten)]
+    row: &'a ObligationRow,
 }
 
 pub fn run(args: ProveArgs) -> ExitCode {
@@ -174,7 +184,12 @@ pub fn run(args: ProveArgs) -> ExitCode {
                 obligations: report
                     .components
                     .iter()
-                    .flat_map(|c| c.obligations.iter())
+                    .flat_map(|c| {
+                        c.obligations.iter().map(|row| ObligationEntry {
+                            component: &c.component,
+                            row,
+                        })
+                    })
                     .collect(),
                 messages: report
                     .components
@@ -200,7 +215,7 @@ fn print_text(report: &ProveReport, verbose: bool, replay: bool) {
             if verbose || row.is_problem() {
                 println!(
                     "{} {}: {}{}",
-                    row.component,
+                    component.component,
                     row.name,
                     row.status.label(),
                     row.replay_note()
@@ -301,6 +316,7 @@ fn check_component(
     replay: bool,
 ) -> ComponentReport {
     let mut report = ComponentReport {
+        component: stem.to_string(),
         messages: Vec::new(),
         obligations: Vec::new(),
         summary: Summary::default(),
@@ -357,7 +373,6 @@ fn check_component(
             ProofStatus::Error => summary.errors += 1,
         }
         report.obligations.push(ObligationRow {
-            component: stem.to_string(),
             name: name.clone(),
             status,
             replay,
