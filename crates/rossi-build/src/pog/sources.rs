@@ -36,6 +36,32 @@ pub enum ElementKind {
     Witness,
 }
 
+impl ElementKind {
+    /// The word this kind is reported under.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ElementKind::Context => "context",
+            ElementKind::Machine => "machine",
+            ElementKind::CarrierSet => "carrier_set",
+            ElementKind::Constant => "constant",
+            ElementKind::Axiom => "axiom",
+            ElementKind::Extends => "extends",
+            ElementKind::Sees => "sees",
+            ElementKind::Refines => "refines",
+            ElementKind::Variable => "variable",
+            ElementKind::Invariant => "invariant",
+            ElementKind::Variant => "variant",
+            ElementKind::Event => "event",
+            ElementKind::RefinesEvent => "refines_event",
+            ElementKind::Parameter => "parameter",
+            ElementKind::Guard => "guard",
+            ElementKind::Action => "action",
+            ElementKind::Witness => "witness",
+        }
+    }
+}
+
 /// The element a provenance handle names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceElement {

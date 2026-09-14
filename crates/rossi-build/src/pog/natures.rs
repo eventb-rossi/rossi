@@ -62,6 +62,40 @@ impl Nature {
             .find(|nature| nature.description() == description)
     }
 
+    /// The stable name of this nature, as a report or a filter spells
+    /// it. Distinct from [`Nature::description`], which is the wording
+    /// the file format carries and provers match on.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Nature::ActionFeasibility => "ActionFeasibility",
+            Nature::ActionSimulation => "ActionSimulation",
+            Nature::ActionWellDefinedness => "ActionWellDefinedness",
+            Nature::AxiomWellDefinedness => "AxiomWellDefinedness",
+            Nature::CommonVariableEquality => "CommonVariableEquality",
+            Nature::EventVariant => "EventVariant",
+            Nature::EventNaturalNumberVariant => "EventNaturalNumberVariant",
+            Nature::GuardStrengtheningMerge => "GuardStrengtheningMerge",
+            Nature::GuardStrengtheningSplit => "GuardStrengtheningSplit",
+            Nature::GuardWellDefinedness => "GuardWellDefinedness",
+            Nature::InvariantEstablishment => "InvariantEstablishment",
+            Nature::InvariantPreservation => "InvariantPreservation",
+            Nature::InvariantWellDefinedness => "InvariantWellDefinedness",
+            Nature::Theorem => "Theorem",
+            Nature::TheoremWellDefinedness => "TheoremWellDefinedness",
+            Nature::VariantFiniteness => "VariantFiniteness",
+            Nature::VariantWellDefinedness => "VariantWellDefinedness",
+            Nature::WitnessFeasibility => "WitnessFeasibility",
+            Nature::WitnessWellDefinedness => "WitnessWellDefinedness",
+        }
+    }
+
+    /// The nature `name` spells, when it spells one.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Nature> {
+        Nature::ALL.into_iter().find(|nature| nature.name() == name)
+    }
+
     /// The `poDesc` attribute value.
     #[must_use]
     pub fn description(self) -> &'static str {
@@ -92,6 +126,14 @@ impl Nature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_name_finds_its_nature_back() {
+        for nature in Nature::ALL {
+            assert_eq!(Nature::from_name(nature.name()), Some(nature));
+        }
+        assert_eq!(Nature::from_name("InvariantPreservation "), None);
+    }
 
     #[test]
     fn every_description_names_its_nature_back() {

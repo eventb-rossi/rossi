@@ -138,10 +138,7 @@ impl ProofStatus {
             ProofStatus::Unsupported => "unsupported",
             ProofStatus::Error => "error",
             ProofStatus::Broken => "broken",
-            ProofStatus::Checked(Bucket::Discharged) => "discharged",
-            ProofStatus::Checked(Bucket::Reviewed) => "reviewed",
-            ProofStatus::Checked(Bucket::Pending) => "pending",
-            ProofStatus::Checked(Bucket::Unattempted) => "unattempted",
+            ProofStatus::Checked(bucket) => bucket.as_str(),
         }
     }
 
