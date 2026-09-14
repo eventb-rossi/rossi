@@ -73,15 +73,6 @@ pub(crate) fn cap_if_broken(bucket: Bucket, broken: bool) -> Bucket {
     }
 }
 
-fn label(bucket: Bucket) -> &'static str {
-    match bucket {
-        Bucket::Discharged => "discharged",
-        Bucket::Reviewed => "reviewed",
-        Bucket::Pending => "pending",
-        Bucket::Unattempted => "unattempted",
-    }
-}
-
 /// Check proof status of a Rodin `.zip` archive on disk.
 pub fn check_zip_file(path: &Path) -> Result<ProofReport> {
     let file = std::fs::File::open(path)?;
@@ -294,7 +285,7 @@ impl ProofData {
                     origin: component.clone(),
                     message: format!(
                         "Proof obligation not discharged: {name} ({})",
-                        label(*confidence)
+                        confidence.as_str()
                     ),
                     rule_id: Some(RuleId::UndischargedProof),
                     span: None,
