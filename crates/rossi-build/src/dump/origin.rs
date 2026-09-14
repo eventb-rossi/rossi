@@ -27,7 +27,8 @@ use rossi::ast::{
 use crate::handles::HandleUri;
 use crate::project::Project;
 
-use super::location::{LineIndex, SpanDump};
+use super::location::SpanDump;
+use rossi::ast::LineIndex;
 
 /// What a checked declaration inherits from the clause that produced it.
 #[derive(Debug, Default, Clone)]
@@ -156,11 +157,11 @@ impl<'a> ComponentOrigin<'a> {
     /// Every span the document reports is resolved here, so a position always
     /// names the file it indexes.
     pub(crate) fn place(&self, span: Option<Span>) -> Option<SpanDump> {
-        Some(
-            self.lines
-                .as_ref()?
-                .span(span?, Some(self.source_id.clone())),
-        )
+        Some(SpanDump::of(
+            self.lines.as_ref()?,
+            span?,
+            Some(self.source_id.clone()),
+        ))
     }
 
     pub(crate) fn carrier_set(&self, name: &str) -> Origin<'a> {
