@@ -1,5 +1,6 @@
 //! The tools, and the server that routes to them.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,12 +11,11 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use eventb_animate_driver::report::{Verdict, classify_check, classify_po};
+use eventb_animate_driver::report::{Verdict, classify_check, classify_po, po_counts};
 use eventb_animate_driver::{AnimateConfig, ProbSettings, Run};
 use rossi::pretty::PrettyPrinter;
-use rossi_build::Severity;
-use rossi_build::pog::obligations::{Obligation, Obligations};
-use rossi_build::pog::sources::{ElementKind, SourceIndex};
+use rossi_build::pog::obligations::{Obligation, ObligationStatus, Obligations};
+use rossi_build::pog::sources::SourceIndex;
 use rossi_prove::confidence::Bucket;
 
 use crate::animate;
@@ -26,7 +26,9 @@ use crate::report::{
     ObligationRecord, ObligationReport, ProjectReport, ProofStatusReport, ProofSummary,
     SourceRecord, StatusRecord, ValidateReport, VerdictRecord,
 };
-use crate::workspace::{Loaded, Workspace, obligation_counts, write_build};
+use crate::workspace::{
+    Loaded, Statuses, Workspace, obligation_counts, severity_floor, write_build,
+};
 
 /// What the client is told at the handshake.
 const INSTRUCTIONS: &str = "Rossi verifies the Event-B model under the server's root directory. \
@@ -284,46 +286,12 @@ pub struct ProofStatusArgs {
     pub component: Option<String>,
 }
 
-fn bucket_name(bucket: Bucket) -> &'static str {
-    match bucket {
-        Bucket::Discharged => "discharged",
-        Bucket::Reviewed => "reviewed",
-        Bucket::Pending => "pending",
-        Bucket::Unattempted => "unattempted",
-    }
-}
-
-fn kind_name(kind: ElementKind) -> &'static str {
-    match kind {
-        ElementKind::Context => "context",
-        ElementKind::Machine => "machine",
-        ElementKind::CarrierSet => "carrier_set",
-        ElementKind::Constant => "constant",
-        ElementKind::Axiom => "axiom",
-        ElementKind::Extends => "extends",
-        ElementKind::Sees => "sees",
-        ElementKind::Refines => "refines",
-        ElementKind::Variable => "variable",
-        ElementKind::Invariant => "invariant",
-        ElementKind::Variant => "variant",
-        ElementKind::Event => "event",
-        ElementKind::RefinesEvent => "refines_event",
-        ElementKind::Parameter => "parameter",
-        ElementKind::Guard => "guard",
-        ElementKind::Action => "action",
-        ElementKind::Witness => "witness",
-    }
-}
-
 /// One obligation as the documents carry it, its sources resolved.
-fn obligation_record(po: &Obligation<'_>, sources: Option<&SourceIndex>) -> ObligationRecord {
+fn obligation_record(po: &Obligation<'_>, sources: &SourceIndex) -> ObligationRecord {
     ObligationRecord {
         component: po.component.to_string(),
         name: po.name.to_string(),
-        nature: po.nature.map_or_else(
-            || po.description.to_string(),
-            |nature| format!("{nature:?}"),
-        ),
+        nature: nature_name(po),
         description: po.description.to_string(),
         accurate: po.accurate,
         stamp: po.stamp.map(str::to_string),
@@ -331,11 +299,11 @@ fn obligation_record(po: &Obligation<'_>, sources: Option<&SourceIndex>) -> Obli
             .sources
             .iter()
             .filter_map(|(role, handle)| {
-                let element = sources?.resolve(handle.as_deref()?)?;
+                let element = sources.resolve(handle)?;
                 Some(SourceRecord {
                     role: role.clone(),
                     component: element.component,
-                    kind: kind_name(element.kind).to_string(),
+                    kind: element.kind.as_str().to_string(),
                     name: element.name,
                     event: element.event,
                     theorem: element.theorem,
@@ -343,7 +311,7 @@ fn obligation_record(po: &Obligation<'_>, sources: Option<&SourceIndex>) -> Obli
             })
             .collect(),
         status: po.status.map(|status| StatusRecord {
-            bucket: bucket_name(status.bucket).to_string(),
+            bucket: status.bucket.as_str().to_string(),
             confidence: status.confidence,
             broken: status.broken,
             manual: status.manual,
@@ -352,30 +320,14 @@ fn obligation_record(po: &Obligation<'_>, sources: Option<&SourceIndex>) -> Obli
     }
 }
 
-/// The status buckets of the obligations `select` admits.
-fn proof_summary<'a>(
-    obligations: &'a Obligations,
-    select: impl Fn(&Obligation<'a>) -> bool,
-) -> ProofSummary {
-    let mut proofs = ProofSummary::default();
-    for po in obligations.iter().filter(select) {
-        proofs.total += 1;
-        match po.status {
-            Some(status) => {
-                match status.bucket {
-                    Bucket::Discharged => proofs.discharged += 1,
-                    Bucket::Reviewed => proofs.reviewed += 1,
-                    Bucket::Pending => proofs.pending += 1,
-                    Bucket::Unattempted => proofs.unattempted += 1,
-                }
-                if status.broken {
-                    proofs.broken += 1;
-                }
-            }
-            None => proofs.unattempted += 1,
-        }
-    }
-    proofs
+/// The name an obligation's nature is reported and filtered under, or
+/// its description when the generator gave it one this build does not
+/// know.
+fn nature_name(po: &Obligation<'_>) -> String {
+    po.nature.map_or_else(
+        || po.description.to_string(),
+        |nature| nature.name().to_string(),
+    )
 }
 
 /// A tool-level failure: the document the client gets instead of the
@@ -386,6 +338,34 @@ fn failure(error: impl Into<String>, diagnostics: Vec<DiagnosticRecord>) -> Call
         diagnostics,
     };
     CallToolResult::structured_error(serde_json::to_value(failure).unwrap_or_default())
+}
+
+/// Add one obligation's recorded status to a summary. An obligation
+/// with no row was never attempted.
+fn count_status(summary: &mut ProofSummary, status: Option<ObligationStatus>) {
+    summary.total += 1;
+    let Some(status) = status else {
+        summary.unattempted += 1;
+        return;
+    };
+    match status.bucket {
+        Bucket::Discharged => summary.discharged += 1,
+        Bucket::Reviewed => summary.reviewed += 1,
+        Bucket::Pending => summary.pending += 1,
+        Bucket::Unattempted => summary.unattempted += 1,
+    }
+    if status.broken {
+        summary.broken += 1;
+    }
+}
+
+/// The status buckets of every obligation.
+fn proof_summary(obligations: &Obligations) -> ProofSummary {
+    let mut summary = ProofSummary::default();
+    for po in obligations.iter() {
+        count_status(&mut summary, po.status);
+    }
+    summary
 }
 
 #[tool_router]
@@ -412,14 +392,10 @@ impl RossiServer {
         &self,
         machine: Option<String>,
         bounds: Vec<String>,
-        recorded_status: bool,
+        run: &Run,
     ) -> Result<(Arc<Loaded>, Prepared), CallToolResult> {
         let loaded = self.loaded().await?;
-        let checks = loaded
-            .build
-            .as_ref()
-            .is_some_and(rossi_build::BuildResult::is_ok);
-        if loaded.project.is_none() || !checks {
+        if loaded.checks().is_none() {
             return Err(failure(
                 "the model does not check; fix the errors first",
                 loaded.diagnostics(false),
@@ -427,26 +403,37 @@ impl RossiServer {
         }
         let machine = animate::select_machine(&loaded, machine.as_deref())
             .map_err(|error| failure(error, Vec::new()))?;
+        // Only the disprover's gate reads the recorded verdicts, to skip
+        // an obligation already discharged; every other run must judge
+        // the model on its own.
+        let statuses = match run {
+            Run::Po { .. } => Statuses::Recorded,
+            _ => Statuses::Generated,
+        };
         let shared = Arc::clone(&loaded);
         let prepared = tokio::task::spawn_blocking(move || -> Result<Prepared, CallToolResult> {
-            let project = shared.project.as_ref().expect("checked above");
-            let components = animate::bounded_components(project, &machine, &bounds)
+            let checked = shared.checks().expect("checked above");
+            let components = animate::bounded_components(&checked.project, &machine, &bounds)
                 .map_err(|error| failure(error, Vec::new()))?;
             let files = if bounds.is_empty() {
-                shared.files_for(recorded_status)
+                shared.files_for(statuses)
             } else {
                 // A bounded run rebuilds, so its statuses are the
-                // generated ones whatever the caller wanted; only the
+                // generated ones whatever the run wanted; only the
                 // disprover asks for the recorded ones and it takes no
                 // bounds.
                 animate::build_files(&shared.name, &components).map_err(|diagnostics| {
+                    let texts = shared.text_index();
                     failure(
                         "the bounds do not check against the model",
-                        diagnostics.iter().map(|d| shared.record(d)).collect(),
+                        diagnostics
+                            .iter()
+                            .map(|d| DiagnosticRecord::of_diagnostic(d, &texts))
+                            .collect(),
                     )
                 })?
             };
-            let po_count = animate::obligation_count(&files, &machine);
+            let po_count = rossi_build::pog::sequent_count(&files, &machine);
             let dir = animate::write_project(&shared.name, &components, &files)
                 .map_err(|error| failure(error, Vec::new()))?;
             Ok(Prepared {
@@ -494,7 +481,6 @@ impl RossiServer {
     )]
     async fn project(&self) -> Result<Json<ProjectReport>, CallToolResult> {
         let loaded = self.loaded().await?;
-        let diagnostics = DiagnosticCounts::of(&loaded.diagnostics(false));
         Ok(Json(ProjectReport {
             root: self.workspace.root().display().to_string(),
             name: loaded.name.clone(),
@@ -502,7 +488,7 @@ impl RossiServer {
             output_dir: loaded.output_dir.display().to_string(),
             components: loaded.components.clone(),
             edges: loaded.edges.clone(),
-            diagnostics,
+            diagnostics: loaded.counts(false),
         }))
     }
 
@@ -516,21 +502,8 @@ impl RossiServer {
         Parameters(args): Parameters<ValidateArgs>,
     ) -> Result<Json<ValidateReport>, CallToolResult> {
         let loaded = self.loaded().await?;
-        let minimum = match args.severity.as_deref() {
-            // The well-definedness conditions are `info`, so asking for
-            // them without naming a severity would otherwise filter every
-            // one of them back out.
-            None if args.include_wd => Severity::Info,
-            None | Some("warning") => Severity::Warning,
-            Some("error") => Severity::Error,
-            Some("info") => Severity::Info,
-            Some(other) => {
-                return Err(failure(
-                    format!("unknown severity `{other}`: use error, warning or info"),
-                    Vec::new(),
-                ));
-            }
-        };
+        let minimum = severity_floor(args.severity.as_deref(), args.include_wd)
+            .map_err(|error| failure(error, Vec::new()))?;
         let diagnostics: Vec<DiagnosticRecord> = loaded
             .diagnostics(args.include_wd)
             .into_iter()
@@ -541,7 +514,7 @@ impl RossiServer {
                     .is_none_or(|wanted| record.component.as_deref() == Some(wanted))
             })
             .collect();
-        let counts = DiagnosticCounts::of(&diagnostics);
+        let counts = DiagnosticCounts::of(diagnostics.iter().map(|record| record.severity));
         Ok(Json(ValidateReport {
             diagnostics,
             counts,
@@ -563,24 +536,22 @@ impl RossiServer {
     ) -> Result<Json<BuildReport>, CallToolResult> {
         let loaded = self.loaded().await?;
         let diagnostics = loaded.diagnostics(false);
-        let Some(build) = &loaded.build else {
+        let Some(checked) = &loaded.checked else {
             return Err(failure("the model does not parse", diagnostics));
         };
         if args.write {
             write_build(&loaded).map_err(|error| failure(error, Vec::new()))?;
         }
-        let counts = DiagnosticCounts::of(&diagnostics);
+        let counts = DiagnosticCounts::of(diagnostics.iter().map(|record| record.severity));
         let by_nature = obligation_counts(&loaded);
         let proofs = loaded
-            .obligations
-            .as_ref()
-            .map_or_else(ProofSummary::default, |obligations| {
-                proof_summary(obligations, |_| true)
-            });
+            .obligations()
+            .map_or_else(ProofSummary::default, proof_summary);
         Ok(Json(BuildReport {
             output_dir: loaded.output_dir.display().to_string(),
             written: args.write,
-            files: build
+            files: checked
+                .build
                 .files
                 .iter()
                 .map(|file| FileRecord {
@@ -600,7 +571,7 @@ impl RossiServer {
 
     /// The obligations of the load, or the failure to report instead.
     fn obligations<'a>(&self, loaded: &'a Loaded) -> Result<&'a Obligations, CallToolResult> {
-        loaded.obligations.as_ref().ok_or_else(|| {
+        loaded.obligations().ok_or_else(|| {
             failure(
                 "no proof obligations: the model does not check",
                 loaded.diagnostics(false),
@@ -619,7 +590,7 @@ impl RossiServer {
     ) -> Result<Json<ListPosReport>, CallToolResult> {
         let loaded = self.loaded().await?;
         let obligations = self.obligations(&loaded)?;
-        let sources = loaded.sources.as_ref();
+        let checked = loaded.checked.as_ref().expect("obligations imply a check");
         let status_filter = match args.status.as_deref() {
             None => None,
             Some(name @ ("discharged" | "reviewed" | "pending" | "unattempted" | "open")) => {
@@ -634,21 +605,32 @@ impl RossiServer {
                 ));
             }
         };
-        let matching: Vec<ObligationRecord> = obligations
+        if let Some(wanted) = args.nature.as_deref()
+            && rossi_build::pog::natures::Nature::from_name(wanted).is_none()
+        {
+            return Err(failure(
+                format!("unknown nature `{wanted}`; see a build report for the ones generated"),
+                Vec::new(),
+            ));
+        }
+        // The filters read the obligation itself, so only the page that
+        // survives them is turned into records: an element filter over a
+        // large refinement chain would otherwise resolve every
+        // obligation's provenance to return ten rows.
+        let matching: Vec<Obligation<'_>> = obligations
             .iter()
             .filter(|po| {
                 args.component
                     .as_deref()
                     .is_none_or(|wanted| po.component == wanted)
             })
-            .map(|po| obligation_record(&po, sources))
-            .filter(|record| args.nature.as_deref().is_none_or(|n| record.nature == n))
-            .filter(|record| {
+            .filter(|po| args.nature.as_deref().is_none_or(|n| nature_name(po) == n))
+            .filter(|po| {
                 status_filter.is_none_or(|wanted| {
-                    let bucket = record
+                    let bucket = po
                         .status
-                        .as_ref()
-                        .map_or("unattempted", |s| s.bucket.as_str());
+                        .map_or(Bucket::Unattempted, |status| status.bucket)
+                        .as_str();
                     if wanted == "open" {
                         bucket != "discharged"
                     } else {
@@ -656,22 +638,27 @@ impl RossiServer {
                     }
                 })
             })
-            .filter(|record| {
+            .filter(|po| {
                 args.element.as_deref().is_none_or(|wanted| {
-                    record.sources.iter().any(|source| {
-                        source.name == wanted
-                            || source
-                                .event
-                                .as_deref()
-                                .is_some_and(|event| format!("{event}/{}", source.name) == wanted)
+                    po.sources.iter().any(|(_, handle)| {
+                        checked.sources.resolve(handle).is_some_and(|element| {
+                            element.name == wanted
+                                || element.event.is_some_and(|event| {
+                                    format!("{event}/{}", element.name) == wanted
+                                })
+                        })
                     })
                 })
             })
             .collect();
         let total = matching.len();
         let limit = args.limit.max(1);
-        let page: Vec<ObligationRecord> =
-            matching.into_iter().skip(args.offset).take(limit).collect();
+        let page: Vec<ObligationRecord> = matching
+            .iter()
+            .skip(args.offset)
+            .take(limit)
+            .map(|po| obligation_record(po, &checked.sources))
+            .collect();
         let next_offset = (args.offset + page.len() < total).then(|| args.offset + page.len());
         Ok(Json(ListPosReport {
             obligations: page,
@@ -701,7 +688,8 @@ impl RossiServer {
                 Vec::new(),
             ));
         };
-        let record = obligation_record(&po, loaded.sources.as_ref());
+        let checked = loaded.checked.as_ref().expect("obligations imply a check");
+        let record = obligation_record(&po, &checked.sources);
         let sequent = obligations
             .sequent(&args.component, &args.name)
             .map_err(|error| {
@@ -746,26 +734,27 @@ impl RossiServer {
     ) -> Result<Json<ProofStatusReport>, CallToolResult> {
         let loaded = self.loaded().await?;
         let obligations = self.obligations(&loaded)?;
-        let components: Vec<ComponentProofs> = obligations
-            .components()
-            .filter(|component| {
-                args.component
-                    .as_deref()
-                    .is_none_or(|wanted| *component == wanted)
-            })
-            .map(|component| ComponentProofs {
-                component: component.to_string(),
-                summary: proof_summary(obligations, |po| po.component == component),
-            })
-            .collect();
-        let summary = proof_summary(obligations, |po| {
-            args.component
-                .as_deref()
-                .is_none_or(|wanted| po.component == wanted)
-        });
+        let wanted = args.component.as_deref();
+        // One pass: a summary per component and the total together, so a
+        // long refinement chain is not walked once per component.
+        let mut per_component: BTreeMap<&str, ProofSummary> = BTreeMap::new();
+        let mut summary = ProofSummary::default();
+        for po in obligations
+            .iter()
+            .filter(|po| wanted.is_none_or(|wanted| po.component == wanted))
+        {
+            count_status(&mut summary, po.status);
+            count_status(per_component.entry(po.component).or_default(), po.status);
+        }
         Ok(Json(ProofStatusReport {
             summary,
-            components,
+            components: per_component
+                .into_iter()
+                .map(|(component, summary)| ComponentProofs {
+                    component: component.to_string(),
+                    summary,
+                })
+                .collect(),
         }))
     }
 
@@ -778,7 +767,6 @@ impl RossiServer {
         &self,
         Parameters(args): Parameters<ModelCheckArgs>,
     ) -> Result<Json<ModelCheckReport>, CallToolResult> {
-        let (loaded, prepared) = self.prepare(args.machine, args.bounds, false).await?;
         let run = Run::Check {
             time_limit_secs: args.time_limit_secs.unwrap_or(30),
             states: args.states,
@@ -791,6 +779,7 @@ impl RossiServer {
             set_size: args.set_size,
             prefs: args.prefs,
         };
+        let (loaded, prepared) = self.prepare(args.machine, args.bounds, &run).await?;
         let (report, code) = self.animate(&prepared, &run, &settings).await?;
         let transitions = report
             .counterexample
@@ -830,9 +819,9 @@ impl RossiServer {
                 Some(CounterexampleRecord {
                     transitions,
                     violating_state: state,
-                    violated_invariants: animate::match_violated(
+                    violated_invariants: animate::violated_invariants(
                         &violated,
-                        &loaded.invariants,
+                        &loaded,
                         &prepared.machine,
                     ),
                     bindings: bindings(&state_bindings),
@@ -901,24 +890,19 @@ impl RossiServer {
         &self,
         Parameters(args): Parameters<CbcArgs>,
     ) -> Result<Json<CheckRunReport>, CallToolResult> {
-        let (_, prepared) = self.prepare(args.machine, args.bounds, false).await?;
-        let run = Run::Cbc {
-            events: args.events,
-            deadlock: args.deadlock,
-        };
-        let settings = ProbSettings {
-            set_size: args.set_size,
-            prefs: args.prefs,
-        };
-        let (report, code) = self.animate(&prepared, &run, &settings).await?;
-        Ok(Json(CheckRunReport {
-            machine: prepared.machine.clone(),
-            bounds: prepared.bounds.clone(),
-            status: report.status.clone(),
-            message: report.message.clone().unwrap_or_default(),
-            checks: checks(&report),
-            exit_code: code,
-        }))
+        self.check_run(
+            args.machine,
+            args.bounds,
+            Run::Cbc {
+                events: args.events,
+                deadlock: args.deadlock,
+            },
+            ProbSettings {
+                set_size: args.set_size,
+                prefs: args.prefs,
+            },
+        )
+        .await
     }
 
     #[tool(
@@ -930,15 +914,33 @@ impl RossiServer {
         &self,
         Parameters(args): Parameters<WdArgs>,
     ) -> Result<Json<CheckRunReport>, CallToolResult> {
-        let (_, prepared) = self.prepare(args.machine, Vec::new(), false).await?;
-        let settings = ProbSettings {
-            set_size: args.set_size,
-            prefs: args.prefs,
-        };
-        let (report, code) = self.animate(&prepared, &Run::Wd, &settings).await?;
+        self.check_run(
+            args.machine,
+            Vec::new(),
+            Run::Wd,
+            ProbSettings {
+                set_size: args.set_size,
+                prefs: args.prefs,
+            },
+        )
+        .await
+    }
+
+    /// One run whose report is a list of checks: the constraint-based
+    /// preservation check and the well-definedness prover both answer in
+    /// that shape.
+    async fn check_run(
+        &self,
+        machine: Option<String>,
+        bounds: Vec<String>,
+        run: Run,
+        settings: ProbSettings,
+    ) -> Result<Json<CheckRunReport>, CallToolResult> {
+        let (_, prepared) = self.prepare(machine, bounds, &run).await?;
+        let (report, code) = self.animate(&prepared, &run, &settings).await?;
         Ok(Json(CheckRunReport {
             machine: prepared.machine.clone(),
-            bounds: Vec::new(),
+            bounds: prepared.bounds.clone(),
             status: report.status.clone(),
             message: report.message.clone().unwrap_or_default(),
             checks: checks(&report),
@@ -955,9 +957,6 @@ impl RossiServer {
         &self,
         Parameters(args): Parameters<DisproveArgs>,
     ) -> Result<Json<DisproveReport>, CallToolResult> {
-        // The gate reads the recorded verdicts: an obligation already
-        // discharged needs no counterexample search.
-        let (_, prepared) = self.prepare(args.machine, Vec::new(), true).await?;
         let mut filters = args.names;
         filters.extend(args.filter);
         let run = Run::Po {
@@ -968,18 +967,11 @@ impl RossiServer {
             set_size: args.set_size,
             prefs: args.prefs,
         };
+        let (_, prepared) = self.prepare(args.machine, Vec::new(), &run).await?;
         let (report, code) = self.animate(&prepared, &run, &settings).await?;
         let rows = checks(&report);
-        let open = rows.iter().filter(|c| c.outcome != "passed").count();
-        let spurious = rows
-            .iter()
-            .filter(|c| {
-                c.outcome == "failed"
-                    && c.message.as_deref().is_some_and(|m| {
-                        m.starts_with("counterexample under the selected hypotheses")
-                    })
-            })
-            .count();
+        let counts = po_counts(&report);
+        let (open, spurious) = (counts.open, counts.spurious);
         let verdict = match classify_po(&report) {
             Verdict::PoDisproved { disproved, total } => DisproveVerdict {
                 kind: "disproved".to_string(),

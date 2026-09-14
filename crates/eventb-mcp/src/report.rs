@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use rossi::ast::LineIndex;
 use rossi_build::{Diagnostic, RuleId, Severity};
 
 /// A 1-indexed position range in a source file, in characters.
@@ -21,10 +22,10 @@ pub struct Region {
 }
 
 impl Region {
-    /// The region a byte span of `source` covers.
-    pub fn of_span(source: &str, span: rossi::ast::Span) -> Region {
-        let (start_line, start_column) = line_col(source, span.start);
-        let (end_line, end_column) = line_col(source, span.end);
+    /// The region a byte span covers, positioned through `index`.
+    pub fn of_span(index: &LineIndex<'_>, span: rossi::ast::Span) -> Region {
+        let (start_line, start_column) = index.line_col(span.start);
+        let (end_line, end_column) = index.line_col(span.end);
         Region {
             start_line,
             start_column,
@@ -44,22 +45,15 @@ impl Region {
     }
 }
 
-fn line_col(source: &str, byte_offset: usize) -> (usize, usize) {
-    let (line, col) = rossi::ast::Span {
-        start: byte_offset,
-        end: byte_offset,
-    }
-    .to_line_col(source);
-    (line + 1, col + 1)
-}
-
 /// One finding about the project.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct DiagnosticRecord {
     /// `error`, `warning` or `info`.
-    pub severity: String,
+    #[schemars(with = "String")]
+    pub severity: Severity,
     /// The stable `EBnnn` rule code, when the finding has one.
-    pub rule_id: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub rule_id: Option<RuleId>,
     /// The component the finding is about, when it is about one.
     pub component: Option<String>,
     /// The element inside the component (`inv1`, `evt/grd1`), when the
@@ -76,8 +70,8 @@ impl DiagnosticRecord {
     /// A whole-file failure such as a parse error.
     pub fn for_file(rule: RuleId, file: &str, message: String, region: Option<Region>) -> Self {
         DiagnosticRecord {
-            severity: Severity::Error.as_str().to_string(),
-            rule_id: Some(rule.code().to_string()),
+            severity: Severity::Error,
+            rule_id: Some(rule),
             component: None,
             element: None,
             message,
@@ -86,12 +80,9 @@ impl DiagnosticRecord {
         }
     }
 
-    /// A checker finding, located through `source_of`: the file and text
-    /// of the component the finding names, when they are known.
-    pub fn of_diagnostic(
-        diagnostic: &Diagnostic,
-        source_of: impl Fn(&str) -> Option<(String, Option<String>)>,
-    ) -> Self {
+    /// A checker finding about a component of `sources`, positioned in
+    /// that component's text when it has one.
+    pub fn of_diagnostic(diagnostic: &Diagnostic, texts: &TextIndex<'_>) -> Self {
         let component = diagnostic.component();
         let element = diagnostic
             .origin
@@ -99,33 +90,39 @@ impl DiagnosticRecord {
             .and_then(|rest| rest.strip_prefix('.'))
             .filter(|rest| !rest.is_empty())
             .map(str::to_string);
-        let located = source_of(component);
-        let region = match (&located, diagnostic.span) {
-            (Some((_, Some(text))), Some(span)) => Some(Region::of_span(text, span)),
-            _ => None,
-        };
+        let located = texts.get(component);
         DiagnosticRecord {
-            severity: diagnostic.severity.as_str().to_string(),
-            rule_id: diagnostic.rule_id.map(|rule| rule.code().to_string()),
+            severity: diagnostic.severity,
+            rule_id: diagnostic.rule_id,
             component: located.is_some().then(|| component.to_string()),
             element,
             message: diagnostic.message.clone(),
-            file: located.map(|(file, _)| file),
-            region,
+            file: located.map(|(file, _)| file.to_string()),
+            region: match (located, diagnostic.span) {
+                (Some((_, Some(index))), Some(span)) => Some(Region::of_span(index, span)),
+                _ => None,
+            },
         }
     }
 
     /// Whether the record is at least `minimum` severe.
     pub fn at_least(&self, minimum: Severity) -> bool {
-        rank(&self.severity) >= rank(minimum.as_str())
+        rank(self.severity) >= rank(minimum)
     }
 }
 
-fn rank(severity: &str) -> u8 {
+/// Where each component's text is, and a line index into it, for the
+/// components a load could read. Built once per report: resolving a
+/// position rescans the source, so a report with thousands of findings
+/// must not do it per finding.
+pub type TextIndex<'a> = std::collections::HashMap<&'a str, (&'a str, Option<LineIndex<'a>>)>;
+
+/// The severities, ordered.
+fn rank(severity: Severity) -> u8 {
     match severity {
-        "error" => 2,
-        "warning" => 1,
-        _ => 0,
+        Severity::Error => 2,
+        Severity::Warning => 1,
+        Severity::Info => 0,
     }
 }
 
@@ -138,13 +135,14 @@ pub struct DiagnosticCounts {
 }
 
 impl DiagnosticCounts {
-    pub fn of(records: &[DiagnosticRecord]) -> Self {
+    /// The counts of the severities in `severities`.
+    pub fn of(severities: impl IntoIterator<Item = Severity>) -> Self {
         let mut counts = DiagnosticCounts::default();
-        for record in records {
-            match record.severity.as_str() {
-                "error" => counts.errors += 1,
-                "warning" => counts.warnings += 1,
-                _ => counts.infos += 1,
+        for severity in severities {
+            match severity {
+                Severity::Error => counts.errors += 1,
+                Severity::Warning => counts.warnings += 1,
+                Severity::Info => counts.infos += 1,
             }
         }
         counts
