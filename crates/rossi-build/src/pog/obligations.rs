@@ -5,8 +5,9 @@
 //! agent-facing tool) wants the obligations as values instead: the
 //! nature and provenance of each one, and its sequent with the
 //! hypothesis-set chain resolved the way the prover resolves it, across
-//! the component files a chain crosses. This index reads the generated
-//! files once and serves both, so no caller re-parses XML.
+//! the component files a chain crosses. Both come out of the reader the
+//! prover already uses, so a caller neither re-parses the XML nor pays
+//! for the predicates of an obligation it only wanted to list.
 
 use std::collections::HashMap;
 
@@ -16,19 +17,16 @@ use rossi_prove::{Confidence, ProverSequent, PsStatus, read_bps};
 
 use crate::ScFile;
 use crate::error::{Error, ProjectError, Result};
-use crate::po_view::PoView;
 use crate::proofs::cap_if_broken;
 
 use super::natures::Nature;
 
-/// One component's obligation file: the normalized view for metadata,
-/// the filename its sequents load under, and the rows of its status
-/// sidecar by obligation name.
+/// One component's obligation file: the filename its sequents load
+/// under, and the rows of its status sidecar by obligation name.
 #[derive(Debug)]
 struct ComponentFile {
     component: String,
     filename: String,
-    view: PoView,
     statuses: HashMap<String, PsStatus>,
 }
 
@@ -76,9 +74,9 @@ pub struct Obligation<'a> {
     pub accurate: bool,
     /// The obligation's stamp, when the file carries one.
     pub stamp: Option<&'a str>,
-    /// `(role, handle)` provenance rows, handles with their project
-    /// segment dropped as [`PoView`] normalizes them.
-    pub sources: &'a [(String, Option<String>)],
+    /// The elements the obligation traces back to: `(role, handle)`
+    /// rows in document order, the handles as the file spells them.
+    pub sources: &'a [(String, String)],
     /// The recorded status, when the status sidecar has a row for the
     /// obligation.
     pub status: Option<ObligationStatus>,
@@ -106,7 +104,6 @@ impl Obligations {
             let Some(component) = file.filename.strip_suffix(".bpo") else {
                 continue;
             };
-            let view = PoView::from_xml(&file.contents)?;
             let parsed = PoFile::read(file.contents.as_bytes()).map_err(|e| match e {
                 PoError::Xml(e) => Error::from(e),
                 PoError::Unsupported(what) => ProjectError::XmlTag(what).into(),
@@ -115,7 +112,6 @@ impl Obligations {
             index.components.push(ComponentFile {
                 component: component.to_string(),
                 filename: file.filename.clone(),
-                view,
                 statuses: statuses.remove(component).unwrap_or_default(),
             });
         }
@@ -164,7 +160,8 @@ impl Obligations {
     }
 
     fn describe<'a>(&'a self, c: &'a ComponentFile, name: &str) -> Option<Obligation<'a>> {
-        let (name, sequent) = c.view.sequents.get_key_value(name)?;
+        let sequent = self.project.file(&c.filename)?.sequent(name)?;
+        let name = sequent.name.as_str();
         let status = c.statuses.get(name).map(|row| ObligationStatus {
             bucket: cap_if_broken(
                 Confidence::classify(row.confidence.map(i64::from)),

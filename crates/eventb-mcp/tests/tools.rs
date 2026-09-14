@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use tempfile::TempDir;
+
 use eventb_animate_driver::AnimateConfig;
 use rmcp::model::{CallToolRequestParams, ClientInfo};
 use rmcp::service::RunningService;
@@ -10,6 +12,7 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
 
 use eventb_mcp::RossiServer;
+use eventb_mcp::workspace::Statuses;
 
 #[derive(Clone, Default)]
 struct Client;
@@ -24,19 +27,22 @@ fn examples() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../rossi/examples")
 }
 
-/// A fresh root holding copies of the named example files.
-fn root_with(name: &str, files: &[&str]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("eventb-mcp-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// A fresh root holding copies of the named example files, removed when
+/// the guard drops — a build writes its output under the root, so a run
+/// that leaves the tree behind also leaves that.
+fn root_with(name: &str, files: &[&str]) -> TempDir {
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("eventb-mcp-{name}-"))
+        .tempdir()
+        .expect("a temporary root");
     for file in files {
-        std::fs::copy(examples().join(file), dir.join(file)).unwrap();
+        std::fs::copy(examples().join(file), dir.path().join(file)).unwrap();
     }
     dir
 }
 
-async fn connect(root: PathBuf) -> RunningService<RoleClient, Client> {
-    connect_with(root, AnimateConfig::default()).await
+async fn connect_root(root: &TempDir) -> RunningService<RoleClient, Client> {
+    connect_with(root.path().to_path_buf(), AnimateConfig::default()).await
 }
 
 async fn connect_with(root: PathBuf, animate: AnimateConfig) -> RunningService<RoleClient, Client> {
@@ -86,7 +92,7 @@ async fn call(
 
 #[tokio::test]
 async fn the_server_lists_its_tools() {
-    let client = connect(root_with("tools", &[])).await;
+    let client = connect_root(&root_with("tools", &[])).await;
     let mut names: Vec<String> = client
         .list_all_tools()
         .await
@@ -119,7 +125,7 @@ async fn project_validate_and_build_over_an_example() {
         "bank",
         &["bank_account_ctx.eventb", "bank_account_machine.eventb"],
     );
-    let client = connect(root.clone()).await;
+    let client = connect_root(&root).await;
 
     let (error, project) = call(&client, "project", Value::Null).await;
     assert!(!error, "{project}");
@@ -169,7 +175,7 @@ async fn project_validate_and_build_over_an_example() {
     assert_eq!(build["proofs"]["total"], total, "{build}");
     assert_eq!(build["proofs"]["unattempted"], total, "{build}");
     let output_dir = PathBuf::from(build["output_dir"].as_str().unwrap());
-    assert!(output_dir.starts_with(&root), "{output_dir:?}");
+    assert!(output_dir.starts_with(root.path()), "{output_dir:?}");
     assert!(output_dir.join("bank_account.bpo").is_file());
     assert!(output_dir.join("bank_account.bps").is_file());
 
@@ -187,11 +193,11 @@ async fn project_validate_and_build_over_an_example() {
 async fn a_file_that_does_not_parse_is_a_located_finding() {
     let root = root_with("broken", &[]);
     std::fs::write(
-        root.join("broken.eventb"),
+        root.path().join("broken.eventb"),
         "MACHINE m\nINVARIANTS\n    @inv1 x ∈\nEND\n",
     )
     .unwrap();
-    let client = connect(root).await;
+    let client = connect_root(&root).await;
 
     let (error, validation) = call(&client, "validate", json!({})).await;
     assert!(!error, "{validation}");
@@ -219,11 +225,11 @@ async fn a_file_that_does_not_parse_is_a_located_finding() {
 async fn asking_for_the_well_definedness_conditions_reports_them() {
     let root = root_with("wd", &[]);
     std::fs::write(
-        root.join("c.eventb"),
+        root.path().join("c.eventb"),
         "CONTEXT c\nCONSTANTS f y\nAXIOMS\n    @a1 f ∈ ℕ ⇸ ℕ\n    @a2 y = f(1)\nEND\n",
     )
     .unwrap();
-    let client = connect(root).await;
+    let client = connect_root(&root).await;
 
     let (error, plain) = call(&client, "validate", json!({})).await;
     assert!(!error, "{plain}");
@@ -256,11 +262,11 @@ async fn an_edit_is_picked_up_by_the_next_call() {
         "edit",
         &["bank_account_ctx.eventb", "bank_account_machine.eventb"],
     );
-    let client = connect(root.clone()).await;
+    let client = connect_root(&root).await;
     let (_, before) = call(&client, "validate", json!({})).await;
     assert_eq!(before["counts"]["errors"], 0, "{before}");
 
-    let ctx = root.join("bank_account_ctx.eventb");
+    let ctx = root.path().join("bank_account_ctx.eventb");
     let text = std::fs::read_to_string(&ctx).unwrap();
     let edited = text.replace(
         "@axm5 min_balance < max_balance",
@@ -290,7 +296,7 @@ async fn an_edit_is_picked_up_by_the_next_call() {
 /// diff. Rerun with `EVENTB_MCP_SCHEMA_REGENERATE=1` to accept a change.
 #[tokio::test]
 async fn the_tool_schemas_are_the_committed_ones() {
-    let client = connect(root_with("schema", &[])).await;
+    let client = connect_root(&root_with("schema", &[])).await;
     let mut tools = client.list_all_tools().await.expect("tools list");
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     let actual = serde_json::to_string_pretty(&tools).unwrap() + "\n";
@@ -314,7 +320,7 @@ async fn obligations_are_listed_shown_and_summed_up() {
         "pos",
         &["bank_account_ctx.eventb", "bank_account_machine.eventb"],
     );
-    let client = connect(root).await;
+    let client = connect_root(&root).await;
     let (_, build) = call(&client, "build", json!({"write": false})).await;
     let total = build["obligations"]["total"].as_u64().unwrap() as usize;
     assert!(total > 2, "{build}");
@@ -459,7 +465,7 @@ async fn a_missing_model_checker_is_a_failure_document() {
         path: "rossi-test-definitely-not-installed".into(),
         ..AnimateConfig::default()
     };
-    let client = connect_with(root, config).await;
+    let client = connect_with(root.path().to_path_buf(), config).await;
     let (error, report) = call(&client, "model_check", json!({})).await;
     assert!(error, "{report}");
     assert!(
@@ -483,9 +489,9 @@ const COUNTER_MACHINE: &str = "MACHINE m\nSEES c\nVARIABLES x\nINVARIANTS\n    @
 #[ignore]
 async fn the_model_checker_runs_end_to_end() {
     let root = root_with("e2e", &[]);
-    std::fs::write(root.join("c.eventb"), COUNTER_CTX).unwrap();
-    std::fs::write(root.join("m.eventb"), COUNTER_MACHINE).unwrap();
-    let client = connect_with(root, animator()).await;
+    std::fs::write(root.path().join("c.eventb"), COUNTER_CTX).unwrap();
+    std::fs::write(root.path().join("m.eventb"), COUNTER_MACHINE).unwrap();
+    let client = connect_with(root.path().to_path_buf(), animator()).await;
 
     // The violation, its trace, and the invariant mapped back to its label.
     let (error, check) = call(&client, "model_check", json!({"time_limit_secs": 20})).await;
@@ -573,11 +579,11 @@ async fn the_model_checker_runs_end_to_end() {
 #[tokio::test]
 async fn only_the_disprover_is_written_the_recorded_proof_status() {
     let root = root_with("status", &[]);
-    std::fs::write(root.join("c.eventb"), COUNTER_CTX).unwrap();
-    std::fs::write(root.join("m.eventb"), COUNTER_MACHINE).unwrap();
+    std::fs::write(root.path().join("c.eventb"), COUNTER_CTX).unwrap();
+    std::fs::write(root.path().join("m.eventb"), COUNTER_MACHINE).unwrap();
 
     // A build writes the generated statuses, all unattempted.
-    let loaded = eventb_mcp::workspace::Workspace::new(root.clone())
+    let loaded = eventb_mcp::workspace::Workspace::new(root.path().to_path_buf())
         .load()
         .await
         .expect("the project loads");
@@ -593,7 +599,7 @@ async fn only_the_disprover_is_written_the_recorded_proof_status() {
         generated.replacen(r#"confidence="-99""#, r#"confidence="1000""#, 1),
     )
     .unwrap();
-    let loaded = eventb_mcp::workspace::Workspace::new(root)
+    let loaded = eventb_mcp::workspace::Workspace::new(root.path().to_path_buf())
         .load()
         .await
         .expect("the project loads again");
@@ -606,13 +612,17 @@ async fn only_the_disprover_is_written_the_recorded_proof_status() {
             .contents
     };
     assert!(
-        status_of(loaded.files_for(true)).contains(r#"confidence="1000""#),
+        status_of(loaded.files_for(Statuses::Recorded)).contains(r#"confidence="1000""#),
         "the disprover sees the recorded verdict"
     );
-    let fresh = status_of(loaded.files_for(false));
+    let fresh = status_of(loaded.files_for(Statuses::Generated));
     assert!(
         !fresh.contains(r#"confidence="1000""#),
         "a model check must not see it: {fresh}"
     );
-    assert_eq!(fresh, generated, "it sees the generated statuses");
+    assert!(
+        fresh.matches(r#"confidence="-99""#).count()
+            == generated.matches(r#"confidence="-99""#).count(),
+        "every row is unattempted again: {fresh}"
+    );
 }

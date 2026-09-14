@@ -15,16 +15,21 @@ use rossi::{Component, Context, NamedComponent};
 use rossi_build::{Diagnostic, Project, ProjectComponent, ScFile};
 
 use crate::report::ViolatedInvariant;
-use crate::workspace::{InvariantInfo, Loaded};
+use crate::workspace::Loaded;
 
 /// The machine to run: the named one, or the most refined one when the
 /// project has exactly one machine nothing refines.
 pub fn select_machine(loaded: &Loaded, wanted: Option<&str>) -> Result<String, String> {
-    let machines: Vec<&str> = loaded
-        .components
+    let components = loaded
+        .checks()
+        .map(|checked| checked.project.components.as_slice())
+        .unwrap_or_default();
+    let machines: Vec<&str> = components
         .iter()
-        .filter(|c| c.kind == "machine")
-        .map(|c| c.name.as_str())
+        .filter_map(|pc| match &pc.component {
+            Component::Machine(machine) => Some(machine.name.as_str()),
+            Component::Context(_) => None,
+        })
         .collect();
     if let Some(name) = wanted {
         return if machines.contains(&name) {
@@ -35,11 +40,12 @@ pub fn select_machine(loaded: &Loaded, wanted: Option<&str>) -> Result<String, S
             ))
         };
     }
-    let refined: HashSet<&str> = loaded
-        .edges
+    let refined: HashSet<&str> = components
         .iter()
-        .filter(|edge| edge.kind == "refines")
-        .map(|edge| edge.to.as_str())
+        .filter_map(|pc| match &pc.component {
+            Component::Machine(machine) => machine.refines.as_deref(),
+            Component::Context(_) => None,
+        })
         .collect();
     let leaves: Vec<&str> = machines
         .iter()
@@ -75,6 +81,15 @@ pub fn bounded_components(
         return Ok(components);
     }
     let context_name = format!("{machine}_bounds");
+    if components
+        .iter()
+        .any(|named| named.component.name() == context_name)
+    {
+        return Err(format!(
+            "the project already has a component named `{context_name}`; \
+             rename it to run this machine with bounds"
+        ));
+    }
     let Some(Component::Machine(target)) = components
         .iter_mut()
         .map(|named| &mut named.component)
@@ -140,25 +155,9 @@ pub fn write_project(
         .map_err(|e| format!("cannot create a temporary project: {e}"))?;
     rossi::write_project_directory(dir.path(), components, name)
         .map_err(|e| format!("cannot write the temporary project: {e}"))?;
-    for file in files {
-        if !rossi_build::is_normal_path_component(&file.filename) {
-            return Err(format!("unsafe generated filename {:?}", file.filename));
-        }
-        std::fs::write(dir.path().join(&file.filename), &file.contents)
-            .map_err(|e| format!("cannot write {}: {e}", file.filename))?;
-    }
+    rossi_build::write_sc_files(dir.path(), files)
+        .map_err(|e| format!("cannot write into the temporary project: {e}"))?;
     Ok(dir)
-}
-
-/// The obligations of `machine` among `files`, for the disprover's
-/// deadline: every sequent of its obligation file.
-pub fn obligation_count(files: &[ScFile], machine: &str) -> usize {
-    files
-        .iter()
-        .find(|file| file.filename == format!("{machine}.bpo"))
-        .map_or(0, |file| {
-            file.contents.matches("<org.eventb.core.poSequent ").count()
-        })
 }
 
 /// Run the tool on the project under `dir` and read its report.
@@ -182,40 +181,24 @@ pub async fn run(
     Ok((report, output.code))
 }
 
-/// Whitespace-insensitive form of a predicate rendering.
-pub fn normalize_predicate(predicate: &str) -> String {
-    predicate.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-/// The tool's printed violated invariants mapped back to declarations:
-/// by rendering, then by bare label, the checked machine's own
-/// declaration winning an ambiguous label. An unmatched string is kept
-/// as it was printed, so a violation is never dropped.
-pub fn match_violated(
+/// The declarations the tool's printed violated predicates name, one
+/// row per printed string; the matching rule is the driver's, and a
+/// string nothing matched keeps the printed form so a violation is
+/// never dropped.
+pub fn violated_invariants(
     violated: &[String],
-    invariants: &[InvariantInfo],
+    loaded: &Loaded,
     machine: &str,
 ) -> Vec<ViolatedInvariant> {
-    violated
-        .iter()
-        .map(|printed| {
-            let normalized = normalize_predicate(printed);
-            let hits: Vec<&InvariantInfo> = invariants
-                .iter()
-                .filter(|info| info.renderings.contains(&normalized))
-                .collect();
-            let hits = if hits.is_empty() {
-                let by_label: Vec<&InvariantInfo> = invariants
-                    .iter()
-                    .filter(|info| info.label == printed.trim())
-                    .collect();
-                match by_label.iter().find(|info| info.component == machine) {
-                    Some(own) if by_label.len() > 1 => vec![*own],
-                    _ => by_label,
-                }
-            } else {
-                hits
-            };
+    let invariants = loaded
+        .checked
+        .as_ref()
+        .map(|checked| checked.invariants.as_slice())
+        .unwrap_or_default();
+    report::match_violated(violated, invariants, machine)
+        .into_iter()
+        .zip(violated)
+        .map(|(hits, printed)| {
             let hit = hits.first();
             ViolatedInvariant {
                 text: printed.clone(),
@@ -265,6 +248,24 @@ mod tests {
     }
 
     #[test]
+    fn a_bounds_context_that_would_collide_is_refused() {
+        let ctx = "CONTEXT m_bounds\nEND\n";
+        let mut project = project();
+        for component in rossi::parse_components(ctx).unwrap() {
+            project.components.push(ProjectComponent::from_parsed(
+                rossi::component_filename(&component),
+                component,
+                Some(ctx.to_string()),
+            ));
+        }
+        let error = bounded_components(&project, "m", &["n < 5".to_string()]).unwrap_err();
+        assert!(
+            error.contains("already has a component named `m_bounds`"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn no_bounds_leave_the_components_alone() {
         let same = bounded_components(&project(), "m", &[]).unwrap();
         assert_eq!(same.len(), 2);
@@ -277,44 +278,5 @@ mod tests {
         let bounded = bounded_components(&project(), "m", &["zz < 5".to_string()]).unwrap();
         let diagnostics = build_files("p", &bounded).unwrap_err();
         assert!(!diagnostics.is_empty());
-    }
-
-    #[test]
-    fn violated_invariants_match_by_rendering_then_label() {
-        let invariants = vec![
-            InvariantInfo {
-                component: "m0".into(),
-                label: "inv1".into(),
-                renderings: vec!["x∈ℕ".into(), "x:NAT".into()],
-            },
-            InvariantInfo {
-                component: "m1".into(),
-                label: "inv1".into(),
-                renderings: vec!["x<3".into()],
-            },
-        ];
-        let matched = match_violated(
-            &[
-                "x < 3".into(),
-                "x : NAT".into(),
-                "inv1".into(),
-                "y=0".into(),
-            ],
-            &invariants,
-            "m1",
-        );
-        let summary: Vec<(Option<&str>, Option<&str>)> = matched
-            .iter()
-            .map(|v| (v.component.as_deref(), v.label.as_deref()))
-            .collect();
-        assert_eq!(
-            summary,
-            [
-                (Some("m1"), Some("inv1")),
-                (Some("m0"), Some("inv1")),
-                (Some("m1"), Some("inv1")),
-                (None, None),
-            ]
-        );
     }
 }

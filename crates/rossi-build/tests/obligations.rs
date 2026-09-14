@@ -129,7 +129,6 @@ fn every_source_handle_resolves_to_the_element_it_names() {
                     .sources
                     .iter()
                     .map(|(role, handle)| {
-                        let handle = handle.as_deref().expect("a source names a handle");
                         let element = sources.resolve(handle).unwrap_or_else(|| {
                             panic!(
                                 "{model}: {}/{}: unresolved {role} source {handle}",
