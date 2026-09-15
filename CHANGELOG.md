@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3](https://github.com/eventb-rossi/rossi/compare/v0.2.2...v0.2.3) - 2026-09-15
+
+### Added
+- *(lint)* Warn on a section written out of order
+- *(build)* Register the section-order rule
+- *(lsp)* Offer to move a section written out of order
+
+### Changed
+- *(parse)* Derive the context and machine section order from the keyword table
+
 ## [0.2.2](https://github.com/eventb-rossi/rossi/compare/v0.2.1...v0.2.2) - 2026-09-11
 
 ### Added
