@@ -457,10 +457,10 @@ pub(crate) fn rewrite_relational(pred: &Predicate) -> Option<Predicate> {
         RelationalOp::Equal if is_atomic(left, AtomicOp::EmptySet) => Some(right),
         _ => None,
     };
-    if let Some(expr) = empty_operand {
-        if let Some(result) = rewrite_equals_empty_set(pred, expr) {
-            return Some(result);
-        }
+    if let Some(expr) = empty_operand
+        && let Some(result) = rewrite_equals_empty_set(pred, expr)
+    {
+        return Some(result);
     }
     match op {
         RelationalOp::SubsetEq => {
@@ -469,20 +469,18 @@ pub(crate) fn rewrite_relational(pred: &Predicate) -> Option<Predicate> {
                 op: AssocExprOp::BUnion,
                 children,
             } = right.kind()
+                && children.contains(left)
             {
-                if children.contains(left) {
-                    return btrue(pred);
-                }
+                return btrue(pred);
             }
             // SIMP_SUBSETEQ_BINTER: … ∩ S ∩ … ⊆ S == ⊤
             if let ExpressionKind::Associative {
                 op: AssocExprOp::BInter,
                 children,
             } = left.kind()
+                && children.contains(right)
             {
-                if children.contains(right) {
-                    return btrue(pred);
-                }
+                return btrue(pred);
             }
             // DERIV_SUBSETEQ_BUNION: A ∪ … ∪ B ⊆ S == A ⊆ S ∧ …
             if let ExpressionKind::Associative {
@@ -513,10 +511,10 @@ pub(crate) fn rewrite_relational(pred: &Predicate) -> Option<Predicate> {
                 ));
             }
             // SIMP_SUBSETEQ_SING: {E} ⊆ S == E ∈ S (level 2)
-            if let ExpressionKind::SetExtension(members) = left.kind() {
-                if let [element] = members.as_slice() {
-                    return Some(rel(RelationalOp::In, element, right));
-                }
+            if let ExpressionKind::SetExtension(members) = left.kind()
+                && let [element] = members.as_slice()
+            {
+                return Some(rel(RelationalOp::In, element, right));
             }
         }
         RelationalOp::In => {
@@ -554,10 +552,9 @@ pub(crate) fn rewrite_relational(pred: &Predicate) -> Option<Predicate> {
         // SIMP_EQUAL_SING: {E} = {F} == E = F
         if let (ExpressionKind::SetExtension(a), ExpressionKind::SetExtension(b)) =
             (left.kind(), right.kind())
+            && let ([e], [f]) = (a.as_slice(), b.as_slice())
         {
-            if let ([e], [f]) = (a.as_slice(), b.as_slice()) {
-                return Some(rel(RelationalOp::Equal, e, f));
-            }
+            return Some(rel(RelationalOp::Equal, e, f));
         }
     }
     // SIMP_LIT_* — literal comparisons by computation.
@@ -602,41 +599,41 @@ pub(crate) fn rewrite_relational(pred: &Predicate) -> Option<Predicate> {
                 }
             }
             // SIMP_LIT_EQUAL_KBOOL_TRUE / FALSE
-            if is_atomic(left, AtomicOp::True) {
-                if let ExpressionKind::Bool(inner) = right.kind() {
-                    return Some(inner.clone());
-                }
+            if is_atomic(left, AtomicOp::True)
+                && let ExpressionKind::Bool(inner) = right.kind()
+            {
+                return Some(inner.clone());
             }
-            if is_atomic(right, AtomicOp::True) {
-                if let ExpressionKind::Bool(inner) = left.kind() {
-                    return Some(inner.clone());
-                }
+            if is_atomic(right, AtomicOp::True)
+                && let ExpressionKind::Bool(inner) = left.kind()
+            {
+                return Some(inner.clone());
             }
-            if is_atomic(left, AtomicOp::False) {
-                if let ExpressionKind::Bool(inner) = right.kind() {
-                    return Some(not(inner));
-                }
+            if is_atomic(left, AtomicOp::False)
+                && let ExpressionKind::Bool(inner) = right.kind()
+            {
+                return Some(not(inner));
             }
-            if is_atomic(right, AtomicOp::False) {
-                if let ExpressionKind::Bool(inner) = left.kind() {
-                    return Some(not(inner));
-                }
+            if is_atomic(right, AtomicOp::False)
+                && let ExpressionKind::Bool(inner) = left.kind()
+            {
+                return Some(not(inner));
             }
         }
         // SIMP_LIT_GT_CARD_0: card(S) > 0 == ¬ S = ∅
         RelationalOp::Gt => {
-            if let (Some(set), Some(value)) = (card_arg(left), super::as_literal(right)) {
-                if value == zero {
-                    return Some(is_not_empty(&set));
-                }
+            if let (Some(set), Some(value)) = (card_arg(left), super::as_literal(right))
+                && value == zero
+            {
+                return Some(is_not_empty(&set));
             }
         }
         // SIMP_LIT_LT_CARD_0: 0 < card(S) == ¬ S = ∅
         RelationalOp::Lt => {
-            if let (Some(value), Some(set)) = (super::as_literal(left), card_arg(right)) {
-                if value == zero {
-                    return Some(is_not_empty(&set));
-                }
+            if let (Some(value), Some(set)) = (super::as_literal(left), card_arg(right))
+                && value == zero
+            {
+                return Some(is_not_empty(&set));
             }
         }
         // SIMP_LIT_LE_CARD_0: 0 ≤ card(S) == ⊤
@@ -720,25 +717,25 @@ fn batch2_relational(
         RelationalOp::Equal => {
             // SIMP_SPECIAL_EQUAL_REL: A ↔ B = ∅, A ⇸ B = ∅,
             // A ⤔ B = ∅ == ⊥ (level 2)
-            if is_atomic(right, AtomicOp::EmptySet) {
-                if let ExpressionKind::Binary { op: arrow, .. } = left.kind() {
-                    if matches!(
-                        arrow,
-                        BinaryExprOp::Rel | BinaryExprOp::PFun | BinaryExprOp::PInj
-                    ) {
-                        return bfalse(pred);
-                    }
-                    // SIMP_SPECIAL_EQUAL_RELDOM: A  B = ∅ or A → B = ∅
-                    // == ¬(A = ∅) ∧ B = ∅ (level 2)
-                    if matches!(arrow, BinaryExprOp::TFun | BinaryExprOp::TRel) {
-                        let ExpressionKind::Binary {
-                            left: a, right: b, ..
-                        } = left.kind()
-                        else {
-                            unreachable!("matched above");
-                        };
-                        return Some(conj(pred, vec![is_not_empty(a), is_empty(b)]));
-                    }
+            if is_atomic(right, AtomicOp::EmptySet)
+                && let ExpressionKind::Binary { op: arrow, .. } = left.kind()
+            {
+                if matches!(
+                    arrow,
+                    BinaryExprOp::Rel | BinaryExprOp::PFun | BinaryExprOp::PInj
+                ) {
+                    return bfalse(pred);
+                }
+                // SIMP_SPECIAL_EQUAL_RELDOM: A  B = ∅ or A → B = ∅
+                // == ¬(A = ∅) ∧ B = ∅ (level 2)
+                if matches!(arrow, BinaryExprOp::TFun | BinaryExprOp::TRel) {
+                    let ExpressionKind::Binary {
+                        left: a, right: b, ..
+                    } = left.kind()
+                    else {
+                        unreachable!("matched above");
+                    };
+                    return Some(conj(pred, vec![is_not_empty(a), is_empty(b)]));
                 }
             }
             // SIMP_MULTI_EQUAL_BINTER:
@@ -747,21 +744,20 @@ fn batch2_relational(
                 op: AssocExprOp::BInter,
                 children,
             } = left.kind()
+                && let Some(index) = children.iter().position(|c| c == right)
             {
-                if let Some(index) = children.iter().position(|c| c == right) {
-                    let rest: Vec<Expression> = children
-                        .iter()
-                        .enumerate()
-                        .filter(|(k, _)| *k != index)
-                        .map(|(_, c)| c.clone())
-                        .collect();
-                    let inter = if rest.len() == 1 {
-                        rest.into_iter().next().unwrap()
-                    } else {
-                        ff.associative_expression(AssocExprOp::BInter, rest, None)
-                    };
-                    return Some(rel(RelationalOp::SubsetEq, right, &inter));
-                }
+                let rest: Vec<Expression> = children
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| *k != index)
+                    .map(|(_, c)| c.clone())
+                    .collect();
+                let inter = if rest.len() == 1 {
+                    rest.into_iter().next().unwrap()
+                } else {
+                    ff.associative_expression(AssocExprOp::BInter, rest, None)
+                };
+                return Some(rel(RelationalOp::SubsetEq, right, &inter));
             }
             // SIMP_MULTI_EQUAL_BUNION:
             // S ∪ … ∪ T ∪ … = T == S ∪ … ⊆ T (level 2)
@@ -769,39 +765,37 @@ fn batch2_relational(
                 op: AssocExprOp::BUnion,
                 children,
             } = left.kind()
+                && let Some(index) = children.iter().position(|c| c == right)
             {
-                if let Some(index) = children.iter().position(|c| c == right) {
-                    let rest: Vec<Expression> = children
-                        .iter()
-                        .enumerate()
-                        .filter(|(k, _)| *k != index)
-                        .map(|(_, c)| c.clone())
-                        .collect();
-                    let union = if rest.len() == 1 {
-                        rest.into_iter().next().unwrap()
-                    } else {
-                        ff.associative_expression(AssocExprOp::BUnion, rest, None)
-                    };
-                    return Some(rel(RelationalOp::SubsetEq, &union, right));
-                }
+                let rest: Vec<Expression> = children
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| *k != index)
+                    .map(|(_, c)| c.clone())
+                    .collect();
+                let union = if rest.len() == 1 {
+                    rest.into_iter().next().unwrap()
+                } else {
+                    ff.associative_expression(AssocExprOp::BUnion, rest, None)
+                };
+                return Some(rel(RelationalOp::SubsetEq, &union, right));
             }
             // SIMP_SPECIAL_EQUAL_COMPSET: {x·P ∣ E} = ∅ == ∀x·¬P
             // (level 2)
-            if is_atomic(right, AtomicOp::EmptySet) {
-                if let ExpressionKind::Quantified {
+            if is_atomic(right, AtomicOp::EmptySet)
+                && let ExpressionKind::Quantified {
                     op: QuantExprOp::CSet,
                     decls,
                     pred: body,
                     ..
                 } = left.kind()
-                {
-                    return Some(ff.quantified_predicate(
-                        QuantPredOp::Forall,
-                        decls.clone(),
-                        not(body),
-                        None,
-                    ));
-                }
+            {
+                return Some(ff.quantified_predicate(
+                    QuantPredOp::Forall,
+                    decls.clone(),
+                    not(body),
+                    None,
+                ));
             }
         }
         RelationalOp::In => {
@@ -810,10 +804,10 @@ fn batch2_relational(
                 return btrue(pred);
             }
             // SIMP_CARD_NATURAL1: card(S) ∈ ℕ1 == ¬ S = ∅ (level 2)
-            if let Some(set) = card_arg(left) {
-                if is_atomic(right, AtomicOp::Natural1) {
-                    return Some(is_not_empty(&set));
-                }
+            if let Some(set) = card_arg(left)
+                && is_atomic(right, AtomicOp::Natural1)
+            {
+                return Some(is_not_empty(&set));
             }
             // SIMP_LIT_IN_NATURAL(1) and the negated-literal forms
             // (level 2) — a negative literal is −(lit) in this crate.
@@ -845,10 +839,10 @@ fn batch2_relational(
                     left: f,
                     right: arg,
                 } = fe.kind()
+                    && f == right
+                    && arg == e
                 {
-                    if f == right && arg == e {
-                        return btrue(pred);
-                    }
+                    return btrue(pred);
                 }
                 // SIMP_IN_FUNIMAGE_CONVERSE_L: F∼(E) ↦ E ∈ F == ⊤
                 if let ExpressionKind::Binary {
@@ -856,16 +850,14 @@ fn batch2_relational(
                     left: conv,
                     right: arg,
                 } = e.kind()
-                {
-                    if let ExpressionKind::Unary {
+                    && let ExpressionKind::Unary {
                         op: UnaryExprOp::Converse,
                         child: f,
                     } = conv.kind()
-                    {
-                        if f == right && arg == fe {
-                            return btrue(pred);
-                        }
-                    }
+                    && f == right
+                    && arg == fe
+                {
+                    return btrue(pred);
                 }
                 // SIMP_IN_FUNIMAGE_CONVERSE_R: F(E) ↦ E ∈ F∼ == ⊤
                 if let (
@@ -879,10 +871,10 @@ fn batch2_relational(
                         child: f2,
                     },
                 ) = (e.kind(), right.kind())
+                    && f == f2
+                    && arg == fe
                 {
-                    if f == f2 && arg == fe {
-                        return btrue(pred);
-                    }
+                    return btrue(pred);
                 }
             }
             // DEF_IN_MAPSTO: a ↦ b ∈ A × B == a∈A ∧ b∈B (level 3)
@@ -910,12 +902,10 @@ fn batch2_relational(
                 right: removed,
                 ..
             } = right.kind()
+                && let ExpressionKind::SetExtension(members) = removed.kind()
+                && members.contains(left)
             {
-                if let ExpressionKind::SetExtension(members) = removed.kind() {
-                    if members.contains(left) {
-                        return bfalse(pred);
-                    }
-                }
+                return bfalse(pred);
             }
             // DERIV_MULTI_IN_BUNION: E ∈ … ∪ {…, E, …} ∪ … == ⊤
             // (level 3)
@@ -987,10 +977,10 @@ fn batch2_relational(
         RelationalOp::Equal | RelationalOp::SubsetEq if left.is_type_expression() => Some(right),
         _ => None,
     };
-    if let Some(expr) = type_operand {
-        if let Some(result) = rewrite_equals_type(pred, expr) {
-            return Some(result);
-        }
+    if let Some(expr) = type_operand
+        && let Some(result) = rewrite_equals_type(pred, expr)
+    {
+        return Some(result);
     }
     if op == RelationalOp::In {
         // DERIV_PRJ1_SURJ / DERIV_PRJ2_SURJ / DERIV_ID_BIJ (level 4)
@@ -999,19 +989,19 @@ fn batch2_relational(
             left: ty1,
             right: ty2,
         } = right.kind()
+            && ty1.is_type_expression()
+            && ty2.is_type_expression()
         {
-            if ty1.is_type_expression() && ty2.is_type_expression() {
-                let projection = matches!(
-                    left.kind(),
-                    ExpressionKind::Atomic(AtomicOp::KPrj1Gen)
-                        | ExpressionKind::Atomic(AtomicOp::KPrj2Gen)
-                );
-                if projection && is_arrow(*arrow, false) {
-                    return btrue(pred);
-                }
-                if is_atomic(left, AtomicOp::KIdGen) && is_arrow(*arrow, true) {
-                    return btrue(pred);
-                }
+            let projection = matches!(
+                left.kind(),
+                ExpressionKind::Atomic(AtomicOp::KPrj1Gen)
+                    | ExpressionKind::Atomic(AtomicOp::KPrj2Gen)
+            );
+            if projection && is_arrow(*arrow, false) {
+                return btrue(pred);
+            }
+            if is_atomic(left, AtomicOp::KIdGen) && is_arrow(*arrow, true) {
+                return btrue(pred);
             }
         }
         // SIMP_MIN_IN / SIMP_MAX_IN: min(S)∈S, max(S)∈S == ⊤ (level 5)
@@ -1019,10 +1009,9 @@ fn batch2_relational(
             op: UnaryExprOp::KMin | UnaryExprOp::KMax,
             child,
         } = left.kind()
+            && child == right
         {
-            if child == right {
-                return btrue(pred);
-            }
+            return btrue(pred);
         }
         // The id specials (level 5).
         if let ExpressionKind::Binary {
@@ -1030,55 +1019,47 @@ fn batch2_relational(
             left: e1,
             right: e2,
         } = left.kind()
+            && e1 == e2
         {
-            if e1 == e2 {
-                // SIMP_SPECIAL_IN_ID: E ↦ E ∈ id == ⊤
-                if is_atomic(right, AtomicOp::KIdGen) {
-                    return btrue(pred);
+            // SIMP_SPECIAL_IN_ID: E ↦ E ∈ id == ⊤
+            if is_atomic(right, AtomicOp::KIdGen) {
+                return btrue(pred);
+            }
+            if let ExpressionKind::Binary {
+                op: BinaryExprOp::SetMinus,
+                left: r,
+                right: sub,
+            } = right.kind()
+            {
+                // SIMP_SPECIAL_IN_SETMINUS_ID: E ↦ E ∈ r ∖ id == ⊥
+                if is_atomic(sub, AtomicOp::KIdGen) {
+                    return bfalse(pred);
                 }
-                if let ExpressionKind::Binary {
-                    op: BinaryExprOp::SetMinus,
-                    left: r,
-                    right: sub,
-                } = right.kind()
-                {
-                    // SIMP_SPECIAL_IN_SETMINUS_ID: E ↦ E ∈ r ∖ id == ⊥
-                    if is_atomic(sub, AtomicOp::KIdGen) {
-                        return bfalse(pred);
-                    }
-                    // SIMP_SPECIAL_IN_SETMINUS_DOMRES_ID:
-                    // E ↦ E ∈ r ∖ (S ◁ id) == E ↦ E ∈ S ⩤ r
-                    if let ExpressionKind::Binary {
-                        op: BinaryExprOp::DomRes,
-                        left: s,
-                        right: id,
-                    } = sub.kind()
-                    {
-                        if is_atomic(id, AtomicOp::KIdGen) {
-                            return Some(rel(
-                                RelationalOp::In,
-                                left,
-                                &ff.binary_expression(
-                                    BinaryExprOp::DomSub,
-                                    s.clone(),
-                                    r.clone(),
-                                    None,
-                                ),
-                            ));
-                        }
-                    }
-                }
-                // SIMP_SPECIAL_IN_DOMRES_ID: E ↦ E ∈ S ◁ id == E ∈ S
+                // SIMP_SPECIAL_IN_SETMINUS_DOMRES_ID:
+                // E ↦ E ∈ r ∖ (S ◁ id) == E ↦ E ∈ S ⩤ r
                 if let ExpressionKind::Binary {
                     op: BinaryExprOp::DomRes,
                     left: s,
                     right: id,
-                } = right.kind()
+                } = sub.kind()
+                    && is_atomic(id, AtomicOp::KIdGen)
                 {
-                    if is_atomic(id, AtomicOp::KIdGen) {
-                        return Some(rel(RelationalOp::In, e1, s));
-                    }
+                    return Some(rel(
+                        RelationalOp::In,
+                        left,
+                        &ff.binary_expression(BinaryExprOp::DomSub, s.clone(), r.clone(), None),
+                    ));
                 }
+            }
+            // SIMP_SPECIAL_IN_DOMRES_ID: E ↦ E ∈ S ◁ id == E ∈ S
+            if let ExpressionKind::Binary {
+                op: BinaryExprOp::DomRes,
+                left: s,
+                right: id,
+            } = right.kind()
+                && is_atomic(id, AtomicOp::KIdGen)
+            {
+                return Some(rel(RelationalOp::In, e1, s));
             }
         }
     }
@@ -1533,13 +1514,11 @@ fn rewrite_quant_expr(expr: &Expression) -> Option<Expression> {
                 left,
                 right,
             } = guard.kind()
+                && left == value
+                && not_locally_bound(right, n_bound)
+                && partial_lambda_pattern_check(value, n_bound)
             {
-                if left == value
-                    && not_locally_bound(right, n_bound)
-                    && partial_lambda_pattern_check(value, n_bound)
-                {
-                    return Some(right.shift_bound_identifiers(-(n_bound as i32)));
-                }
+                return Some(right.shift_bound_identifiers(-(n_bound as i32)));
             }
             // SIMP_COMPSET_SUBSETEQ: {x · x⊆S ∣ x} == ℙ(S) (level 2)
             if let PredicateKind::Relational {
@@ -1547,16 +1526,16 @@ fn rewrite_quant_expr(expr: &Expression) -> Option<Expression> {
                 left,
                 right,
             } = guard.kind()
+                && let ExpressionKind::BoundIdentifier(index) = left.kind()
+                && left == value
+                && not_locally_bound(right, n_bound)
+                && *index < n_bound
             {
-                if let ExpressionKind::BoundIdentifier(index) = left.kind() {
-                    if left == value && not_locally_bound(right, n_bound) && *index < n_bound {
-                        return Some(ff.unary_expression(
-                            UnaryExprOp::Pow,
-                            right.shift_bound_identifiers(-(n_bound as i32)),
-                            None,
-                        ));
-                    }
-                }
+                return Some(ff.unary_expression(
+                    UnaryExprOp::Pow,
+                    right.shift_bound_identifiers(-(n_bound as i32)),
+                    None,
+                ));
             }
             None
         }
@@ -1622,19 +1601,16 @@ fn simplify_extremum_of_union(children: &[Expression], op: UnaryExprOp) -> Optio
     let new_children: Vec<Expression> = children
         .iter()
         .map(|child| {
-            if let ExpressionKind::SetExtension(members) = child.kind() {
-                if let [single] = members.as_slice() {
-                    if let ExpressionKind::Unary {
-                        op: inner,
-                        child: set,
-                    } = single.kind()
-                    {
-                        if *inner == op {
-                            changed = true;
-                            return set.clone();
-                        }
-                    }
-                }
+            if let ExpressionKind::SetExtension(members) = child.kind()
+                && let [single] = members.as_slice()
+                && let ExpressionKind::Unary {
+                    op: inner,
+                    child: set,
+                } = single.kind()
+                && *inner == op
+            {
+                changed = true;
+                return set.clone();
             }
             child.clone()
         })
@@ -2328,17 +2304,15 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(typed_empty(expr));
             }
             // SIMP_TYPE_SETMINUS_SETMINUS: U ∖ (U ∖ S) == S
-            if left.is_type_expression() {
-                if let ExpressionKind::Binary {
+            if left.is_type_expression()
+                && let ExpressionKind::Binary {
                     op: BinaryExprOp::SetMinus,
                     left: u2,
                     right: s,
                 } = right.kind()
-                {
-                    if u2 == left {
-                        return Some(s.clone());
-                    }
-                }
+                && u2 == left
+            {
+                return Some(s.clone());
             }
             None
         }
@@ -2375,20 +2349,19 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 op: AssocExprOp::Mul,
                 children,
             } = left.kind()
+                && let Some(index) = children.iter().position(|c| c == right)
             {
-                if let Some(index) = children.iter().position(|c| c == right) {
-                    let rest: Vec<Expression> = children
-                        .iter()
-                        .enumerate()
-                        .filter(|(k, _)| *k != index)
-                        .map(|(_, c)| c.clone())
-                        .collect();
-                    return Some(if rest.len() == 1 {
-                        rest.into_iter().next().unwrap()
-                    } else {
-                        ff.associative_expression(AssocExprOp::Mul, rest, None)
-                    });
-                }
+                let rest: Vec<Expression> = children
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| *k != index)
+                    .map(|(_, c)| c.clone())
+                    .collect();
+                return Some(if rest.len() == 1 {
+                    rest.into_iter().next().unwrap()
+                } else {
+                    ff.associative_expression(AssocExprOp::Mul, rest, None)
+                });
             }
             // SIMP_DIV_MINUS: (−E) ÷ (−F) == E ÷ F — this also covers
             // The negative-literal overloads, whose values are
@@ -2419,16 +2392,16 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 right: e,
             } = right.kind()
             {
-                if let Some(f) = converse_of(inner_f) {
-                    if &f == left {
-                        return Some(e.clone());
-                    }
+                if let Some(f) = converse_of(inner_f)
+                    && &f == left
+                {
+                    return Some(e.clone());
                 }
                 // SIMP_FUNIMAGE_CONVERSE_FUNIMAGE: f∼(f(E)) == E
-                if let Some(f) = converse_of(left) {
-                    if &f == inner_f {
-                        return Some(e.clone());
-                    }
+                if let Some(f) = converse_of(left)
+                    && &f == inner_f
+                {
+                    return Some(e.clone());
                 }
             }
             // SIMP_MULTI_FUNIMAGE_OVERL_SETENUM: (f  {…, E ↦ F})(E) == F
@@ -2436,26 +2409,23 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 op: AssocExprOp::Ovr,
                 children,
             } = left.kind()
+                && let Some(last) = children.last()
+                && let ExpressionKind::SetExtension(members) = last.kind()
             {
-                if let Some(last) = children.last() {
-                    if let ExpressionKind::SetExtension(members) = last.kind() {
-                        for member in members {
-                            if let ExpressionKind::Binary {
-                                op: BinaryExprOp::Mapsto,
-                                left: x,
-                                right: y,
-                            } = member.kind()
-                            {
-                                if x == right {
-                                    return Some(y.clone());
-                                }
-                            }
-                        }
+                for member in members {
+                    if let ExpressionKind::Binary {
+                        op: BinaryExprOp::Mapsto,
+                        left: x,
+                        right: y,
+                    } = member.kind()
+                        && x == right
+                    {
+                        return Some(y.clone());
                     }
                 }
-                // SIMP_MULTI_FUNIMAGE_BUNION_SETENUM handled below for
-                // BUnion functions.
             }
+            // SIMP_MULTI_FUNIMAGE_BUNION_SETENUM handled below for
+            // BUnion functions.
             // SIMP_FUNIMAGE_FUNIMAGE_CONVERSE_SETENUM:
             // {x ↦ a, …}({a ↦ x, …}(E)) == E
             if let (
@@ -2466,36 +2436,35 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                     right: e,
                 },
             ) = (left.kind(), right.kind())
+                && let ExpressionKind::SetExtension(inner) = inner_set.kind()
             {
-                if let ExpressionKind::SetExtension(inner) = inner_set.kind() {
-                    // The reference `return`s from the whole binary
-                    // rewrite as soon as this shape matches, so a
-                    // failed inverse check decides the node: no later
-                    // functional-image rule may fire on it.
-                    if outer.len() != inner.len() {
-                        return None;
-                    }
-                    let inverse =
-                        outer
-                            .iter()
-                            .zip(inner)
-                            .all(|(m1, m2)| match (m1.kind(), m2.kind()) {
-                                (
-                                    ExpressionKind::Binary {
-                                        op: BinaryExprOp::Mapsto,
-                                        left: a1,
-                                        right: b1,
-                                    },
-                                    ExpressionKind::Binary {
-                                        op: BinaryExprOp::Mapsto,
-                                        left: a2,
-                                        right: b2,
-                                    },
-                                ) => b1 == a2 && b2 == a1,
-                                _ => false,
-                            });
-                    return inverse.then(|| e.clone());
+                // The reference `return`s from the whole binary
+                // rewrite as soon as this shape matches, so a
+                // failed inverse check decides the node: no later
+                // functional-image rule may fire on it.
+                if outer.len() != inner.len() {
+                    return None;
                 }
+                let inverse =
+                    outer
+                        .iter()
+                        .zip(inner)
+                        .all(|(m1, m2)| match (m1.kind(), m2.kind()) {
+                            (
+                                ExpressionKind::Binary {
+                                    op: BinaryExprOp::Mapsto,
+                                    left: a1,
+                                    right: b1,
+                                },
+                                ExpressionKind::Binary {
+                                    op: BinaryExprOp::Mapsto,
+                                    left: a2,
+                                    right: b2,
+                                },
+                            ) => b1 == a2 && b2 == a1,
+                            _ => false,
+                        });
+                return inverse.then(|| e.clone());
             }
             // SIMP_FUNIMAGE_CPROD: (S × {E})(x) == E
             if let ExpressionKind::Binary {
@@ -2503,12 +2472,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 right: values,
                 ..
             } = left.kind()
+                && let ExpressionKind::SetExtension(members) = values.kind()
+                && let [e] = members.as_slice()
             {
-                if let ExpressionKind::SetExtension(members) = values.kind() {
-                    if let [e] = members.as_slice() {
-                        return Some(e.clone());
-                    }
-                }
+                return Some(e.clone());
             }
             // SIMP_FUNIMAGE_LAMBDA: solved by the lambda computer.
             if let Some(image) = lambda_computer(expr) {
@@ -2562,10 +2529,9 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                         left: x,
                         right: y,
                     } = member.kind()
+                        && x == right
                     {
-                        if x == right {
-                            return Some(y.clone());
-                        }
+                        return Some(y.clone());
                     }
                 }
             }
@@ -2584,10 +2550,9 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                                 left: x,
                                 right: y,
                             } = member.kind()
+                                && x == right
                             {
-                                if x == right {
-                                    return Some(y.clone());
-                                }
+                                return Some(y.clone());
                             }
                         }
                     }
@@ -2606,10 +2571,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(ff.unary_expression(UnaryExprOp::KRan, left.clone(), None));
             }
             // SIMP_MULTI_RELIMAGE_DOM: r[dom(r)] == ran(r)
-            if let Some(r) = dom_of(right) {
-                if &r == left {
-                    return Some(ff.unary_expression(UnaryExprOp::KRan, left.clone(), None));
-                }
+            if let Some(r) = dom_of(right)
+                && &r == left
+            {
+                return Some(ff.unary_expression(UnaryExprOp::KRan, left.clone(), None));
             }
             // SIMP_RELIMAGE_ID: id[T] == T
             if is_atomic(left, AtomicOp::KIdGen) {
@@ -2621,33 +2586,25 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 left: dom_set,
                 right: s,
             } = left.kind()
-            {
-                if let (ExpressionKind::SetExtension(a), ExpressionKind::SetExtension(b)) =
+                && let (ExpressionKind::SetExtension(a), ExpressionKind::SetExtension(b)) =
                     (dom_set.kind(), right.kind())
-                {
-                    if let ([e1], [e2]) = (a.as_slice(), b.as_slice()) {
-                        if e1 == e2 {
-                            return Some(s.clone());
-                        }
-                    }
-                }
+                && let ([e1], [e2]) = (a.as_slice(), b.as_slice())
+                && e1 == e2
+            {
+                return Some(s.clone());
             }
             // SIMP_MULTI_RELIMAGE_SING_MAPSTO: {E ↦ F}[{E}] == {F}
             if let (ExpressionKind::SetExtension(a), ExpressionKind::SetExtension(b)) =
                 (left.kind(), right.kind())
+                && let ([maplet], [e2]) = (a.as_slice(), b.as_slice())
+                && let ExpressionKind::Binary {
+                    op: BinaryExprOp::Mapsto,
+                    left: e1,
+                    right: f,
+                } = maplet.kind()
+                && e1 == e2
             {
-                if let ([maplet], [e2]) = (a.as_slice(), b.as_slice()) {
-                    if let ExpressionKind::Binary {
-                        op: BinaryExprOp::Mapsto,
-                        left: e1,
-                        right: f,
-                    } = maplet.kind()
-                    {
-                        if e1 == e2 {
-                            return Some(ff.set_extension(vec![f.clone()], None));
-                        }
-                    }
-                }
+                return Some(ff.set_extension(vec![f.clone()], None));
             }
             if let Some(conv_arg) = converse_of(left) {
                 // SIMP_MULTI_RELIMAGE_CONVERSE_RANSUB: (r ⩥ S)∼[S] == ∅
@@ -2656,10 +2613,9 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                     right: s,
                     ..
                 } = conv_arg.kind()
+                    && s == right
                 {
-                    if s == right {
-                        return Some(typed_empty(expr));
-                    }
+                    return Some(typed_empty(expr));
                 }
                 // SIMP_MULTI_RELIMAGE_CONVERSE_RANRES:
                 // (r ▷ S)∼[S] == r∼[S]
@@ -2668,15 +2624,14 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                     left: r,
                     right: s,
                 } = conv_arg.kind()
+                    && s == right
                 {
-                    if s == right {
-                        return Some(ff.binary_expression(
-                            BinaryExprOp::RelImage,
-                            ff.unary_expression(UnaryExprOp::Converse, r.clone(), None),
-                            right.clone(),
-                            None,
-                        ));
-                    }
+                    return Some(ff.binary_expression(
+                        BinaryExprOp::RelImage,
+                        ff.unary_expression(UnaryExprOp::Converse, r.clone(), None),
+                        right.clone(),
+                        None,
+                    ));
                 }
                 // SIMP_RELIMAGE_CONVERSE_DOMSUB:
                 // (S ⩤ r)∼[T] == r∼[T] ∖ S
@@ -2703,10 +2658,9 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 left: s,
                 ..
             } = left.kind()
+                && s == right
             {
-                if s == right {
-                    return Some(typed_empty(expr));
-                }
+                return Some(typed_empty(expr));
             }
             // SIMP_RELIMAGE_DOMRES_ID: (S ◁ id)[T] == S ∩ T
             if let Some(s) = domres_id(left) {
@@ -2739,16 +2693,16 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(right.clone());
             }
             // SIMP_MULTI_DOMRES_DOM: dom(r) ◁ r == r
-            if let Some(r) = dom_of(left) {
-                if &r == right {
-                    return Some(right.clone());
-                }
+            if let Some(r) = dom_of(left)
+                && &r == right
+            {
+                return Some(right.clone());
             }
             // SIMP_MULTI_DOMRES_RAN: ran(r) ◁ r∼ == r∼
-            if let (Some(r), Some(c)) = (ran_of(left), converse_of(right)) {
-                if r == c {
-                    return Some(right.clone());
-                }
+            if let (Some(r), Some(c)) = (ran_of(left), converse_of(right))
+                && r == c
+            {
+                return Some(right.clone());
             }
             // SIMP_DOMRES_DOMRES_ID: S ◁ (T ◁ id) == (S ∩ T) ◁ id
             if let Some(t) = domres_id(right) {
@@ -2784,16 +2738,16 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(left.clone());
             }
             // SIMP_MULTI_RANRES_RAN: r ▷ ran(r) == r
-            if let Some(r) = ran_of(right) {
-                if &r == left {
-                    return Some(left.clone());
-                }
+            if let Some(r) = ran_of(right)
+                && &r == left
+            {
+                return Some(left.clone());
             }
             // SIMP_MULTI_RANRES_DOM: r∼ ▷ dom(r) == r∼
-            if let (Some(c), Some(r)) = (converse_of(left), dom_of(right)) {
-                if c == r {
-                    return Some(left.clone());
-                }
+            if let (Some(c), Some(r)) = (converse_of(left), dom_of(right))
+                && c == r
+            {
+                return Some(left.clone());
             }
             // SIMP_RANRES_DOMRES_ID: (S ◁ id) ▷ T == (S ∩ T) ◁ id
             if let Some(s) = domres_id(left) {
@@ -2838,10 +2792,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(typed_empty(expr));
             }
             // SIMP_MULTI_DOMSUB_DOM: dom(r) ⩤ r == ∅
-            if let Some(r) = dom_of(left) {
-                if &r == right {
-                    return Some(typed_empty(expr));
-                }
+            if let Some(r) = dom_of(left)
+                && &r == right
+            {
+                return Some(typed_empty(expr));
             }
             // SIMP_DOMSUB_DOMRES_ID: S ⩤ (T ◁ id) == (T ∖ S) ◁ id
             if let Some(t) = domres_id(right) {
@@ -2862,10 +2816,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 ));
             }
             // SIMP_MULTI_DOMSUB_RAN: ran(r) ⩤ r∼ == ∅
-            if let (Some(r), Some(c)) = (ran_of(left), converse_of(right)) {
-                if r == c {
-                    return Some(typed_empty(expr));
-                }
+            if let (Some(r), Some(c)) = (ran_of(left), converse_of(right))
+                && r == c
+            {
+                return Some(typed_empty(expr));
             }
             None
         }
@@ -2883,10 +2837,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 return Some(typed_empty(expr));
             }
             // SIMP_MULTI_RANSUB_RAN: r ⩥ ran(r) == ∅
-            if let Some(r) = ran_of(right) {
-                if &r == left {
-                    return Some(typed_empty(expr));
-                }
+            if let Some(r) = ran_of(right)
+                && &r == left
+            {
+                return Some(typed_empty(expr));
             }
             // SIMP_RANSUB_DOMRES_ID: (S ◁ id) ⩥ T == (S ∖ T) ◁ id
             if let Some(s) = domres_id(left) {
@@ -2916,10 +2870,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                 ));
             }
             // SIMP_MULTI_RANSUB_DOM: r∼ ⩥ dom(r) == ∅
-            if let (Some(c), Some(r)) = (converse_of(left), dom_of(right)) {
-                if c == r {
-                    return Some(typed_empty(expr));
-                }
+            if let (Some(c), Some(r)) = (converse_of(left), dom_of(right))
+                && c == r
+            {
+                return Some(typed_empty(expr));
             }
             None
         }
@@ -3055,10 +3009,10 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
         }
         BinaryExprOp::UpTo => {
             // SIMP_LIT_UPTO: i‥j == ∅ when j < i (literals)
-            if let (Some(i), Some(j)) = (super::as_literal(left), super::as_literal(right)) {
-                if i > j {
-                    return Some(typed_empty(expr));
-                }
+            if let (Some(i), Some(j)) = (super::as_literal(left), super::as_literal(right))
+                && i > j
+            {
+                return Some(typed_empty(expr));
             }
             None
         }
@@ -3076,13 +3030,11 @@ fn rewrite_binary_expr(expr: &Expression) -> Option<Expression> {
                     right: e2,
                 },
             ) = (left.kind(), right.kind())
+                && is_atomic(p1, AtomicOp::KPrj1Gen)
+                && is_atomic(p2, AtomicOp::KPrj2Gen)
+                && e1 == e2
             {
-                if is_atomic(p1, AtomicOp::KPrj1Gen)
-                    && is_atomic(p2, AtomicOp::KPrj2Gen)
-                    && e1 == e2
-                {
-                    return Some(e1.clone());
-                }
+                return Some(e1.clone());
             }
             None
         }
@@ -3168,15 +3120,14 @@ fn rewrite_assoc_expr(expr: &Expression) -> Option<Expression> {
                     right: tb,
                     ..
                 } = b.kind()
+                    && b.is_type_expression()
                 {
-                    if b.is_type_expression() {
-                        return Some(ff.binary_expression(
-                            BinaryExprOp::CProd,
-                            ff.unary_expression(UnaryExprOp::KDom, a.clone(), None),
-                            tb.clone(),
-                            None,
-                        ));
-                    }
+                    return Some(ff.binary_expression(
+                        BinaryExprOp::CProd,
+                        ff.unary_expression(UnaryExprOp::KDom, a.clone(), None),
+                        tb.clone(),
+                        None,
+                    ));
                 }
                 // SIMP_TYPE_FCOMP_L: (Ta × Tb) ; r == Ta × ran(r)
                 if let ExpressionKind::Binary {
@@ -3184,15 +3135,14 @@ fn rewrite_assoc_expr(expr: &Expression) -> Option<Expression> {
                     left: ta,
                     ..
                 } = a.kind()
+                    && a.is_type_expression()
                 {
-                    if a.is_type_expression() {
-                        return Some(ff.binary_expression(
-                            BinaryExprOp::CProd,
-                            ta.clone(),
-                            ff.unary_expression(UnaryExprOp::KRan, b.clone(), None),
-                            None,
-                        ));
-                    }
+                    return Some(ff.binary_expression(
+                        BinaryExprOp::CProd,
+                        ta.clone(),
+                        ff.unary_expression(UnaryExprOp::KRan, b.clone(), None),
+                        None,
+                    ));
                 }
             }
             None
@@ -3205,15 +3155,14 @@ fn rewrite_assoc_expr(expr: &Expression) -> Option<Expression> {
                     right: tb,
                     ..
                 } = a.kind()
+                    && a.is_type_expression()
                 {
-                    if a.is_type_expression() {
-                        return Some(ff.binary_expression(
-                            BinaryExprOp::CProd,
-                            ff.unary_expression(UnaryExprOp::KDom, b.clone(), None),
-                            tb.clone(),
-                            None,
-                        ));
-                    }
+                    return Some(ff.binary_expression(
+                        BinaryExprOp::CProd,
+                        ff.unary_expression(UnaryExprOp::KDom, b.clone(), None),
+                        tb.clone(),
+                        None,
+                    ));
                 }
                 // SIMP_TYPE_BCOMP_R: r ∘ (Ta × Tb) == Ta × ran(r)
                 if let ExpressionKind::Binary {
@@ -3221,15 +3170,14 @@ fn rewrite_assoc_expr(expr: &Expression) -> Option<Expression> {
                     left: ta,
                     ..
                 } = b.kind()
+                    && b.is_type_expression()
                 {
-                    if b.is_type_expression() {
-                        return Some(ff.binary_expression(
-                            BinaryExprOp::CProd,
-                            ta.clone(),
-                            ff.unary_expression(UnaryExprOp::KRan, a.clone(), None),
-                            None,
-                        ));
-                    }
+                    return Some(ff.binary_expression(
+                        BinaryExprOp::CProd,
+                        ta.clone(),
+                        ff.unary_expression(UnaryExprOp::KRan, a.clone(), None),
+                        None,
+                    ));
                 }
             }
             None

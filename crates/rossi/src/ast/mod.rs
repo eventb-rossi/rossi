@@ -345,6 +345,22 @@ impl Span {
         self.end += delta;
     }
 
+    /// The (line, column) of `byte_offset` in `source`, both 1-indexed —
+    /// the convention SARIF and the Camille reader report positions in,
+    /// and what every human-facing report prints.
+    ///
+    /// Rescans from byte zero, so a report resolving many positions in
+    /// one file should build a [`crate::ast::LineIndex`] instead.
+    #[must_use]
+    pub fn line_col_1_indexed(source: &str, byte_offset: usize) -> (usize, usize) {
+        let (line, column) = Span {
+            start: byte_offset,
+            end: byte_offset,
+        }
+        .to_line_col(source);
+        (line + 1, column + 1)
+    }
+
     /// Convert the start byte offset to (line, column), both 0-indexed.
     ///
     /// Line 0 is the first line, column 0 is the first character on that line.
@@ -364,6 +380,61 @@ impl Span {
             }
         }
         (line, col)
+    }
+}
+
+/// The line starts of one source, so a byte offset becomes a line and column
+/// in logarithmic time.
+///
+/// [`Span::to_line_col`] rescans from byte zero on every call. That is fine
+/// for a handful of diagnostics and quadratic for a dump, which positions
+/// every node of every formula. Building the table once per component turns
+/// the whole document's position mapping into a binary search plus one walk
+/// of the containing line.
+pub struct LineIndex<'a> {
+    text: &'a str,
+    /// Byte offset of the first character of each line. Always starts at 0,
+    /// so it is never empty and the search below cannot underflow.
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    #[must_use]
+    pub fn new(text: &'a str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(
+            text.bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i + 1),
+        );
+        LineIndex { text, starts }
+    }
+
+    /// The 1-based line and character column of a byte offset.
+    ///
+    /// An offset past the end of the text clamps to the end rather than
+    /// panicking: a span is only as trustworthy as the source it was taken
+    /// against, and a position is not worth aborting a document over.
+    #[must_use]
+    pub fn line_col(&self, offset: usize) -> (usize, usize) {
+        let offset = self.floor_char_boundary(offset.min(self.text.len()));
+        // `starts[0]` is 0 and `offset` is non-negative, so at least one
+        // element satisfies the predicate and the subtraction is safe.
+        let line = self.starts.partition_point(|start| *start <= offset) - 1;
+        let col = self.text[self.starts[line]..offset].chars().count() + 1;
+        (line + 1, col)
+    }
+    /// The largest character boundary at or below `offset`.
+    ///
+    /// Slicing the text to compute a column would panic on an offset that
+    /// splits a multi-byte character. Formula spans come from the lexer and
+    /// land on boundaries, but a span is data and the mapping must be total.
+    fn floor_char_boundary(&self, mut offset: usize) -> usize {
+        while offset > 0 && !self.text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
     }
 }
 
@@ -488,5 +559,75 @@ mod tests {
             Located::new(SourceId::new("M0.eventb"), span),
             Located::new(SourceId::new("M1.eventb"), span)
         );
+    }
+}
+
+#[cfg(test)]
+mod line_index_tests {
+    use super::{LineIndex, Span};
+
+    /// The index must agree with the model's own conversion, which is
+    /// 0-based, for every offset in a source. That function is the shared
+    /// oracle: as long as this holds, the dump's positions and the
+    /// diagnostics' regions cannot drift apart.
+    fn agrees_with_model(text: &str) {
+        let index = LineIndex::new(text);
+        for offset in 0..=text.len() {
+            if !text.is_char_boundary(offset) {
+                continue;
+            }
+            let (line, col) = Span {
+                start: offset,
+                end: offset,
+            }
+            .to_line_col(text);
+            assert_eq!(
+                index.line_col(offset),
+                (line + 1, col + 1),
+                "offset {offset} of {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn agrees_with_the_model_on_plain_text() {
+        agrees_with_model("machine m\nvariables x\nend\n");
+    }
+
+    #[test]
+    fn agrees_with_the_model_on_multibyte_text() {
+        agrees_with_model("@inv1: x ∈ ℙ(ℤ)\n@inv2: y ⊆ S\n");
+    }
+
+    #[test]
+    fn agrees_with_the_model_on_crlf_text() {
+        // A carriage return is an ordinary character on its line, so the
+        // column of the newline that follows it counts it.
+        agrees_with_model("axioms\r\n  @axm1: ⊤\r\n");
+    }
+
+    #[test]
+    fn agrees_with_the_model_without_a_trailing_newline() {
+        agrees_with_model("end");
+    }
+
+    #[test]
+    fn an_empty_source_is_one_line() {
+        assert_eq!(LineIndex::new("").line_col(0), (1, 1));
+    }
+
+    #[test]
+    fn an_offset_past_the_end_clamps() {
+        let index = LineIndex::new("ab\ncd");
+        assert_eq!(index.line_col(99), index.line_col(5));
+    }
+
+    #[test]
+    fn an_offset_inside_a_character_clamps_to_its_start() {
+        // `ℤ` is three bytes at offset 0; offsets 1 and 2 split it.
+        let index = LineIndex::new("ℤ ∈ S");
+        assert_eq!(index.line_col(1), (1, 1));
+        assert_eq!(index.line_col(2), (1, 1));
+        assert_eq!(index.line_col(3), (1, 2));
     }
 }

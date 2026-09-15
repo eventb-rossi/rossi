@@ -30,10 +30,25 @@ pub(crate) struct InvariantInfo {
     pub component: String,
     /// The file that held that machine when the run started.
     pub uri: Url,
-    /// Whitespace-stripped renderings (Rodin-canonical and ASCII) of the
-    /// predicate; the tool prints the `.bcm` predicate code, which our
-    /// build derives from the same AST.
+    /// Renderings of the predicate the tool may print
+    /// ([`rossi_build::normalize::predicate_renderings`]); the tool prints
+    /// the `.bcm` predicate code, which our build derives from the same
+    /// AST.
     pub renderings: Vec<String>,
+}
+
+impl eventb_animate_driver::report::DeclaredInvariant for InvariantInfo {
+    fn component(&self) -> &str {
+        &self.component
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn renderings(&self) -> &[String] {
+        &self.renderings
+    }
 }
 
 /// The structural facts PO-name anchoring needs about one closure member.
@@ -88,7 +103,7 @@ pub(crate) fn prepare(
     let mut build = build_in_memory(&closure)?;
     let po_count = match mode {
         AnimateMode::Po => apply_recorded_proof_state(&mut build, &closure, rodin_project_dir),
-        AnimateMode::Check => count_po_sequents(&build, &closure.machine),
+        AnimateMode::Check => rossi_build::pog::sequent_count(&build.files, &closure.machine),
     };
     let temp_dir = write_temp_project(&closure.components, &build)?;
     Ok(Prepared {
@@ -267,26 +282,15 @@ fn record_component(component: &rossi::Component, uri: &Url, closure: &mut Closu
         event_names: HashSet::new(),
     };
     if let rossi::Component::Machine(machine) = component {
-        let ascii = rossi::PrettyPrinter::ascii();
         for invariant in &machine.invariants {
             let Some(label) = invariant.label.clone() else {
                 continue;
             };
-            // The canonical rendering comes from the emitter's own
-            // canonicaliser — the `.bcm` code the tool prints is produced
-            // through that exact function, so the two cannot drift.
-            let mut renderings = vec![
-                normalize_predicate(&rossi_build::normalize::canonical_predicate(
-                    &invariant.predicate,
-                )),
-                normalize_predicate(&ascii.print_formula_predicate(&invariant.predicate)),
-            ];
-            renderings.dedup();
             closure.invariants.push(InvariantInfo {
                 label,
                 component: machine.name.clone(),
                 uri: uri.clone(),
-                renderings,
+                renderings: rossi_build::normalize::predicate_renderings(&invariant.predicate),
             });
         }
         if machine.initialisation.is_some() {
@@ -304,12 +308,6 @@ fn record_component(component: &rossi::Component, uri: &Url, closure: &mut Closu
         .into_iter()
         .map(|(_, name)| name.to_string())
         .collect()
-}
-
-/// Whitespace-insensitive form used to compare predicate renderings with the
-/// tool's printed forms.
-pub(crate) fn normalize_predicate(predicate: &str) -> String {
-    predicate.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 /// Statically check the closure in memory, producing the `.bcc`/`.bcm`
@@ -337,19 +335,6 @@ fn build_in_memory(closure: &Closure) -> Result<rossi_build::BuildResult, Animat
     Ok(result)
 }
 
-/// The number of proof-obligation sequents in the clicked machine's
-/// generated `.bpo` file — the run is pinned to that machine with `-m`, so
-/// ancestor and context obligations don't inflate the watchdog deadline. On
-/// a fresh build every sequent is open. Counted by start-tag scan rather than
-/// a full parse: the emitter always writes `name` as the first attribute, so
-/// the space-terminated prefix is guaranteed (see
-/// `rossi_build::pog::reconcile`, which relies on the same invariant).
-pub(crate) fn count_po_sequents(build: &rossi_build::BuildResult, machine: &str) -> usize {
-    build.file(&format!("{machine}.bpo")).map_or(0, |file| {
-        file.contents.matches("<org.eventb.core.poSequent ").count()
-    })
-}
-
 /// Write a complete Rodin project (sources + checked + proof files) to a
 /// fresh temp directory. The directory is removed when the guard drops.
 fn write_temp_project(
@@ -362,18 +347,8 @@ fn write_temp_project(
         .map_err(|e| AnimateError::Io(e.to_string()))?;
     rossi::write_project_directory(dir.path(), components, PROJECT_NAME)
         .map_err(|e| AnimateError::Io(e.to_string()))?;
-    for file in &build_result.files {
-        // The guard every consumer of `ScFile::filename` applies before
-        // touching the filesystem (see `rossi_build::is_normal_path_component`).
-        if !rossi_build::is_normal_path_component(&file.filename) {
-            return Err(AnimateError::Io(format!(
-                "unsafe generated filename {:?}",
-                file.filename
-            )));
-        }
-        std::fs::write(dir.path().join(&file.filename), &file.contents)
-            .map_err(|e| AnimateError::Io(e.to_string()))?;
-    }
+    rossi_build::write_sc_files(dir.path(), &build_result.files)
+        .map_err(|e| AnimateError::Io(e.to_string()))?;
     Ok(dir)
 }
 
