@@ -26,6 +26,24 @@ pub fn canonical_typed_predicate(p: &formula::Predicate) -> String {
     typed_canonical_printer().print_formula_predicate(&p.rewrite(&mut AscribeGenericAtoms))
 }
 
+/// The renderings of `predicate` that a tool's printed form may match:
+/// the canonical one the checked file carries, and its ASCII spelling.
+/// Deduplicated, because the two coincide for a formula with no
+/// operators to spell differently.
+///
+/// A model checker prints predicates from the checked file, which is
+/// rendered through [`canonical_predicate`]; the ASCII form covers a
+/// tool that spells operators in the keyboard convention instead.
+#[must_use]
+pub fn predicate_renderings(predicate: &formula::Predicate) -> Vec<String> {
+    let mut renderings = vec![
+        canonical_predicate(predicate),
+        rossi::pretty::PrettyPrinter::ascii().print_formula_predicate(predicate),
+    ];
+    renderings.dedup();
+    renderings
+}
+
 /// See [`canonical_typed_predicate`].
 pub fn canonical_typed_expression(e: &formula::Expression) -> String {
     typed_canonical_printer().print_formula_expression(&e.rewrite(&mut AscribeGenericAtoms))

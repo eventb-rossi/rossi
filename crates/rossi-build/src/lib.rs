@@ -112,6 +112,7 @@ pub fn check_with_model(project: &Project) -> (BuildResult, sc_model::ScModel) {
 
 /// The output of a build: emitted files plus diagnostics collected along the way.
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct BuildResult {
     /// Emitted files: `.bcc` / `.bcm` in the order they were produced
     /// (topological order on SEES/REFINES/EXTENDS), then the generated
@@ -149,6 +150,7 @@ impl BuildResult {
 
 /// A single emitted statically-checked file.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ScFile {
     /// Target file name, e.g. `"AuctionContext.bcc"` or `"AuctionMachine.bcm"`.
     pub filename: String,
@@ -174,8 +176,28 @@ pub fn is_normal_path_component(value: &str) -> bool {
         && parts.next().is_none()
 }
 
+/// Write generated files into `dir`, which must already exist.
+///
+/// Every filename is checked with [`is_normal_path_component`] first: a
+/// generated name is data, and a name that is a path would write outside
+/// the directory the caller chose. One writer means one place that check
+/// can be got wrong.
+pub fn write_sc_files(dir: &std::path::Path, files: &[ScFile]) -> std::io::Result<()> {
+    for file in files {
+        if !is_normal_path_component(&file.filename) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsafe generated filename {:?}", file.filename),
+            ));
+        }
+        std::fs::write(dir.join(&file.filename), &file.contents)?;
+    }
+    Ok(())
+}
+
 /// A single diagnostic — a type error, a missing reference, a cycle, etc.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Diagnostic {
     pub severity: Severity,
     /// Origin of the diagnostic: the component name, optionally scoped by
@@ -238,6 +260,8 @@ impl std::fmt::Display for Diagnostic {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Severity {
     Error,
     Warning,
@@ -263,5 +287,31 @@ impl Severity {
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_serializes_with_the_reported_spellings() {
+        let diagnostic = Diagnostic {
+            severity: Severity::Warning,
+            origin: "M.inv1".to_string(),
+            message: "unused".to_string(),
+            rule_id: Some(RuleId::DeadVariable),
+            span: Some(rossi::ast::Span { start: 3, end: 7 }),
+        };
+        assert_eq!(
+            serde_json::to_value(&diagnostic).unwrap(),
+            serde_json::json!({
+                "severity": "warning",
+                "origin": "M.inv1",
+                "message": "unused",
+                "rule_id": "EB011",
+                "span": {"start": 3, "end": 7},
+            })
+        );
     }
 }

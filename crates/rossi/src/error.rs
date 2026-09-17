@@ -423,6 +423,37 @@ impl ParseError {
         }
     }
 
+    /// The precise formula failure inside this error, when it has one,
+    /// with its span in the whole source's coordinates.
+    ///
+    /// A file that does not parse is reported as one whole-file failure,
+    /// which tells a reader nothing they can act on. Some failures are
+    /// precise enough to report on their own — a predicate written as an
+    /// assignment, an assignment whose sides do not match — and the
+    /// recovering parser finds them clause by clause. A recovered failure
+    /// carries its span in the recovered segment's coordinates, so it is
+    /// shifted into the source's here; every consumer that underlines one
+    /// needs the same shift.
+    #[must_use]
+    pub fn precise_formula_cause(&self) -> Option<(&ParseError, Option<Span>)> {
+        match self {
+            ParseError::AssignmentInPredicate { .. }
+            | ParseError::AssignmentArityMismatch { .. } => Some((self, None)),
+            ParseError::RecoverableError {
+                span: Some(recovery_span),
+                source: Some(source),
+                ..
+            } if matches!(source.as_ref(), ParseError::AssignmentArityMismatch { .. }) => {
+                let absolute = source.span().map_or(*recovery_span, |mut span| {
+                    span.shift(recovery_span.start);
+                    span
+                });
+                Some((source, Some(absolute)))
+            }
+            _ => None,
+        }
+    }
+
     /// 1-indexed `(line, column)` of where this error starts, when it carries a
     /// source position. Unwraps a [`ParseError::FileContext`] envelope and
     /// follows [`ParseError::MultipleErrors`] to its first entry.

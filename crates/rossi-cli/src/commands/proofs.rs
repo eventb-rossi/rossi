@@ -138,10 +138,7 @@ impl ProofStatus {
             ProofStatus::Unsupported => "unsupported",
             ProofStatus::Error => "error",
             ProofStatus::Broken => "broken",
-            ProofStatus::Checked(Bucket::Discharged) => "discharged",
-            ProofStatus::Checked(Bucket::Reviewed) => "reviewed",
-            ProofStatus::Checked(Bucket::Pending) => "pending",
-            ProofStatus::Checked(Bucket::Unattempted) => "unattempted",
+            ProofStatus::Checked(bucket) => bucket.as_str(),
         }
     }
 
@@ -159,6 +156,14 @@ impl ProofStatus {
     /// proof would not mend it.
     pub(crate) fn is_stale(self) -> bool {
         matches!(self, ProofStatus::Broken)
+    }
+}
+
+/// A status serializes as the word [`ProofStatus::label`] prints, so
+/// the JSON and the human report never disagree.
+impl serde::Serialize for ProofStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.label())
     }
 }
 

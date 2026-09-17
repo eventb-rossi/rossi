@@ -59,6 +59,29 @@ pub enum Bucket {
     Unattempted,
 }
 
+impl Bucket {
+    /// The word this bucket is reported under, in every format.
+    ///
+    /// A proof report, a status summary and an agent-facing document all
+    /// name a bucket, and a reader comparing two of them should not find
+    /// different words for the same verdict, so they share one spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Bucket::Discharged => "discharged",
+            Bucket::Reviewed => "reviewed",
+            Bucket::Pending => "pending",
+            Bucket::Unattempted => "unattempted",
+        }
+    }
+}
+
+impl std::fmt::Display for Bucket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Bucket, Confidence};

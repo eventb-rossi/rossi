@@ -1,0 +1,21 @@
+[package]
+name = "eventb-animate-driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Drives the eventb-animate model checker for the Rossi toolchain: command lines, the watchdog, and the verdicts of its JSON report."
+keywords = ["event-b", "model-checking", "prob", "formal-methods"]
+categories = ["development-tools"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+# Killing a hung tool's whole process group on timeout: the packaged tool
+# is a launcher script that may not `exec` its JVM.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
