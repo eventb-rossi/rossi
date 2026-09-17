@@ -48,29 +48,48 @@ use crate::type_env::TypeEnv;
 /// wouldn't), so a covered cache proves the walk would find nothing and
 /// the traversal can be skipped — the common case for well-formed
 /// models.
-fn cache_covered(free_names: &[String], env: &TypeEnv) -> bool {
+fn cache_covered(free_names: &[String], env: &TypeEnv, declared: &[String]) -> bool {
     free_names
         .iter()
-        .all(|name| env.contains(name) || is_builtin_ident(name))
+        .all(|name| env.contains(name) || declared.contains(name) || is_builtin_ident(name))
 }
 
 /// Locate the first free identifier in `pred`, considering `env` plus
 /// locally-bound quantifier variables.
 pub fn free_identifier_in_predicate(pred: &Predicate, env: &TypeEnv) -> Option<String> {
-    if cache_covered(pred.free_identifiers(), env) {
+    undeclared_identifier_in_predicate(pred, env, &[])
+}
+
+/// Like [`free_identifier_in_predicate`], also treating the `declared`
+/// names as known: the typing pass's test for a name nothing declares,
+/// as opposed to a declared name that merely has no type yet.
+pub fn undeclared_identifier_in_predicate(
+    pred: &Predicate,
+    env: &TypeEnv,
+    declared: &[String],
+) -> Option<String> {
+    if cache_covered(pred.free_identifiers(), env, declared) {
         return None;
     }
-    let mut v = FreeFinder { env, found: None };
+    let mut v = FreeFinder {
+        env,
+        declared,
+        found: None,
+    };
     let _ = occurrences::walk_predicate(pred, &mut Vec::new(), &mut v);
     v.found
 }
 
 /// Locate the first free identifier in `expr`.
 pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option<String> {
-    if cache_covered(expr.free_identifiers(), env) {
+    if cache_covered(expr.free_identifiers(), env, &[]) {
         return None;
     }
-    let mut v = FreeFinder { env, found: None };
+    let mut v = FreeFinder {
+        env,
+        declared: &[],
+        found: None,
+    };
     let _ = occurrences::walk_expression(expr, &mut Vec::new(), &mut v);
     v.found
 }
@@ -80,10 +99,14 @@ pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option
 /// declarations in the model, so `x'` reads resolve there).
 pub fn free_identifier_in_action_rhs(body: &ActionBody, env: &TypeEnv) -> Option<String> {
     let assignment = body.assignment()?;
-    if cache_covered(assignment.free_identifiers(), env) {
+    if cache_covered(assignment.free_identifiers(), env, &[]) {
         return None;
     }
-    let mut v = FreeFinder { env, found: None };
+    let mut v = FreeFinder {
+        env,
+        declared: &[],
+        found: None,
+    };
     let _ = occurrences::walk_assignment(assignment, &mut Vec::new(), &mut v);
     v.found
 }
@@ -263,6 +286,8 @@ fn free_usage(occ: &Occurrence<'_>) -> bool {
 
 struct FreeFinder<'a> {
     env: &'a TypeEnv,
+    /// Names known besides `env` (declared but not yet typed).
+    declared: &'a [String],
     found: Option<String>,
 }
 
@@ -271,7 +296,10 @@ impl occurrences::OccurrenceVisitor for FreeFinder<'_> {
         if !free_usage(&occ) {
             return ControlFlow::Continue(());
         }
-        if self.env.contains(occ.name) || is_builtin_ident(occ.name) {
+        if self.env.contains(occ.name)
+            || self.declared.iter().any(|name| name == occ.name)
+            || is_builtin_ident(occ.name)
+        {
             ControlFlow::Continue(())
         } else {
             self.found = Some(occ.name.to_string());

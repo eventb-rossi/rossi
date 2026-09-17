@@ -15,6 +15,7 @@ use rossi::{
 
 use crate::checked_predicate::{
     ActionCheck, PredicateCheck, check_action, check_labeled_predicate, check_predicate,
+    unknown_type,
 };
 use crate::handles::HandleUri;
 use crate::rodin_ids::{Kind, RodinIds, Scope};
@@ -835,7 +836,7 @@ pub(super) fn build_event_decl(
         invalid_parameter_names.insert(parameter.name.clone());
     }
 
-    let (scope, scope_accurate) = build_event_scope(
+    let (scope, scope_accurate, rejected_guards) = build_event_scope(
         &mut context,
         &inherited,
         &event_dups,
@@ -845,6 +846,7 @@ pub(super) fn build_event_decl(
     let (buckets, buckets_accurate) = build_event_buckets(
         &mut context,
         &scope,
+        &rejected_guards,
         &inherited,
         &event_dups,
         &invalid_parameter_names,
@@ -1028,14 +1030,16 @@ fn build_repair_action(
 
 /// Build the event-local type scope: outer env + inherited parameter
 /// types (when extended) + own-parameter inference from inherited+own
-/// guards. Returns the scope and an `accurate` flag (false when any
-/// parameter could not be typed).
+/// guards. Returns the scope, an `accurate` flag (false when any
+/// parameter could not be typed) and the guards read before the guards
+/// that type their parameters (by guard index, with the untyped names),
+/// which [`build_event_buckets`] drops as EB020.
 fn build_event_scope(
     context: &mut EventCheckContext<'_, '_, '_>,
     inherited: &InheritedEvent<'_>,
     dups: &crate::duplicates::EventDuplicates,
     invalid_parameter_names: &BTreeSet<String>,
-) -> (TypeEnv, bool) {
+) -> (TypeEnv, bool, BTreeMap<usize, Vec<String>>) {
     let kind = context.kind;
     let machine_name = context.machine.machine_name;
     let label = context.label();
@@ -1056,19 +1060,19 @@ fn build_event_scope(
     // guards have nothing left to type — an inherited guard was checked
     // in the parent's scope and cannot reference a name this event
     // introduces.
-    let mut axioms: Vec<rossi::Predicate> = Vec::new();
+    let mut axioms: Vec<(usize, &rossi::Predicate)> = Vec::new();
     // 2nd+ occurrences of a duplicated guard label are dropped from the
     // event (see `build_event_buckets`), so they must not contribute typing
     // either; the kept first occurrence still types its parameters.
     let mut typing_kept = crate::duplicates::FirstKept::new(&dups.guard_action_labels.names);
-    for g in kind.guards() {
+    for (i, g) in kind.guards().iter().enumerate() {
         if inherited.contains_label(g.label.as_deref()) {
             continue;
         }
         if typing_kept.drops(g.label.as_deref()) {
             continue;
         }
-        axioms.push(g.predicate.clone());
+        axioms.push((i, &g.predicate));
     }
     // Invalid parameters are dropped entirely, so they are not typed again.
     // Duplicate and outer-name conflicts already have their own diagnostics.
@@ -1078,9 +1082,8 @@ fn build_event_scope(
         .filter(|p| !invalid_parameter_names.contains(&p.name))
         .map(|p| p.name.clone())
         .collect();
-    let unresolved = resolve_identifier_types(&mut scope, &param_names, &axioms);
-    let mut accurate = true;
-    for name in &unresolved {
+    let typing = resolve_identifier_types(&mut scope, &param_names, &axioms);
+    for name in &typing.untyped {
         context.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             origin: format!("{machine_name}.{label}.{name}"),
@@ -1088,9 +1091,8 @@ fn build_event_scope(
             rule_id: Some(crate::RuleId::TypeError),
             span: crate::ast_util::named_element_span(kind.parameters(), name),
         });
-        accurate = false;
     }
-    (scope, accurate)
+    (scope, typing.untyped.is_empty(), typing.rejected)
 }
 
 /// Per-event decl buckets produced by [`build_event_buckets`]. Witnesses are
@@ -1115,6 +1117,7 @@ fn clause_origin(machine: &str, event: &str, clause_label: Option<&str>, fallbac
 fn build_event_buckets(
     context: &mut EventCheckContext<'_, '_, '_>,
     scope: &TypeEnv,
+    rejected_guards: &BTreeMap<usize, Vec<String>>,
     inherited: &InheritedEvent<'_>,
     dups: &crate::duplicates::EventDuplicates,
     invalid_parameter_names: &BTreeSet<String>,
@@ -1192,13 +1195,12 @@ fn build_event_buckets(
             }
         }
         match build_guard_decl(
-            machine.ids,
-            machine.file_root,
+            &machine,
             label,
             i,
             g,
+            rejected_guards.get(&i).map(Vec::as_slice),
             scope,
-            machine.machine_name,
         ) {
             Ok(d) => guards.push(d),
             Err(diag) => {
@@ -1370,21 +1372,25 @@ fn build_event_child_source(
     event_source.child(child_tag, child_id)
 }
 
+/// `unknown` holds the parameters the guard reads before the guards that
+/// type them (EB020): Rodin drops it, so it fails like any other error.
 fn build_guard_decl(
-    ids: &RodinIds,
-    file_root: &HandleUri,
+    machine: &MachineCheckContext<'_>,
     event_label: &str,
     source_index: usize,
     g: &LabeledPredicate,
+    unknown: Option<&[String]>,
     env: &TypeEnv,
-    machine_name: &str,
 ) -> std::result::Result<GuardDecl, Diagnostic> {
-    let (label, pc) = check_labeled_predicate(g, env, "grd", "guard", |lbl| {
-        format!("{machine_name}.{event_label}.{lbl}")
-    })?;
+    let machine_name = machine.machine_name;
+    let origin = |lbl: &str| format!("{machine_name}.{event_label}.{lbl}");
+    if let Some(names) = unknown {
+        return Err(unknown_type(g, "grd", "guard", names, origin));
+    }
+    let (label, pc) = check_labeled_predicate(g, env, "grd", "guard", origin)?;
     let source = build_event_child_source(
-        ids,
-        file_root,
+        machine.ids,
+        machine.file_root,
         event_label,
         Kind::Guard,
         in_tag::GUARD,

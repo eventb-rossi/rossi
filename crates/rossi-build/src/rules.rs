@@ -9,9 +9,8 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB034"`); gaps are
-/// rules not yet implemented in rossi (EB020 unknown
-/// type) or removed as valueless (EB013 dead
+/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB034"`); the one gap
+/// is a rule removed as valueless (EB013 dead
 /// constant — every hit was already an EB006 typing Error). EB023, EB024,
 /// EB028, EB031 and EB034 are rossi-only extensions; EB025 is a refinement
 /// static-check emitted by `crate::build`; EB029, EB030 and EB032 are
@@ -58,6 +57,11 @@ pub enum RuleId {
     UndeclaredIdentifier,
     /// EB019 — Same component name defined in more than one file.
     DuplicateComponent,
+    /// EB020 — An axiom, invariant or guard reads a constant, variable or
+    /// parameter before the predicate that types it. Rodin types these
+    /// predicates in source order, so the type is still unknown there and
+    /// the predicate is dropped.
+    UnknownType,
     /// EB021 — An identifier (variable, constant, carrier set, or event
     /// parameter) is declared more than once within the same scope.
     DuplicateIdentifier,
@@ -131,6 +135,7 @@ impl RuleId {
             RuleId::ProofFileParseError => "EB017",
             RuleId::UndeclaredIdentifier => "EB018",
             RuleId::DuplicateComponent => "EB019",
+            RuleId::UnknownType => "EB020",
             RuleId::DuplicateIdentifier => "EB021",
             RuleId::DuplicateLabel => "EB022",
             RuleId::ShadowedName => "EB023",
@@ -170,6 +175,7 @@ impl RuleId {
             RuleId::ProofFileParseError => "Proof file parse error",
             RuleId::UndeclaredIdentifier => "Undeclared identifier",
             RuleId::DuplicateComponent => "Duplicate component",
+            RuleId::UnknownType => "Unknown type",
             RuleId::DuplicateIdentifier => "Duplicate identifier",
             RuleId::DuplicateLabel => "Duplicate label",
             RuleId::ShadowedName => "Shadowed identifier",
@@ -241,6 +247,9 @@ impl RuleId {
             RuleId::DuplicateComponent => {
                 "The same component name is defined in more than one file in the project."
             }
+            RuleId::UnknownType => {
+                "An axiom, invariant or guard reads an identifier before the predicate that types it. Axioms, invariants and guards are typed in source order, each against the types the ones before it established, so the predicate is dropped; move the typing predicate in front of it."
+            }
             RuleId::DuplicateIdentifier => {
                 "An identifier (variable, constant, carrier set, or event parameter) is declared more than once within the same scope."
             }
@@ -301,6 +310,7 @@ impl RuleId {
             | RuleId::CircularRefines
             | RuleId::CrossReferenceNotFound
             | RuleId::UndeclaredIdentifier
+            | RuleId::UnknownType
             | RuleId::DuplicateIdentifier
             | RuleId::DuplicateLabel
             | RuleId::NewEventAssignsInheritedVariable
@@ -369,6 +379,7 @@ impl RuleId {
             RuleId::ProofFileParseError,
             RuleId::UndeclaredIdentifier,
             RuleId::DuplicateComponent,
+            RuleId::UnknownType,
             RuleId::DuplicateIdentifier,
             RuleId::DuplicateLabel,
             RuleId::ShadowedName,
@@ -417,6 +428,7 @@ mod tests {
         assert_eq!(RuleId::ProofFileParseError.code(), "EB017");
         assert_eq!(RuleId::UndeclaredIdentifier.code(), "EB018");
         assert_eq!(RuleId::DuplicateComponent.code(), "EB019");
+        assert_eq!(RuleId::UnknownType.code(), "EB020");
         assert_eq!(RuleId::DuplicateIdentifier.code(), "EB021");
         assert_eq!(RuleId::DuplicateLabel.code(), "EB022");
         assert_eq!(RuleId::ShadowedName.code(), "EB023");
@@ -441,9 +453,9 @@ mod tests {
     /// order also subsumes the uniqueness and length checks.
     #[test]
     fn all_lists_every_rule() {
-        // `EB001`..`EB034` minus the two documented gaps (EB013, EB020).
+        // `EB001`..`EB034` minus the one documented gap (EB013).
         let expected: Vec<String> = (1..=34)
-            .filter(|n| !matches!(n, 13 | 20))
+            .filter(|n| *n != 13)
             .map(|n| format!("EB{n:03}"))
             .collect();
         let listed: Vec<&str> = RuleId::all().iter().map(|r| r.code()).collect();
