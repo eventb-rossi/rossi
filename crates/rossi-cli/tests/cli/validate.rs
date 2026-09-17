@@ -1660,6 +1660,59 @@ END
 }
 
 #[test]
+fn validate_directory_reports_invariant_typed_too_late_as_eb020() {
+    let tmp = tempdir_unique("rossi-cli-validate-typing-order");
+    std::fs::write(
+        tmp.join("m.eventb"),
+        r#"machine m
+variables x y
+invariants
+  @use x ≠ y
+  @x_ty x ∈ ℕ
+  @y_ty y ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a1 x ≔ 0
+      @a2 y ≔ 1
+  end
+end
+"#,
+    )
+    .unwrap();
+
+    let output = rossi_command()
+        .args(["validate", "--format", "json", tmp.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        !output.status.success(),
+        "an invariant read before its typing invariants must fail validation; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    let diagnostic = rows
+        .iter()
+        .find(|row| row["rule_id"] == "EB020")
+        .unwrap_or_else(|| panic!("missing EB020 diagnostic: {stdout}"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["origin"], "m.use");
+    assert_eq!(diagnostic["inner_filename"], "m.eventb");
+    assert!(
+        diagnostic["region"].is_object(),
+        "the error must be positioned on the untyped use: {diagnostic}"
+    );
+    assert!(
+        !rows.iter().any(|row| row["rule_id"] == "EB006"),
+        "the later invariants type both variables, so no EB006: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn validate_directory_reports_inherited_event_label_as_eb022_error() {
     let tmp = extended_label_fixture("rossi-cli-validate-inherited-label");
     let output = rossi_command()

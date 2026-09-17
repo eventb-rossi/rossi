@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use rossi::names::is_primed_identifier;
 use rossi::{Context, LabeledPredicate, NamedElement};
 
-use crate::checked_predicate::check_labeled_predicate;
+use crate::checked_predicate::{check_labeled_predicate, unknown_type};
 use crate::handles::HandleUri;
 use crate::project::{Project, ProjectComponent};
 use crate::rodin_ids::{Kind, RodinIds};
@@ -90,8 +90,9 @@ pub fn check_context(
     let axiom_preds: Vec<_> = ctx
         .axioms
         .iter()
-        .filter(|ax| !typing_kept.drops(ax.label.as_deref()))
-        .map(|a| a.predicate.clone())
+        .enumerate()
+        .filter(|(_, ax)| !typing_kept.drops(ax.label.as_deref()))
+        .map(|(i, ax)| (i, &ax.predicate))
         .collect();
     // Duplicated constants are dropped, not typed — they are EB021 errors,
     // not EB006 inference failures.
@@ -101,9 +102,8 @@ pub fn check_context(
         .filter(|c| !dup_ids.contains(&c.name) && !is_primed_identifier(&c.name))
         .map(|c| c.name.clone())
         .collect();
-    let unresolved =
-        super::typing::resolve_identifier_types(&mut env, &constant_names, &axiom_preds);
-    for name in &unresolved {
+    let typing = super::typing::resolve_identifier_types(&mut env, &constant_names, &axiom_preds);
+    for name in &typing.untyped {
         diags.push(Diagnostic {
             severity: Severity::Error,
             origin: format!("{}.{}", ctx.name, name),
@@ -136,7 +136,8 @@ pub fn check_context(
             accurate = false;
             continue;
         }
-        match build_axiom_decl(&pc.rodin_ids, &file_root, i, ax, &env, &ctx.name) {
+        let unknown = typing.rejected.get(&i).map(Vec::as_slice);
+        match build_axiom_decl(&pc.rodin_ids, &file_root, i, ax, unknown, &env, &ctx.name) {
             Ok(decl) => axioms.push(decl),
             Err(diag) => {
                 accurate = false;
@@ -311,16 +312,22 @@ fn build_constant_decl(
     }
 }
 
+/// `unknown` holds the constants the axiom reads before the axioms that
+/// type them (EB020): Rodin drops it, so it fails like any other error.
 fn build_axiom_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     source_index: usize,
     ax: &LabeledPredicate,
+    unknown: Option<&[String]>,
     env: &TypeEnv,
     ctx_name: &str,
 ) -> std::result::Result<AxiomDecl, Diagnostic> {
-    let (label, pc) =
-        check_labeled_predicate(ax, env, "axm", "axiom", |lbl| format!("{ctx_name}.{lbl}"))?;
+    let origin = |lbl: &str| format!("{ctx_name}.{lbl}");
+    if let Some(names) = unknown {
+        return Err(unknown_type(ax, "axm", "axiom", names, origin));
+    }
+    let (label, pc) = check_labeled_predicate(ax, env, "axm", "axiom", origin)?;
     let source = crate::sc::file_child_source(ids, file_root, Kind::Axiom, in_tag::AXIOM, &label);
     Ok(AxiomDecl {
         label,

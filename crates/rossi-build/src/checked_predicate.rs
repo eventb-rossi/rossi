@@ -133,6 +133,37 @@ pub(crate) fn undeclared_identifier(
     }
 }
 
+/// The EB020 diagnostic for a predicate that reads declared names before
+/// the predicate that types them. `default_label`, `kind_name` and
+/// `origin` are as for [`check_labeled_predicate`]; the kind also names
+/// what should have typed `names`, the still-untyped identifiers.
+/// Anchored on the first of them, falling back to the predicate's span.
+#[must_use]
+pub(crate) fn unknown_type(
+    raw: &LabeledPredicate,
+    default_label: &str,
+    kind_name: &str,
+    names: &[String],
+    origin: impl FnOnce(&str) -> String,
+) -> Diagnostic {
+    let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
+    let span = names
+        .first()
+        .and_then(|name| usage_span_in_predicate(&raw.predicate, name))
+        .or(raw.span);
+    Diagnostic {
+        severity: Severity::Error,
+        origin: origin(raw.label.as_deref().unwrap_or(default_label)),
+        message: format!(
+            "{kind_name} predicate reads {} before any {kind_name} types {}",
+            quoted.join(", "),
+            if names.len() == 1 { "it" } else { "them" }
+        ),
+        rule_id: Some(crate::RuleId::UnknownType),
+        span,
+    }
+}
+
 /// Resolve a labeled predicate against `env` and produce the effective
 /// label plus the full [`PredicateCheck`], or a [`Diagnostic`] if the
 /// predicate references an unknown identifier.

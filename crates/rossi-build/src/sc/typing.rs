@@ -1,87 +1,118 @@
 //! The static checker's single identifier-typing seam.
 //!
 //! Constants, variables and event parameters are all typed the same
-//! way: a fixpoint over the component's typing predicates that types
-//! as many of the declared names as possible, leaving the caller to
-//! diagnose the rest.
+//! way: one pass over the component's typing predicates in source order,
+//! each checked against the types the predicates before it established,
+//! leaving the caller to diagnose the names that stayed untyped.
+//!
+//! This is Rodin's `LabeledFormulaModule.checkAndType`: a single growing
+//! type environment, and a predicate that reads a declared name before
+//! any predicate has typed it fails with "Type unknown". Such a
+//! predicate is dropped from the checked file and contributes nothing;
+//! the predicates after it carry on with the environment unchanged.
+//! Order matters: a fixpoint would quietly accept what Rodin rejects.
 //!
 //! The engine behind the seam is the formula model's type checker:
 //! each predicate is lowered onto the typed model and checked against
 //! the current environment; on success, the types it infers for
-//! declared names are merged and the fixpoint continues until nothing
-//! new resolves. A predicate that infers a name outside the declared
-//! set references an unknown identifier — its typings are not trusted,
-//! exactly as the previous engine refused predicates it could not
-//! fully verify.
+//! declared names are merged for the predicates that follow. A
+//! predicate that infers a name outside the declared set references an
+//! unknown identifier — its typings are not trusted, exactly as the
+//! previous engine refused predicates it could not fully verify.
 
-use rossi::formula::{self};
+use std::collections::{BTreeMap, BTreeSet};
+
+use rossi::formula::{self, ProblemKind};
 use rossi::{ActionBody, Expression, Predicate};
 
+use crate::sc::identifier_walker::undeclared_identifier_in_predicate;
 use crate::type_env::TypeEnv;
 
-/// Types the `declared` names against `predicates`, inserting solved
-/// types into `env`; returns the names that remained untyped, in
-/// declaration order.
+/// What the ordered typing pass found out.
+pub(crate) struct IdentifierTyping<'a> {
+    /// Declared names no predicate typed, in declaration order.
+    pub untyped: Vec<&'a str>,
+    /// Predicates rejected at their position, keyed by the index the
+    /// caller numbered them with: the declared names whose type was
+    /// still unknown when the predicate was reached, in first-occurrence
+    /// order. Rodin's "Type unknown": the caller drops the predicate.
+    pub rejected: BTreeMap<usize, Vec<String>>,
+}
+
+/// Types the `declared` names against `predicates` in the given order,
+/// inserting solved types into `env` as it goes. Each predicate carries
+/// the index the caller reports it under.
 pub(crate) fn resolve_identifier_types<'a>(
     env: &mut TypeEnv,
     declared: &'a [String],
-    predicates: &[Predicate],
-) -> Vec<&'a str> {
-    let declared_set: std::collections::BTreeSet<&str> =
-        declared.iter().map(String::as_str).collect();
-    // Only predicates mentioning a still-unresolved declared name can
-    // contribute; the rest are never worth re-checking. The worklist
-    // shrinks as predicates are spent.
-    let mut worklist: Vec<&Predicate> = predicates
-        .iter()
-        .filter(|pred| {
-            pred.free_identifiers()
-                .iter()
-                .any(|name| declared_set.contains(name.as_str()) && !env.contains(name))
-        })
-        .collect();
-    loop {
-        let mut progressed = false;
-        worklist.retain(|pred| {
-            // Sealed fresh per predicate (an O(1) cache hit while the
-            // environment is unchanged): a predicate must be validated
-            // against everything merged before it in this pass, or an
-            // ill-typed predicate could slip its typings in before the
-            // conflicting evidence lands and keep a type the later
-            // per-formula gate rejects.
-            let result = pred.type_check(&env.sealed());
-            if !result.is_success() {
-                // May start succeeding once more names resolve.
-                return true;
-            }
-            // Reject typings from predicates referencing identifiers
-            // that are neither in the environment nor declared here.
-            if result
-                .inferred
-                .iter()
-                .any(|(name, _)| !declared_set.contains(name))
-            {
-                return true;
-            }
-            for (name, ty) in result.inferred.iter() {
-                if !env.contains(name) {
-                    env.insert(name, ty.clone());
-                    progressed = true;
+    predicates: &[(usize, &Predicate)],
+) -> IdentifierTyping<'a> {
+    let declared_set: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    let mut rejected = BTreeMap::new();
+    for &(index, pred) in predicates {
+        // Only a predicate mentioning a still-untyped declared name can
+        // type something or be rejected for an unknown declared type;
+        // the rest are left to the per-formula gate.
+        if !pred
+            .free_identifiers()
+            .iter()
+            .any(|name| declared_set.contains(name.as_str()) && !env.contains(name))
+        {
+            continue;
+        }
+        // Sealed fresh per predicate (an O(1) cache hit while the
+        // environment is unchanged): a predicate is validated against
+        // everything merged before it, or an ill-typed predicate could
+        // slip its typings in before the conflicting evidence lands and
+        // keep a type the later per-formula gate rejects.
+        let result = pred.type_check(&env.sealed());
+        if !result.is_success() {
+            // A name nothing declares is the gate's undeclared-identifier
+            // error (Rodin's `FormulaFreeIdentsModule` rejects the
+            // predicate before typing); an unknown declared type at this
+            // point is Rodin's "Type unknown" and drops the predicate.
+            if undeclared_identifier_in_predicate(pred, env, declared).is_none() {
+                let unknown: Vec<String> = result
+                    .problems
+                    .iter()
+                    .filter_map(|problem| match &problem.kind {
+                        ProblemKind::UntypedIdentifier(name)
+                            if declared_set.contains(name.as_str()) =>
+                        {
+                            Some(name.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if !unknown.is_empty() {
+                    rejected.insert(index, unknown);
                 }
             }
-            // Everything this predicate can give is merged; a spent
-            // predicate never infers anything new.
-            false
-        });
-        if !progressed {
-            break;
+            continue;
+        }
+        // Reject typings from predicates referencing identifiers
+        // that are neither in the environment nor declared here.
+        if result
+            .inferred
+            .iter()
+            .any(|(name, _)| !declared_set.contains(name))
+        {
+            continue;
+        }
+        for (name, ty) in result.inferred.iter() {
+            if !env.contains(name) {
+                env.insert(name, ty.clone());
+            }
         }
     }
-    declared
-        .iter()
-        .filter(|name| !env.contains(name))
-        .map(String::as_str)
-        .collect()
+    IdentifierTyping {
+        untyped: declared
+            .iter()
+            .filter(|name| !env.contains(name))
+            .map(String::as_str)
+            .collect(),
+        rejected,
+    }
 }
 
 /// The strict acceptance shared by the per-formula gates: the check

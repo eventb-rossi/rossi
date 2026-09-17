@@ -19,7 +19,7 @@ use std::rc::Rc;
 use rossi::names::is_primed_identifier;
 use rossi::{LabeledPredicate, Machine};
 
-use crate::checked_predicate::{check_expression, check_labeled_predicate};
+use crate::checked_predicate::{check_expression, check_labeled_predicate, unknown_type};
 use crate::handles::HandleUri;
 use crate::project::{Project, ProjectComponent};
 use crate::rodin_ids::{Kind, RodinIds};
@@ -188,11 +188,12 @@ pub fn check_machine(
     let invariant_preds: Vec<_> = machine
         .invariants
         .iter()
-        .filter(|inv| !typing_kept.drops(inv.label.as_deref()))
-        .map(|i| i.predicate.clone())
+        .enumerate()
+        .filter(|(_, inv)| !typing_kept.drops(inv.label.as_deref()))
+        .map(|(i, inv)| (i, &inv.predicate))
         .collect();
-    let unresolved = resolve_identifier_types(&mut env, &variable_names, &invariant_preds);
-    for name in &unresolved {
+    let typing = resolve_identifier_types(&mut env, &variable_names, &invariant_preds);
+    for name in &typing.untyped {
         // An untyped variable is an error in Rodin (UntypedVariableError,
         // MachineCommitIdentsModule): the variable is dropped from the
         // output. The file still stays `accurate="true"` — untyped
@@ -244,7 +245,16 @@ pub fn check_machine(
             accurate = false;
             continue;
         }
-        match build_invariant_decl(&pc.rodin_ids, &file_root, i, inv, &env, &machine.name) {
+        let unknown = typing.rejected.get(&i).map(Vec::as_slice);
+        match build_invariant_decl(
+            &pc.rodin_ids,
+            &file_root,
+            i,
+            inv,
+            unknown,
+            &env,
+            &machine.name,
+        ) {
             Ok(d) => invariant_decls.push(d),
             Err(diag) => {
                 diags.push(diag);
@@ -549,17 +559,23 @@ fn build_sees_decls(
     out
 }
 
+/// `unknown` holds the variables the invariant reads before the
+/// invariants that type them (EB020): Rodin drops it, so it fails like
+/// any other error.
 fn build_invariant_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     source_index: usize,
     inv: &LabeledPredicate,
+    unknown: Option<&[String]>,
     env: &TypeEnv,
     machine_name: &str,
 ) -> std::result::Result<InvariantDecl, Diagnostic> {
-    let (label, pc) = check_labeled_predicate(inv, env, "inv", "invariant", |lbl| {
-        format!("{machine_name}.{lbl}")
-    })?;
+    let origin = |lbl: &str| format!("{machine_name}.{lbl}");
+    if let Some(names) = unknown {
+        return Err(unknown_type(inv, "inv", "invariant", names, origin));
+    }
+    let (label, pc) = check_labeled_predicate(inv, env, "inv", "invariant", origin)?;
     let source =
         crate::sc::file_child_source(ids, file_root, Kind::Invariant, in_tag::INVARIANT, &label);
     Ok(InvariantDecl {
