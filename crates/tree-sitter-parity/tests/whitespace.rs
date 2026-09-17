@@ -17,16 +17,18 @@
 //!   [8232..8233]` (`EventBParser.scc`) — it takes U+0085 and U+00A0, and
 //!   answers "Unknown token" from U+1680 up. `rossi validate` reports that gap
 //!   as EB031.
-//! - **tree-sitter** writes `extras: [/\s/]`, which its generated `parser.c`
-//!   compiles to `('\t' <= c && c <= '\r') || c == ' '` — ASCII only.
+//! - **tree-sitter** once wrote `extras: [/\s/]`, which its generated
+//!   `parser.c` compiled to `('\t' <= c && c <= '\r') || c == ' '` — 6 of the
+//!   28 Rossi separates on. `grammar.js` now spells that class out and gives
+//!   `label` its complement, `src/parser.c` is regenerated, and the submodule
+//!   points at that commit.
 //!
-//! The tree-sitter column reports rather than asserts, because it cannot move
-//! until `src/parser.c` is regenerated: the fix lives in `grammar.js` on the
-//! grammar repo's `devel` branch and the submodule is deliberately not bumped
-//! yet. Rossi's own column is asserted in-workspace, where CI actually runs it,
-//! by `rossi::tests::simple_predicate_test`; the EB031 column is asserted per
-//! row below. When the regeneration lands, the
-//! `tree-sitter=REJECT` lines below are the checklist of what should flip.
+//! The tree-sitter column therefore asserts rather than reports. Both grammars
+//! name the same set now, and holding them to it across a regeneration is the
+//! only thing that keeps them there. Rossi's own column is asserted
+//! in-workspace, where CI actually runs it, by
+//! `rossi::tests::simple_predicate_test`; the EB031 column is asserted per row
+//! below.
 
 mod common;
 
@@ -68,7 +70,7 @@ fn probe(separator: char) -> String {
 #[test]
 fn report_whitespace_verdicts() {
     let mut parser = common::eventb_parser();
-    let mut divergent = 0usize;
+    let mut divergent: Vec<String> = Vec::new();
 
     for &(separator, name, camille) in SEPARATORS {
         let source = probe(separator);
@@ -87,7 +89,7 @@ fn report_whitespace_verdicts() {
         );
 
         if rossi != tree_sitter {
-            divergent += 1;
+            divergent.push(format!("U+{:04X} {name}", separator as u32));
         }
         println!(
             "  U+{:04X} {name:<26} rossi={:<6} camille={:<6} tree-sitter={:<6}{}",
@@ -101,7 +103,14 @@ fn report_whitespace_verdicts() {
 
     println!(
         "{} of {} separators divide rossi and tree-sitter",
-        divergent,
+        divergent.len(),
         SEPARATORS.len()
+    );
+
+    // After the table, so a failure still prints every row it was drawn from.
+    assert!(
+        divergent.is_empty(),
+        "rossi and the tree-sitter grammar must separate on the same code \
+         points; they part on {divergent:?}"
     );
 }

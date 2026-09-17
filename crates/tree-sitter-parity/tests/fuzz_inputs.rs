@@ -84,12 +84,12 @@ fn report_parity_over_fuzz_inputs() {
         let rossi = rossi_verdict(&text);
         let tree_sitter = common::tree_sitter_accepts(&mut parser, &text);
 
-        // Rossi's separator set is Rodin's, which is wider than the tree-sitter
-        // grammar's ASCII `\s`. Without taking that out of the comparison a
-        // whitespace disagreement is indistinguishable from a grammar one, and
-        // it is the grammar findings this report exists for. Re-run both
-        // parsers over the normalised text: a disagreement that survives is
-        // about the language, one that does not is about whitespace.
+        // Both grammars separate on Rodin's set now, so this is a drift guard
+        // rather than a filter. Were the two sets to part again, a whitespace
+        // disagreement would be indistinguishable from a grammar one, and it
+        // is the grammar findings this report exists for. Re-run both parsers
+        // over the normalised text: a disagreement that survives is about the
+        // language, one that does not is about whitespace.
         //
         // `&&` keeps both the normalised copy and the re-parse off the
         // agreeing majority; only the counter looks at every input.

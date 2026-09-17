@@ -100,10 +100,10 @@ pub fn without_panicking<T>(body: impl FnOnce() -> T) -> Option<T> {
 /// and everything else alone.
 ///
 /// Takes whitespace out of a cross-tool comparison: rossi's separator set is
-/// Rodin's, which is wider than either Camille's `layout_char` or the
-/// tree-sitter grammar's ASCII `\s`, so without this a whitespace
-/// disagreement is indistinguishable from a grammar disagreement. Newlines
-/// survive because structure and `//` comments are line-terminated.
+/// Rodin's, still wider than Camille's `layout_char` and once wider than the
+/// tree-sitter grammar's too, so without this a whitespace disagreement is
+/// indistinguishable from a grammar disagreement. Newlines survive because
+/// structure and `//` comments are line-terminated.
 pub fn normalize_whitespace(text: &str) -> String {
     text.replace(
         |c: char| c != '\n' && rossi::keywords::is_whitespace(c),
