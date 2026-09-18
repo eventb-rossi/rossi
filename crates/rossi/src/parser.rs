@@ -2796,7 +2796,7 @@ fn parse_expression(
                 Rule::integer => {
                     let value = first
                         .as_str()
-                        .parse::<i64>()
+                        .parse::<num_bigint::BigInt>()
                         .map_err(|_| ParseError::InvalidInteger(first.as_str().to_string()))?;
                     Ok(fx.ff.integer_literal(value, node_span))
                 }
@@ -2986,7 +2986,7 @@ fn parse_expression(
         Rule::integer => {
             let value = pair
                 .as_str()
-                .parse::<i64>()
+                .parse::<num_bigint::BigInt>()
                 .map_err(|_| ParseError::InvalidInteger(pair.as_str().to_string()))?;
             Ok(fx.ff.integer_literal(value, node_span))
         }
