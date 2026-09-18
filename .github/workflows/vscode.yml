@@ -43,11 +43,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test symbol matcher
-        run: npm run test:matcher
-
-      - name: Test manifest
-        run: npm run test:manifest
+      - name: Test
+        run: npm test
 
       - name: Package VSIX
         run: npm run package -- --out /tmp/event-b.vsix
