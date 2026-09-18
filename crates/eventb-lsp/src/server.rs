@@ -81,6 +81,19 @@ fn refresh_saved_layers(
     symbols.index_disk_components(uri.to_string(), &components, &text);
 }
 
+/// A pull report's result id: a hash of the diagnostics it carries, so two
+/// reports share an id exactly when they say the same thing. `None` only when
+/// the report cannot be serialized, which drops the client back to always
+/// receiving a full report.
+fn report_result_id(diagnostics: &[Diagnostic]) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+
+    let encoded = serde_json::to_string(diagnostics).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    encoded.hash(&mut hasher);
+    Some(format!("{:016x}", hasher.finish()))
+}
+
 /// Run blocking filesystem or parsing work away from Tokio's async workers.
 async fn run_blocking<F, T>(task: F) -> Result<T>
 where
@@ -427,6 +440,58 @@ impl Analyzer {
         for uri in self.document_manager.all_uris() {
             self.republish_diagnostics(uri).await;
         }
+    }
+
+    /// One document's diagnostics for a *pull* request, with the result id a
+    /// client echoes back as `previousResultId` to ask "has this changed?".
+    ///
+    /// Two sources, in order: an open buffer's stored parse (the same one the
+    /// push path publishes, so pull and push can never disagree), or, for a
+    /// workspace file nobody has opened, the bytes on disk. The disk case is
+    /// what makes `workspace/diagnostic` worth having — it is the only way a
+    /// user sees an error in a file they have not visited.
+    ///
+    /// The result id is a hash of the report itself, so `unchanged` means
+    /// exactly that. The buffer's revision would be cheaper but wrong: a
+    /// document's diagnostics also move with the proof-obligation and animate
+    /// overlays, the Rodin proof status, the workspace graph and the
+    /// configuration, none of which touch the revision — a client that
+    /// echoed a revision-based id would never see the warning a save's
+    /// broken proof produced. Hashing the report also gives a file read from
+    /// disk an id, which a revision cannot.
+    pub(crate) fn pull_report(&self, uri: &Url) -> Option<(Option<String>, Vec<Diagnostic>)> {
+        // The buffer if it is open, the file otherwise, through the loader
+        // every other cross-file path reads with.
+        let doc = crate::component_loader::ComponentLoader::new(
+            &self.cross_reference_manager,
+            Some(&self.document_manager),
+        )
+        .parsed(uri)?;
+
+        // `rossi.diagnostics.enabled` is a user's "stop telling me about this"
+        // switch, so it silences the pull path exactly as it silences the push
+        // one. An empty report retracts, which is the intent.
+        let diagnostics = if self.config_manager.get().diagnostics.enabled {
+            self.diagnostics_for(uri, &doc)
+        } else {
+            Vec::new()
+        };
+        Some((report_result_id(&diagnostics), diagnostics))
+    }
+
+    /// Every workspace file worth reporting on: the indexed components plus
+    /// any open document the index has not caught up with.
+    pub(crate) fn pull_uris(&self) -> Vec<Url> {
+        let mut uris: Vec<Url> = self
+            .cross_reference_manager
+            .all_component_uris()
+            .iter()
+            .filter_map(|uri| Url::parse(uri).ok())
+            .chain(self.document_manager.all_uris())
+            .collect();
+        uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        uris.dedup();
+        uris
     }
 
     /// Recompute and publish a document's diagnostics from its stored parse,
@@ -1322,6 +1387,20 @@ impl LanguageServer for RossiLanguageServer {
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                // Pull diagnostics alongside the push ones: a client that
+                // supports pull uses it and ignores the pushes, and one that
+                // does not keeps working unchanged. `interFileDependencies`
+                // is true because a SEES/REFINES/EXTENDS edit changes what a
+                // *dependent* file reports, so the client must be willing to
+                // re-pull siblings rather than trust a per-file cache.
+                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
+                    DiagnosticOptions {
+                        identifier: Some("rossi".to_string()),
+                        inter_file_dependencies: true,
+                        workspace_diagnostics: true,
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    },
+                )),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
@@ -1896,6 +1975,112 @@ impl LanguageServer for RossiLanguageServer {
         );
 
         Ok(response)
+    }
+
+    async fn diagnostic(
+        &self,
+        params: DocumentDiagnosticParams,
+    ) -> Result<DocumentDiagnosticReportResult> {
+        let uri = params.text_document.uri;
+        debug!("Pull diagnostic request for: {}", uri);
+
+        let analyzer = self.analyzer.clone();
+        let previous = params.previous_result_id;
+        let report = run_blocking(move || analyzer.pull_report(&uri)).await?;
+
+        // A file the server cannot read at all (deleted between the client's
+        // request and this read) reports as clean rather than as an error: the
+        // client is about to drop it anyway, and a request failure would make
+        // it retry.
+        let Some((result_id, items)) = report else {
+            return Ok(DocumentDiagnosticReportResult::Report(
+                DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport::default()),
+            ));
+        };
+
+        if let (Some(current), Some(previous)) = (result_id.as_deref(), previous.as_deref())
+            && current == previous
+        {
+            return Ok(DocumentDiagnosticReportResult::Report(
+                DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
+                    related_documents: None,
+                    unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
+                        result_id: current.to_string(),
+                    },
+                }),
+            ));
+        }
+
+        Ok(DocumentDiagnosticReportResult::Report(
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                related_documents: None,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport { result_id, items },
+            }),
+        ))
+    }
+
+    async fn workspace_diagnostic(
+        &self,
+        params: WorkspaceDiagnosticParams,
+    ) -> Result<WorkspaceDiagnosticReportResult> {
+        debug!("Workspace pull diagnostic request");
+
+        // The whole-workspace sweep reads and parses files off the blocking
+        // pool, and it must not race the initial scan: before it completes,
+        // `pull_uris` sees an index that is still filling, and a file missing
+        // from that answer reports as clean. `workspace/symbol` waits on the
+        // same gate for the same reason.
+        self.workspace_scan_state.wait().await;
+
+        let analyzer = self.analyzer.clone();
+        let previous: std::collections::HashMap<Url, String> = params
+            .previous_result_ids
+            .into_iter()
+            .map(|previous| (previous.uri, previous.value))
+            .collect();
+
+        let items = run_blocking(move || {
+            analyzer
+                .pull_uris()
+                .into_iter()
+                .filter_map(|uri| {
+                    let (result_id, items) = analyzer.pull_report(&uri)?;
+                    let unchanged = result_id
+                        .as_deref()
+                        .zip(previous.get(&uri).map(String::as_str))
+                        .is_some_and(|(current, seen)| current == seen);
+                    Some(if unchanged {
+                        WorkspaceDocumentDiagnosticReport::Unchanged(
+                            WorkspaceUnchangedDocumentDiagnosticReport {
+                                uri,
+                                version: None,
+                                unchanged_document_diagnostic_report:
+                                    UnchangedDocumentDiagnosticReport {
+                                        result_id: result_id.unwrap_or_default(),
+                                    },
+                            },
+                        )
+                    } else {
+                        WorkspaceDocumentDiagnosticReport::Full(
+                            WorkspaceFullDocumentDiagnosticReport {
+                                uri,
+                                version: None,
+                                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                                    result_id,
+                                    items,
+                                },
+                            },
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .await?;
+
+        debug!("Workspace pull diagnostic returned {} reports", items.len());
+        Ok(WorkspaceDiagnosticReportResult::Report(
+            WorkspaceDiagnosticReport { items },
+        ))
     }
 
     async fn document_highlight(

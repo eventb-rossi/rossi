@@ -1108,6 +1108,238 @@ mod operator_table {
     }
 }
 
+mod pull_diagnostics {
+    //! Wire-level tests for `textDocument/diagnostic` and
+    //! `workspace/diagnostic`: the capability is advertised, an open buffer's
+    //! report matches what the push path would publish, echoing a result id
+    //! answers `unchanged`, and the workspace sweep reaches a file that was
+    //! never opened.
+
+    use super::{TempWorkspace, notification};
+    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::server::RossiLanguageServer;
+    use futures::StreamExt;
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp::LspService;
+    use tower_lsp::jsonrpc::Request;
+
+    /// A context whose `CONSTANS` typo the parser reports.
+    const BROKEN: &str = "CONTEXT broken\nCONSTANS\n    c\nEND\n";
+    const CLEAN: &str =
+        "CONTEXT clean\nCONSTANTS\n    c\nAXIOMS\n    @axm1 c \u{2208} \u{2115}\nEND\n";
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_document_pull_reports_and_then_answers_unchanged() {
+        let workspace = TempWorkspace::new("pull-diagnostics-doc");
+        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let file_uri = Url::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(init)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let provider = &result.unwrap()["capabilities"]["diagnosticProvider"];
+        assert_eq!(provider["identifier"], json!("rossi"));
+        assert_eq!(
+            provider["interFileDependencies"],
+            json!(true),
+            "a SEES / REFINES / EXTENDS edit changes what dependents report"
+        );
+        assert_eq!(provider["workspaceDiagnostics"], json!(true));
+
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification("initialized", json!({})))
+            .await
+            .unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": file_uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": BROKEN,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let pull = |id: i64, previous: Option<String>| {
+            let mut params = json!({ "textDocument": { "uri": file_uri } });
+            if let Some(previous) = previous {
+                params["previousResultId"] = json!(previous);
+            }
+            Request::build("textDocument/diagnostic")
+                .id(id)
+                .params(params)
+                .finish()
+        };
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(pull(2, None))
+            .await
+            .unwrap()
+            .expect("textDocument/diagnostic must respond");
+        let (_id, result) = response.into_parts();
+        let first: Value = result.expect("textDocument/diagnostic must succeed");
+
+        assert_eq!(first["kind"], json!("full"));
+        let items = first["items"].as_array().expect("items is an array");
+        assert!(
+            !items.is_empty(),
+            "the CONSTANS typo must be reported; got {first}"
+        );
+        let result_id = first["resultId"]
+            .as_str()
+            .expect("an open document carries a result id")
+            .to_string();
+
+        // Echoing the result id for an untouched document answers `unchanged`
+        // rather than resending every item.
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(pull(3, Some(result_id.clone())))
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let second: Value = result.unwrap();
+        assert_eq!(second["kind"], json!("unchanged"), "got {second}");
+        assert_eq!(second["resultId"], json!(result_id));
+
+        // An edit moves the revision, so the same previous id now reports in
+        // full again.
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": file_uri, "version": 2 },
+                    "contentChanges": [{ "text": CLEAN }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(pull(4, Some(result_id)))
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let third: Value = result.unwrap();
+        assert_eq!(third["kind"], json!("full"), "got {third}");
+        assert_eq!(
+            third["items"].as_array().unwrap().len(),
+            0,
+            "the repaired document is clean; got {third}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_workspace_sweep_reaches_a_file_that_was_never_opened() {
+        let workspace = TempWorkspace::new("pull-diagnostics-workspace");
+        let broken = workspace.as_ref().join("broken.eventb");
+        std::fs::write(&broken, BROKEN).unwrap();
+        std::fs::write(workspace.as_ref().join("clean.eventb"), CLEAN).unwrap();
+        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let broken_uri = Url::from_file_path(&broken).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification("initialized", json!({})))
+            .await
+            .unwrap();
+
+        let request = Request::build("workspace/diagnostic")
+            .id(2)
+            .params(json!({ "previousResultIds": [] }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("workspace/diagnostic must respond");
+        let (_id, result) = response.into_parts();
+        let report: Value = result.expect("workspace/diagnostic must succeed");
+
+        let items = report["items"].as_array().expect("items is an array");
+        let broken_report = items
+            .iter()
+            .find(|item| item["uri"] == json!(broken_uri))
+            .unwrap_or_else(|| panic!("broken.eventb must be swept; got {report}"));
+        assert!(
+            !broken_report["items"].as_array().unwrap().is_empty(),
+            "a file nobody opened must still report its parse error; got {report}"
+        );
+
+        // The clean sibling is swept too, and reports nothing.
+        let clean_report = items
+            .iter()
+            .find(|item| {
+                item["uri"]
+                    .as_str()
+                    .is_some_and(|u| u.ends_with("clean.eventb"))
+            })
+            .unwrap_or_else(|| panic!("clean.eventb must be swept; got {report}"));
+        assert_eq!(
+            clean_report["items"].as_array().unwrap().len(),
+            0,
+            "the clean sibling reports nothing; got {report}"
+        );
+    }
+}
+
 mod document_highlight {
     //! Wire-level test for `textDocument/documentHighlight`: the capability is
     //! advertised, every occurrence of the symbol under the cursor comes back

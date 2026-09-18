@@ -169,6 +169,17 @@ The project-level static check (`rossi_build::build`: type inference over the
 dependency closure and Rodin-style drop diagnostics) is not yet published as
 diagnostics. See [Semantic Analysis Reuse](#semantic-analysis-reuse).
 
+Diagnostics are available both ways. The server pushes
+`textDocument/publishDiagnostics` for open buffers, and it answers the pull
+requests `textDocument/diagnostic` and `workspace/diagnostic` with the same
+findings. The workspace sweep also reports files nobody has opened, read from
+disk, so a project-wide problem list does not depend on visiting every file.
+A report's `resultId` is a hash of the findings it carries, so echoing it back
+as `previousResultId` answers `unchanged` for exactly as long as the report
+says the same thing — including when a proof-status, animate or workspace-graph
+change moved the findings without touching the buffer. A file read from disk
+gets one the same way.
+
 ### Document Symbols
 
 Navigate your Event-B models with a hierarchical outline:
