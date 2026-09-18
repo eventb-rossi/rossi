@@ -452,8 +452,9 @@ fn expected_class(rule: Rule) -> ExpectedClass {
         Rule::op_becomes_equal | Rule::op_becomes_in | Rule::op_becomes_such => {
             ExpectedClass::Token
         }
-        // Postfix inverse: an operator the infix bridges do not know.
-        Rule::op_inverse => ExpectedClass::Operator,
+        // Postfix inverse and the user-defined infix word: operators the
+        // infix bridges do not know.
+        Rule::op_inverse | Rule::ext_infix_op => ExpectedClass::Operator,
         _ => {
             if rule_to_binary_op(rule).is_some()
                 || rule_to_comparison_op(rule).is_some()
@@ -2154,6 +2155,136 @@ fn fold_span(left: Option<Span>, right: Option<Span>) -> Option<Span> {
     }
 }
 
+/// Parse a chain of user-defined infix operators (`a plus b plus c`): one
+/// operator group between the pair constructor and every other binary level.
+/// The operator words resolve against the factory in use; a chain folds flat
+/// only for one associative operator, and any other chain is rejected like
+/// Rodin rejects juxtaposed operators of unrelated groups.
+fn parse_infix_ext_expr(
+    pair: pest::iterators::Pair<Rule>,
+    fx: &mut Fx,
+) -> Result<Expression, ParseError> {
+    use crate::formula::extension::ExpressionExtension;
+
+    let mut inner = pair.into_inner();
+    let first = inner.next().ok_or(ParseError::EmptyExpression)?;
+    let mut steps = Vec::new();
+    while let Some(operator) = inner.next() {
+        let operand = inner.next().ok_or(ParseError::EmptyExpression)?;
+        steps.push((operator, operand));
+    }
+    // The chain's operator: its symbol, its extension, and whether it may
+    // repeat. Resolved once from the first operator; every later one must
+    // be the same word.
+    let (symbol, span0) = {
+        let (operator, _) = steps.first().expect("dispatched only for a real chain");
+        (operator.as_str(), operator.as_span())
+    };
+    let ext: std::sync::Arc<dyn ExpressionExtension> = match fx.ff.extension_by_symbol(symbol) {
+        Some((_, Extension::Expr(ext))) if ext.kind().notation == Notation::Infix => ext.clone(),
+        _ => return Err(unknown_infix_operator(symbol, span0)),
+    };
+    let kind = ext.kind();
+    let mut operands = Vec::with_capacity(steps.len() + 1);
+    operands.push(parse_infix_ext_operand(first, symbol, fx)?);
+    let mut steps = steps.into_iter();
+    let (_, second) = steps.next().expect("dispatched only for a real chain");
+    operands.push(parse_infix_ext_operand(second, symbol, fx)?);
+    for (operator, operand) in steps {
+        let word = operator.as_str();
+        if word != symbol {
+            let known = matches!(
+                fx.ff.extension_by_symbol(word),
+                Some((_, Extension::Expr(other))) if other.kind().notation == Notation::Infix
+            );
+            if !known {
+                return Err(unknown_infix_operator(word, operator.as_span()));
+            }
+        }
+        if word != symbol || !kind.associative {
+            return Err(incompatible_operators(
+                operator.as_span(),
+                symbol.to_string(),
+                word.to_string(),
+            ));
+        }
+        operands.push(parse_infix_ext_operand(operand, symbol, fx)?);
+    }
+    let span = fold_span(
+        operands.first().and_then(Expression::span),
+        operands.last().and_then(Expression::span),
+    );
+    let actual = operands.len();
+    fx.ff
+        .extended_expression(&ext, operands, Vec::new(), span, None)
+        .map_err(extension_error(symbol, kind.children.exprs, actual))
+}
+
+/// An operand of the infix operator `symbol`. Rodin's operator groups are
+/// mutually incompatible, so an operand that is itself an unparenthesised
+/// binary chain of any level below the pair (relation arrows down to
+/// arithmetic) is rejected, as `a plus b + c` is in Rodin; closed forms,
+/// applications and prefix operators are ordinary operands.
+fn parse_infix_ext_operand(
+    pair: pest::iterators::Pair<Rule>,
+    symbol: &str,
+    fx: &mut Fx,
+) -> Result<Expression, ParseError> {
+    // The descent stops at the first wrapper with a real chain, or at the
+    // operand proper, which `parse_expression` takes from there: a
+    // single-child wrapper and its child span the same text.
+    let mut pair = pair;
+    while is_binary_wrapper(pair.as_rule()) {
+        let mut children = pair.clone().into_inner();
+        let first = children.next().ok_or(ParseError::EmptyExpression)?;
+        if let Some(operator) = children.next() {
+            return Err(incompatible_operators(
+                operator.as_span(),
+                display_rule(operator.as_rule()),
+                symbol.to_string(),
+            ));
+        }
+        pair = first;
+    }
+    parse_expression(pair, fx)
+}
+
+/// The binary precedence wrappers: a pair of one of these rules with a single
+/// child is a passthrough to that child, with several children an operator
+/// chain of that level. The one list behind [`parse_expression`]'s descent
+/// and the infix-operand check.
+fn is_binary_wrapper(rule: Rule) -> bool {
+    matches!(
+        rule,
+        Rule::ident_binder_type
+            | Rule::maplet_expr
+            | Rule::maplet_expr_no_semi
+            | Rule::relation_type_expr
+            | Rule::relation_type_expr_no_semi
+            | Rule::set_operator_expr
+            | Rule::set_operator_expr_no_semi
+            | Rule::relational_expr
+            | Rule::relational_expr_no_semi
+            | Rule::exponent_expr
+            | Rule::exponent_expr_no_semi
+            | Rule::additive_expr
+            | Rule::additive_expr_no_semi
+            | Rule::multiplicative_expr
+            | Rule::multiplicative_expr_no_semi
+    )
+}
+
+/// [`ParseError::UnknownInfixOperator`] anchored at the operator word.
+fn unknown_infix_operator(name: &str, span: pest::Span<'_>) -> ParseError {
+    let (line, column) = span.start_pos().line_col();
+    ParseError::UnknownInfixOperator {
+        name: name.to_string(),
+        line,
+        column,
+        span: Some(Span::from_pest(span)),
+    }
+}
+
 /// Build an [`ParseError::IncompatibleOperators`] anchored at the operator
 /// `span` (the operator at which the incompatibility is detected). Called only
 /// on the rejection path, so the `line_col` scan stays off the accepting path.
@@ -2224,23 +2355,18 @@ fn parse_expression(
                     .next()
                     .ok_or(ParseError::EmptyExpression)?;
             }
+            // The user-defined infix level: same shape, its own builder.
+            Rule::infix_ext_expr | Rule::infix_ext_expr_no_semi => {
+                let mut probe = pair.clone().into_inner();
+                let first = probe.next().ok_or(ParseError::EmptyExpression)?;
+                if probe.next().is_some() {
+                    return parse_infix_ext_expr(pair, fx);
+                }
+                pair = first;
+            }
             // Binary precedence wrappers. Single child = no operator at this
             // level (descend); multi-child = real chain (dispatch).
-            Rule::relation_type_expr
-            | Rule::relation_type_expr_no_semi
-            | Rule::ident_binder_type
-            | Rule::maplet_expr
-            | Rule::maplet_expr_no_semi
-            | Rule::set_operator_expr
-            | Rule::set_operator_expr_no_semi
-            | Rule::relational_expr
-            | Rule::relational_expr_no_semi
-            | Rule::exponent_expr
-            | Rule::exponent_expr_no_semi
-            | Rule::additive_expr
-            | Rule::additive_expr_no_semi
-            | Rule::multiplicative_expr
-            | Rule::multiplicative_expr_no_semi => {
+            r if is_binary_wrapper(r) => {
                 let mut probe = pair.clone().into_inner();
                 let first = probe.next().ok_or(ParseError::EmptyExpression)?;
                 if probe.next().is_some() {

@@ -13,21 +13,27 @@ use rossi::formula::{Expression, ExpressionKind, FactoryError, FormulaFactory, P
 
 use crate::common::{env, int};
 
-/// `dist(a, b)` — a total binary integer operator.
-struct Dist;
+/// The integer operators of the test factory: `dist(a, b)` (prefix, two
+/// children), `zero` (nullary), `a plus b` (associative infix) and
+/// `a minus b` (non-associative infix). One shape, differing in kind.
+struct IntOp {
+    symbol: &'static str,
+    id: &'static str,
+    kind: ExtensionKind,
+}
 
-impl FormulaExtension for Dist {
+impl FormulaExtension for IntOp {
     fn symbol(&self) -> &str {
-        "dist"
+        self.symbol
     }
     fn id(&self) -> &str {
-        "test.dist"
+        self.id
     }
     fn group_id(&self) -> &str {
         "test.group"
     }
     fn kind(&self) -> ExtensionKind {
-        ExtensionKind::prefix_expression(2)
+        self.kind
     }
     fn conjoin_children_wd(&self) -> bool {
         true
@@ -37,7 +43,7 @@ impl FormulaExtension for Dist {
     }
 }
 
-impl ExpressionExtension for Dist {
+impl ExpressionExtension for IntOp {
     fn synthesize_type(&self, exprs: &[Expression], _preds: &[Predicate]) -> Option<Type> {
         exprs
             .iter()
@@ -54,6 +60,44 @@ impl ExpressionExtension for Dist {
         }
         int
     }
+}
+
+/// The integer operator spelled `symbol`; one object per symbol for the
+/// process, since registration is by object identity.
+fn int_op(symbol: &str) -> Arc<dyn ExpressionExtension> {
+    static OPS: std::sync::LazyLock<Vec<Arc<dyn ExpressionExtension>>> =
+        std::sync::LazyLock::new(|| {
+            vec![
+                Arc::new(IntOp {
+                    symbol: "dist",
+                    id: "test.dist",
+                    kind: ExtensionKind::prefix_expression(2),
+                }),
+                Arc::new(IntOp {
+                    symbol: "zero",
+                    id: "test.zero",
+                    kind: ExtensionKind::atomic_expression(),
+                }),
+                Arc::new(IntOp {
+                    symbol: "plus",
+                    id: "test.plus",
+                    kind: ExtensionKind::infix_expression(true),
+                }),
+                Arc::new(IntOp {
+                    symbol: "minus",
+                    id: "test.minus",
+                    kind: ExtensionKind::infix_expression(false),
+                }),
+            ]
+        });
+    OPS.iter()
+        .find(|op| op.symbol() == symbol)
+        .expect("a test operator")
+        .clone()
+}
+
+fn dist_ext() -> Arc<dyn ExpressionExtension> {
+    int_op("dist")
 }
 
 /// `even(n)` — a predicate operator over one integer.
@@ -89,12 +133,6 @@ impl PredicateExtension for Even {
     }
 }
 
-fn dist_ext() -> Arc<dyn ExpressionExtension> {
-    static DIST: std::sync::LazyLock<Arc<dyn ExpressionExtension>> =
-        std::sync::LazyLock::new(|| Arc::new(Dist));
-    DIST.clone()
-}
-
 fn even_ext() -> Arc<dyn PredicateExtension> {
     static EVEN: std::sync::LazyLock<Arc<dyn PredicateExtension>> =
         std::sync::LazyLock::new(|| Arc::new(Even));
@@ -106,54 +144,32 @@ fn extended_factory() -> FormulaFactory {
         .expect("valid extension set")
 }
 
-/// `zero` — a nullary integer operator.
-struct Zero;
-
-impl FormulaExtension for Zero {
-    fn symbol(&self) -> &str {
-        "zero"
-    }
-    fn id(&self) -> &str {
-        "test.zero"
-    }
-    fn group_id(&self) -> &str {
-        "test.group"
-    }
-    fn kind(&self) -> ExtensionKind {
-        ExtensionKind::atomic_expression()
-    }
-    fn conjoin_children_wd(&self) -> bool {
-        true
-    }
-    fn wd_predicate(&self, _formula: ExtendedRef<'_>, wd: &WdMediator<'_>) -> Predicate {
-        wd.true_wd()
-    }
-}
-
-impl ExpressionExtension for Zero {
-    fn synthesize_type(&self, _exprs: &[Expression], _preds: &[Predicate]) -> Option<Type> {
-        Some(Type::Int)
-    }
-    fn verify_type(&self, ty: &Type, _exprs: &[Expression], _preds: &[Predicate]) -> bool {
-        *ty == Type::Int
-    }
-    fn type_check(&self, mediator: &mut TypeCheckMediator<'_, '_>, _exprs: &[TcType]) -> TcType {
-        mediator.from_type(&Type::Int)
-    }
-}
-
 fn zero_ext() -> Arc<dyn ExpressionExtension> {
-    static ZERO: std::sync::LazyLock<Arc<dyn ExpressionExtension>> =
-        std::sync::LazyLock::new(|| Arc::new(Zero));
-    ZERO.clone()
+    int_op("zero")
 }
 
-/// The factory the parsing tests build against: `dist`, `even` and `zero`.
+fn plus_ext() -> Arc<dyn ExpressionExtension> {
+    int_op("plus")
+}
+
+fn minus_ext() -> Arc<dyn ExpressionExtension> {
+    int_op("minus")
+}
+
+/// The tag `ff` registered `symbol` under.
+fn tag_of(ff: &FormulaFactory, symbol: &str) -> tag::Tag {
+    ff.extension_by_symbol(symbol).expect("registered").0
+}
+
+/// The factory the parsing tests build against: `dist`, `even`, `zero`,
+/// `plus` and `minus`.
 fn parse_factory() -> FormulaFactory {
     FormulaFactory::with_extensions([
         Extension::Expr(dist_ext()),
         Extension::Pred(even_ext()),
         Extension::Expr(zero_ext()),
+        Extension::Expr(plus_ext()),
+        Extension::Expr(minus_ext()),
     ])
     .expect("valid extension set")
 }
@@ -557,7 +573,7 @@ fn extended_tag(expr: &Expression) -> (tag::Tag, usize) {
 #[test]
 fn prefix_operator_call_parses_to_extended_expression() {
     let ff = parse_factory();
-    let (dist_tag, _) = ff.extension_by_symbol("dist").expect("registered");
+    let dist_tag = tag_of(&ff, "dist");
     let expr = rossi::parse_expression_str_with("dist(a, b)", &ff).expect("parses");
     assert_eq!(extended_tag(&expr), (dist_tag, 2));
     assert_eq!(
@@ -584,7 +600,7 @@ fn prefix_operator_call_parses_to_extended_expression() {
 #[test]
 fn nullary_operator_parses_bare() {
     let ff = parse_factory();
-    let (zero_tag, _) = ff.extension_by_symbol("zero").expect("registered");
+    let zero_tag = tag_of(&ff, "zero");
     let expr = rossi::parse_expression_str_with("zero", &ff).expect("parses");
     assert_eq!(extended_tag(&expr), (zero_tag, 0));
     let expr = rossi::parse_expression_str_with("zero + x", &ff).expect("parses");
@@ -602,7 +618,7 @@ fn nullary_operator_parses_bare() {
 #[test]
 fn predicate_operator_call_parses_to_extended_predicate() {
     let ff = parse_factory();
-    let (even_tag, _) = ff.extension_by_symbol("even").expect("registered");
+    let even_tag = tag_of(&ff, "even");
     let pred = rossi::parse_predicate_str_with("even(x) ∧ x > 0", &ff).expect("parses");
     let rossi::PredicateKind::Associative { children, .. } = pred.kind() else {
         panic!("expected a conjunction, got {pred:?}");
@@ -724,4 +740,199 @@ fn operator_symbols_cannot_name_identifiers() {
     assert!(matches!(&error, rossi::ParseError::ReservedWord { word, .. } if word == "dist"));
     // The same names are free under the default factory.
     rossi::parse_predicate_str("∀dist·dist = 1").expect("ordinary identifier");
+}
+
+// --- infix operators ---
+
+#[test]
+fn infix_operator_parses_between_pair_and_arrows() {
+    let ff = parse_factory();
+    let plus_tag = tag_of(&ff, "plus");
+
+    // Above the pair constructor: `a ↦ b plus c` is `a ↦ (b plus c)`.
+    let expr = rossi::parse_expression_str_with("a ↦ b plus c", &ff).expect("parses");
+    let ExpressionKind::Binary {
+        op: BinaryExprOp::Mapsto,
+        left,
+        right,
+    } = expr.kind()
+    else {
+        panic!("expected a maplet, got {expr:?}");
+    };
+    assert!(matches!(left.kind(), ExpressionKind::FreeIdentifier(name) if name == "a"));
+    assert_eq!(extended_tag(right), (plus_tag, 2));
+    assert_eq!(
+        right.span(),
+        Some(rossi::formula::Span { start: 6, end: 14 })
+    );
+    let expr = rossi::parse_expression_str_with("a plus b ↦ c", &ff).expect("parses");
+    let ExpressionKind::Binary {
+        op: BinaryExprOp::Mapsto,
+        left,
+        ..
+    } = expr.kind()
+    else {
+        panic!("expected a maplet, got {expr:?}");
+    };
+    assert_eq!(extended_tag(left), (plus_tag, 2));
+
+    // Applications, images and prefix operators are ordinary operands.
+    let expr =
+        rossi::parse_expression_str_with("f(x) plus g[y] plus dist(a, b)", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (plus_tag, 3));
+    let expr = rossi::parse_expression_str_with("−a plus card(S)", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (plus_tag, 2));
+
+    // In predicate position and in a set.
+    let pred =
+        rossi::parse_predicate_str_with("a plus b ∈ S ∧ {a plus b} ⊆ S", &ff).expect("parses");
+    let rossi::PredicateKind::Associative { children, .. } = pred.kind() else {
+        panic!("expected a conjunction, got {pred:?}");
+    };
+    let rossi::PredicateKind::Relational { left, .. } = children[0].kind() else {
+        panic!("expected a membership, got {:?}", children[0]);
+    };
+    assert_eq!(extended_tag(left), (plus_tag, 2));
+
+    // Under the default factory the word is not an operator, and a keyword
+    // is never even tried as one.
+    let error = rossi::parse_expression_str("a end b").expect_err("keyword");
+    assert!(
+        matches!(&error, rossi::ParseError::PestError { .. }),
+        "{error:?}"
+    );
+    for text in ["a plus b", "a card b"] {
+        let error = rossi::parse_expression_str(text).expect_err(text);
+        assert!(
+            matches!(
+                &error,
+                rossi::ParseError::UnknownInfixOperator {
+                    line: 1,
+                    column: 3,
+                    ..
+                }
+            ),
+            "{text}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn associative_infix_chain_folds_flat() {
+    let ff = parse_factory();
+    let plus_tag = tag_of(&ff, "plus");
+    let expr = rossi::parse_expression_str_with("a plus b plus c plus d", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (plus_tag, 4));
+    assert_eq!(
+        expr.span(),
+        Some(rossi::formula::Span { start: 0, end: 22 })
+    );
+    // Parentheses keep their nesting.
+    let expr = rossi::parse_expression_str_with("a plus (b plus c)", &ff).expect("parses");
+    let ExpressionKind::Extended { exprs, .. } = expr.kind() else {
+        panic!("expected an extended expression, got {expr:?}");
+    };
+    assert_eq!(exprs.len(), 2);
+    assert_eq!(extended_tag(&exprs[1]), (plus_tag, 2));
+}
+
+#[test]
+fn non_associative_infix_chain_is_rejected() {
+    let ff = parse_factory();
+    let minus_tag = tag_of(&ff, "minus");
+    let expr = rossi::parse_expression_str_with("a minus b", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (minus_tag, 2));
+    let expr = rossi::parse_expression_str_with("a minus (b minus c)", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (minus_tag, 2));
+    for (text, left, right) in [
+        ("a minus b minus c", "minus", "minus"),
+        ("a plus b minus c", "plus", "minus"),
+        ("a minus b plus c", "minus", "plus"),
+    ] {
+        let error = rossi::parse_expression_str_with(text, &ff).expect_err(text);
+        assert!(
+            matches!(&error, rossi::ParseError::IncompatibleOperators { left: l, right: r, .. }
+                if l == left && r == right),
+            "{text}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn infix_operand_at_set_level_needs_parentheses() {
+    let ff = parse_factory();
+    for text in [
+        "a plus b + c",
+        "a + b plus c",
+        "a ∪ b plus c",
+        "S plus T → U",
+        "a plus b ∗ c",
+        "a plus b ‥ c",
+        "a plus b ^ c",
+    ] {
+        let error = rossi::parse_expression_str_with(text, &ff).expect_err(text);
+        assert!(
+            matches!(&error, rossi::ParseError::IncompatibleOperators { .. }),
+            "{text}: {error:?}"
+        );
+    }
+    for text in [
+        "a plus (b + c)",
+        "(a ∪ b) plus c",
+        "S plus (T → U)",
+        "a plus b ↦ c ∗ d",
+    ] {
+        rossi::parse_expression_str_with(text, &ff).unwrap_or_else(|e| panic!("{text}: {e}"));
+    }
+}
+
+#[test]
+fn keyword_after_operand_is_never_an_infix_operator() {
+    let ff = parse_factory();
+    let plus_tag = tag_of(&ff, "plus");
+    let source = "\
+MACHINE M
+VARIABLES
+    x y
+INVARIANTS
+    @inv1 x ∈ ℤ ∧ y ∈ ℤ
+    @inv2 x = 1 or y plus x = 2
+VARIANT
+    x plus y
+EVENTS
+EVENT INITIALISATION
+THEN
+    @a x ≔ 0
+    @b y ≔ 0
+END
+EVENT e
+ANY
+    p
+WHERE
+    @g p = x plus y
+THEN
+    @a x ≔ x plus p
+END
+END
+";
+    let components = rossi::parse_components_with(source, &ff).expect("parses");
+    let rossi::Component::Machine(m) = &components[0] else {
+        panic!("expected a machine");
+    };
+    let variant = &m.variants[0].expression;
+    assert_eq!(extended_tag(variant), (plus_tag, 2));
+    assert!(matches!(
+        m.invariants[1].predicate.kind(),
+        rossi::PredicateKind::Associative { .. }
+    ));
+    assert_eq!(m.events[0].parameters.len(), 1);
+    assert_eq!(m.events[0].guards.len(), 1);
+    assert_eq!(m.events[0].actions.len(), 1);
+    // Under the default factory the same machine, minus the operator uses,
+    // is unaffected: every word after an operand is the keyword it was.
+    let plain = source
+        .replace(" plus y", "")
+        .replace("y plus x", "y")
+        .replace(" plus p", "");
+    rossi::parse_components(&plain).expect("keywords still close every formula");
 }

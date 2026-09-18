@@ -1113,6 +1113,38 @@ mod tests {
         assert!(iter_completion_scope(scope::MACHINE).any(|k| k.id == Theorems));
     }
 
+    /// The grammar's `reserved_word` alternation, the guard under a
+    /// user-defined infix operator, must name every rule with a word
+    /// spelling: each `kw_*` rule and each `op_*` rule with a word among its
+    /// spellings. A keyword missing there would be read as an operator.
+    #[test]
+    fn reserved_word_covers_every_keyword() {
+        let grammar = include_str!("grammar.pest");
+        let mut word_rules: HashSet<&str> = HashSet::new();
+        for line in grammar.lines() {
+            let Some((name, body)) = line.split_once(" = ") else {
+                continue;
+            };
+            if !(name.starts_with("kw_") || name.starts_with("op_")) {
+                continue;
+            }
+            if crate::operators::pest_string_literals(body)
+                .iter()
+                .any(|lit| lit.starts_with(|c: char| c.is_ascii_alphabetic()))
+            {
+                word_rules.insert(name);
+            }
+        }
+        let head = "reserved_word = _{";
+        let start = grammar.find(head).expect("reserved_word rule") + head.len();
+        let end = start + grammar[start..].find('}').expect("closed rule");
+        let listed: HashSet<&str> = grammar[start..end]
+            .split(|c: char| c == '|' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(listed, word_rules);
+    }
+
     #[test]
     fn keywords_match_grammar() {
         let grammar = include_str!("grammar.pest");
