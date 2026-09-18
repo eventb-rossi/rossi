@@ -130,7 +130,7 @@ pub(crate) fn declared_name_at_offset(components: &[Component], offset: usize, n
 }
 
 /// Whether `span` covers `offset`, counting the trailing edge.
-fn covers(span: Span, offset: usize) -> bool {
+pub(crate) fn covers(span: Span, offset: usize) -> bool {
     span.contains(offset) || span.end == offset
 }
 

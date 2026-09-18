@@ -1441,6 +1441,9 @@ impl LanguageServer for RossiLanguageServer {
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                // One level down the refinement graph: the machines that
+                // refine this one, or the events that refine this event.
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 // Pull diagnostics alongside the push ones: a client that
                 // supports pull uses it and ignores the pushes, and one that
                 // does not keeps working unchanged. `interFileDependencies`
@@ -2036,6 +2039,20 @@ impl LanguageServer for RossiLanguageServer {
         );
 
         Ok(response)
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: request::GotoImplementationParams,
+    ) -> Result<Option<request::GotoImplementationResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        debug!("Goto implementation for: {} at {:?}", uri, position);
+
+        let provider = Arc::clone(&self.type_hierarchy_provider);
+        let locations = run_blocking(move || provider.implementations(&uri, position)).await?;
+
+        Ok(locations.map(request::GotoImplementationResponse::Array))
     }
 
     async fn prepare_type_hierarchy(
