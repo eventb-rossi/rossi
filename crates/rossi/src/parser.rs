@@ -33,13 +33,20 @@ thread_local! {
 /// `delta` beyond the enclosing scope's shift. Used by error recovery,
 /// which parses clause segments out of their document position: the
 /// formula model is immutable, so its spans must be born in document
-/// coordinates.
+/// coordinates. The previous base is restored by a guard, so it comes back
+/// when `f` unwinds too and a caught panic cannot shift the next parse on
+/// the thread.
 fn with_span_base<T>(delta: usize, f: impl FnOnce() -> T) -> T {
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = SPAN_BASE.try_with(|base| base.set(self.0));
+        }
+    }
     let previous = SPAN_BASE.with(|base| base.get());
     SPAN_BASE.with(|base| base.set(previous + delta));
-    let result = f();
-    SPAN_BASE.with(|base| base.set(previous));
-    result
+    let _restore = Restore(previous);
+    f()
 }
 
 thread_local! {
@@ -55,11 +62,20 @@ thread_local! {
 /// without it being threaded through the structural builders. It is never
 /// ambient across an API boundary: public callers go through the explicit
 /// `_with` twins, so a worker on another thread cannot silently lose it.
+/// The previous factory is restored by a guard, so it comes back when `f`
+/// unwinds too and a caught panic cannot leave a stale factory behind for
+/// the next parse on the thread.
 pub(crate) fn with_factory<T>(ff: &FormulaFactory, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<FormulaFactory>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            let _ = FACTORY.try_with(|slot| slot.replace(previous));
+        }
+    }
     let previous = FACTORY.with(|slot| slot.replace(Some(ff.clone())));
-    let result = f();
-    FACTORY.with(|slot| *slot.borrow_mut() = previous);
-    result
+    let _restore = Restore(previous);
+    f()
 }
 
 /// The factory of the enclosing [`with_factory`] scope, else the default.
@@ -6383,5 +6399,70 @@ end";
         let machine_span = m.span.expect("machine span");
         assert!(mch_src[events.span.start..events.span.end].starts_with("events"));
         assert!(events.span.end < machine_span.end);
+    }
+
+    /// A caught panic inside a scope must not leave the scope behind: the
+    /// next parse on the thread would otherwise build with a stale factory
+    /// or shifted spans.
+    #[test]
+    fn scopes_are_restored_when_the_closure_unwinds() {
+        use crate::formula::extension::{ExpressionExtension, Extension, ExtensionKind};
+        use crate::formula::extension::{ExtendedRef, FormulaExtension};
+        use crate::formula::typecheck::{TcType, TypeCheckMediator};
+        use crate::formula::wd::WdMediator;
+        use crate::formula::{Expression, Predicate, Type};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct Zero;
+        impl FormulaExtension for Zero {
+            fn symbol(&self) -> &str {
+                "zero"
+            }
+            fn id(&self) -> &str {
+                "parser.test.zero"
+            }
+            fn group_id(&self) -> &str {
+                "parser.test"
+            }
+            fn kind(&self) -> ExtensionKind {
+                ExtensionKind::atomic_expression()
+            }
+            fn conjoin_children_wd(&self) -> bool {
+                true
+            }
+            fn wd_predicate(&self, _: ExtendedRef<'_>, wd: &WdMediator<'_>) -> Predicate {
+                wd.true_wd()
+            }
+        }
+        impl ExpressionExtension for Zero {
+            fn synthesize_type(&self, _: &[Expression], _: &[Predicate]) -> Option<Type> {
+                Some(Type::Int)
+            }
+            fn verify_type(&self, ty: &Type, _: &[Expression], _: &[Predicate]) -> bool {
+                *ty == Type::Int
+            }
+            fn type_check(&self, m: &mut TypeCheckMediator<'_, '_>, _: &[TcType]) -> TcType {
+                m.from_type(&Type::Int)
+            }
+        }
+        let ff = FormulaFactory::with_extensions([Extension::Expr(std::sync::Arc::new(Zero))])
+            .expect("valid extension set");
+
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            with_factory(&ff, || {
+                assert_eq!(scoped_factory(), ff);
+                with_span_base(10, || {
+                    assert_eq!(SPAN_BASE.with(|base| base.get()), 10);
+                    panic!("inside both scopes");
+                })
+            })
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(scoped_factory(), FormulaFactory::default_factory());
+        assert_eq!(SPAN_BASE.with(|base| base.get()), 0);
+        // And the next parse on this thread is an ordinary one.
+        let pred = parse_predicate_str("zero = 1").expect("parses");
+        assert_eq!(pred.factory(), &FormulaFactory::default_factory());
+        assert_eq!(pred.span().map(|s| s.start), Some(0));
     }
 }
