@@ -167,15 +167,22 @@ pub fn lexical_spans(source: &str) -> LexicalSpans {
                 i = (i + 2).min(bytes.len());
                 comments.push(Span { start, end: i });
             }
-            c if c.is_ascii_alphabetic() || c == b'_' => {
+            _ if source[i..]
+                .chars()
+                .next()
+                .is_some_and(crate::names::is_math_identifier_start) =>
+            {
                 // One whole structural word: hyphen-joined, so `end-to-end` is
-                // a single name and not a keyword with a tail.
+                // a single name and not a keyword with a tail. Word characters
+                // are Unicode, so the scan steps over whole characters.
                 let start = i;
                 let mut letters_only = true;
-                while i < bytes.len() && crate::keywords::is_structural_word_char(bytes[i] as char)
-                {
-                    letters_only &= bytes[i].is_ascii_alphabetic();
-                    i += 1;
+                for ch in source[i..].chars() {
+                    if !crate::keywords::is_structural_word_char(ch) {
+                        break;
+                    }
+                    letters_only &= ch.is_ascii_alphabetic();
+                    i += ch.len_utf8();
                 }
                 let word = &source[start..i];
                 // Every keyword is letters only and within these bounds

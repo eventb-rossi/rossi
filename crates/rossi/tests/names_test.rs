@@ -242,7 +242,7 @@ fn recovery_rejects_invalid_component_names() {
     for src in [
         "MACHINE a--b\nEND\n",
         "MACHINE m1\nSEES\n    a--b\nEND\n",
-        "CONTEXT \u{e4}\nEND\n",
+        "CONTEXT \u{3bb}\nEND\n",
     ] {
         let result = parse_components_with_recovery(src);
         let components = result.component.expect("recovery yields a partial AST");
@@ -333,14 +333,14 @@ fn reserved_keyword_constant_accepted() {
 
 #[test]
 fn malformed_component_name_target_rejected() {
-    // The text grammar's `component_name` rule requires an ASCII letter or
-    // `_` start and every `-` to open a non-empty segment, so import rejects
+    // The text grammar's `component_name` rule requires a letter or `_`
+    // start and every `-` to open a non-empty segment, so import rejects
     // what pretty-printing could not re-parse (issue #28). The per-character
     // classification is unit-tested in `names`; this pins the wiring for the
     // opaque-target path.
     for (bad, reason_substring) in [
-        ("1bad", "must start with ASCII letter or '_'"),
-        ("-bad", "must start with ASCII letter or '_'"),
+        ("1bad", "must start with a letter or '_'"),
+        ("-bad", "must start with a letter or '_'"),
         ("bad-", "'-' must be followed by"),
         ("ba--d", "'-' must be followed by"),
     ] {
@@ -499,5 +499,103 @@ fn malformed_predicate_attribute_wraps_pest_error() {
             assert!(reason.contains("Pest parsing error"), "reason: {reason}");
         }
         other => panic!("expected MalformedAttribute, got {other:?}"),
+    }
+}
+
+// ----- Rodin's identifier character classes --------------------------------
+
+#[test]
+fn unicode_letters_are_identifiers() {
+    // Rodin classifies identifier characters with Java's identifier classes,
+    // so any letter starts a name: a carrier set `ℝ`, constants `α` and `β`.
+    let source = "\
+CONTEXT C
+SETS
+    ℝ
+CONSTANTS
+    α
+    β
+AXIOMS
+    @axm1 α ∈ ℝ
+    @axm2 β = α
+END
+";
+    let Component::Context(ctx) = parse_one(source) else {
+        panic!("expected Context");
+    };
+    assert_eq!(ctx.sets[0].name, "ℝ");
+    assert_eq!(ctx.constants[0].name, "α");
+    assert_eq!(ctx.constants[1].name, "β");
+
+    let mut expected = Component::Context(ctx);
+    expected.clear_spans();
+    let text = rossi::to_string(&expected);
+    let mut reparsed = parse(&text).unwrap_or_else(|e| panic!("must re-parse, got {e}\n{text}"));
+    reparsed.clear_spans();
+    assert_eq!(reparsed, expected);
+
+    // XML import applies the same classes.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.carrierSet name="s" org.eventb.core.identifier="ℝ"/>
+    <org.eventb.core.constant name="c" org.eventb.core.identifier="α"/>
+</org.eventb.core.contextFile>"#;
+    let Component::Context(imported) = parse_xml(xml).expect("import accepts Unicode names") else {
+        panic!("expected Context");
+    };
+    assert_eq!(imported.sets[0].name, "ℝ");
+    assert_eq!(imported.constants[0].name, "α");
+}
+
+#[test]
+fn reserved_glyphs_stay_tokens() {
+    // Rodin's lexer reads the longest identifier image and then looks the
+    // whole image up: `ℤ` alone is the integer set, while `ℤx` is one
+    // identifier. `λ` is excluded from the classes, so a lambda still lexes.
+    let source = "\
+MACHINE M
+VARIABLES
+    ℤx
+INVARIANTS
+    @inv1 ℤx ∈ ℤ
+    @inv2 (λy·y ∈ ℕ ∣ y + ℤx)(1) ∈ ℤ
+EVENTS
+EVENT INITIALISATION
+THEN
+    @act1 ℤx ≔ 0
+END
+END
+";
+    let Component::Machine(m) = parse_one(source) else {
+        panic!("expected Machine");
+    };
+    assert_eq!(m.variables[0].name, "ℤx");
+    let mut expected = Component::Machine(m);
+    expected.clear_spans();
+    let text = rossi::to_string(&expected);
+    assert!(text.contains("ℤx ∈ ℤ"), "{text}");
+    let mut reparsed = parse(&text).expect("re-parse");
+    reparsed.clear_spans();
+    assert_eq!(reparsed, expected);
+
+    // A bare glyph is the token, so it can never name a user identifier:
+    // the text grammar does not lex it as one, and XML import refuses it
+    // like every reserved word.
+    for glyph in rossi::builtins::RESERVED_GLYPH_WORDS {
+        let source = format!("MACHINE M\nVARIABLES\n    {glyph}\nEND\n");
+        assert!(
+            parse(&source).is_err(),
+            "{glyph} must not declare a variable"
+        );
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.constant name="c" org.eventb.core.identifier="{glyph}"/>
+</org.eventb.core.contextFile>"#
+        );
+        match parse_xml(&xml) {
+            Err(ParseError::UnsupportedIdentifier { .. }) => {}
+            other => panic!("{glyph}: expected an unsupported-identifier error, got {other:?}"),
+        }
     }
 }

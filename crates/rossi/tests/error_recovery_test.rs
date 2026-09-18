@@ -188,15 +188,15 @@ fn recovery_still_rejects_noncanonical_and_reserved_names() {
     let source = "\
 MACHINE 1m
 SEES
-    1ctx a--b ä
+    1ctx a--b
 VARIABLES
-    1x ä x-y dom _x
+    1x ℕ x-y dom _x
 INVARIANTS
     @i _x ∈
 EVENTS
     EVENT a--b
     ANY
-        1p ä p-q dom _p
+        1p ℕ p-q dom _p
     WHERE
         @g _p = _x
     END

@@ -8,8 +8,9 @@
 //! [`is_reserved_name`] composes the per-word case rules into the blocklist
 //! tools use when *introducing* a name (rename).
 //!
-//! The non-ASCII symbol atoms (`ℕ ℕ1 ℙ ℙ1 ℤ` …) are operator spellings handled by
-//! [`crate::operators`]; only identifier-shaped words live here.
+//! The non-ASCII symbol atoms (`ℕ ℕ1 ℙ ℙ1 ℤ`) are operator spellings handled
+//! by [`crate::operators`]; they appear here only as [`RESERVED_GLYPH_WORDS`],
+//! the spellings that can never name an identifier.
 //!
 //! [`crate::operators::BuiltinFunction`] and
 //! [`crate::operators::BuiltinPredicate`] remain the sources used during
@@ -105,11 +106,22 @@ pub const RESERVED_ATOM_WORDS: &[&str] = &[
     "BOOL", "FALSE", "TRUE", "id", "pred", "prj1", "prj2", "succ",
 ];
 
+/// The glyph spellings of the built-in sets and powerset operators. To
+/// Rodin's lexer these are identifier *characters* (`ℤx` is an ordinary
+/// identifier), but the whole image is the token, so none of them can name a
+/// user identifier (`isValidIdentifierName` rejects them). The text grammar
+/// never lexes them as identifiers (`reserved_glyph`); this list covers the
+/// XML door and the rename blocklist. Their ASCII spellings stay usable as
+/// names like every other rossi-only spelling.
+pub const RESERVED_GLYPH_WORDS: &[&str] = &["ℕ", "ℕ1", "ℤ", "ℙ", "ℙ1"];
+
 /// Whether `word` is in the full kernel_lang §2.2 reserved list (exact case).
 /// Checked wherever a user identifier is being *named*: declarations,
 /// assignment targets, predicate-application heads, recovery, XML import.
 pub fn is_reserved_word(word: &str) -> bool {
-    is_reserved_operator_word(word) || RESERVED_ATOM_WORDS.contains(&word)
+    is_reserved_operator_word(word)
+        || RESERVED_ATOM_WORDS.contains(&word)
+        || RESERVED_GLYPH_WORDS.contains(&word)
 }
 
 /// Whether `word` may not appear as a plain (unapplied) identifier inside a
