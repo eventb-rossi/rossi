@@ -208,7 +208,7 @@ impl BuiltinPredicate {
     pub fn min_arity(&self) -> usize {
         match self {
             BuiltinPredicate::Finite => 1,
-            BuiltinPredicate::Partition => 2,
+            BuiltinPredicate::Partition => 1,
         }
     }
 
@@ -219,15 +219,16 @@ impl BuiltinPredicate {
         use crate::formula::extension::Arity;
         match self {
             BuiltinPredicate::Finite => Arity::Fixed(1),
-            BuiltinPredicate::Partition => Arity::AtLeast(2),
+            BuiltinPredicate::Partition => Arity::AtLeast(1),
         }
     }
 
     pub fn check_arity(&self, n: usize) -> bool {
         match self {
             BuiltinPredicate::Finite => n == 1,
-            // partition(S, A, B, ...) requires the set plus at least one block
-            BuiltinPredicate::Partition => n >= 2,
+            // partition(S, A, B, ...) takes the set plus any number of blocks;
+            // with none it asserts that S is empty, as Rodin reads it
+            BuiltinPredicate::Partition => n >= 1,
         }
     }
 
