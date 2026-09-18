@@ -572,20 +572,22 @@ pub fn is_clause_boundary(word: &str) -> bool {
 
 /// Whether `c` continues a word for keyword-boundary purposes: a keyword
 /// match counts as whole-word only when neither neighbour is one of these.
-/// Mirrors the grammar's `word_char` (the body of `word_boundary`): ASCII
-/// alphanumerics and `_`. A trailing identifier prime `'` is deliberately
-/// excluded — as in the grammar (and Event-B), a prime attaches only to a
-/// plain identifier, so a keyword followed by `'` is still that keyword
-/// (`mod'` is `mod` then `'`). Math contexts keep recognizing words across
-/// `-` (`a-dom(r)` lexes `dom` as an operator); structural scans use
-/// [`is_structural_word_char`] instead.
+/// Mirrors the grammar's `word_char` (the body of `word_boundary`) through
+/// [`crate::names::is_math_identifier_part`]. A trailing identifier prime
+/// `'` is deliberately excluded — as in the grammar (and Event-B), a prime
+/// attaches only to a plain identifier, so a keyword followed by `'` is still
+/// that keyword (`mod'` is `mod` then `'`). Math contexts keep recognizing
+/// words across `-` (`a-dom(r)` lexes `dom` as an operator); structural scans
+/// use [`is_structural_word_char`] instead.
+#[inline]
 pub fn is_word_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+    crate::names::is_math_identifier_part(c)
 }
 
 /// [`is_word_char`] plus `-`, mirroring the grammar's `struct_word_boundary`:
 /// a hyphen-joined `component_name` like `end-to-end` or `the-MACHINE-x` must
 /// never be split at an embedded keyword.
+#[inline]
 pub fn is_structural_word_char(c: char) -> bool {
     is_word_char(c) || c == '-'
 }

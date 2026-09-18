@@ -304,18 +304,24 @@ impl Canonical<'_> {
         }
         // An identifier: the grammar's `ident_core`, as `names` spells
         // it. `BOOL` is a keyword token before it is a word, as in the
-        // grammar.
-        let len = self
-            .rest
-            .iter()
-            .take_while(|b| crate::names::is_math_identifier_part(**b as char))
-            .count();
-        if len == 0 || !crate::names::is_math_identifier_start(self.rest[0] as char) {
+        // grammar. `rest` is a suffix of a `&str` cut at token ends, so it
+        // is valid UTF-8 and the identifier classes apply to whole chars.
+        let text = std::str::from_utf8(self.rest).ok()?;
+        let len: usize = text
+            .chars()
+            .take_while(|c| crate::names::is_math_identifier_part(*c))
+            .map(char::len_utf8)
+            .sum();
+        if len == 0
+            || !text
+                .chars()
+                .next()
+                .is_some_and(crate::names::is_math_identifier_start)
+        {
             return None;
         }
-        let (word, rest) = self.rest.split_at(len);
-        let word = std::str::from_utf8(word).ok()?;
-        self.rest = rest;
+        let (word, rest) = text.split_at(len);
+        self.rest = rest.as_bytes();
         if word == "BOOL" {
             Some(Type::Bool)
         } else if crate::builtins::is_reserved_name(word) || crate::keywords::is_keyword(word) {

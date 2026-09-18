@@ -25,6 +25,22 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 // Basic Tokens
 // ==========================
 
+// Identifier character classes follow Rodin's lexer, which classifies code
+// points with Java's `Character.isJavaIdentifierStart/Part` and excludes only
+// `λ` (a letter, but the lambda token) and `$` (Rodin's meta-variable sigil).
+// The ASCII alternatives come first as the fast path, and the category
+// lookups (each a table search) run only for a code point that is neither
+// ASCII nor a math symbol, which is what follows a word in a formula; the
+// Unicode general categories are pest built-ins. `names.rs` mirrors the two
+// rules with the same categories (parity-tested). A built-in glyph that is
+// itself a letter (`ℕ`, `ℤ`, `ℙ`) is therefore a token only as a whole
+// word: `ℤ` is the integer set, `ℤx` is an identifier, exactly as in Rodin.
+ident_start = _{
+    ASCII_ALPHA | "_"
+  | (!(ASCII | MATH_SYMBOL | "λ" | "$")
+     ~ (LETTER | LETTER_NUMBER | CURRENCY_SYMBOL | CONNECTOR_PUNCTUATION))
+}
+
 // Word-boundary guards (single source of truth). `word_char` is the set of
 // characters that continue a mathematical identifier; a keyword counts as a
 // keyword only when not immediately followed by one (otherwise it is an
@@ -33,20 +49,29 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)* ~ "\n"?) }
 // (`NAT-1` = `ℕ − 1`); structural keywords also treat `-` as a word char so a
 // hyphenated `component_name` (`end-to-end`, `variant-x`) is never split at an
 // embedded keyword.
-word_char = _{ ASCII_ALPHANUMERIC | "_" }
+word_char = _{
+    ASCII_ALPHANUMERIC | "_"
+  | (!(ASCII | MATH_SYMBOL) ~ (ident_start | DECIMAL_NUMBER | NONSPACING_MARK | SPACING_MARK))
+}
 word_boundary = _{ !word_char }
 struct_word_boundary = _{ !(word_char | "-") }
 
 // Prime-less, hyphen-less identifier core, shared by `identifier` and
-// `component_name`; built on the single `word_char` alnum+`_` source.
-ident_core = _{ (ASCII_ALPHA | "_") ~ word_char* }
+// `component_name`; built on the single `ident_start`/`word_char` source.
+ident_core = _{ ident_start ~ word_char* }
+
+// The built-in glyphs that are letters. Rodin's lexer reads them with the
+// identifier characters and then finds the whole image in its token table,
+// so the bare glyph is never an identifier while `ℤx` is one; the same
+// spellings are reserved names in `builtins` for the XML door.
+reserved_glyph = _{ ("ℕ1" | "ℕ" | "ℤ" | "ℙ1" | "ℙ") ~ word_boundary }
 
 // Identifier (mathematical: kernel_lang §2.2 — no hyphens; see names.rs).
 // An optional single trailing prime marks an Event-B after-state variable
 // (`x'`). The prime never repeats nor appears interior (`x''`, `x'y` are two
 // tokens), matching Rodin's lexer, where a prime attaches only to a plain
 // identifier — never to a keyword.
-identifier = @{ ident_core ~ "'"? }
+identifier = @{ !reserved_glyph ~ ident_core ~ "'"? }
 
 // Component name: machine/context names, REFINES/SEES/EXTENDS targets and
 // event names. Rodin stores these as file names / labels (bare strings, not
@@ -170,8 +195,8 @@ op_union = { "∪" | "\\/" }
 op_intersection = { "∩" | "/\\" }
 op_difference = { "∖" | "\\" }
 op_cartesian = { "×" | "**" }
-op_powerset = @{ "ℙ" | ("POW" ~ word_boundary) }
-op_powerset1 = @{ "ℙ1" | ("POW1" ~ word_boundary) }
+op_powerset = @{ ("ℙ" | "POW") ~ word_boundary }
+op_powerset1 = @{ ("ℙ1" | "POW1") ~ word_boundary }
 op_emptyset = { "∅" | "{}" }
 op_oftype = @{ "⦂" | ("oftype" ~ word_boundary) }
 
