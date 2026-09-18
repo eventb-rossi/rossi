@@ -176,6 +176,26 @@ fn validate_declared_identifier(name: &str, origin: &str) -> Result<String> {
 /// human-readable name; fall back to `name` for hand-crafted files that
 /// lack `label`. Trimmed here (not just in `validate_component_name`) so the
 /// INITIALISATION check at the call sites sees the cleaned name.
+/// Whether this event node repeats the internal `name` of one already read
+/// from the same file.
+///
+/// Rodin's element store keys a parent's children by internal name: on a
+/// second DOM node with the same name `Buffer.getChildren` logs "Duplicate
+/// child" and puts the first node back, so to Rodin the file holds one
+/// event and no label conflict. A file with such a repeat exists in the
+/// corpus (an identical event element written twice); reading both copies
+/// turned it into a duplicate-label error that dropped the event and every
+/// refinement of it.
+fn repeated_event_node(
+    e: &quick_xml::events::BytesStart,
+    seen: &mut std::collections::HashSet<String>,
+) -> Result<bool> {
+    Ok(match get_xml_attr(e, b"name")? {
+        Some(name) => !seen.insert(name),
+        None => false,
+    })
+}
+
 fn event_name_attr(e: &quick_xml::events::BytesStart) -> Result<String> {
     let raw = get_xml_attr(e, b"label")?
         .or(get_xml_attr(e, b"name")?)
@@ -611,6 +631,7 @@ fn parse_machine_xml_with_name(
     let mut initialisation = None;
     let mut events = Vec::new();
     let mut current_event: Option<EventBuilder> = None;
+    let mut seen_event_nodes = std::collections::HashSet::new();
     let mut metadata = None;
 
     loop {
@@ -620,6 +641,16 @@ fn parse_machine_xml_with_name(
                 let tag_name = std::str::from_utf8(name_bytes.as_ref())
                     .map_err(|e| ParseError::InvalidXml(e.to_string()))?
                     .to_string();
+
+                if tag_name == "org.eventb.core.event"
+                    && repeated_event_node(&e, &mut seen_event_nodes)?
+                {
+                    let end = e.to_end();
+                    reader
+                        .read_to_end_into(end.name(), &mut Vec::new())
+                        .map_err(|e| ParseError::InvalidXml(e.to_string()))?;
+                    continue;
+                }
 
                 if tag_name == "org.eventb.core.machineFile" {
                     let version = get_xml_attr(&e, b"version")?;
@@ -715,6 +746,9 @@ fn parse_machine_xml_with_name(
                     // writes these as XmlEvent::Empty; the Start/End
                     // handler for `org.eventb.core.event` doesn't fire.
                     "org.eventb.core.event" => {
+                        if repeated_event_node(&e, &mut seen_event_nodes)? {
+                            continue;
+                        }
                         let event_name = event_name_attr(&e)?;
                         let convergence = get_xml_attr(&e, b"convergence")?;
                         let event_comment = get_xml_attr(&e, b"comment")?;
