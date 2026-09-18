@@ -722,6 +722,10 @@ pub struct RossiLanguageServer {
     workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
     /// Completion signal for the initial disk-backed workspace scan.
     workspace_scan_state: WorkspaceScanState,
+    /// Every workspace folder the client opened, in its order. The first
+    /// is the cross-reference manager's root (the Rodin workspace and
+    /// project naming hang off one root); all of them are scanned.
+    workspace_folders: parking_lot::Mutex<Vec<PathBuf>>,
     /// Semantic tokens provider
     semantic_tokens_provider: Arc<SemanticTokensProvider>,
     /// Document links provider
@@ -938,6 +942,7 @@ impl RossiLanguageServer {
             rename_provider: Arc::new(rename_provider),
             workspace_symbol_provider,
             workspace_scan_state,
+            workspace_folders: parking_lot::Mutex::new(Vec::new()),
             semantic_tokens_provider: Arc::new(SemanticTokensProvider::new()),
             document_links_provider: Arc::new(document_links_provider),
             code_actions_provider: Arc::new(CodeActionProvider::new()),
@@ -1433,15 +1438,23 @@ impl RossiLanguageServer {
         });
     }
 
-    /// Ask the client to watch the workspace's Event-B sources, so writes made
-    /// outside the editor reach [`Self::did_change_watched_files`]. Registering
-    /// from the server rather than from each editor's client configuration
-    /// gives every editor the same behaviour from one place, and ties the
-    /// watcher's lifetime to a language server that actually started.
-    ///
-    /// A failure is logged and the session continues on the startup snapshot;
-    /// the capability guard lives at the call site, since a server must not
-    /// send requests the client never announced support for.
+    /// Index one folder's files into both disk layers.
+    async fn scan_folder(&self, folder: PathBuf) {
+        let manager = Arc::clone(&self.cross_reference_manager);
+        let symbols = Arc::clone(&self.workspace_symbol_provider);
+        match run_blocking(move || {
+            manager.scan_workspace_with(&folder, |uri, components, text| {
+                symbols.index_disk_components(uri, components, text);
+            })
+        })
+        .await
+        {
+            Ok(Ok(count)) => info!("Indexed {} Event-B files from workspace", count),
+            Ok(Err(e)) => info!("Failed to scan workspace: {}", e),
+            Err(e) => info!("Failed to scan workspace: {}", e),
+        }
+    }
+
     /// Announce `textDocument/prepareTypeHierarchy`.
     ///
     /// This goes through `client/registerCapability` rather than the
@@ -1472,6 +1485,15 @@ impl RossiLanguageServer {
         }
     }
 
+    /// Ask the client to watch the workspace's Event-B sources, so writes made
+    /// outside the editor reach [`Self::did_change_watched_files`]. Registering
+    /// from the server rather than from each editor's client configuration
+    /// gives every editor the same behaviour from one place, and ties the
+    /// watcher's lifetime to a language server that actually started.
+    ///
+    /// A failure is logged and the session continues on the startup snapshot;
+    /// the capability guard lives at the call site, since a server must not
+    /// send requests the client never announced support for.
     async fn register_source_watcher(&self) {
         let registration = Registration {
             id: "rossi-eventb-source-watcher".to_string(),
@@ -1500,12 +1522,16 @@ impl LanguageServer for RossiLanguageServer {
             params.client_info
         );
 
-        // Extract workspace root from initialize params
-        let workspace_root: Option<PathBuf> = params
+        // Every folder is scanned; the first doubles as the root.
+        let folders: Vec<PathBuf> = params
             .workspace_folders
-            .as_ref()
-            .and_then(|folders| folders.first())
-            .and_then(|folder| folder.uri.to_file_path().ok())
+            .iter()
+            .flatten()
+            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .collect();
+        let workspace_root: Option<PathBuf> = folders
+            .first()
+            .cloned()
             .or_else(|| {
                 params
                     .root_uri
@@ -1519,7 +1545,13 @@ impl LanguageServer for RossiLanguageServer {
 
         if let Some(root) = workspace_root {
             info!("Workspace root: {:?}", root);
-            self.cross_reference_manager.set_workspace_root(root);
+            self.cross_reference_manager
+                .set_workspace_root(root.clone());
+            *self.workspace_folders.lock() = if folders.is_empty() {
+                vec![root]
+            } else {
+                folders
+            };
         }
 
         self.supports_work_done_progress.store(
@@ -1683,7 +1715,10 @@ impl LanguageServer for RossiLanguageServer {
                 // and every SEES / REFINES / EXTENDS that names it, the way a
                 // rename request on the name would.
                 workspace: Some(WorkspaceServerCapabilities {
-                    workspace_folders: None,
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
                     file_operations: Some(WorkspaceFileOperationsServerCapabilities {
                         will_rename: Some(source_file_operations()),
                         did_rename: Some(source_file_operations()),
@@ -1705,25 +1740,11 @@ impl LanguageServer for RossiLanguageServer {
     async fn initialized(&self, _params: InitializedParams) {
         info!("Server initialized successfully");
 
-        // Scan workspace for Event-B files to populate cross-reference index
-        if let Some(root) = self.cross_reference_manager.workspace_root() {
-            let manager = Arc::clone(&self.cross_reference_manager);
-            let symbols = Arc::clone(&self.workspace_symbol_provider);
-            match run_blocking(move || {
-                manager.scan_workspace_with(&root, |uri, components, text| {
-                    symbols.index_disk_components(uri, components, text);
-                })
-            })
-            .await
-            {
-                Ok(Ok(count)) => {
-                    info!("Indexed {} Event-B files from workspace", count);
-                }
-                Ok(Err(e)) => {
-                    info!("Failed to scan workspace: {}", e);
-                }
-                Err(e) => info!("Failed to scan workspace: {}", e),
-            }
+        // Scan every workspace folder for Event-B files to populate the
+        // cross-reference index.
+        let folders = self.workspace_folders.lock().clone();
+        for folder in folders {
+            self.scan_folder(folder).await;
         }
         self.workspace_scan_state.complete();
 
@@ -1752,6 +1773,74 @@ impl LanguageServer for RossiLanguageServer {
         self.client
             .log_message(MessageType::INFO, "Rossi Language Server initialized")
             .await;
+    }
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        let removed: Vec<PathBuf> = params
+            .event
+            .removed
+            .iter()
+            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .collect();
+        let added: Vec<PathBuf> = params
+            .event
+            .added
+            .iter()
+            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .collect();
+        info!(
+            "Workspace folders changed: +{} -{}",
+            added.len(),
+            removed.len()
+        );
+
+        {
+            let mut folders = self.workspace_folders.lock();
+            folders.retain(|folder| !removed.contains(folder));
+            // A client may re-announce a folder it already sent; adding it
+            // twice would index the same tree twice on every later change.
+            let fresh: Vec<PathBuf> = added
+                .iter()
+                .filter(|folder| !folders.contains(folder))
+                .cloned()
+                .collect();
+            folders.extend(fresh);
+            // The first folder is the root the Rodin workspace and project
+            // naming hang off; removing it moves the root to the next one.
+            if let Some(root) = folders.first()
+                && self.cross_reference_manager.workspace_root().as_ref() != Some(root)
+            {
+                self.cross_reference_manager
+                    .set_workspace_root(root.clone());
+            }
+        }
+
+        // A removed folder's files leave the disk layers; a client that
+        // still has one of them open keeps its buffer overlay until close.
+        if !removed.is_empty() {
+            let xrefs = Arc::clone(&self.cross_reference_manager);
+            let symbols = Arc::clone(&self.workspace_symbol_provider);
+            if let Err(error) = run_blocking(move || {
+                for uri in xrefs.all_component_uris() {
+                    let under_removed = Url::parse(&uri)
+                        .ok()
+                        .and_then(|u| u.to_file_path().ok())
+                        .is_some_and(|path| removed.iter().any(|folder| path.starts_with(folder)));
+                    if under_removed {
+                        xrefs.remove_disk_document(&uri);
+                        symbols.remove_disk_document(&uri);
+                    }
+                }
+            })
+            .await
+            {
+                info!("Failed to drop a removed workspace folder: {error}");
+            }
+        }
+        for folder in added {
+            self.scan_folder(folder).await;
+        }
+        self.analyzer.republish_all_diagnostics().await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
