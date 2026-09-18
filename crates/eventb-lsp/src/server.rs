@@ -16,6 +16,7 @@ use rossi_build::walk::SOURCE_EXTENSION;
 use crate::analysis;
 use crate::code_actions::CodeActionProvider;
 use crate::completion::CompletionProvider;
+use crate::component_loader::ComponentLoader;
 use crate::config::{ConfigManager, RossiConfig};
 use crate::cross_references::CrossReferenceManager;
 use crate::definition::DefinitionProvider;
@@ -80,6 +81,67 @@ fn refresh_saved_layers(
     let components = crate::component_util::parse_all(&text);
     xrefs.index_disk_components(uri.to_string(), &components);
     symbols.index_disk_components(uri.to_string(), &components, &text);
+}
+
+/// The workspace edit that renames the component a renamed file declares,
+/// or `None` when the file declares no component named after its old stem
+/// (a merged file, a component whose name never matched its file) or the
+/// new stem is not a usable component name. Resolved through the rename
+/// provider at the component's name, so the edit is exactly what a rename
+/// request there would produce.
+fn component_rename_for_file(
+    provider: &RenameProvider,
+    loader: &ComponentLoader,
+    file: &FileRename,
+) -> Option<WorkspaceEdit> {
+    let old_uri = Url::parse(&file.old_uri).ok()?;
+    let new_uri = Url::parse(&file.new_uri).ok()?;
+    let stem = |uri: &Url| {
+        uri.to_file_path()
+            .ok()?
+            .file_stem()?
+            .to_str()
+            .map(str::to_owned)
+    };
+    let old_stem = stem(&old_uri)?;
+    let new_stem = stem(&new_uri)?;
+    if old_stem == new_stem {
+        return None;
+    }
+
+    // The buffer's stored parse if it is open, the file otherwise: the
+    // client sends this before it moves anything.
+    let parsed = loader.parsed(&old_uri)?;
+    let text = parsed.text();
+    let component = parsed.components().iter().find(|c| c.name() == old_stem)?;
+    let position = crate::position::span_to_range(&component.name_span()?, text).start;
+
+    provider.rename(
+        &RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: old_uri },
+                position,
+            },
+            new_name: new_stem,
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        },
+        text,
+    )
+}
+
+/// The file-operation filter both rename registrations share: every Event-B
+/// source file.
+fn source_file_operations() -> FileOperationRegistrationOptions {
+    FileOperationRegistrationOptions {
+        filters: vec![FileOperationFilter {
+            scheme: Some("file".to_string()),
+            pattern: FileOperationPattern {
+                glob: format!("**/*.{SOURCE_EXTENSION}"),
+                matches: Some(FileOperationPatternKind::File),
+                options: None,
+            },
+        }],
+    }
 }
 
 /// A pull report's result id: a hash of the diagnostics it carries, so two
@@ -1617,6 +1679,17 @@ impl LanguageServer for RossiLanguageServer {
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                // Renaming `Foo.eventb` renames the component `Foo` it declares
+                // and every SEES / REFINES / EXTENDS that names it, the way a
+                // rename request on the name would.
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: None,
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(source_file_operations()),
+                        did_rename: Some(source_file_operations()),
+                        ..Default::default()
+                    }),
+                }),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -2388,6 +2461,64 @@ impl LanguageServer for RossiLanguageServer {
         debug!("Workspace symbol search returned {} symbols", symbols.len());
 
         Ok(Some(symbols))
+    }
+
+    async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        debug!("Will rename {} file(s)", params.files.len());
+        let provider = Arc::clone(&self.rename_provider);
+        let documents = Arc::clone(&self.document_manager);
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        run_blocking(move || {
+            let loader = ComponentLoader::new(&xrefs, Some(&documents));
+            let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+                std::collections::HashMap::new();
+            for file in &params.files {
+                let Some(edit) = component_rename_for_file(&provider, &loader, file) else {
+                    continue;
+                };
+                for (uri, edits) in edit.changes.into_iter().flatten() {
+                    changes.entry(uri).or_default().extend(edits);
+                }
+            }
+            // Renaming several files at once can make two of them contribute
+            // edits to the same third file (its own name, plus the SEES /
+            // REFINES / EXTENDS it makes of the other renamed component). Each
+            // rename sorted its own edits, so the merged list is neither
+            // ordered nor deduplicated until it is put back in order here.
+            for edits in changes.values_mut() {
+                crate::rename::sort_edits_reverse(edits);
+                edits.dedup_by(|a, b| a.range == b.range);
+            }
+            (!changes.is_empty()).then_some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            })
+        })
+        .await
+    }
+
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        // The disk layers are keyed by URI: the old one is gone and the
+        // new one has appeared, and a client that does not watch files
+        // sends no other signal for either.
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        let symbols = Arc::clone(&self.workspace_symbol_provider);
+        let uris: Vec<Url> = params
+            .files
+            .iter()
+            .flat_map(|file| [Url::parse(&file.old_uri), Url::parse(&file.new_uri)])
+            .filter_map(|parsed| parsed.ok())
+            .collect();
+        if let Err(error) = run_blocking(move || {
+            for uri in &uris {
+                refresh_saved_layers(&xrefs, &symbols, uri);
+            }
+        })
+        .await
+        {
+            info!("Failed to refresh renamed files: {error}");
+        }
     }
 
     async fn prepare_rename(

@@ -387,7 +387,7 @@ fn base_span(text: &str, span: Span) -> Span {
 
 /// Sort edits bottom-to-top, right-to-left so applying them never shifts a
 /// not-yet-applied edit's offsets.
-fn sort_edits_reverse(edits: &mut [TextEdit]) {
+pub(crate) fn sort_edits_reverse(edits: &mut [TextEdit]) {
     edits.sort_by(|a, b| {
         b.range
             .start
