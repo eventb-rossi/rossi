@@ -47,6 +47,7 @@ pub mod symbols;
 #[cfg(test)]
 pub(crate) mod test_util;
 pub mod text_utils;
+pub mod type_definition;
 mod uri_identity;
 pub mod workspace;
 
