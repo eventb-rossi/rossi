@@ -272,7 +272,7 @@ fn push_unique_locations(
 ) {
     for location in new_locations {
         let key = (
-            location.uri.to_string(),
+            location.uri.as_str().to_owned(),
             location.range.start.line,
             location.range.start.character,
             location.range.end.line,

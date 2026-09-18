@@ -298,7 +298,10 @@ fn index_manager(fixture: &support::ModelFixture) -> Arc<CrossReferenceManager> 
     let manager = Arc::new(CrossReferenceManager::new());
     for component in fixture.components.values() {
         let uri = support::file_uri(&component.path);
-        manager.index_components(uri.to_string(), std::slice::from_ref(&component.component));
+        manager.index_components(
+            uri.as_str().to_owned(),
+            std::slice::from_ref(&component.component),
+        );
     }
     manager
 }

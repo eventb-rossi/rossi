@@ -175,7 +175,7 @@ impl Workspace {
         // files through the DocumentManager first and fall back to disk,
         // and these synthetic URIs have no disk file behind them.
         for file in &files {
-            crm.update_component(file.uri.to_string(), &file.text);
+            crm.update_component(file.uri.as_str().to_owned(), &file.text);
             dm.open(file.uri.clone(), 1, file.text.clone());
         }
         assert_eq!(
@@ -227,7 +227,7 @@ impl Workspace {
 
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
-        crm.update_component(uri.to_string(), text);
+        crm.update_component(uri.as_str().to_owned(), text);
         dm.open(uri, 1, text.to_string());
         assert_eq!(
             crm.all_component_names().len(),
@@ -642,7 +642,7 @@ fn cars_references_context_constant() {
     let mut seen = HashSet::new();
     for location in &locations {
         let key = (
-            location.uri.to_string(),
+            location.uri.as_str().to_owned(),
             location.range.start.line,
             location.range.start.character,
             location.range.end.line,
@@ -656,7 +656,7 @@ fn cars_references_context_constant() {
             slice_range(ws.text_for_uri(&location.uri), location.range),
             "cars_limit",
             "bad reference range in {}",
-            location.uri
+            location.uri.as_str()
         );
     }
 
@@ -676,12 +676,12 @@ fn cars_references_context_constant() {
                 WordBoundary::MathIdentifier,
             )
             .len();
-            (count > 0).then(|| (f.uri.to_string(), count))
+            (count > 0).then(|| (f.uri.as_str().to_owned(), count))
         })
         .collect();
     let mut actual: BTreeMap<String, usize> = BTreeMap::new();
     for location in &locations {
-        *actual.entry(location.uri.to_string()).or_default() += 1;
+        *actual.entry(location.uri.as_str().to_owned()).or_default() += 1;
     }
     assert_eq!(
         actual, expected,
@@ -713,17 +713,20 @@ fn cars_rename_component_cross_file() {
     for (uri, edits) in &changes {
         let text = ws.text_for_uri(uri);
         let renamed = apply_edits(text, edits);
-        rossi::parse(&renamed)
-            .unwrap_or_else(|e| panic!("{uri}: text no longer parses after rename: {e}"));
+        rossi::parse(&renamed).unwrap_or_else(|e| {
+            panic!("{}: text no longer parses after rename: {e}", uri.as_str())
+        });
         assert!(
             find_whole_word_locations(&renamed, "C0", uri, None, WordBoundary::MathIdentifier)
                 .is_empty(),
-            "{uri}: whole-word C0 left behind after rename"
+            "{}: whole-word C0 left behind after rename",
+            uri.as_str()
         );
         assert!(
             !find_whole_word_locations(&renamed, "C0_v2", uri, None, WordBoundary::MathIdentifier)
                 .is_empty(),
-            "{uri}: C0_v2 missing after rename"
+            "{}: C0_v2 missing after rename",
+            uri.as_str()
         );
     }
 }
@@ -1149,7 +1152,7 @@ fn all_models_merged_invariants() {
 
         // Workspace symbols are indexed from the merged document.
         let provider = WorkspaceSymbolProvider::new();
-        provider.update_symbols(uri.to_string(), text);
+        provider.update_symbols(uri.as_str().to_owned(), text);
         assert!(
             !provider.search("").is_empty(),
             "{zip_name}: workspace symbol index is empty"
@@ -1344,7 +1347,7 @@ fn merged_workspace_symbols_cover_every_component() {
     let ws = merged_traffic_light();
     let text = &ws.files[0].text;
     let provider = WorkspaceSymbolProvider::new();
-    provider.update_symbols(ws.files[0].uri.to_string(), text);
+    provider.update_symbols(ws.files[0].uri.as_str().to_owned(), text);
 
     // One symbol per (name, container) — declared in the right component,
     // located in the right region of the document.

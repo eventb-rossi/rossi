@@ -185,7 +185,10 @@ async fn settle(analyzer: &Analyzer, target: Option<(Url, i32)>) {
     })
     .await;
     if echoed.is_err() {
-        tracing::info!("{uri} did not echo the applied edit in time");
+        tracing::info!(
+            "{uri} did not echo the applied edit in time",
+            uri = uri.as_str()
+        );
     }
 }
 

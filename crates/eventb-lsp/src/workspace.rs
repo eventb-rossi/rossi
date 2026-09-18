@@ -259,7 +259,7 @@ impl WorkspaceSymbolProvider {
             "Extracted {} symbols from {} ({})",
             symbols.len(),
             component.name(),
-            uri
+            uri.as_str()
         );
 
         symbols
