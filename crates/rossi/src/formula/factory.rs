@@ -39,6 +39,9 @@ pub(super) struct FactoryData {
     extensions: BTreeMap<Tag, Extension>,
     /// Extension object identity → tag, for construction lookups.
     by_identity: HashMap<usize, Tag>,
+    /// Extension symbol → tag and extension, for the parser's operator
+    /// resolution (one lookup per spelling).
+    by_symbol: HashMap<String, (Tag, Extension)>,
 }
 
 impl std::fmt::Debug for FactoryData {
@@ -49,10 +52,11 @@ impl std::fmt::Debug for FactoryData {
     }
 }
 
-static DEFAULT: LazyLock<FormulaFactory> = LazyLock::new(|| {
+pub(super) static DEFAULT: LazyLock<FormulaFactory> = LazyLock::new(|| {
     FormulaFactory(Arc::new(FactoryData {
         extensions: BTreeMap::new(),
         by_identity: HashMap::new(),
+        by_symbol: HashMap::new(),
     }))
 });
 
@@ -165,9 +169,14 @@ impl FormulaFactory {
             .iter()
             .map(|(tag, ext)| (ext.identity(), *tag))
             .collect();
+        let by_symbol = by_tag
+            .iter()
+            .map(|(tag, ext)| (ext.common().symbol().to_string(), (*tag, ext.clone())))
+            .collect();
         let factory = FormulaFactory(Arc::new(FactoryData {
             extensions: by_tag,
             by_identity,
+            by_symbol,
         }));
         registry.factories.insert(key, factory.clone());
         Ok(factory)
@@ -176,6 +185,13 @@ impl FormulaFactory {
     /// The extension registered under `tag` in this factory, if any.
     pub fn extension(&self, tag: Tag) -> Option<&Extension> {
         self.0.extensions.get(&tag)
+    }
+
+    /// The extension whose operator symbol is `symbol`, with its tag. Symbols
+    /// are unique within a factory ([`Self::with_extensions`] rejects a
+    /// duplicate), so this is how the parser resolves an operator spelling.
+    pub fn extension_by_symbol(&self, symbol: &str) -> Option<(Tag, &Extension)> {
+        self.0.by_symbol.get(symbol).map(|(tag, ext)| (*tag, ext))
     }
 
     /// The extensions this factory supports, in tag order.
@@ -887,6 +903,14 @@ impl PartialEq for FormulaFactory {
 }
 
 impl Eq for FormulaFactory {}
+
+/// Hashes by identity, consistent with [`PartialEq`], so a factory can key a
+/// map of per-factory caches.
+impl std::hash::Hash for FormulaFactory {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
+    }
+}
 
 impl std::fmt::Debug for FormulaFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

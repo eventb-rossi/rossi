@@ -443,3 +443,49 @@ fn parse_predicate_at_shifts_spans() {
     let expr = rossi::parse_expression_at("x + 1", 3, &ff).expect("parses");
     assert_eq!(expr.span(), Some(rossi::formula::Span { start: 3, end: 8 }));
 }
+
+// --- lookup by symbol ---
+
+#[test]
+fn factory_finds_extension_by_symbol() {
+    let ff = extended_factory();
+    let (tag, ext) = ff.extension_by_symbol("dist").expect("registered");
+    assert_eq!(ext.common().id(), "test.dist");
+    assert_eq!(
+        ff.extension(tag).map(|by_tag| by_tag.common().id()),
+        Some(ext.common().id()),
+        "the tag and the symbol index agree"
+    );
+    let (_, even) = ff.extension_by_symbol("even").expect("registered");
+    assert_eq!(even.common().id(), "test.even");
+    assert!(
+        ff.extension_by_symbol("card").is_none(),
+        "builtins are not extensions"
+    );
+    assert!(
+        ff.extension_by_symbol("Dist").is_none(),
+        "symbols are exact-case"
+    );
+    assert!(
+        FormulaFactory::default_factory()
+            .extension_by_symbol("dist")
+            .is_none()
+    );
+}
+
+#[test]
+fn factory_identity_is_hashable() {
+    use std::collections::HashSet;
+    let set: HashSet<FormulaFactory> = [
+        extended_factory(),
+        extended_factory(),
+        FormulaFactory::default_factory(),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        set.len(),
+        2,
+        "interned factories hash and compare by identity"
+    );
+}
