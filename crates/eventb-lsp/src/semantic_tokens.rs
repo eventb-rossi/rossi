@@ -6,8 +6,8 @@
 
 use crate::formula_walk::IdentRole;
 use crate::lsp_types::{
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
-    SemanticTokensParams, SemanticTokensResult,
+    Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
+    SemanticTokensLegend, SemanticTokensParams, SemanticTokensRangeResult, SemanticTokensResult,
 };
 use rossi::ast::{
     Component, Context, Event, InitialisationEvent, LabeledAction, LabeledPredicate, Machine, Span,
@@ -62,6 +62,31 @@ impl SemanticTokensProvider {
         text: &str,
         components: &[Component],
     ) -> Option<SemanticTokensResult> {
+        self.tokens_within(text, components, None)
+            .map(SemanticTokensResult::Tokens)
+    }
+
+    /// `textDocument/semanticTokens/range`: the tokens of the lines `range`
+    /// covers. The walk is the same as for the whole document (it is the
+    /// walk, not the encoding, that a large file makes expensive, and the
+    /// walk is cheap); what the range buys is a small delta-encoded answer,
+    /// which is what a client asks for on a large file's first paint.
+    pub fn semantic_tokens_range(
+        &self,
+        range: Range,
+        text: &str,
+        components: &[Component],
+    ) -> Option<SemanticTokensRangeResult> {
+        self.tokens_within(text, components, Some(range))
+            .map(SemanticTokensRangeResult::Tokens)
+    }
+
+    fn tokens_within(
+        &self,
+        text: &str,
+        components: &[Component],
+        range: Option<Range>,
+    ) -> Option<SemanticTokens> {
         // Extract semantic tokens from the AST, one component at a time
         let mut builder = SemanticTokensBuilder::new(text);
 
@@ -79,6 +104,13 @@ impl SemanticTokensProvider {
         builder.emit_comment_tokens();
         builder.emit_label_tokens();
 
+        if let Some(range) = range {
+            // Whole lines: a token straddling the range's first or last
+            // column is still wanted, and the client clips to its view.
+            builder
+                .tokens
+                .retain(|t| t.line >= range.start.line && t.line <= range.end.line);
+        }
         let tokens = builder.build();
 
         debug!("Generated {} semantic tokens", tokens.data.len() / 5);
@@ -89,10 +121,10 @@ impl SemanticTokensProvider {
             return None;
         }
 
-        Some(SemanticTokensResult::Tokens(SemanticTokens {
+        Some(SemanticTokens {
             result_id: None,
             data: tokens.data,
-        }))
+        })
     }
 }
 

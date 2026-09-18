@@ -1583,7 +1583,7 @@ impl LanguageServer for RossiLanguageServer {
                         SemanticTokensOptions {
                             work_done_progress_options: WorkDoneProgressOptions::default(),
                             legend: SemanticTokensProvider::legend(),
-                            range: Some(false),
+                            range: Some(true),
                             full: Some(SemanticTokensFullOptions::Bool(true)),
                         },
                     ),
@@ -2424,6 +2424,26 @@ impl LanguageServer for RossiLanguageServer {
         );
 
         Ok(response)
+    }
+
+    async fn semantic_tokens_range(
+        &self,
+        params: SemanticTokensRangeParams,
+    ) -> Result<Option<SemanticTokensRangeResult>> {
+        let uri = &params.text_document.uri;
+        debug!(
+            "Semantic tokens range request for: {} {:?}",
+            uri, params.range
+        );
+
+        let Some(doc) = self.document_manager.parse_result(uri) else {
+            return Ok(None);
+        };
+        Ok(self.semantic_tokens_provider.semantic_tokens_range(
+            params.range,
+            doc.text(),
+            doc.components(),
+        ))
     }
 
     async fn semantic_tokens_full(
