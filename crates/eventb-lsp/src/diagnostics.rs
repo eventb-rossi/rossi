@@ -15,7 +15,7 @@ use rossi_build::RuleId;
 /// every diagnostic this server emits shares: the `"rossi"` source and the
 /// unused optional fields. The single place those defaults live, so the parse
 /// and lint converters can't drift apart.
-fn lsp_diagnostic(
+pub(crate) fn lsp_diagnostic(
     range: Range,
     severity: DiagnosticSeverity,
     code: Option<NumberOrString>,

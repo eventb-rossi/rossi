@@ -153,6 +153,10 @@ pub(crate) struct Analyzer {
     /// and re-anchored onto the live buffers at publish time. Empty until a
     /// lens runs.
     animate_findings: Arc<parking_lot::RwLock<crate::animate::diagnostics::FindingsOverlay>>,
+    /// The proof obligations of every document computed so far, keyed
+    /// by URI and refreshed on open and on save. Ranges are recomputed
+    /// against the current parse whenever the list is served.
+    proof_obligations: Arc<parking_lot::RwLock<crate::proof::ProofOverlay>>,
     client: Client,
 }
 
@@ -267,6 +271,12 @@ impl Analyzer {
             uri,
             doc,
             &self.animate_findings.read(),
+        ));
+        // Proof obligations are computed on open and on save; between
+        // saves their ranges follow the current parse, so an edit above an
+        // invariant does not leave its marker behind.
+        diags.extend(crate::proof::diagnostics(
+            &self.proof_obligations_for(uri, doc),
         ));
         if !doc.parse().errors.is_empty() {
             return diags;
@@ -442,6 +452,62 @@ impl Analyzer {
             return;
         }
         self.republish_all_diagnostics().await;
+    }
+
+    /// A document's stored proof obligations re-anchored against its
+    /// current parse; empty when none were computed or the feature is off.
+    pub(crate) fn proof_obligations_for(
+        &self,
+        uri: &Url,
+        doc: &ParsedDocument,
+    ) -> Vec<crate::proof::Obligation> {
+        if !self.config_manager.get().proof_obligations.enabled {
+            return Vec::new();
+        }
+        self.proof_obligations
+            .read()
+            .get(uri)
+            .map(|obligations| crate::proof::re_anchor(doc, obligations))
+            .unwrap_or_default()
+    }
+
+    /// Replace one document's proof obligations and, if anything changed,
+    /// republish its diagnostics and push the new list to the client.
+    pub(crate) async fn apply_proof_obligations(
+        &self,
+        uri: Url,
+        obligations: Vec<crate::proof::Obligation>,
+    ) {
+        if !self
+            .proof_obligations
+            .write()
+            .apply(uri.clone(), obligations)
+        {
+            return;
+        }
+        self.republish_diagnostics(uri.clone()).await;
+        // Pushed through the same accessor the request and the diagnostics
+        // use, so a client never holds ranges the diagnostics disagree with.
+        let obligations = self
+            .document_manager
+            .parse_result(&uri)
+            .map(|doc| self.proof_obligations_for(&uri, &doc))
+            .unwrap_or_default();
+        self.client
+            .send_notification::<crate::proof::ProofStatusNotification>(
+                crate::proof::ProofStatusParams { uri, obligations },
+            )
+            .await;
+    }
+
+    /// Whether a list has been computed for `uri` since it was opened.
+    pub(crate) fn has_proof_obligations(&self, uri: &Url) -> bool {
+        self.proof_obligations.read().get(uri).is_some()
+    }
+
+    /// Forget a closed document's obligations.
+    pub(crate) fn drop_proof_obligations(&self, uri: &Url) {
+        self.proof_obligations.write().remove(uri);
     }
 
     /// Republish every open document's diagnostics, for a change to an input
@@ -782,6 +848,9 @@ impl RossiLanguageServer {
             animate_findings: Arc::new(parking_lot::RwLock::new(
                 crate::animate::diagnostics::FindingsOverlay::default(),
             )),
+            proof_obligations: Arc::new(parking_lot::RwLock::new(
+                crate::proof::ProofOverlay::default(),
+            )),
             client: client.clone(),
         };
 
@@ -883,6 +952,40 @@ impl RossiLanguageServer {
             project_name,
             project_dir,
         })
+    }
+
+    /// Recompute the proof obligations of the document at `uri` from its
+    /// current parse and the stored proofs, then publish what changed.
+    /// Called on open and on save, never per keystroke: the generator
+    /// runs the full static check plus proof-obligation generation over
+    /// the closure, which is save-cadence work.
+    async fn refresh_proof_obligations(&self, uri: Url) {
+        if !self.config_manager.get().proof_obligations.enabled {
+            return;
+        }
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return;
+        };
+        let sources = crate::proof::sources_for(
+            &uri,
+            self.rodin_project_target(&uri)
+                .map(|target| target.project_dir),
+        );
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        let documents = Arc::clone(&self.document_manager);
+        let computed = run_blocking(move || {
+            let loader = crate::component_loader::ComponentLoader::new(&xrefs, Some(&documents));
+            crate::proof::compute(&doc, &loader, &sources)
+        })
+        .await;
+        // `None` is a document that does not parse: the previous list
+        // stays until a clean parse replaces it.
+        let Ok(Some(obligations)) = computed else {
+            return;
+        };
+        self.analyzer
+            .apply_proof_obligations(uri, obligations)
+            .await;
     }
 
     /// The "Open in Rodin" command: resolve the request up front, refuse a
@@ -1660,7 +1763,8 @@ impl LanguageServer for RossiLanguageServer {
 
         // Opening analyzes promptly (not debounced): refresh the eager indexes
         // and publish diagnostics from the document's stored parse.
-        self.analyzer.analyze(uri).await;
+        self.analyzer.analyze(uri.clone()).await;
+        self.refresh_proof_obligations(uri).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -1708,8 +1812,9 @@ impl LanguageServer for RossiLanguageServer {
         // bows out.
         self.document_manager.close(&uri);
 
-        // Drop the closed document's cached inlay hints.
+        // Drop the closed document's cached inlay hints and obligations.
         self.inlay_hints_provider.evict(&uri);
+        self.analyzer.drop_proof_obligations(&uri);
 
         // Drop both open overlays, revealing what is saved for the file. No
         // read: each index already holds its disk layer.
@@ -1747,6 +1852,7 @@ impl LanguageServer for RossiLanguageServer {
         }
 
         self.schedule_rodin_rebuild(&uri);
+        self.refresh_proof_obligations(uri).await;
     }
 
     /// Refresh the disk-backed indexes when Event-B files change outside the
@@ -2418,6 +2524,11 @@ impl LanguageServer for RossiLanguageServer {
             doc.text(),
             &uri,
         ));
+        lenses.extend(crate::proof::code_lenses(
+            doc.components(),
+            doc.text(),
+            &self.analyzer.proof_obligations_for(&uri, &doc),
+        ));
         Ok(Some(lenses))
     }
 
@@ -2520,6 +2631,31 @@ impl RossiLanguageServer {
         Ok(rossi::operators::operator_rows(
             self.config_manager.get().format.emits_private_use_glyphs(),
         ))
+    }
+
+    /// `rossi/proofObligations`: the obligations of one open document.
+    ///
+    /// Served from the list computed at the last open or save when there
+    /// is one, re-anchored to the current text; computed on the spot
+    /// otherwise (a client asking before the first refresh finished, or
+    /// after a configuration change turned the feature on). Unlike
+    /// [`Self::operator_table`] this takes a required params object,
+    /// so a client must always send one.
+    pub async fn proof_obligations(
+        &self,
+        params: crate::proof::ProofObligationsParams,
+    ) -> Result<Vec<crate::proof::Obligation>> {
+        let uri = params.text_document.uri;
+        if !self.config_manager.get().proof_obligations.enabled {
+            return Ok(Vec::new());
+        }
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return Ok(Vec::new());
+        };
+        if !self.analyzer.has_proof_obligations(&uri) {
+            self.refresh_proof_obligations(uri.clone()).await;
+        }
+        Ok(self.analyzer.proof_obligations_for(&uri, &doc))
     }
 }
 

@@ -212,7 +212,7 @@ fn update_component(job: &Job, files: &[ScFile], project: &OnceLock<PoProject>) 
 
 /// All generated obligation files as one project: hypothesis-set
 /// chains cross component files.
-fn build_project(files: &[ScFile]) -> PoProject {
+pub fn build_project(files: &[ScFile]) -> PoProject {
     let mut project = PoProject::default();
     for file in files {
         if file.filename.ends_with(".bpo")
