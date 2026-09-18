@@ -460,6 +460,12 @@ hint stays out of the problems list; on a fresh model every obligation is
 open), and a broken proof as a warning. `rossi.proofObligations.enabled`
 turns the whole surface off.
 
+The Rodin and animate flows report through `$/progress` and honour
+`window/workDoneProgress/cancel`: cancelling the progress stops the flow at
+its next step, and kills a running eventb-animate outright. The framework has
+no hook for that notification, so the server registers it as a custom
+notification of its own.
+
 Three `workspace/executeCommand` commands are also registered —
 `rossi.rodin.open`, `rossi.animate.check` and `rossi.animate.po`. They drive
 external tools and are meant for the bundled extensions rather than for
@@ -495,7 +501,7 @@ discharging open ones.
 - Diagnostics cover parse errors, the component-local checks above and the project-level static check over the open file's dependency closure. A component whose closure is incomplete (an unresolvable `SEES` / `REFINES` / `EXTENDS` target) reports no project-level findings at all, since every inherited name would otherwise read as unknown.
 - Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
 - Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
-- Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
+- Workspace indexing is eager/basic; there is no LRU eviction or parallel indexing yet. Requests honour `$/cancelRequest` at the protocol level, but a request's blocking work runs to completion once started.
 
 ## Development
 

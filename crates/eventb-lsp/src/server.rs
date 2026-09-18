@@ -752,6 +752,9 @@ pub struct RossiLanguageServer {
     animate_in_flight: SingleFlight,
     /// Whether the client advertised `window.workDoneProgress` support.
     supports_work_done_progress: std::sync::atomic::AtomicBool,
+    /// Every lens progress in flight, so `window/workDoneProgress/cancel`
+    /// can reach the flow that owns the token.
+    progress_cancels: Arc<crate::progress::CancelRegistry>,
     /// Whether the client advertised `workspace.inlayHint.refreshSupport`.
     supports_inlay_hint_refresh: std::sync::atomic::AtomicBool,
     /// Whether the client advertised
@@ -949,6 +952,7 @@ impl RossiLanguageServer {
             rodin_open_in_flight: SingleFlight::default(),
             animate_in_flight: SingleFlight::default(),
             supports_work_done_progress: std::sync::atomic::AtomicBool::new(false),
+            progress_cancels: Arc::new(crate::progress::CancelRegistry::default()),
             supports_inlay_hint_refresh: std::sync::atomic::AtomicBool::new(false),
             supports_watched_files_registration: std::sync::atomic::AtomicBool::new(false),
             supports_type_hierarchy_registration: std::sync::atomic::AtomicBool::new(false),
@@ -1096,6 +1100,7 @@ impl RossiLanguageServer {
             workspace_dir,
             configured_rodin_path: config.rodin.path.clone(),
             progress_supported: self.supports_work_done_progress.load(Ordering::Relaxed),
+            cancels: Arc::clone(&self.progress_cancels),
             written: Arc::clone(&self.rodin_written),
             mirror_proofs: config.rodin.mirror_proofs,
             bridge: config.rodin.bridge,
@@ -1163,6 +1168,7 @@ impl RossiLanguageServer {
                 rodin_project_dir,
             },
             progress_supported: self.supports_work_done_progress.load(Ordering::Relaxed),
+            cancels: Arc::clone(&self.progress_cancels),
             analyzer: self.analyzer.clone(),
         };
 
@@ -2984,6 +2990,16 @@ impl RossiLanguageServer {
             self.refresh_proof_obligations(uri.clone()).await;
         }
         Ok(self.analyzer.proof_obligations_for(&uri, &doc))
+    }
+
+    /// `window/workDoneProgress/cancel`: the client asked to stop the flow
+    /// behind a progress token. Registered as a custom notification because
+    /// the framework's `LanguageServer` trait has no hook for it yet. A token
+    /// the server no longer tracks is a cancel racing the flow's own end.
+    pub async fn work_done_progress_cancel(&self, params: WorkDoneProgressCancelParams) {
+        if self.progress_cancels.cancel(&params.token) {
+            debug!("Progress {:?} cancelled by the client", params.token);
+        }
     }
 
     /// `rossi/proofState`: one obligation's sequent, regenerated from the

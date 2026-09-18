@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::AnimateConfig;
@@ -98,14 +99,16 @@ pub(crate) struct ToolOutput {
     pub code: Option<i32>,
 }
 
-/// Spawn the tool and wait for it under `watchdog`. On timeout the whole
-/// process group is killed (unix) — the packaged tool is a launcher script
-/// that may not `exec` its JVM, and `kill_on_drop` alone would only reap the
-/// launcher; elsewhere `kill_on_drop` is the fallback.
+/// Spawn the tool and wait for it under `watchdog`, or until `cancel` fires.
+/// On either the whole process group is killed (unix) — the packaged tool
+/// is a launcher script that may not `exec` its JVM, and `kill_on_drop`
+/// alone would only reap the launcher; elsewhere `kill_on_drop` is the
+/// fallback.
 pub(crate) async fn run_tool(
     program: &str,
     args: &[OsString],
     watchdog: Duration,
+    cancel: Option<&Arc<crate::progress::Cancel>>,
 ) -> Result<ToolOutput, AnimateError> {
     let mut command = tokio::process::Command::new(program);
     command
@@ -127,27 +130,43 @@ pub(crate) async fn run_tool(
             )));
         }
     };
-    #[cfg(unix)]
     let pid = child.id();
-    match tokio::time::timeout(watchdog, child.wait_with_output()).await {
-        Ok(Ok(output)) => Ok(ToolOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            code: output.status.code(),
-        }),
-        Ok(Err(error)) => Err(AnimateError::ToolFailed(format!(
-            "waiting for '{program}' failed: {error}"
-        ))),
-        Err(_elapsed) => {
-            // Dropping the wait future already kill_on_drop'd the direct
-            // child; take its whole group down with it.
-            #[cfg(unix)]
-            if let Some(pid) = pid {
-                // The child was made its own group leader via
-                // process_group(0), so its pid is the pgid.
-                unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+    // Dropping the wait future kill_on_drop's the direct child; the group
+    // kill takes the JVM the launcher started down with it.
+    let kill_group = || {
+        #[cfg(unix)]
+        if let Some(pid) = pid {
+            // The child was made its own group leader via
+            // process_group(0), so its pid is the pgid.
+            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+        }
+        #[cfg(not(unix))]
+        let _ = pid;
+    };
+    let cancelled = async {
+        match cancel {
+            Some(cancel) => cancel.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        waited = tokio::time::timeout(watchdog, child.wait_with_output()) => match waited {
+            Ok(Ok(output)) => Ok(ToolOutput {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                code: output.status.code(),
+            }),
+            Ok(Err(error)) => Err(AnimateError::ToolFailed(format!(
+                "waiting for '{program}' failed: {error}"
+            ))),
+            Err(_elapsed) => {
+                kill_group();
+                Err(AnimateError::Timeout(watchdog.as_secs()))
             }
-            Err(AnimateError::Timeout(watchdog.as_secs()))
+        },
+        () = cancelled => {
+            kill_group();
+            Err(AnimateError::Cancelled)
         }
     }
 }
@@ -231,6 +250,7 @@ mod tests {
             "rossi-test-definitely-not-installed",
             &[],
             Duration::from_secs(5),
+            None,
         )
         .await
         .unwrap_err();

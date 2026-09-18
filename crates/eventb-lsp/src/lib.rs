@@ -116,6 +116,10 @@ pub async fn run_stdio() -> Result<()> {
             proof::state::REQUEST_STATE,
             server::RossiLanguageServer::proof_state,
         )
+        .custom_method(
+            "window/workDoneProgress/cancel",
+            server::RossiLanguageServer::work_done_progress_cancel,
+        )
         .finish();
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

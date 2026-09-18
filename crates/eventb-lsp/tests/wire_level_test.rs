@@ -1049,6 +1049,44 @@ mod animate_lens {
     }
 }
 
+mod progress_cancel {
+    //! `window/workDoneProgress/cancel` reaches the server as a custom
+    //! notification (the framework has no trait hook for it). Pins that the
+    //! registration accepts the notification's real parameter shape, and
+    //! that a token nothing tracks is ignored rather than answered with an
+    //! error the client would log.
+
+    use eventb_lsp::server::RossiLanguageServer;
+    use serde_json::json;
+    use tower::{Service, ServiceExt};
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_cancel_for_an_untracked_token_is_accepted_silently() {
+        let (mut service, _socket) = LspService::build(RossiLanguageServer::new)
+            .custom_method(
+                "window/workDoneProgress/cancel",
+                RossiLanguageServer::work_done_progress_cancel,
+            )
+            .finish();
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+
+        let cancel = Request::build("window/workDoneProgress/cancel")
+            .params(json!({ "token": "rossi-progress-0" }))
+            .finish();
+        let response = service.ready().await.unwrap().call(cancel).await.unwrap();
+        assert!(
+            response.is_none(),
+            "a notification produces no response; got {response:?}"
+        );
+    }
+}
+
 mod operator_table {
     //! Wire-level regression test for the `rossi/operatorTable` custom request.
     //!
