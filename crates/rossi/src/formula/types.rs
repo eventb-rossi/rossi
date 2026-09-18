@@ -117,8 +117,15 @@ impl Type {
 
     /// The expression denoting this type as a set: `ℤ`, `BOOL`, the
     /// given set's identifier (typed `ℙ(S)`), `ℙ(·)` and `×` of the
-    /// inner sets. The result is type-checked. Parametric types are not
-    /// spellable until the extension mechanism lands.
+    /// inner sets, and a parametric type as its type constructor applied
+    /// to its parameters' expressions (`List(ℤ)`). The result is
+    /// type-checked.
+    ///
+    /// # Panics
+    ///
+    /// If a parametric type's constructor is not a type-constructor
+    /// extension of `ff`: a type belongs to the factory that declared its
+    /// constructor, like every formula node.
     pub fn to_expression(&self, ff: &super::factory::FormulaFactory) -> super::Expression {
         use super::tag::{AtomicOp, BinaryExprOp, UnaryExprOp};
         match self {
@@ -134,8 +141,28 @@ impl Type {
                 right.to_expression(ff),
                 None,
             ),
-            Type::Parametric { symbol, .. } => {
-                panic!("parametric type {symbol} has no expression form yet")
+            Type::Parametric {
+                tag,
+                symbol,
+                params,
+            } => {
+                let Some(super::extension::Extension::Expr(constructor)) = ff.extension(*tag)
+                else {
+                    panic!("parametric type {symbol} is not an extension of this factory")
+                };
+                assert!(
+                    constructor.is_a_type_constructor(),
+                    "extension {symbol} is not a type constructor"
+                );
+                let params = params.iter().map(|p| p.to_expression(ff)).collect();
+                ff.extended_expression(
+                    constructor,
+                    params,
+                    Vec::new(),
+                    None,
+                    Some(Type::pow(self.clone())),
+                )
+                .expect("a type constructor applied to its parameters")
             }
         }
     }
@@ -187,9 +214,19 @@ impl Type {
     /// `None` when the string is not an extension-free type spelling —
     /// malformed input, a non-type expression such as `1+2`, or a
     /// parametric type like `List(ℤ)`, which parses as a function
-    /// application and is rejected by the interpretation step.
+    /// application and is rejected by the interpretation step. A
+    /// parametric spelling resolves through [`Type::parse_rodin_with`].
     pub fn parse_rodin(s: &str) -> Option<Type> {
-        parse_canonical(s).or_else(|| parse_spelled(s))
+        Self::parse_rodin_with(s, &super::factory::DEFAULT)
+    }
+
+    /// [`Type::parse_rodin`] against `ff`: a type constructor of `ff`
+    /// applied to type spellings (`List(ℤ)`, `ℙ(List(T)×T)`) is the
+    /// parametric type, read through the formula parser. The canonical fast
+    /// path knows the factory only to decline a word that names one of its
+    /// operators, which is never a given set.
+    pub fn parse_rodin_with(s: &str, ff: &super::factory::FormulaFactory) -> Option<Type> {
+        parse_canonical(s, ff).or_else(|| parse_spelled_with(s, ff))
     }
 
     fn write_canonical(&self, out: &mut String) {
@@ -233,10 +270,11 @@ impl Type {
     }
 }
 
-/// A type spelling read through the formula parser: the general path,
-/// and the authority on everything [`parse_canonical`] declines.
-fn parse_spelled(s: &str) -> Option<Type> {
-    let expr = crate::parser::parse_expression_str(s).ok()?;
+/// A type spelling read through the formula parser against `ff`: the
+/// general path, and the authority on everything [`parse_canonical`]
+/// declines.
+fn parse_spelled_with(s: &str, ff: &super::factory::FormulaFactory) -> Option<Type> {
+    let expr = crate::parser::parse_expression_str_with(s, ff).ok()?;
     super::typecheck::type_from_expression(&expr)
 }
 
@@ -246,21 +284,23 @@ fn parse_spelled(s: &str) -> Option<Type> {
 /// files repeat a few dozen such spellings millions of times, and the
 /// formula parser costs microseconds per call.
 ///
-/// The only claim is inclusion: a `Some` here is what [`parse_spelled`]
+/// The only claim is inclusion: a `Some` here is what [`parse_spelled_with`]
 /// returns too. Every other input — whitespace, the ASCII operator
 /// spellings, `ℙ1`, primes, non-ASCII identifier characters, reserved
 /// or keyword words, an application `S(x)`, deep nesting — is `None`,
 /// leaving the formula parser to decide, so this never has to know how
 /// the parser treats an unusual spelling.
-fn parse_canonical(s: &str) -> Option<Type> {
-    let mut cursor = Canonical { rest: s.as_bytes() };
+fn parse_canonical(s: &str, ff: &super::factory::FormulaFactory) -> Option<Type> {
+    let mut cursor = Canonical { rest: s, ff };
     let ty = cursor.product(0)?;
     cursor.rest.is_empty().then_some(ty)
 }
 
-/// The byte cursor of [`parse_canonical`].
+/// The cursor of [`parse_canonical`].
 struct Canonical<'a> {
-    rest: &'a [u8],
+    rest: &'a str,
+    /// The factory whose operator symbols are never given sets.
+    ff: &'a super::factory::FormulaFactory,
 }
 
 impl Canonical<'_> {
@@ -269,7 +309,7 @@ impl Canonical<'_> {
     const MAX_DEPTH: usize = 32;
 
     fn eat(&mut self, token: &str) -> bool {
-        match self.rest.strip_prefix(token.as_bytes()) {
+        match self.rest.strip_prefix(token) {
             Some(rest) => {
                 self.rest = rest;
                 true
@@ -304,27 +344,25 @@ impl Canonical<'_> {
         }
         // An identifier: the grammar's `ident_core`, as `names` spells
         // it. `BOOL` is a keyword token before it is a word, as in the
-        // grammar. `rest` is a suffix of a `&str` cut at token ends, so it
-        // is valid UTF-8 and the identifier classes apply to whole chars.
-        let text = std::str::from_utf8(self.rest).ok()?;
-        let len: usize = text
-            .chars()
-            .take_while(|c| crate::names::is_math_identifier_part(*c))
-            .map(char::len_utf8)
-            .sum();
-        if len == 0
-            || !text
-                .chars()
-                .next()
-                .is_some_and(crate::names::is_math_identifier_start)
-        {
+        // grammar; an operator symbol of the factory is a token too.
+        let mut chars = self.rest.chars();
+        let first = chars.next()?;
+        if !crate::names::is_math_identifier_start(first) {
             return None;
         }
-        let (word, rest) = text.split_at(len);
-        self.rest = rest.as_bytes();
+        let tail = chars.as_str();
+        let len = first.len_utf8()
+            + tail
+                .find(|c| !crate::names::is_math_identifier_part(c))
+                .unwrap_or(tail.len());
+        let (word, rest) = self.rest.split_at(len);
+        self.rest = rest;
         if word == "BOOL" {
             Some(Type::Bool)
-        } else if crate::builtins::is_reserved_name(word) || crate::keywords::is_keyword(word) {
+        } else if crate::builtins::is_reserved_name(word)
+            || crate::keywords::is_keyword(word)
+            || self.ff.extension_by_symbol(word).is_some()
+        {
             None
         } else {
             Some(Type::given(word))
@@ -444,7 +482,11 @@ mod tests {
         for t in types {
             let canonical = t.to_rodin_canonical();
             // The fast path handles every canonical form by itself.
-            assert_eq!(parse_canonical(&canonical), Some(t.clone()), "{canonical}");
+            assert_eq!(
+                parse_canonical(&canonical, &crate::formula::factory::DEFAULT),
+                Some(t.clone()),
+                "{canonical}"
+            );
             assert_eq!(Type::parse_rodin(&canonical), Some(t));
         }
     }
@@ -461,8 +503,9 @@ mod tests {
     /// Whenever the fast path accepts a string, the formula parser
     /// agrees — the inclusion `parse_canonical` promises.
     fn agrees_with_parser(s: &str) {
-        if let Some(fast) = parse_canonical(s) {
-            assert_eq!(parse_spelled(s), Some(fast), "{s:?}");
+        if let Some(fast) = parse_canonical(s, &crate::formula::factory::DEFAULT) {
+            let default = super::super::factory::FormulaFactory::default_factory();
+            assert_eq!(parse_spelled_with(s, &default), Some(fast), "{s:?}");
         }
     }
 
@@ -519,7 +562,9 @@ mod tests {
         assert!(words.iter().any(|word| word == "POW"), "{words:?}");
         let accepted: Vec<String> = words
             .into_iter()
-            .filter(|word| word != "BOOL" && parse_canonical(word).is_some())
+            .filter(|word| {
+                word != "BOOL" && parse_canonical(word, &crate::formula::factory::DEFAULT).is_some()
+            })
             .collect();
         assert!(accepted.is_empty(), "{accepted:?}");
     }
@@ -539,7 +584,11 @@ mod tests {
             ("card", None),
             ("S(x)", None),
         ] {
-            assert_eq!(parse_canonical(s), None, "{s}");
+            assert_eq!(
+                parse_canonical(s, &crate::formula::factory::DEFAULT),
+                None,
+                "{s}"
+            );
             assert_eq!(Type::parse_rodin(s), expected, "{s}");
         }
     }
