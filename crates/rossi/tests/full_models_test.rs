@@ -709,6 +709,22 @@ fn test_power_set_requires_parentheses() {
 }
 
 #[test]
+fn test_comprehension_ident_list_is_a_single_identifier() {
+    // `{x ∣ P}` is Rodin's implicit form with the member `x`; a comma list
+    // in that position is not an expression and Rodin refuses it. The
+    // explicit form spells the member.
+    let source = "CONTEXT test\nCONSTANTS k\nAXIOMS\n@axm1 k = { e, en ∣ ⊤ }\nEND\n";
+    assert!(
+        parse(source).is_err(),
+        "a comma list before ∣ must not parse"
+    );
+    for good in ["{ e ∣ ⊤ }", "{ e, en · ⊤ ∣ e ↦ en }", "{ e ↦ en ∣ ⊤ }"] {
+        let source = format!("CONTEXT test\nCONSTANTS k\nAXIOMS\n@axm1 k = {good}\nEND\n");
+        parse(&source).unwrap_or_else(|e| panic!("`{good}`: {e}"));
+    }
+}
+
+#[test]
 fn test_integer_literal_beyond_i64() {
     // Rodin's IntegerLiteral holds a BigInteger, so any decimal is legal.
     for literal in [

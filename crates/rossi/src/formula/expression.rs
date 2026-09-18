@@ -128,9 +128,8 @@ pub enum Form {
     /// which must reference exactly the locally bound identifiers and
     /// nothing else.
     Implicit,
-    /// `{x, y ∣ P}` — only the declarations and the predicate are
-    /// spelled; the expression is the canonical maplet chain of the
-    /// declarations (`x ↦ y`).
+    /// `{x ∣ P}` — only the declaration and the predicate are spelled;
+    /// the expression is the declared identifier itself.
     IdentList,
     /// `λ pattern · P ∣ E` — the expression is `pattern ↦ E` where the
     /// pattern is a maplet tree over exactly the bound identifiers.

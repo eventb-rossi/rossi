@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn setcomp_extended_form_collapses_to_basic_arity2() {
         // Multi-binder: projection is the left-associative maplet.
-        let basic = make_bcm_xml("r ≔ {x, y ∣ x ∈ A ∧ y ∈ B}");
+        let basic = make_bcm_xml("r ≔ {x ↦ y ∣ x ∈ A ∧ y ∈ B}");
         let rodin = make_bcm_xml("r ≔ {x⦂S, y⦂T · x ∈ A ∧ y ∈ B ∣ x ↦ y}");
         let va = ScView::from_xml(&basic).unwrap();
         let vb = ScView::from_xml(&rodin).unwrap();

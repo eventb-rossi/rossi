@@ -297,12 +297,15 @@ set_enumeration = {
 
 // Set Comprehension:
 // Extended form:   {x · P | E}  (identifiers, dot, predicate, pipe, expression)
-// Basic form:      {x | P}      (identifiers, pipe, predicate)
+// Basic form:      {x | P}      (one identifier, pipe, predicate)
 // Expression form: {E | P}      (expression, pipe, predicate) — e.g., {x ↦ y | P}
-// PEG ordering: identifier-based forms before expression form, extended before basic
+// PEG ordering: identifier-based forms before expression form, extended before basic.
+// The basic form takes exactly one identifier: to Rodin `{x | P}` is the
+// expression form with the member `x`, and a comma list there is not an
+// expression, so `{x, y | P}` is refused (spell the member: `{x ↦ y | P}`).
 set_comprehension = {
     lbrace ~ typed_identifier ~ (comma ~ typed_identifier)* ~ dot ~ predicate ~ pipe ~ expression ~ rbrace
-  | lbrace ~ typed_identifier ~ (comma ~ typed_identifier)* ~ pipe ~ predicate ~ rbrace
+  | lbrace ~ typed_identifier ~ pipe ~ predicate ~ rbrace
   | lbrace ~ expression ~ pipe ~ predicate ~ rbrace
 }
 
