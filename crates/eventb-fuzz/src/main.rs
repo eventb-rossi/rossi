@@ -65,6 +65,10 @@ struct GenArgs {
     /// `--normalize`.
     #[arg(long)]
     ordered_clauses: bool,
+    /// Join a decorated component or event name with an underscore rather
+    /// than the hyphen Camille refuses. Implied by `--normalize`.
+    #[arg(long)]
+    plain_names: bool,
     /// Every emission convention at once: what a Camille gate actually needs
     /// fed to it.
     ///
@@ -110,6 +114,7 @@ fn generate(args: GenArgs) -> ExitCode {
         unicode_operators: args.unicode || args.normalize,
         lowercase_keywords: args.lowercase_keywords || args.normalize,
         ordered_clauses: args.ordered_clauses || args.normalize,
+        plain_names: args.plain_names || args.normalize,
         ..Config::default()
     };
     let generator = Generator::new(&grammar, config);
