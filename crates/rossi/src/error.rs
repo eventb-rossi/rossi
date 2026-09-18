@@ -309,6 +309,18 @@ pub enum ParseError {
         span: Option<Span>,
     },
 
+    /// A word stood between two expressions where only an infix operator of
+    /// the factory in use can (`a plus b`), and the factory has no infix
+    /// expression operator of that spelling. `line` and `column` are
+    /// 1-indexed; `span` is the byte range of the word.
+    #[error("unknown infix operator `{name}` at line {line}, column {column}")]
+    UnknownInfixOperator {
+        name: String,
+        line: usize,
+        column: usize,
+        span: Option<Span>,
+    },
+
     #[error("Multiple parse errors ({} total): {}", .0.len(), .0.first().map(|e| e.to_string()).unwrap_or_default())]
     MultipleErrors(Vec<ParseError>),
 }
@@ -397,7 +409,8 @@ impl ParseError {
             | ParseError::ExpressionNotBinding { line, span, .. }
             | ParseError::InvalidTypeExpression { line, span, .. }
             | ParseError::AssignmentArityMismatch { line, span, .. }
-            | ParseError::NotAPrefixOperator { line, span, .. } => {
+            | ParseError::NotAPrefixOperator { line, span, .. }
+            | ParseError::UnknownInfixOperator { line, span, .. } => {
                 *line += line_delta;
                 shift_span(span, byte_delta);
             }
@@ -455,6 +468,7 @@ impl ParseError {
             | ParseError::InvalidTypeExpression { line, column, .. }
             | ParseError::AssignmentArityMismatch { line, column, .. }
             | ParseError::NotAPrefixOperator { line, column, .. }
+            | ParseError::UnknownInfixOperator { line, column, .. }
             | ParseError::ClauseError { line, column, .. }
             | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
             ParseError::FileContext { source, .. } => source.position(),
@@ -485,6 +499,7 @@ impl ParseError {
             | ParseError::InvalidTypeExpression { span, .. }
             | ParseError::AssignmentArityMismatch { span, .. }
             | ParseError::NotAPrefixOperator { span, .. }
+            | ParseError::UnknownInfixOperator { span, .. }
             | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),

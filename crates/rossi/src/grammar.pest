@@ -416,11 +416,41 @@ relation_type_expr = {
                          | op_relation | op_oftype) ~ set_operator_expr)?
 }
 
+// Every rule with a word spelling: the structural and math keywords and the
+// word-spelled operators. `identifier` is keyword-permissive (a name may be
+// spelled like a keyword), so an infix extension operator, which is also a
+// word standing between two expressions, must decline them explicitly:
+// without the guard `x ≔ y END MACHINE M` would read `y <END> MACHINE`.
+// Pinned against the grammar by `reserved_word_covers_every_keyword`.
+reserved_word = _{
+    kw_context | kw_extends | kw_sets | kw_constants | kw_axioms | kw_theorems | kw_end
+  | kw_machine | kw_refines | kw_sees | kw_variables | kw_invariants | kw_variant | kw_events
+  | kw_initialisation | kw_event | kw_any | kw_where | kw_when | kw_with | kw_then | kw_begin
+  | kw_witness | kw_status | kw_ordinary | kw_convergent | kw_anticipated | kw_skip
+  | kw_true | kw_false | kw_theorem | kw_nat1 | kw_nat | kw_int | kw_bool
+  | kw_bool_true | kw_bool_false | kw_bool_type | kw_UNION | kw_INTER
+  | op_or | op_not | op_powerset1 | op_powerset | op_oftype | op_domain | op_range
+  | op_composition | op_modulo
+}
+
+// User-defined infix operators: one operator group, placed as the Rodin
+// extension mechanism places it, above the pair constructor and below every
+// other binary level: `a ↦ b plus c` is `a ↦ (b plus c)` and `a plus b ↦ c`
+// is `(a plus b) ↦ c`. The operator is a plain word; the AST builder resolves
+// it against the factory in use and rejects an unknown word, a chain of
+// different or non-associative operators, and an operand that is itself an
+// unparenthesised chain of a lower level (`a plus b + c`), since Rodin's
+// operator groups are mutually incompatible.
+ext_infix_op = @{ &ident_start ~ !reserved_word ~ ident_core ~ word_boundary }
+infix_ext_expr = {
+    relation_type_expr ~ (ext_infix_op ~ relation_type_expr)*
+}
+
 // Maplet (lowest binary expression precedence; left-associative, flat-list
 // form folded left at AST build).
 // Spec p.18 / EVENTB_LANGUAGE_REFERENCE.md: `a ↦ b ↦ c = (a ↦ b) ↦ c`.
 maplet_expr = {
-    relation_type_expr ~ (op_maplet ~ relation_type_expr)*
+    infix_ext_expr ~ (op_maplet ~ infix_ext_expr)*
 }
 
 // Quantified union: ⋃x·P ∣ E  or  UNION x·P ∣ E
@@ -566,8 +596,11 @@ relation_type_expr_no_semi = {
                                  | op_total_surjective_relation | op_surjective_relation | op_total_relation
                                  | op_relation | op_oftype) ~ set_operator_expr_no_semi)?
 }
+infix_ext_expr_no_semi = {
+    relation_type_expr_no_semi ~ (ext_infix_op ~ relation_type_expr_no_semi)*
+}
 maplet_expr_no_semi = {
-    relation_type_expr_no_semi ~ (op_maplet ~ relation_type_expr_no_semi)*
+    infix_ext_expr_no_semi ~ (op_maplet ~ infix_ext_expr_no_semi)*
 }
 // No-semi quantified expression variants: body uses action_expression so that ";"
 // is unambiguously the action separator, not forward composition.
