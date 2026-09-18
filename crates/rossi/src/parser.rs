@@ -3460,11 +3460,18 @@ fn parse_predicate_inner(
             let mut inner = pair.into_inner();
             let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
             if first.as_rule() == Rule::op_not {
-                let pred = parse_predicate_inner(
-                    inner.next().ok_or(ParseError::EmptyPredicate)?,
-                    bracketed,
-                    fx,
-                )?;
+                let operand = inner.next().ok_or(ParseError::EmptyPredicate)?;
+                // A bare quantifier under `¬` needs parentheses like one under
+                // a binary connective, with the same closing-bracket exception
+                // (Rodin accepts `(¬ ∃x·P)` and refuses `¬ ∃x·P`).
+                if !bracketed && let Some(quantifier) = leading_quantifier(&operand) {
+                    return Err(incompatible_operators(
+                        first.as_span(),
+                        display_rule(Rule::op_not),
+                        quantifier,
+                    ));
+                }
+                let pred = parse_predicate_inner(operand, bracketed, fx)?;
                 Ok(fx.ff.not_predicate(pred, node_span))
             } else if let Some(quantifier) = rule_to_quantifier(first.as_rule()) {
                 // A quantified predicate appearing as a sub-formula operand,

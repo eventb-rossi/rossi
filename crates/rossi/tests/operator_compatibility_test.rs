@@ -255,3 +255,23 @@ fn quantifier_implication_operand_bounded_by_a_bracket_parses() {
     pred_ok("(x > 0 ⇒ ∃ w · w > 0)"); // whole predicate bracketed
     pred_ok("x > 0 ⇔ (∃ w · w > 0)");
 }
+
+// `¬` is a unary connective with the same rule: its operand may not be a bare
+// quantifier unless a closing bracket bounds it. Rodin: `Operator: ¬ is not
+// compatible with: ∃, parentheses are required`.
+
+#[test]
+fn bare_quantifier_under_negation_is_rejected() {
+    pred_incompatible("¬ ∃ w · w > 0", "¬", "∃");
+    pred_incompatible("¬ ∀ w · w > 0", "¬", "∀");
+    pred_incompatible("¬ ¬ ∃ w · w > 0", "¬", "∃");
+    pred_incompatible("x > 0 ∧ ¬ ∀ w · w > 0", "¬", "∀");
+}
+
+#[test]
+fn negated_quantifier_bounded_by_a_bracket_parses() {
+    pred_ok("¬ (∃ w · w > 0)"); // quantifier parenthesised
+    pred_ok("(¬ ∃ w · w > 0)"); // whole predicate bracketed
+    pred_ok("x > 0 ∧ (¬ ∃ w · w > 0)"); // bracketed negation as an operand
+    pred_ok("z ∈ {x ∣ ¬ ∃ w · w > x}"); // comprehension closes it
+}
