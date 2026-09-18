@@ -695,6 +695,20 @@ fn test_builtin_finite_wrong_arity() {
 }
 
 #[test]
+fn test_power_set_requires_parentheses() {
+    // Rodin: `Expected: ( but was: ℤ`. Both power-set spellings are closed
+    // unary operators like dom and ran; the prefix form is not Event-B.
+    for bad in ["ℙ ℤ", "ℙ1 ℤ", "ℙ ℙ(ℤ)", "POW S"] {
+        let source = format!("CONTEXT test\nSETS S\nCONSTANTS k\nAXIOMS\n@axm1 k ∈ {bad}\nEND\n");
+        assert!(parse(&source).is_err(), "`{bad}` must not parse");
+    }
+    for good in ["ℙ(ℤ)", "ℙ1(ℤ)", "ℙ(ℙ(S))", "POW(S)", "ℙ (S) × ℙ1 (S)"] {
+        let source = format!("CONTEXT test\nSETS S\nCONSTANTS k\nAXIOMS\n@axm1 k ∈ {good}\nEND\n");
+        parse(&source).unwrap_or_else(|e| panic!("`{good}`: {e}"));
+    }
+}
+
+#[test]
 fn test_integer_literal_beyond_i64() {
     // Rodin's IntegerLiteral holds a BigInteger, so any decimal is legal.
     for literal in [

@@ -2491,7 +2491,7 @@ fn parse_expression(
             let op_pair = inner.next().ok_or(ParseError::MissingOperator)?;
             let op =
                 rule_to_unary_op(op_pair.as_rule()).ok_or_else(|| ParseError::UnexpectedRule {
-                    expected: "dom or ran".to_string(),
+                    expected: "dom, ran, ℙ or ℙ1".to_string(),
                     found: format!("{:?}", op_pair.as_rule()),
                 })?;
             let operand_pair = inner.nth(1).ok_or(ParseError::EmptyExpression)?;

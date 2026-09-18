@@ -335,7 +335,7 @@ lambda_expr = {
 // - sitting at the function_application base, postfix operators bind to the
 //   whole application like in Rodin: `dom(f)(x) = (dom(f))(x)`,
 //   `dom(f)∼ = (dom(f))∼`, `dom(f)[S] = (dom(f))[S]`.
-closed_unary_expr = { (op_domain | op_range) ~ lparen ~ expression ~ rparen }
+closed_unary_expr = { (op_domain | op_range | op_powerset1 | op_powerset) ~ lparen ~ expression ~ rparen }
 
 // Postfix applications. Core function application takes exactly one
 // argument (Rodin's FUNIMAGE is binary; a pair is written with a maplet,
@@ -360,7 +360,6 @@ function_application = {
 // share this rule.
 unary_expr = {
     op_minus ~ multiplicative_expr
-  | (op_powerset1 | op_powerset) ~ unary_expr
   | function_application
 }
 
@@ -370,7 +369,6 @@ unary_expr = {
 // through the non-associativity check (`2^−3^4`), which is rejected.
 exponent_operand = {
     op_minus ~ exponent_operand
-  | (op_powerset1 | op_powerset) ~ unary_expr
   | function_application
 }
 
