@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 use rossi::formula::{Assignment, AssignmentKind, Expression, FormulaFactory, Predicate, Type};
 
 use crate::handles::HandleUri;
-use crate::sc::machine_record::{ActionDecl, EventDecl, GuardDecl, MachineRecord};
+use crate::sc::machine_record::{ActionDecl, EventDecl, MachineRecord};
 use crate::sc::{CheckedMachine, ScModel};
 
 /// A simultaneous free-identifier substitution (one batch of parallel
@@ -398,7 +398,8 @@ pub(super) struct ConcreteEventGuardTable {
 
 impl ConcreteEventGuardTable {
     pub fn new(machine: &CheckedMachine, event: &EventDecl) -> Self {
-        let guards = effective_guards(event)
+        let guards = event
+            .chain_guards()
             .into_iter()
             .map(|guard| GuardInfo {
                 label: guard.label.clone(),
@@ -437,7 +438,8 @@ pub(super) struct AbstractGuardInfo {
 
 impl AbstractEventGuardTable {
     pub fn new(abstract_event: &EventDecl, concrete: &ConcreteEventGuardTable) -> Self {
-        let guards: Vec<AbstractGuardInfo> = effective_guards(abstract_event)
+        let guards: Vec<AbstractGuardInfo> = abstract_event
+            .chain_guards()
             .into_iter()
             .map(|guard| AbstractGuardInfo {
                 label: guard.label.clone(),
@@ -511,15 +513,4 @@ impl AbstractEventGuardList {
     pub fn first_abstract_event(&self) -> Option<&std::rc::Rc<EventDecl>> {
         self.events.first()
     }
-}
-
-/// The effective guard list: the inherited chain's guards (root
-/// first), then the event's own, matching the checked file's order.
-fn effective_guards(event: &EventDecl) -> Vec<&GuardDecl> {
-    let mut out: Vec<&GuardDecl> = Vec::new();
-    for ancestor in event.chain_root_first() {
-        out.extend(ancestor.guards.iter());
-    }
-    out.extend(event.guards.iter());
-    out
 }

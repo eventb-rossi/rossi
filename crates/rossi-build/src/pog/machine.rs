@@ -232,20 +232,10 @@ pub(super) fn variant_po_name(single_default: bool, label: &str, suffix: &str) -
 }
 
 /// An integer variant decreases, so it needs no finiteness proof; a
-/// set variant does, unless its type is finite by construction.
+/// set variant does, unless its type is finite by construction. A given
+/// set can be infinite, so only the type's own structure is trusted here.
 fn must_prove_finite(ty: &Type) -> bool {
-    !matches!(ty, Type::Int) && !is_finite_type(ty)
-}
-
-fn is_finite_type(ty: &Type) -> bool {
-    match ty {
-        Type::Bool => true,
-        // A given set can be infinite; ℤ is; a parametric type can be
-        // (e.g. List(BOOL)).
-        Type::Int | Type::Given(_) | Type::Parametric { .. } => false,
-        Type::Pow(inner) => is_finite_type(inner),
-        Type::Prod(left, right) => is_finite_type(left) && is_finite_type(right),
-    }
+    !matches!(ty, Type::Int) && !ty.is_finite_with(&|_| false)
 }
 
 /// The checked-file internal names of the machine's own invariants —

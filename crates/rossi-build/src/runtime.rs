@@ -23,17 +23,29 @@
 //! They never say a model is untranslatable: certainty is undecidable in
 //! general, and each translation draws the line in a different place.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::ast::Span;
 use rossi::formula::{
-    Assignment, AssignmentKind, Expression, ExpressionKind, Predicate, PredicateKind,
-    tag::{AssocPredOp, RelationalOp},
+    Assignment, AssignmentKind, BoundIdentDecl, Expression, ExpressionKind, Predicate,
+    PredicateKind, Type,
+    tag::{
+        AssocExprOp, AssocPredOp, AtomicOp, BinaryExprOp, BinaryPredOp, QuantPredOp, RelationalOp,
+        UnaryExprOp,
+    },
 };
 
 use crate::ast_util::lhs_variables;
-use crate::sc_model::{ActionDecl, CheckedContext, CheckedMachine, EventDecl, ScModel};
+use crate::sc_model::{ActionDecl, CheckedContext, CheckedMachine, EventDecl, GuardDecl, ScModel};
 use crate::{Diagnostic, Project, RuleId, Severity};
+
+/// Run every runtime-translation suitability check over the leaf machines of
+/// `project` and the contexts they see.
+///
+/// The severities are mixed: a construct whose value a translation cannot
+/// read is a `Warning`, one it can read but only under an assumption the
+/// model leaves open is `Info`. Callers that hide INFO findings (the CLI does
+/// unless `--show-info` is given) still see the certain half.
 #[must_use]
 pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
     let scope = Scope::build(project, model);
@@ -41,7 +53,9 @@ pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
 
     for machine in &scope.machines {
         check_machine(machine, &mut diags);
+        check_parameters(machine, &scope, &mut diags);
     }
+    check_formulas(&scope, &mut diags);
 
     diags
 }
@@ -57,8 +71,10 @@ pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
 /// sequence.
 struct Scope<'a> {
     machines: Vec<&'a CheckedMachine>,
-    #[allow(dead_code)]
     contexts: Vec<&'a CheckedContext>,
+    /// Carrier sets a visible axiom gives a finite cardinality. The type
+    /// alone never says so: a given set may be infinite.
+    finite_sets: BTreeSet<String>,
 }
 
 impl<'a> Scope<'a> {
@@ -111,13 +127,146 @@ impl<'a> Scope<'a> {
             contexts.push(context);
         }
 
-        Self { machines, contexts }
+        let finite_sets = contexts
+            .iter()
+            .flat_map(|context| context.record.axioms.iter())
+            .flat_map(|axiom| conjuncts(&axiom.typed))
+            .filter_map(finitely_bounded_set)
+            .map(str::to_string)
+            .collect();
+
+        Self {
+            machines,
+            contexts,
+            finite_sets,
+        }
+    }
+
+    /// Whether every value of `ty` can be enumerated: the structural test
+    /// plus the carrier sets a visible axiom bounds.
+    fn is_finite(&self, ty: &Type) -> bool {
+        ty.is_finite_with(&|name| self.finite_sets.contains(name))
+    }
+}
+
+/// The carrier set this axiom conjunct gives a finite cardinality, if any.
+///
+/// Four spellings say it: `finite(S)`, a `partition` of `S` into listed
+/// blocks, an enumeration `S = {a, b}`, and `card(S) = n`. Rodin has no
+/// enumerated carrier-set declaration, so every one of them is an ordinary
+/// axiom.
+fn finitely_bounded_set(pred: &Predicate) -> Option<&str> {
+    if let PredicateKind::Simple(expr) = pred.kind() {
+        return carrier_set_name(expr);
+    }
+    // `card(S) = n` — `card` is well-defined only on finite sets, so the
+    // axiom asserts finiteness by being well-defined.
+    if let PredicateKind::Relational {
+        op: RelationalOp::Equal,
+        left,
+        right,
+    } = pred.kind()
+        && let Some(name) = [left, right]
+            .into_iter()
+            .find_map(|side| card_operand(side).and_then(carrier_set_name))
+    {
+        return Some(name);
+    }
+    listing(pred)
+        .filter(|listing| listing.finite)
+        .and_then(|listing| carrier_set_name(listing.set))
+}
+
+/// What an axiom says about the members of a set, when it lists them.
+///
+/// Two spellings list members: `partition(S, {a}, {b})` and `S = {a, b}`.
+/// They carry the same information about the set being finite; which one a
+/// model uses is a matter of style, and every rule that reads one reads the
+/// other through this.
+struct Listing<'a> {
+    /// The set listed — a carrier set or a set-valued constant.
+    set: &'a Expression,
+    /// Whether every block is a literal set extension, so that the whole set
+    /// is finite. `partition(S, A, B)` splits `S` in two without bounding
+    /// either half and says nothing about its size.
+    finite: bool,
+}
+
+fn listing(pred: &Predicate) -> Option<Listing<'_>> {
+    match pred.kind() {
+        PredicateKind::Multiple(exprs) => {
+            let (set, blocks) = exprs.split_first()?;
+            Some(Listing {
+                set,
+                finite: blocks
+                    .iter()
+                    .all(|block| matches!(block.kind(), ExpressionKind::SetExtension(_))),
+            })
+        }
+        PredicateKind::Relational {
+            op: RelationalOp::Equal,
+            left,
+            right,
+        } => [(left, right), (right, left)]
+            .into_iter()
+            .find_map(|(set, members)| {
+                let ExpressionKind::SetExtension(_) = members.kind() else {
+                    return None;
+                };
+                Some(Listing { set, finite: true })
+            }),
+        _ => None,
+    }
+}
+
+/// The name of the carrier set `expr` denotes, when it is one.
+///
+/// A carrier set `S` is the free identifier whose own type is `ℙ(S)`; a
+/// constant of the same type is a subset of it and is not the set itself.
+fn carrier_set_name(expr: &Expression) -> Option<&str> {
+    let name = free_identifier(expr)?;
+    match expr.ty() {
+        Some(Type::Pow(base)) => match base.as_ref() {
+            Type::Given(given) if given == name => Some(name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn free_identifier(expr: &Expression) -> Option<&str> {
+    match expr.kind() {
+        ExpressionKind::FreeIdentifier(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// The set `expr` counts, when it is a `card(…)`.
+fn card_operand(expr: &Expression) -> Option<&Expression> {
+    match expr.kind() {
+        ExpressionKind::Unary {
+            op: UnaryExprOp::KCard,
+            child,
+        } => Some(child),
+        _ => None,
     }
 }
 
 // ---------------------------------------------------------------------
 // Event access
 // ---------------------------------------------------------------------
+
+/// Every guard in scope for `event`, oldest inherited first, paired with
+/// whether it was declared by this event (and so whether its span indexes
+/// this component's text).
+fn event_guards(event: &EventDecl) -> impl Iterator<Item = (bool, &GuardDecl)> {
+    let guards = event.chain_guards();
+    let inherited = guards.len() - event.guards.len();
+    guards
+        .into_iter()
+        .enumerate()
+        .map(move |(index, guard)| (index >= inherited, guard))
+}
 
 /// Every typed action of `event`, oldest inherited first, paired with
 /// whether it was declared by this event. `skip` has no typed form and is
@@ -454,10 +603,673 @@ fn is_singleton(expr: &Expression) -> bool {
     matches!(expr.kind(), ExpressionKind::SetExtension(members) if members.len() == 1)
 }
 
+/// Whether `op` builds a relation or function space, which is infinite as
+/// soon as either side is and is the shape a declaration gives a type with.
+fn is_relation_space_op(op: BinaryExprOp) -> bool {
+    matches!(
+        op,
+        BinaryExprOp::Rel
+            | BinaryExprOp::TRel
+            | BinaryExprOp::SRel
+            | BinaryExprOp::STRel
+            | BinaryExprOp::PFun
+            | BinaryExprOp::TFun
+            | BinaryExprOp::PInj
+            | BinaryExprOp::TInj
+            | BinaryExprOp::PSur
+            | BinaryExprOp::TSur
+            | BinaryExprOp::TBij
+    )
+}
+
 fn quoted_list(names: &[&str]) -> String {
     names
         .iter()
         .map(|name| format!("`{name}`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// ---------------------------------------------------------------------
+// EB103 — event parameter not determined by the guards
+// ---------------------------------------------------------------------
+
+/// Report every parameter of a leaf machine's events that the guards do not
+/// pin to one value.
+///
+/// This is INFO rather than a warning because it is not always a defect: in
+/// trace-driven checking the parameter comes from the trace, and its absence
+/// from the model is correct. The rule reports what the consumer will have to
+/// supply.
+fn check_parameters(machine: &CheckedMachine, scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    for event in &machine.record.events {
+        if event.label == crate::sc::initialisation_label() {
+            continue; // INITIALISATION takes no parameters.
+        }
+        let guards: Vec<&Predicate> = event_guards(event)
+            .flat_map(|(_, guard)| conjuncts(&guard.typed))
+            .collect();
+
+        for parameter in event.chain_parameters() {
+            if guards
+                .iter()
+                .any(|conjunct| determines(conjunct, &parameter.name))
+            {
+                continue;
+            }
+            // A parameter confined to a finite domain is still a choice,
+            // but a translation can at least enumerate it; that is a
+            // materially different position to be in, so the message says
+            // which. The type settles it for a bounded carrier set or
+            // `BOOL`; otherwise a guard may still confine it.
+            let enumerable = scope.is_finite(&parameter.ty)
+                || guards.iter().any(|conjunct| {
+                    membership_domain(conjunct, &parameter.name)
+                        .is_some_and(|set| is_enumerable_set(set, scope))
+                });
+            let message = if enumerable {
+                format!(
+                    "Could not verify the value of parameter `{}`: no guard of the form `{} = …`, though its domain is finite and can be enumerated",
+                    parameter.name, parameter.name
+                )
+            } else {
+                format!(
+                    "Could not verify the value of parameter `{}`: no guard of the form `{} = …`, so it must be supplied outside the model",
+                    parameter.name, parameter.name
+                )
+            };
+            diags.push(Diagnostic {
+                severity: RuleId::UndeterminedParameter.default_severity(),
+                origin: format!("{}.{}/{}", machine.name(), event.label, parameter.name),
+                message,
+                rule_id: Some(RuleId::UndeterminedParameter),
+                // The parameter's own declaration span is not carried on the
+                // checked record, and the guards that should have pinned it
+                // are exactly what is missing, so there is nothing to anchor.
+                span: None,
+            });
+        }
+    }
+}
+
+/// Whether this conjunct fixes `name` to one value: an equality with `name`
+/// bare on one side and an expression that does not read it on the other.
+fn determines(pred: &Predicate, name: &str) -> bool {
+    let PredicateKind::Relational {
+        op: RelationalOp::Equal,
+        left,
+        right,
+    } = pred.kind()
+    else {
+        return false;
+    };
+    [(left, right), (right, left)]
+        .iter()
+        .any(|(target, value)| {
+            free_identifier(target) == Some(name)
+                && !value.free_identifiers().iter().any(|free| free == name)
+        })
+}
+
+/// Whether a translation could enumerate this set.
+///
+/// An enumerated set and an integer interval are finite however infinite
+/// their element type is, which is exactly how a model bounds an integer;
+/// anything else is judged by its element type.
+fn is_enumerable_set(set: &Expression, scope: &Scope) -> bool {
+    match set.kind() {
+        ExpressionKind::SetExtension(_) => true,
+        ExpressionKind::Binary {
+            op: BinaryExprOp::UpTo,
+            ..
+        } => true,
+        _ => set
+            .ty()
+            .and_then(Type::base_type)
+            .is_some_and(|element| scope.is_finite(element)),
+    }
+}
+
+/// The set `name` is required to belong to by this conjunct, if any.
+fn membership_domain<'a>(pred: &'a Predicate, name: &str) -> Option<&'a Expression> {
+    let PredicateKind::Relational {
+        op: RelationalOp::In,
+        left,
+        right,
+    } = pred.kind()
+    else {
+        return None;
+    };
+    (free_identifier(left) == Some(name)).then_some(right)
+}
+
+// ---------------------------------------------------------------------
+// Formula walk — EB104, EB105, EB106
+// ---------------------------------------------------------------------
+
+/// One type-checked formula of the scope, as the walk over it wants to see
+/// it: a predicate, or an expression that stands in value position.
+///
+/// Every expression a component declares is evaluated — a variant, an
+/// assigned value, the set of a `:∈` — so there is no third case.
+enum Formula<'a> {
+    Pred(&'a Predicate),
+    Value(&'a Expression),
+}
+
+/// Walk every formula the scope's leaf machines and visible contexts
+/// declare, reporting the rules that read whole formulas.
+///
+/// EB106 is collected rather than emitted inline: a carrier set used in ten
+/// places is one under-specified declaration, so it is reported once, at the
+/// declaration, naming the first use.
+fn check_formulas(scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    let mut unbounded_sets: BTreeMap<String, String> = BTreeMap::new();
+
+    for_each_formula(scope, &mut |origin, span, formula| match formula {
+        Formula::Pred(pred) => {
+            check_quantifiers_in_predicate(pred, scope, origin, span, diags);
+            check_values_in_predicate(pred, scope, origin, span, diags, &mut unbounded_sets);
+        }
+        Formula::Value(expr) => {
+            check_quantifiers_in_expression(expr, scope, origin, span, diags);
+            check_values_in_expression(expr, scope, origin, span, diags, &mut unbounded_sets, true);
+        }
+    });
+
+    emit_unbounded_sets(scope, &unbounded_sets, diags);
+}
+
+/// EB106, one finding per under-specified carrier set, at its declaration.
+fn emit_unbounded_sets(
+    scope: &Scope,
+    unbounded_sets: &BTreeMap<String, String>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for (set, first_use) in unbounded_sets {
+        let Some(context) = scope
+            .contexts
+            .iter()
+            .find(|context| context.record.carrier_sets.iter().any(|s| &s.name == set))
+        else {
+            continue;
+        };
+        diags.push(Diagnostic {
+            severity: RuleId::DeferredSetWithoutCardinality.default_severity(),
+            origin: format!("{}.{set}", context.name()),
+            message: format!(
+                "Could not verify the size of carrier set `{set}`, used as a value by `{first_use}`: no `finite({set})`, `partition({set}, …)`, `{set} = {{…}}` or `card({set}) = …` axiom is visible"
+            ),
+            rule_id: Some(RuleId::DeferredSetWithoutCardinality),
+            // The declaration's span lives on the untyped AST; the checked
+            // record keeps only its Rodin handle, so the finding is
+            // anchored by origin alone.
+            span: None,
+        });
+    }
+}
+
+/// How a formula is reported: the origin it is filed under, built only when
+/// a rule has something to say, and the span of its own text.
+type Origin<'a> = &'a dyn Fn() -> String;
+
+/// What [`for_each_formula`] hands each formula to.
+type FormulaVisitor<'a> = &'a mut dyn FnMut(Origin<'_>, Option<Span>, Formula);
+
+/// Call `visit` for every type-checked formula of the scope, with the origin
+/// it is reported under and the span of its own text.
+///
+/// Origins are built lazily: most formulas produce no finding, and the
+/// closure is only called by a rule that has one.
+fn for_each_formula(scope: &Scope, visit: FormulaVisitor<'_>) {
+    for context in &scope.contexts {
+        let name = context.name();
+        for axiom in &context.record.axioms {
+            visit(
+                &|| format!("{name}.{}", axiom.label),
+                axiom.typed.span(),
+                Formula::Pred(&axiom.typed),
+            );
+        }
+    }
+
+    for machine in &scope.machines {
+        let name = machine.name();
+        for invariant in &machine.record.invariants {
+            visit(
+                &|| format!("{name}.{}", invariant.label),
+                invariant.typed.span(),
+                Formula::Pred(&invariant.typed),
+            );
+        }
+        for variant in &machine.record.variants {
+            if let Some(typed) = &variant.typed {
+                visit(
+                    &|| format!("{name}.{}", variant.label),
+                    typed.span(),
+                    Formula::Value(typed),
+                );
+            }
+        }
+        for event in &machine.record.events {
+            for (own, guard) in event_guards(event) {
+                visit(
+                    &|| format!("{name}.{}/{}", event.label, guard.label),
+                    own_span(own, guard.typed.span()),
+                    Formula::Pred(&guard.typed),
+                );
+            }
+            for (own, action, typed) in event_actions(event) {
+                let origin = || format!("{name}.{}/{}", event.label, action.label);
+                let span = own_span(own, typed.span());
+                // An assignment's right-hand side is a value position by
+                // definition: the value is what gets stored.
+                match typed.kind() {
+                    AssignmentKind::BecomesEqualTo { values, .. } => {
+                        for value in values {
+                            visit(&origin, span, Formula::Value(value));
+                        }
+                    }
+                    AssignmentKind::BecomesMemberOf { set, .. } => {
+                        visit(&origin, span, Formula::Value(set));
+                    }
+                    AssignmentKind::BecomesSuchThat { pred, .. } => {
+                        visit(&origin, span, Formula::Pred(pred));
+                    }
+                }
+            }
+            for witness in &event.witnesses {
+                visit(
+                    &|| format!("{name}.{}/{}", event.label, witness.label),
+                    witness.typed.span(),
+                    Formula::Pred(&witness.typed),
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// EB104 — quantifier or comprehension without a finite domain
+// ---------------------------------------------------------------------
+
+fn check_quantifiers_in_predicate(
+    pred: &Predicate,
+    scope: &Scope,
+    origin: Origin<'_>,
+    span: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    if let PredicateKind::Quantified {
+        op,
+        decls,
+        pred: body,
+    } = pred.kind()
+    {
+        // `∀x · P ⇒ Q` restricts `x` in the antecedent; `∃x · P` restricts
+        // it in the body itself. Rodin imposes neither shape, so both are
+        // read the same way: the conjuncts that must hold for the bound
+        // variable to matter.
+        let generators = match (op, body.kind()) {
+            (
+                QuantPredOp::Forall,
+                PredicateKind::Binary {
+                    op: BinaryPredOp::LImp,
+                    left,
+                    ..
+                },
+            ) => conjuncts(left),
+            _ => conjuncts(body),
+        };
+        report_unbounded_decls(decls, &generators, scope, origin, span, diags);
+    }
+
+    let (preds, exprs) = predicate_children(pred);
+    for child in preds {
+        check_quantifiers_in_predicate(child, scope, origin, span, diags);
+    }
+    for child in exprs {
+        check_quantifiers_in_expression(child, scope, origin, span, diags);
+    }
+}
+
+fn check_quantifiers_in_expression(
+    expr: &Expression,
+    scope: &Scope,
+    origin: Origin<'_>,
+    span: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    if let ExpressionKind::Quantified { decls, pred, .. } = expr.kind() {
+        // A comprehension, a lambda and `⋃`/`⋂` all restrict their bound
+        // variables in the same predicate slot. The print form differs; the
+        // meaning does not.
+        report_unbounded_decls(decls, &conjuncts(pred), scope, origin, span, diags);
+    }
+
+    let (preds, exprs) = expression_children(expr);
+    for child in preds {
+        check_quantifiers_in_predicate(child, scope, origin, span, diags);
+    }
+    for child in exprs {
+        check_quantifiers_in_expression(child, scope, origin, span, diags);
+    }
+}
+
+/// Report each declaration of one quantifier that has neither a finite type
+/// nor a generator among `generators`.
+fn report_unbounded_decls(
+    decls: &[BoundIdentDecl],
+    generators: &[&Predicate],
+    scope: &Scope,
+    origin: Origin<'_>,
+    span: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for (position, decl) in decls.iter().enumerate() {
+        // A finite type is its own domain: `BOOL` needs no generator, and
+        // neither does a carrier set an axiom has bounded.
+        if decl.ty().is_some_and(|ty| scope.is_finite(ty)) {
+            continue;
+        }
+        // Declarations bind innermost-last, so the declaration at position
+        // `i` of `n` is de Bruijn index `n - 1 - i` inside the body.
+        let index = (decls.len() - 1 - position) as u32;
+        if generators
+            .iter()
+            .any(|generator| restricts(generator, index))
+        {
+            continue;
+        }
+        diags.push(Diagnostic {
+            severity: RuleId::UnboundedQuantifier.default_severity(),
+            origin: origin(),
+            message: format!(
+                "Could not verify a finite domain for bound variable `{}`: no membership, equality or maplet membership restricts it, and its type is not finite",
+                decl.name()
+            ),
+            rule_id: Some(RuleId::UnboundedQuantifier),
+            span,
+        });
+    }
+}
+
+/// Whether this conjunct gives the bound variable at `index` a domain to be
+/// iterated over.
+///
+/// Four shapes do: a membership `x ∈ S`, a subset constraint `x ⊆ S`, which
+/// is the same statement as `x ∈ ℙ(S)` and would be perverse to read
+/// differently, an equality `x = E` (one value is a domain of one), and a
+/// maplet membership `x ↦ y ∈ r`, which is how a relation's domain is
+/// written.
+fn restricts(pred: &Predicate, index: u32) -> bool {
+    let PredicateKind::Relational { op, left, right } = pred.kind() else {
+        return false;
+    };
+    match op {
+        RelationalOp::In | RelationalOp::Subset | RelationalOp::SubsetEq => {
+            mentions_bound_at_top(left, index)
+        }
+        RelationalOp::Equal => {
+            (is_bound(left, index) && !reads_bound(right, index))
+                || (is_bound(right, index) && !reads_bound(left, index))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `expr` is the bound variable at `index`, possibly inside a maplet
+/// tree — `x`, `x ↦ y`, `(x ↦ y) ↦ z`. A deeper position does not count:
+/// `f(x) ∈ S` says nothing about which `x` to try.
+fn mentions_bound_at_top(expr: &Expression, index: u32) -> bool {
+    match expr.kind() {
+        ExpressionKind::Binary {
+            op: BinaryExprOp::Mapsto,
+            left,
+            right,
+        } => mentions_bound_at_top(left, index) || mentions_bound_at_top(right, index),
+        _ => is_bound(expr, index),
+    }
+}
+
+fn is_bound(expr: &Expression, index: u32) -> bool {
+    matches!(expr.kind(), ExpressionKind::BoundIdentifier(found) if *found == index)
+}
+
+fn reads_bound(expr: &Expression, index: u32) -> bool {
+    expr.dangling_bound_indices().contains(&index)
+}
+
+// ---------------------------------------------------------------------
+// EB105 / EB106 — infinite sets in value position
+// ---------------------------------------------------------------------
+
+/// Why a set cannot be enumerated.
+enum Unbounded {
+    /// An infinite set built into the language: `ℤ`, a power set, a
+    /// function space. The string names it for the message.
+    Structural(&'static str),
+    /// A carrier set no visible axiom bounds.
+    CarrierSet(String),
+}
+
+fn check_values_in_predicate(
+    pred: &Predicate,
+    scope: &Scope,
+    origin: Origin<'_>,
+    span: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+    sets: &mut BTreeMap<String, String>,
+) {
+    let (preds, exprs) = predicate_children(pred);
+    for child in preds {
+        check_values_in_predicate(child, scope, origin, span, diags, sets);
+    }
+    // A predicate never puts its operands in value position by itself:
+    // `x ∈ ℕ` is a typing statement, not a request to build `ℕ`. Only the
+    // expression operators below do, so each child restarts the walk.
+    for child in exprs {
+        check_values_in_expression(child, scope, origin, span, diags, sets, false);
+    }
+}
+
+/// Walk `expr`, testing every operand that must be built rather than merely
+/// described.
+///
+/// The distinction is the whole of these two rules: `f ∈ ℕ → ℤ` gives `f` a
+/// type and is fine, `card(ℕ)` asks for a computation and is not. So a node
+/// is never tested for what it *is*, only for the position its parent puts
+/// it in — `in_value` carries that down.
+///
+/// A node found unbounded is reported and not descended into: its operands
+/// are why it is unbounded, and naming them too would report one defect
+/// several times.
+fn check_values_in_expression(
+    expr: &Expression,
+    scope: &Scope,
+    origin: Origin<'_>,
+    span: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+    sets: &mut BTreeMap<String, String>,
+    in_value: bool,
+) {
+    if in_value {
+        match unbounded_reason(expr, scope) {
+            Some(Unbounded::Structural(what)) => {
+                diags.push(Diagnostic {
+                    severity: RuleId::InfiniteSetValue.default_severity(),
+                    origin: origin(),
+                    message: format!(
+                        "Could not enumerate {what} here: an infinite set is used as a value, not to give a type"
+                    ),
+                    rule_id: Some(RuleId::InfiniteSetValue),
+                    span,
+                });
+                return;
+            }
+            // Recorded, not emitted: the defect is the declaration, and one
+            // finding there beats one per use.
+            Some(Unbounded::CarrierSet(set)) => {
+                sets.entry(set).or_insert_with(origin);
+                return;
+            }
+            None => {}
+        }
+    }
+
+    let (preds, exprs) = expression_children(expr);
+    for child in preds {
+        check_values_in_predicate(child, scope, origin, span, diags, sets);
+    }
+    // Only a handful of operators put their operands in value position; any
+    // other node's children are merely described.
+    let children = value_children(expr)
+        .unwrap_or_else(|| exprs.into_iter().map(|child| (child, false)).collect());
+    for (child, child_in_value) in children {
+        check_values_in_expression(child, scope, origin, span, diags, sets, child_in_value);
+    }
+}
+
+/// Each expression child of `expr`, paired with whether `expr` puts it in
+/// value position — where the set has to be built rather than described.
+/// `None` for an operator that puts none of them there.
+fn value_children(expr: &Expression) -> Option<Vec<(&Expression, bool)>> {
+    let children = match expr.kind() {
+        // Counting, bounding and generalised union all consume the set.
+        ExpressionKind::Unary {
+            op:
+                UnaryExprOp::KCard
+                | UnaryExprOp::KMin
+                | UnaryExprOp::KMax
+                | UnaryExprOp::KUnion
+                | UnaryExprOp::KInter,
+            child,
+        } => vec![(child, true)],
+        // Listing a set builds every member.
+        ExpressionKind::SetExtension(members) => {
+            members.iter().map(|member| (member, true)).collect()
+        }
+        ExpressionKind::Associative {
+            op: AssocExprOp::BUnion,
+            children,
+        } => children.iter().map(|child| (child, true)).collect(),
+        // An intersection is walked from whichever operand can be
+        // enumerated, testing each element against the others, so no single
+        // operand has to be buildable. The node itself is still tested, and
+        // is out of reach only when none of them is.
+        ExpressionKind::Associative {
+            op: AssocExprOp::BInter,
+            children,
+        } => children.iter().map(|child| (child, false)).collect(),
+        // `A ∖ B` walks `A` and tests each element against `B`, so only the
+        // left operand has to be enumerable.
+        ExpressionKind::Binary {
+            op: BinaryExprOp::SetMinus,
+            left,
+            right,
+        } => vec![(left, true), (right, false)],
+        _ => return None,
+    };
+    Some(children)
+}
+
+/// Why `expr` cannot be enumerated, if it cannot.
+///
+/// Only the set-building spine is followed. An operand that computes with a
+/// set (`dom(r)`, `r[s]`) is left alone: its result may well be finite even
+/// when an operand is not, and claiming otherwise would report `dom(f)` for
+/// every total function on `ℤ`.
+fn unbounded_reason(expr: &Expression, scope: &Scope) -> Option<Unbounded> {
+    match expr.kind() {
+        ExpressionKind::Atomic(AtomicOp::Integer) => Some(Unbounded::Structural("`ℤ`")),
+        ExpressionKind::Atomic(AtomicOp::Natural) => Some(Unbounded::Structural("`ℕ`")),
+        ExpressionKind::Atomic(AtomicOp::Natural1) => Some(Unbounded::Structural("`ℕ1`")),
+        // `ℙ(S)` is infinite exactly when `S` is, and so is `ℙ1(S)`.
+        ExpressionKind::Unary {
+            op: UnaryExprOp::Pow | UnaryExprOp::Pow1,
+            child,
+        } => unbounded_reason(child, scope).map(|_| Unbounded::Structural("a power set")),
+        // Every relation and function space, and the product they are built
+        // over, is infinite as soon as either side is.
+        ExpressionKind::Binary { op, left, right }
+            if is_relation_space_op(*op) || *op == BinaryExprOp::CProd =>
+        {
+            unbounded_reason(left, scope)
+                .or_else(|| unbounded_reason(right, scope))
+                .map(|_| Unbounded::Structural("a relation or function space"))
+        }
+        ExpressionKind::Binary {
+            op: BinaryExprOp::SetMinus,
+            left,
+            ..
+        } => unbounded_reason(left, scope),
+        ExpressionKind::Associative {
+            op: AssocExprOp::BUnion,
+            children,
+        } => children
+            .iter()
+            .find_map(|child| unbounded_reason(child, scope)),
+        // An intersection is no larger than its smallest operand, so one
+        // enumerable operand is enough to build it.
+        ExpressionKind::Associative {
+            op: AssocExprOp::BInter,
+            children,
+        } => {
+            let mut reasons = children.iter().map(|child| unbounded_reason(child, scope));
+            let first = reasons.next()??;
+            reasons.all(|reason| reason.is_some()).then_some(first)
+        }
+        ExpressionKind::FreeIdentifier(_) => {
+            let name = carrier_set_name(expr)?;
+            (!scope.finite_sets.contains(name)).then(|| Unbounded::CarrierSet(name.to_string()))
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Generic child access
+// ---------------------------------------------------------------------
+
+/// The immediate sub-formulas of a predicate.
+///
+/// Bound declarations' type annotations are deliberately skipped: an
+/// annotation spells a type, never a value, and reporting one would
+/// contradict the typing exemption these rules rest on.
+fn predicate_children(pred: &Predicate) -> (Vec<&Predicate>, Vec<&Expression>) {
+    match pred.kind() {
+        PredicateKind::Literal(_) | PredicateKind::PredicateVariable(_) => (Vec::new(), Vec::new()),
+        PredicateKind::Relational { left, right, .. } => (Vec::new(), vec![left, right]),
+        PredicateKind::Binary { left, right, .. } => (vec![left, right], Vec::new()),
+        PredicateKind::Associative { children, .. } => (children.iter().collect(), Vec::new()),
+        PredicateKind::Not(child) => (vec![child], Vec::new()),
+        PredicateKind::Quantified { pred, .. } => (vec![pred], Vec::new()),
+        PredicateKind::Simple(expr) => (Vec::new(), vec![expr]),
+        PredicateKind::Multiple(exprs) => (Vec::new(), exprs.iter().collect()),
+        PredicateKind::Application { args, .. } => (Vec::new(), args.iter().collect()),
+        PredicateKind::Extended { exprs, preds, .. } => {
+            (preds.iter().collect(), exprs.iter().collect())
+        }
+    }
+}
+
+/// The immediate sub-formulas of an expression.
+fn expression_children(expr: &Expression) -> (Vec<&Predicate>, Vec<&Expression>) {
+    match expr.kind() {
+        ExpressionKind::FreeIdentifier(_)
+        | ExpressionKind::BoundIdentifier(_)
+        | ExpressionKind::IntegerLiteral(_)
+        | ExpressionKind::Atomic(_) => (Vec::new(), Vec::new()),
+        ExpressionKind::SetExtension(members) => (Vec::new(), members.iter().collect()),
+        ExpressionKind::Bool(pred) => (vec![pred], Vec::new()),
+        ExpressionKind::Binary { left, right, .. } => (Vec::new(), vec![left, right]),
+        ExpressionKind::Associative { children, .. } => (Vec::new(), children.iter().collect()),
+        ExpressionKind::Unary { child, .. } => (Vec::new(), vec![child]),
+        ExpressionKind::Quantified { pred, expr, .. } => (vec![pred], vec![expr]),
+        // The ascribed type is a type expression by construction.
+        ExpressionKind::Ascription { expr, .. } => (Vec::new(), vec![expr]),
+        ExpressionKind::Extended { exprs, preds, .. } => {
+            (preds.iter().collect(), exprs.iter().collect())
+        }
+    }
 }

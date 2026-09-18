@@ -281,6 +281,19 @@ impl EventDecl {
         &self.actions[inherited_count..]
     }
 
+    /// Every guard in scope for this event: the inherited chain's, root
+    /// first, then its own — the checked file's order. The first
+    /// `len() - guards.len()` entries are inherited and their spans index
+    /// an ancestor's text.
+    pub fn chain_guards(&self) -> Vec<&GuardDecl> {
+        let mut out: Vec<&GuardDecl> = Vec::new();
+        for ancestor in self.chain_root_first() {
+            out.extend(ancestor.guards.iter());
+        }
+        out.extend(self.guards.iter());
+        out
+    }
+
     /// Walk the `self.inherited` chain root-first: the oldest ancestor
     /// first, the immediate parent last. This event itself is *not*
     /// included, so a caller wanting the whole chain appends it. Useful

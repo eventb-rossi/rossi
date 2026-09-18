@@ -128,10 +128,22 @@ pub enum RuleId {
     /// EB102 — A leaf machine's INITIALISATION does not determine the
     /// initial state, or reads a variable that has none yet. (rossi-only.)
     NondeterministicInitialisation,
+    /// EB103 — No guard of a leaf machine's event fixes one of its
+    /// parameters to a value. (rossi-only.)
+    UndeterminedParameter,
+    /// EB104 — A quantifier or comprehension binds a variable with neither a
+    /// domain to iterate nor a finite type. (rossi-only.)
+    UnboundedQuantifier,
+    /// EB105 — An infinite set is used where a value is needed rather than
+    /// where a type is given. (rossi-only.)
+    InfiniteSetValue,
+    /// EB106 — A carrier set used as a value has no axiom giving it a finite
+    /// cardinality. (rossi-only.)
+    DeferredSetWithoutCardinality,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB102"`).
+    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB106"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -171,6 +183,10 @@ impl RuleId {
             RuleId::BecomesMemberOfInEvent => "EB100",
             RuleId::NonCanonicalBecomesSuchThat => "EB101",
             RuleId::NondeterministicInitialisation => "EB102",
+            RuleId::UndeterminedParameter => "EB103",
+            RuleId::UnboundedQuantifier => "EB104",
+            RuleId::InfiniteSetValue => "EB105",
+            RuleId::DeferredSetWithoutCardinality => "EB106",
         }
     }
 
@@ -216,6 +232,10 @@ impl RuleId {
                 "Assignment by predicate is not in canonical form"
             }
             RuleId::NondeterministicInitialisation => "Initial state is not determined",
+            RuleId::UndeterminedParameter => "Event parameter is not determined by the guards",
+            RuleId::UnboundedQuantifier => "Quantifier has no finite domain",
+            RuleId::InfiniteSetValue => "Infinite set used as a value",
+            RuleId::DeferredSetWithoutCardinality => "Carrier set has no cardinality",
         }
     }
 
@@ -327,6 +347,18 @@ impl RuleId {
             RuleId::NondeterministicInitialisation => {
                 "A leaf machine's INITIALISATION does not pin the initial state: an action chooses from a non-singleton set, assigns by a predicate outside the canonical form, or reads a machine variable, which has no value before initialisation. A runtime translation must then be given the initial state from outside the model, and every consumer supplies it differently. Give each variable a deterministic initial value."
             }
+            RuleId::UndeterminedParameter => {
+                "An event of a leaf machine takes a parameter that no guard fixes with an equality `p = …`. A translation that fires the event has to come up with a value: it can enumerate the parameter when a guard confines it to a finite set, and otherwise has to guess, or be handed the value. This is reported at INFO because it is not always a defect — under trace-driven checking the trace supplies the parameter, and the model is right not to. Where the value is meant to follow from the model, add the equality guard."
+            }
+            RuleId::UnboundedQuantifier => {
+                "A quantifier or comprehension (`∀`, `∃`, a set comprehension, `λ`, `⋃`, `⋂`) binds a variable that has neither a finite type nor a guard on its domain, so evaluating the formula means iterating a domain with no end. Rodin only has to reason about the formula, never evaluate it, so this is ordinary Event-B; a translation has to enumerate. Restrict the variable with a membership (`∀x · x ∈ S ⇒ …`), an equality, or a maplet membership in a relation. A variable of a finite type, `BOOL` or a bounded carrier set, needs no restriction and is not reported."
+            }
+            RuleId::InfiniteSetValue => {
+                "An infinite set — `ℤ`, `ℕ`, `ℕ1`, a power set or a relation or function space over one, or a carrier set with no cardinality — appears where a value is needed: an assignment right-hand side, the set of a `:∈`, an operand of `card`, `min`, `max`, `union` or `inter`, a member of an enumerated set, an operand of `∪`, every operand of an `∩`, or the left of `∖`. A translation has to build the set to compute with it. Using an infinite set to give a type is fine and is not reported: `f ∈ ℕ → ℤ` states a type, `card(ℕ)` asks for a computation."
+            }
+            RuleId::DeferredSetWithoutCardinality => {
+                "A carrier set is used where a value is needed, and no visible axiom bounds it. Every carrier set in Event-B is deferred — the language has no enumerated declaration — so nothing says how many elements it has, and a translation that has to build it either invents a size or grows the set on demand, where `card` then answers with the population so far rather than the modelled size. Add `finite(S)`, `partition(S, …)`, an enumeration `S = {a, b}`, or `card(S) = n`. A `partition` is usually the one to reach for: it settles this and EB109 at once."
+            }
         }
     }
 
@@ -357,7 +389,7 @@ impl RuleId {
             | RuleId::MissingLabel
             | RuleId::PrimedDeclaredName
             | RuleId::DuplicateComponent => Severity::Error,
-            RuleId::WellDefinedness => Severity::Info,
+            RuleId::WellDefinedness | RuleId::UndeterminedParameter => Severity::Info,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::IncompleteInitialisation
@@ -370,7 +402,10 @@ impl RuleId {
             | RuleId::SectionOutOfOrder
             | RuleId::BecomesMemberOfInEvent
             | RuleId::NonCanonicalBecomesSuchThat
-            | RuleId::NondeterministicInitialisation => Severity::Warning,
+            | RuleId::NondeterministicInitialisation
+            | RuleId::UnboundedQuantifier
+            | RuleId::InfiniteSetValue
+            | RuleId::DeferredSetWithoutCardinality => Severity::Warning,
         }
     }
 
@@ -435,6 +470,10 @@ impl RuleId {
             RuleId::BecomesMemberOfInEvent,
             RuleId::NonCanonicalBecomesSuchThat,
             RuleId::NondeterministicInitialisation,
+            RuleId::UndeterminedParameter,
+            RuleId::UnboundedQuantifier,
+            RuleId::InfiniteSetValue,
+            RuleId::DeferredSetWithoutCardinality,
         ]
     }
 }
@@ -486,6 +525,10 @@ mod tests {
         assert_eq!(RuleId::BecomesMemberOfInEvent.code(), "EB100");
         assert_eq!(RuleId::NonCanonicalBecomesSuchThat.code(), "EB101");
         assert_eq!(RuleId::NondeterministicInitialisation.code(), "EB102");
+        assert_eq!(RuleId::UndeterminedParameter.code(), "EB103");
+        assert_eq!(RuleId::UnboundedQuantifier.code(), "EB104");
+        assert_eq!(RuleId::InfiniteSetValue.code(), "EB105");
+        assert_eq!(RuleId::DeferredSetWithoutCardinality.code(), "EB106");
     }
 
     /// `all()` is a hand-maintained array with no exhaustiveness check, unlike
@@ -498,10 +541,10 @@ mod tests {
     #[test]
     fn all_lists_every_rule() {
         // `EB001`..`EB034` minus the one documented gap (EB013), then the
-        // runtime-translation block `EB100`..`EB102`.
+        // runtime-translation block `EB100`..`EB106`.
         let expected: Vec<String> = (1..=34)
             .filter(|n| *n != 13)
-            .chain(100..=102)
+            .chain(100..=106)
             .map(|n| format!("EB{n:03}"))
             .collect();
         let listed: Vec<&str> = RuleId::all().iter().map(|r| r.code()).collect();

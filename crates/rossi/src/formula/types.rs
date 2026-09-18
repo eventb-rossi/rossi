@@ -71,6 +71,26 @@ impl Type {
         Type::pow(Type::given(name))
     }
 
+    /// Whether every value of the type can be enumerated, given which
+    /// carrier sets `bounded` vouches for.
+    ///
+    /// `BOOL` is finite and `ℤ` is not. A given set is whatever the caller
+    /// knows: the type alone cannot say, since a context may bound it with
+    /// `finite(S)` or a partition and the type does not see axioms. A
+    /// parametric type may be infinite (`List(BOOL)` is), so it counts as
+    /// not.
+    pub fn is_finite_with(&self, bounded: &dyn Fn(&str) -> bool) -> bool {
+        match self {
+            Type::Bool => true,
+            Type::Int | Type::Parametric { .. } => false,
+            Type::Given(name) => bounded(name),
+            Type::Pow(inner) => inner.is_finite_with(bounded),
+            Type::Prod(left, right) => {
+                left.is_finite_with(bounded) && right.is_finite_with(bounded)
+            }
+        }
+    }
+
     /// The element type if this is a powerset: `ℙ(T)` → `T`.
     pub fn base_type(&self) -> Option<&Type> {
         match self {

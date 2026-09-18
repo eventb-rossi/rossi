@@ -281,3 +281,286 @@ fn every_leaf_of_a_forked_refinement_is_checked() {
         "both leaves are reported, in project order"
     );
 }
+
+// ---------------------------------------------------------------------
+// EB103 — event parameter not determined by the guards
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb103_flags_a_parameter_no_guard_fixes() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ ℕ\n    @grd2 p > x\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB103", "M.step/p")]);
+    assert_eq!(
+        diags[0].severity,
+        Severity::Info,
+        "a trace-driven consumer supplies the parameter, so this is advisory"
+    );
+    assert!(
+        diags[0].message.contains("supplied outside the model"),
+        "an unbounded parameter cannot even be enumerated: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn eb103_accepts_a_determining_equality_guard() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  any p\n  where\n    @grd1 p = x + 1\n  then\n    @act1 x ≔ p\nend\nend\n";
+    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+}
+
+#[test]
+fn eb103_says_so_when_the_parameter_is_at_least_enumerable() {
+    let context =
+        "context C\nsets S\nconstants a\n    b\naxioms\n    @a1 partition(S, {a}, {b})\nend\n";
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ S\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ a\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ S\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("C.eventb", context), ("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB103", "M.step/p")]);
+    assert!(
+        diags[0]
+            .message
+            .contains("domain is finite and can be enumerated"),
+        "a partition makes the carrier set enumerable: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn eb103_counts_an_interval_guard_as_enumerable() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ 1 ‥ 10\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB103", "M.step/p")]);
+    assert!(
+        diags[0]
+            .message
+            .contains("domain is finite and can be enumerated"),
+        "an interval bounds an integer parameter however infinite its type: {}",
+        diags[0].message
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB104 — quantifier or comprehension without a finite domain
+// ---------------------------------------------------------------------
+
+/// The design document's own fixture, reduced: `n` is constrained only by an
+/// inequality, so there is nothing to iterate.
+#[test]
+fn eb104_flags_a_bound_variable_with_only_an_inequality() {
+    let context = "context C\nsets NAMES\nconstants here\naxioms\n    @a1 here ∈ NAMES\nend\n";
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  where\n    @grd1 ∀n · n ≠ here ⇒ n ∈ NAMES\n  then\n    @act1 x ≔ 1\nend\nend\n";
+    let diags = findings(&[("C.eventb", context), ("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB104", "M.step/grd1")]);
+    assert_eq!(diags[0].severity, Severity::Warning);
+    assert!(
+        diags[0].message.contains("`n`"),
+        "message names the bound variable: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn eb104_accepts_a_membership_antecedent() {
+    let machine = "machine M\nvariables f\ninvariants\n    @i1 f ∈ ℤ ⇸ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 f ≔ ∅\nend\n\
+        event step\n  where\n    @grd1 ∀n · n ∈ dom(f) ⇒ f(n) > 0\n  then\n    @act1 f ≔ ∅\nend\nend\n";
+    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+}
+
+#[test]
+fn eb104_accepts_a_subset_constraint() {
+    // `C ⊆ S` is the same statement as `C ∈ ℙ(S)`; reading them differently
+    // would report presentation rather than meaning.
+    let machine = "machine M\nvariables s\ninvariants\n    @i1 s ∈ ℙ(ℤ)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 s ≔ ∅\nend\n\
+        event step\n  where\n    @grd1 ∀c · c ⊆ s ⇒ c ⊆ s\n  then\n    @act1 s ≔ ∅\nend\nend\n";
+    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+}
+
+#[test]
+fn eb104_accepts_a_maplet_membership() {
+    // A relation's pairs enumerate both bound variables at once.
+    let machine = "machine M\nvariables r\ninvariants\n    @i1 r ∈ ℤ ↔ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 r ≔ ∅\nend\n\
+        event step\n  where\n    @grd1 ∃p, q · p ↦ q ∈ r ∧ p < q\n  then\n    @act1 r ≔ ∅\nend\nend\n";
+    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+}
+
+#[test]
+fn eb104_exempts_a_finite_type() {
+    // `BOOL` is its own domain, and so is a partitioned carrier set.
+    let context =
+        "context C\nsets S\nconstants a\n    b\naxioms\n    @a1 partition(S, {a}, {b})\nend\n";
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  where\n    @grd1 (∀v · v ≠ a ⇒ v ∈ S) ∧ (∀w · w = TRUE ⇒ w = TRUE)\n  then\n    @act1 x ≔ 1\nend\nend\n";
+    assert_eq!(
+        codes(&findings(&[("C.eventb", context), ("M.eventb", machine)])),
+        Vec::new()
+    );
+}
+
+#[test]
+fn eb104_covers_a_set_comprehension() {
+    let machine = "machine M\nvariables s\ninvariants\n    @i1 s ∈ ℙ(ℤ)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 s ≔ ∅\nend\n\
+        event step\n  then\n    @act1 s ≔ {n · n > 0 ∣ n}\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB104", "M.step/act1")]);
+}
+
+// ---------------------------------------------------------------------
+// EB105 — infinite set used as a value
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb105_flags_cardinality_of_an_infinite_set() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  then\n    @act1 x ≔ card(ℕ)\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB105", "M.step/act1")]);
+    assert_eq!(diags[0].severity, Severity::Warning);
+    assert!(
+        diags[0].message.contains("`ℕ`"),
+        "message names the set: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn eb105_exempts_a_typing_position() {
+    // `f ∈ ℕ → ℤ` states a type; nothing has to be built.
+    let machine = "machine M\nvariables f\ninvariants\n    @i1 f ∈ ℕ → ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 f ≔ (λn · n ∈ ℕ ∣ n)\nend\nend\n";
+    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+}
+
+#[test]
+fn eb105_flags_a_relation_space_that_must_be_built() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  then\n    @act1 x ≔ card(ℤ ↔ ℤ)\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB105", "M.step/act1")]);
+    assert!(
+        diags[0].message.contains("relation or function space"),
+        "message names the shape: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn eb105_flags_a_union_with_an_infinite_operand() {
+    let machine = "machine M\nvariables s\ninvariants\n    @i1 s ∈ ℙ(ℤ)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 s ≔ ∅\nend\n\
+        event step\n  then\n    @act1 s ≔ ℕ ∪ {1}\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB105", "M.step/act1")]);
+}
+
+#[test]
+fn eb105_accepts_an_intersection_with_one_enumerable_operand() {
+    // An intersection is walked from the finite operand and each element
+    // tested against the other, so `ℕ` is never built.
+    let machine = "machine M\nvariables s\n    t\ninvariants\n    @i1 s ∈ ℙ(ℤ)\n    @i2 t ∈ ℙ(ℤ)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 s ≔ ∅\n    @act2 t ≔ ∅\nend\n\
+        event step\n  then\n    @act1 s ≔ t ∩ ℕ\nend\nend\n";
+    assert!(
+        only(
+            &findings(&[("M.eventb", machine)]),
+            RuleId::InfiniteSetValue
+        )
+        .is_empty(),
+        "one enumerable operand bounds the intersection"
+    );
+}
+
+#[test]
+fn eb105_flags_an_intersection_of_infinite_operands() {
+    let machine = "machine M\nvariables s\ninvariants\n    @i1 s ∈ ℙ(ℤ)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 s ≔ ∅\nend\n\
+        event step\n  then\n    @act1 s ≔ ℕ ∩ ℕ1\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(codes(&diags), vec![("EB105", "M.step/act1")]);
+}
+
+// ---------------------------------------------------------------------
+// EB106 — deferred set with no cardinality
+// ---------------------------------------------------------------------
+
+const UNBOUNDED_SET: &str = "context C\nsets S\nconstants a\naxioms\n    @a1 a ∈ S\nend\n";
+
+#[test]
+fn eb106_flags_a_carrier_set_used_as_a_value() {
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ S\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ a\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ S ∖ {a}\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("C.eventb", UNBOUNDED_SET), ("M.eventb", machine)]);
+    let set = only(&diags, RuleId::DeferredSetWithoutCardinality);
+    assert_eq!(set.len(), 1, "one finding per set, at its declaration");
+    assert_eq!(set[0].origin, "C.S");
+    assert_eq!(set[0].severity, Severity::Warning);
+    assert!(
+        set[0].message.contains("M.step/grd1") && set[0].message.contains("partition"),
+        "message names the first use and the evidence that would settle it: {}",
+        set[0].message
+    );
+}
+
+#[test]
+fn eb106_is_silent_when_membership_is_all_that_is_asked() {
+    // Testing membership never enumerates the set.
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ S\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ a\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ S\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("C.eventb", UNBOUNDED_SET), ("M.eventb", machine)]);
+    assert!(
+        only(&diags, RuleId::DeferredSetWithoutCardinality).is_empty(),
+        "a typing membership is not a value use: {diags:#?}"
+    );
+}
+
+#[test]
+fn eb106_rejects_a_partition_into_unlisted_blocks() {
+    // `partition(S, A, B)` splits `S` in two without bounding either half,
+    // so it says nothing about how many elements `S` has.
+    let context = "context C\nsets S\nconstants a\n    A\n    B\naxioms\n    @a1 a ∈ S\n    @a2 partition(S, A, B)\nend\n";
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ S\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ a\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ S ∖ {a}\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("C.eventb", context), ("M.eventb", machine)]);
+    let set = only(&diags, RuleId::DeferredSetWithoutCardinality);
+    assert_eq!(set.len(), 1, "one finding, at the declaration: {diags:#?}");
+    assert_eq!(set[0].origin, "C.S");
+}
+
+#[test]
+fn eb106_accepts_each_way_of_bounding_a_set() {
+    for axioms in [
+        "@a1 a ∈ S\n    @a2 finite(S)",
+        "@a1 partition(S, {a})",
+        "@a1 S = {a}",
+        "@a1 a ∈ S\n    @a2 card(S) = 4",
+    ] {
+        let context = format!("context C\nsets S\nconstants a\naxioms\n    {axioms}\nend\n");
+        let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ S\nevents\n\
+            event INITIALISATION\n  then\n    @act1 x ≔ a\nend\n\
+            event step\n  any p\n  where\n    @grd1 p ∈ S ∖ {a}\n  then\n    @act1 x ≔ p\nend\nend\n";
+        let diags = findings(&[("C.eventb", &context), ("M.eventb", machine)]);
+        assert!(
+            only(&diags, RuleId::DeferredSetWithoutCardinality).is_empty(),
+            "`{axioms}` bounds the set: {diags:#?}"
+        );
+    }
+}
