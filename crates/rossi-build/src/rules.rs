@@ -148,10 +148,22 @@ pub enum RuleId {
     /// EB109 — Two constants of the same carrier set are never related by
     /// `=` or `≠`, so nothing says whether they differ. (rossi-only.)
     IndistinctCarrierSetConstants,
+    /// EB110 — An event's actions only agree with the model when they are
+    /// applied simultaneously. (rossi-only.)
+    ParallelAssignmentHazard,
+    /// EB111 — A guard is well-defined only under a condition no earlier
+    /// guard establishes. (rossi-only.)
+    GuardEvaluationOrder,
+    /// EB112 — A leaf machine drops a variable its abstraction declares.
+    /// (rossi-only.)
+    DroppedAbstractVariable,
+    /// EB113 — A witness constrains the abstract value without determining
+    /// it. (rossi-only.)
+    NonEqualityWitness,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB109"`).
+    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB113"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -198,6 +210,10 @@ impl RuleId {
             RuleId::UnboundedInteger => "EB107",
             RuleId::UndeterminedConstant => "EB108",
             RuleId::IndistinctCarrierSetConstants => "EB109",
+            RuleId::ParallelAssignmentHazard => "EB110",
+            RuleId::GuardEvaluationOrder => "EB111",
+            RuleId::DroppedAbstractVariable => "EB112",
+            RuleId::NonEqualityWitness => "EB113",
         }
     }
 
@@ -250,6 +266,10 @@ impl RuleId {
             RuleId::UnboundedInteger => "Unbounded integer",
             RuleId::UndeterminedConstant => "Constant is not determined by an equality",
             RuleId::IndistinctCarrierSetConstants => "Carrier-set constants are not distinguished",
+            RuleId::ParallelAssignmentHazard => "Actions must be applied simultaneously",
+            RuleId::GuardEvaluationOrder => "Guard depends on the evaluation order",
+            RuleId::DroppedAbstractVariable => "Abstract variable dropped in the leaf machine",
+            RuleId::NonEqualityWitness => "Witness is not an equality",
         }
     }
 
@@ -382,6 +402,18 @@ impl RuleId {
             RuleId::IndistinctCarrierSetConstants => {
                 "Two constants of the same carrier set are never related by `=` or `≠`, so the model does not say whether they denote the same element. A translation that has to give them values cannot tell whether one object or two is meant. Relate them, or declare the set with a `partition`, which settles every pair at once and is what most models do — with four constants that is one predicate instead of six inequalities. Reported at INFO because a model lacking the relation is more often under-specified than wrong."
             }
+            RuleId::ParallelAssignmentHazard => {
+                "An event assigns several variables at once, or one of its actions reads a variable another assigns. Event-B applies every action of an event simultaneously, all reading the before-state, so `x, y ≔ y, x` swaps and `x ≔ y ∥ y ≔ x` does too. Emitting them as statements in sequence does not: the second reads what the first wrote. The model is unambiguous here, so this is not an uncertainty — it is a mistranslation trap, and a measured one: a generator was found turning a two-maplet override into two sequential assignments that do not swap. Translations that get it right copy the read variables first, compute every value before applying any, or prove the sequentialisation correct. Reported at INFO because the model is right; what has to be checked is the consumer."
+            }
+            RuleId::GuardEvaluationOrder => {
+                "A guard is well-defined only under a condition that no earlier guard of the same event states — typically `f(x)` with `x ∈ dom(f)` established later or not at all. In Event-B a guard's well-definedness is a separate proof obligation and guards are a conjunction, not a sequence, so nothing is wrong with the model. A translation that evaluates guards in written order and aborts on the first partial application will fail where the model merely says the event is disabled. Order the guards so each one's well-definedness follows from those above it, or evaluate guards defensively. Overlaps EB010, which reports the well-definedness condition itself; this rule adds only the ordering claim."
+            }
+            RuleId::DroppedAbstractVariable => {
+                "A leaf machine does not keep a variable its abstraction declares, whatever gluing invariant relates what replaced it. Refinement allows this and the proof obligations cover it, but a translation of the leaf alone cannot reproduce anything stated about the dropped variable, so any formula over it is silently lost. Keep the variable, or accept that properties expressed over it are not observable in what runs. Related to EB025, which reports a variable that disappears without the refinement machinery to justify it."
+            }
+            RuleId::NonEqualityWitness => {
+                "A witness gives the abstract parameter or variable a constraint rather than a value: its predicate is not `abstract = E`. The refinement proof only needs a witness to exist, so a constraining witness is perfectly sound. Anything that consumes the refinement relation — a trace checker mapping a concrete run onto the abstract level — has to compute the abstract value, and a constraint does not give it one. Write the witness as an equality where the concrete state determines the abstract value."
+            }
         }
     }
 
@@ -415,7 +447,11 @@ impl RuleId {
             RuleId::WellDefinedness
             | RuleId::UndeterminedParameter
             | RuleId::UnboundedInteger
-            | RuleId::IndistinctCarrierSetConstants => Severity::Info,
+            | RuleId::IndistinctCarrierSetConstants
+            | RuleId::ParallelAssignmentHazard
+            | RuleId::GuardEvaluationOrder
+            | RuleId::DroppedAbstractVariable
+            | RuleId::NonEqualityWitness => Severity::Info,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::IncompleteInitialisation
@@ -504,6 +540,10 @@ impl RuleId {
             RuleId::UnboundedInteger,
             RuleId::UndeterminedConstant,
             RuleId::IndistinctCarrierSetConstants,
+            RuleId::ParallelAssignmentHazard,
+            RuleId::GuardEvaluationOrder,
+            RuleId::DroppedAbstractVariable,
+            RuleId::NonEqualityWitness,
         ]
     }
 }
@@ -562,6 +602,10 @@ mod tests {
         assert_eq!(RuleId::UnboundedInteger.code(), "EB107");
         assert_eq!(RuleId::UndeterminedConstant.code(), "EB108");
         assert_eq!(RuleId::IndistinctCarrierSetConstants.code(), "EB109");
+        assert_eq!(RuleId::ParallelAssignmentHazard.code(), "EB110");
+        assert_eq!(RuleId::GuardEvaluationOrder.code(), "EB111");
+        assert_eq!(RuleId::DroppedAbstractVariable.code(), "EB112");
+        assert_eq!(RuleId::NonEqualityWitness.code(), "EB113");
     }
 
     /// `all()` is a hand-maintained array with no exhaustiveness check, unlike
@@ -574,10 +618,10 @@ mod tests {
     #[test]
     fn all_lists_every_rule() {
         // `EB001`..`EB034` minus the one documented gap (EB013), then the
-        // runtime-translation block `EB100`..`EB109`.
+        // runtime-translation block `EB100`..`EB113`.
         let expected: Vec<String> = (1..=34)
             .filter(|n| *n != 13)
-            .chain(100..=109)
+            .chain(100..=113)
             .map(|n| format!("EB{n:03}"))
             .collect();
         let listed: Vec<&str> = RuleId::all().iter().map(|r| r.code()).collect();

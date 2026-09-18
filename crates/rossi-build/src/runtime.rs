@@ -54,6 +54,10 @@ pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
     for machine in &scope.machines {
         check_machine(machine, &mut diags);
         check_parameters(machine, &scope, &mut diags);
+        check_parallel_actions(machine, &mut diags);
+        check_guard_order(machine, &scope, &mut diags);
+        check_dropped_variables(machine, &scope, &mut diags);
+        check_witnesses(machine, &mut diags);
     }
     check_formulas(&scope, &mut diags);
     check_contexts(&scope, &mut diags);
@@ -1713,4 +1717,286 @@ fn is_integer_typing(pred: &Predicate, name: &str) -> bool {
             bound.kind(),
             ExpressionKind::Atomic(AtomicOp::Integer | AtomicOp::Natural | AtomicOp::Natural1)
         )
+}
+
+// ---------------------------------------------------------------------
+// EB110 — actions that only agree with the model in parallel
+// ---------------------------------------------------------------------
+
+/// Report the events whose actions cannot be applied one after another.
+///
+/// Not an uncertainty: the model says exactly what happens. It is a
+/// mistranslation trap, so the finding is INFO and the help names the three
+/// ways translations get it right.
+fn check_parallel_actions(machine: &CheckedMachine, diags: &mut Vec<Diagnostic>) {
+    for event in &machine.record.events {
+        let actions: Vec<(bool, &ActionDecl, &Assignment)> = event_actions(event).collect();
+        let targets: Vec<Vec<&str>> = actions
+            .iter()
+            .map(|(_, action, _)| lhs_variables(&action.action))
+            .collect();
+
+        for (position, (own, action, typed)) in actions.iter().enumerate() {
+            let origin = || format!("{}.{}/{}", machine.name(), event.label, action.label);
+            let span = own_span(*own, typed.span());
+
+            if matches!(typed.kind(), AssignmentKind::BecomesEqualTo { .. })
+                && targets[position].len() > 1
+            {
+                diags.push(Diagnostic {
+                    severity: RuleId::ParallelAssignmentHazard.default_severity(),
+                    origin: origin(),
+                    message: format!(
+                        "{} are assigned simultaneously; applying the assignments in sequence would not give the same result",
+                        quoted_list(&targets[position])
+                    ),
+                    rule_id: Some(RuleId::ParallelAssignmentHazard),
+                    span,
+                });
+            }
+
+            // A read of what a *different* action writes is the same hazard
+            // spread over two clauses. Reading what this action itself
+            // assigns is the ordinary before-state read every assignment
+            // makes and is not reported.
+            let clashes: Vec<&str> = typed
+                .free_identifiers()
+                .iter()
+                .map(String::as_str)
+                .filter(|name| !targets[position].contains(name))
+                .filter(|name| {
+                    targets
+                        .iter()
+                        .enumerate()
+                        .any(|(other, assigned)| other != position && assigned.contains(name))
+                })
+                .collect();
+            if !clashes.is_empty() {
+                diags.push(Diagnostic {
+                    severity: RuleId::ParallelAssignmentHazard.default_severity(),
+                    origin: origin(),
+                    message: format!(
+                        "This action reads {}, which another action of the same event assigns; every action reads the before-state, so the two must not be applied in sequence",
+                        quoted_list(&clashes)
+                    ),
+                    rule_id: Some(RuleId::ParallelAssignmentHazard),
+                    span,
+                });
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// EB111 — guard depends on the evaluation order
+// ---------------------------------------------------------------------
+
+/// Report guards whose well-definedness nothing earlier establishes.
+///
+/// The conservative half of the question: a conjunct counts as established
+/// when it appears verbatim among the earlier guards, the invariants or the
+/// visible axioms. Real implication needs a prover, so a guard whose
+/// condition merely *follows* from them is reported too. That is why this is
+/// INFO, and why the message says the condition was not found rather than
+/// that it does not hold.
+fn check_guard_order(machine: &CheckedMachine, scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    let mut established: Vec<&Predicate> = scope.axioms.clone();
+    established.extend(scope.invariants(machine));
+    let context_depth = established.len();
+
+    for event in &machine.record.events {
+        established.truncate(context_depth);
+        for (own, guard) in event_guards(event) {
+            let lemma = guard.typed.wd_lemma();
+            let missing: Vec<&Predicate> = essential_conditions(&lemma)
+                .into_iter()
+                .filter(|condition| !established.contains(condition))
+                .collect();
+
+            if !missing.is_empty() {
+                diags.push(Diagnostic {
+                    severity: RuleId::GuardEvaluationOrder.default_severity(),
+                    origin: format!("{}.{}/{}", machine.name(), event.label, guard.label),
+                    message: format!(
+                        "Could not find {} among the earlier guards, the invariants or the axioms; a translation that evaluates guards in order may apply this one where it is not defined",
+                        render_conditions(&missing)
+                    ),
+                    rule_id: Some(RuleId::GuardEvaluationOrder),
+                    span: own_span(own, guard.typed.span()),
+                });
+            }
+
+            // The guard itself is available to those below it: guards are a
+            // conjunction, and a translation evaluating them in order has
+            // already established this one.
+            established.extend(conjuncts(&guard.typed));
+        }
+    }
+}
+
+/// The conditions of a well-definedness lemma that a guard could establish.
+///
+/// A lemma of a quantified guard carries its conditions under the
+/// quantifier. One that does not mention the bound variable — `f` applied to
+/// something fixed, inside a `∀` over something else — is a plain condition
+/// and is reported as itself, which is both readable and comparable against
+/// the earlier guards. One that does mention it cannot be lifted out, so the
+/// whole quantified lemma is reported instead.
+fn essential_conditions(lemma: &Predicate) -> Vec<&Predicate> {
+    let mut out = Vec::new();
+    push_essential(lemma, &mut out);
+    out
+}
+
+fn push_essential<'a>(pred: &'a Predicate, out: &mut Vec<&'a Predicate>) {
+    if is_discharged_by_typing(pred) {
+        return;
+    }
+    match pred.kind() {
+        PredicateKind::Associative {
+            op: AssocPredOp::LAnd,
+            children,
+        } => {
+            for child in children {
+                push_essential(child, out);
+            }
+        }
+        PredicateKind::Quantified { pred: body, .. }
+        | PredicateKind::Binary {
+            op: BinaryPredOp::LImp,
+            right: body,
+            ..
+        } => {
+            let mut inner = Vec::new();
+            push_essential(body, &mut inner);
+            let (closed, open): (Vec<_>, Vec<_>) = inner
+                .into_iter()
+                .partition(|condition| condition.dangling_bound_indices().is_empty());
+            out.extend(closed);
+            if !open.is_empty() {
+                out.push(pred);
+            }
+        }
+        _ => out.push(pred),
+    }
+}
+
+/// Whether this well-definedness conjunct says nothing about evaluation
+/// order.
+///
+/// Two kinds do not. The trivial `⊤`, and the functionality half of a
+/// function application: applying `f` requires both that the argument is in
+/// `dom(f)`, which is an ordering concern, and that `f` is a function at
+/// all, which its type already settles and no guard would ever restate.
+/// Reporting the second would bury the first — every application in a model
+/// carries one.
+///
+/// A quantified conjunct is judged by its body, so a lemma that only
+/// requires functionality under a quantifier is dropped like a bare one.
+fn is_discharged_by_typing(pred: &Predicate) -> bool {
+    match pred.kind() {
+        PredicateKind::Literal(rossi::formula::tag::LiteralPredOp::BTrue) => true,
+        PredicateKind::Relational {
+            op: RelationalOp::In,
+            right,
+            ..
+        } => is_function_space(right),
+        PredicateKind::Quantified { pred: body, .. } => {
+            conjuncts(body).into_iter().all(is_discharged_by_typing)
+        }
+        PredicateKind::Binary {
+            op: BinaryPredOp::LImp,
+            right,
+            ..
+        } => conjuncts(right).into_iter().all(is_discharged_by_typing),
+        PredicateKind::Associative {
+            op: AssocPredOp::LAnd,
+            children,
+        } => children.iter().all(is_discharged_by_typing),
+        _ => false,
+    }
+}
+
+/// Whether `expr` is a function or relation space between two types — the
+/// shape a declaration gives, not one a guard establishes.
+fn is_function_space(expr: &Expression) -> bool {
+    let ExpressionKind::Binary { op, left, right } = expr.kind() else {
+        return false;
+    };
+    is_relation_space_op(*op) && left.is_type_expression() && right.is_type_expression()
+}
+
+fn render_conditions(conditions: &[&Predicate]) -> String {
+    let printer = rossi::pretty::PrettyPrinter::rodin_formula_string();
+    conditions
+        .iter()
+        .map(|condition| format!("`{}`", printer.print_formula_predicate(condition)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+// ---------------------------------------------------------------------
+// EB112 / EB113 — what the refinement leaves behind
+// ---------------------------------------------------------------------
+
+/// EB112 — variables the abstraction declares that the leaf does not keep.
+///
+/// A refinement inherits its abstract variables rather than re-declaring
+/// them, so they stay visible whether or not it keeps them; what marks one
+/// as dropped is that the checked machine has it as abstract only, with no
+/// concrete counterpart.
+fn check_dropped_variables(machine: &CheckedMachine, scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    for variable in &machine.record.variables {
+        if !variable.is_abstract || variable.is_concrete {
+            continue;
+        }
+        let declared_by = machine
+            .ancestors()
+            .iter()
+            .rev()
+            .find(|name| {
+                scope.model.machines.get(*name).is_some_and(|ancestor| {
+                    ancestor
+                        .record
+                        .variables
+                        .iter()
+                        .any(|v| v.name == variable.name && v.is_concrete)
+                })
+            })
+            .map_or_else(|| "its abstraction".to_string(), |name| format!("`{name}`"));
+
+        diags.push(Diagnostic {
+            severity: RuleId::DroppedAbstractVariable.default_severity(),
+            origin: format!("{}.{}", machine.name(), variable.name),
+            message: format!(
+                "`{}` is declared by {declared_by} and not kept here, so nothing this machine runs can reproduce what the model states about it",
+                variable.name
+            ),
+            rule_id: Some(RuleId::DroppedAbstractVariable),
+            span: None,
+        });
+    }
+}
+
+/// EB113 — witnesses that constrain the abstract value without fixing it.
+fn check_witnesses(machine: &CheckedMachine, diags: &mut Vec<Diagnostic>) {
+    for event in &machine.record.events {
+        for witness in &event.witnesses {
+            // The label names what is being witnessed; a primed label
+            // witnesses an abstract variable's after-value.
+            if determines(&witness.typed, &witness.label) {
+                continue;
+            }
+            diags.push(Diagnostic {
+                severity: RuleId::NonEqualityWitness.default_severity(),
+                origin: format!("{}.{}/{}", machine.name(), event.label, witness.label),
+                message: format!(
+                    "Could not verify the abstract value of `{}`: the witness constrains it rather than fixing it with `{} = …`",
+                    witness.label, witness.label
+                ),
+                rule_id: Some(RuleId::NonEqualityWitness),
+                span: witness.typed.span(),
+            });
+        }
+    }
 }

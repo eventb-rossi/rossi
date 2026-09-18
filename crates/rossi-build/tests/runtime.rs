@@ -205,11 +205,12 @@ fn eb102_flags_a_read_of_uninitialised_state() {
     let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ y + 1\n    @act2 y ≔ 0\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
-    assert_eq!(codes(&diags), vec![("EB102", "M.INITIALISATION/act1")]);
+    let init = only(&diags, RuleId::NondeterministicInitialisation);
+    assert_eq!(origins(&init), vec!["M.INITIALISATION/act1"]);
     assert!(
-        diags[0].message.contains("`y`") && diags[0].message.contains("no value before"),
+        init[0].message.contains("`y`") && init[0].message.contains("no value before"),
         "message names the variable read too early: {}",
-        diags[0].message
+        init[0].message
     );
 }
 
@@ -758,4 +759,169 @@ fn eb109_reports_each_unrelated_pair() {
         @a1 a ∈ S\n    @a2 b ∈ S\n    @a3 c ∈ S\n    @a4 a ≠ b\nend\n";
     let diags = findings(&[("C.eventb", context)]);
     assert_eq!(only(&diags, RuleId::IndistinctCarrierSetConstants).len(), 2);
+}
+
+// ---------------------------------------------------------------------
+// EB110 — actions that only agree with the model in parallel
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb110_flags_an_action_reading_what_another_assigns() {
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 y ≔ 0\nend\n\
+        event swap\n  then\n    @act1 x ≔ y\n    @act2 y ≔ x\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    let hazards = only(&diags, RuleId::ParallelAssignmentHazard);
+    assert_eq!(origins(&hazards), vec!["M.swap/act1", "M.swap/act2"]);
+    assert_eq!(hazards[0].severity, Severity::Info);
+    assert!(
+        hazards[0].message.contains("before-state"),
+        "message says why sequence differs from parallel: {}",
+        hazards[0].message
+    );
+}
+
+#[test]
+fn eb110_flags_a_multi_target_assignment() {
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 y ≔ 0\nend\n\
+        event swap\n  then\n    @act1 x, y ≔ y, x\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    let hazards = only(&diags, RuleId::ParallelAssignmentHazard);
+    assert_eq!(origins(&hazards), vec!["M.swap/act1"]);
+    assert!(
+        hazards[0].message.contains("simultaneously"),
+        "message names the semantics at issue: {}",
+        hazards[0].message
+    );
+}
+
+#[test]
+fn eb110_allows_an_action_reading_its_own_target() {
+    // `x ≔ x + 1` reads the before-state of what it assigns, which every
+    // assignment does.
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 y ≔ 0\nend\n\
+        event step\n  then\n    @act1 x ≔ x + 1\n    @act2 y ≔ y + 1\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert!(
+        only(&diags, RuleId::ParallelAssignmentHazard).is_empty(),
+        "no action reads another's target: {diags:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB111 — guard depends on the evaluation order
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb111_flags_an_application_no_earlier_guard_permits() {
+    let machine = "machine M\nvariables f\n    x\ninvariants\n    @i1 f ∈ ℤ ⇸ ℤ\n    @i2 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 f ≔ ∅\n    @act2 x ≔ 0\nend\n\
+        event step\n  where\n    @grd1 f(x) > 0\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    let ordering = only(&diags, RuleId::GuardEvaluationOrder);
+    assert_eq!(origins(&ordering), vec!["M.step/grd1"]);
+    assert_eq!(ordering[0].severity, Severity::Info);
+    assert!(
+        ordering[0].message.contains("dom(f)"),
+        "message names the condition that is missing: {}",
+        ordering[0].message
+    );
+}
+
+#[test]
+fn eb111_accepts_a_guard_ordered_above_its_condition() {
+    let machine = "machine M\nvariables f\n    x\ninvariants\n    @i1 f ∈ ℤ ⇸ ℤ\n    @i2 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 f ≔ ∅\n    @act2 x ≔ 0\nend\n\
+        event step\n  where\n    @grd1 x ∈ dom(f)\n    @grd2 f(x) > 0\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert!(
+        only(&diags, RuleId::GuardEvaluationOrder).is_empty(),
+        "the earlier guard establishes the condition: {diags:#?}"
+    );
+}
+
+#[test]
+fn eb111_accepts_a_condition_an_invariant_states() {
+    let machine = "machine M\nvariables f\n    x\ninvariants\n    @i1 f ∈ ℤ ⇸ ℤ\n    @i2 x ∈ 0 ‥ 9\n    @i3 x ∈ dom(f)\nevents\n\
+        event INITIALISATION\n  then\n    @act1 f ≔ {0 ↦ 0}\n    @act2 x ≔ 0\nend\n\
+        event step\n  where\n    @grd1 f(x) > 0\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert!(
+        only(&diags, RuleId::GuardEvaluationOrder).is_empty(),
+        "an invariant holds before every guard runs: {diags:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB112 — abstract variable dropped in the leaf machine
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb112_flags_a_variable_the_refinement_drops() {
+    let root = "machine M0\nvariables x\n    ghost\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 ghost ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 ghost ≔ 0\nend\nend\n";
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let diags = findings(&[("M0.eventb", root), ("M1.eventb", leaf)]);
+    let dropped = only(&diags, RuleId::DroppedAbstractVariable);
+    assert_eq!(origins(&dropped), vec!["M1.ghost"]);
+    assert_eq!(dropped[0].severity, Severity::Info);
+    assert!(
+        dropped[0].message.contains("M0"),
+        "message names the machine that declared it: {}",
+        dropped[0].message
+    );
+}
+
+#[test]
+fn eb112_accepts_a_refinement_that_keeps_everything() {
+    let root = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let diags = findings(&[("M0.eventb", root), ("M1.eventb", leaf)]);
+    assert!(
+        only(&diags, RuleId::DroppedAbstractVariable).is_empty(),
+        "nothing was dropped: {diags:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB113 — witness that is not an equality
+// ---------------------------------------------------------------------
+
+const WITNESS_ROOT: &str = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+    event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+    event step\n  any p\n  where\n    @grd1 p ∈ 0 ‥ 9\n  then\n    @act1 x ≔ p\nend\nend\n";
+
+#[test]
+fn eb113_flags_a_constraining_witness() {
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step refines step\n  with\n    @p p > 0\n  then\n    @act1 x ≔ 1\nend\nend\n";
+    let diags = findings(&[("M0.eventb", WITNESS_ROOT), ("M1.eventb", leaf)]);
+    let witnesses = only(&diags, RuleId::NonEqualityWitness);
+    assert_eq!(origins(&witnesses), vec!["M1.step/p"]);
+    assert_eq!(witnesses[0].severity, Severity::Info);
+    assert!(
+        witnesses[0]
+            .message
+            .contains("constrains it rather than fixing it"),
+        "message says what is missing: {}",
+        witnesses[0].message
+    );
+}
+
+#[test]
+fn eb113_accepts_an_equality_witness() {
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step refines step\n  with\n    @p p = 1\n  then\n    @act1 x ≔ 1\nend\nend\n";
+    let diags = findings(&[("M0.eventb", WITNESS_ROOT), ("M1.eventb", leaf)]);
+    assert!(
+        only(&diags, RuleId::NonEqualityWitness).is_empty(),
+        "the witness fixes the abstract value: {diags:#?}"
+    );
 }
