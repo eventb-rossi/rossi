@@ -695,8 +695,9 @@ fn test_builtin_finite_wrong_arity() {
 }
 
 #[test]
-fn test_builtin_partition_wrong_arity() {
-    // partition needs at least 2 arguments (set + at least one block)
+fn test_builtin_partition_single_argument() {
+    // `partition(S, S1, ..., Sn)` is defined for n >= 0: with no block it
+    // asserts that S is empty. Rodin accepts the one-argument form.
     let source = r#"
     CONTEXT test
     AXIOMS
@@ -704,14 +705,14 @@ fn test_builtin_partition_wrong_arity() {
     END
     "#;
 
-    let result = parse(source);
-    assert!(result.is_err(), "Expected arity error for partition(S)");
-    let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("partition") && err.contains("at least 2") && err.contains("got 1"),
-        "Expected arity mismatch error, got: {}",
-        err
-    );
+    let component = parse(source).expect("partition(S) parses");
+    let Component::Context(ctx) = component else {
+        panic!("Expected Context component");
+    };
+    match ctx.axioms[0].predicate.kind() {
+        PredicateKind::Multiple(children) => assert_eq!(children.len(), 1),
+        other => panic!("Expected a partition predicate, got {other:?}"),
+    }
 }
 
 #[test]
