@@ -1976,8 +1976,22 @@ mod proof_obligations {
     async fn open_obligations_are_hints_grouped_per_element_and_counted_by_a_lens() {
         let (mut service, mut messages) = open_service().await;
 
-        // The push means the overlay is filled; the diagnostics republished
-        // with it carry the hints.
+        // One publish per open, hints included; the list itself is pushed
+        // after it.
+        let params = next_message(
+            &mut messages,
+            "textDocument/publishDiagnostics",
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("opening publishes diagnostics");
+        let hints: Vec<Value> = params["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["severity"] == json!(4))
+            .cloned()
+            .collect();
         next_message(
             &mut messages,
             eventb_lsp::proof::NOTIFICATION_STATUS,
@@ -1985,22 +1999,6 @@ mod proof_obligations {
         )
         .await
         .expect("the open-time push");
-        let mut hints: Vec<Value> = Vec::new();
-        while let Some(params) = next_message(
-            &mut messages,
-            "textDocument/publishDiagnostics",
-            std::time::Duration::from_millis(300),
-        )
-        .await
-        {
-            hints = params["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|d| d["severity"] == json!(4))
-                .cloned()
-                .collect();
-        }
         assert_eq!(hints.len(), 2, "one hint per invariant; got {hints:?}");
         assert_eq!(hints[0]["range"]["start"]["line"], json!(4));
         assert_eq!(
