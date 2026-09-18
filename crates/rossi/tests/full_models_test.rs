@@ -695,6 +695,29 @@ fn test_builtin_finite_wrong_arity() {
 }
 
 #[test]
+fn test_integer_literal_beyond_i64() {
+    // Rodin's IntegerLiteral holds a BigInteger, so any decimal is legal.
+    for literal in [
+        "9223372036854775808",
+        "18446744073709551616",
+        "1000000000000000000000000000000000000000",
+    ] {
+        let source = format!("CONTEXT test\nCONSTANTS k\nAXIOMS\n@axm1 k = {literal}\nEND\n");
+        let component = parse(&source).unwrap_or_else(|e| panic!("{literal}: {e}"));
+        let Component::Context(ctx) = component else {
+            panic!("Expected Context component");
+        };
+        let PredicateKind::Relational { right, .. } = ctx.axioms[0].predicate.kind() else {
+            panic!("Expected a relational predicate");
+        };
+        match right.kind() {
+            ExpressionKind::IntegerLiteral(value) => assert_eq!(value.to_string(), literal),
+            other => panic!("Expected an integer literal, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn test_builtin_partition_single_argument() {
     // `partition(S, S1, ..., Sn)` is defined for n >= 0: with no block it
     // asserts that S is empty. Rodin accepts the one-argument form.
