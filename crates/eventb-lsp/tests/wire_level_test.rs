@@ -1108,6 +1108,129 @@ mod operator_table {
     }
 }
 
+mod project_diagnostics {
+    //! The project-level static check reaches the editor: a type error that
+    //! no single-component pass can see is published, anchored on the
+    //! offending element, and a clean model stays clean.
+
+    use super::{TempWorkspace, next_published_diagnostics, notification};
+    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::server::RossiLanguageServer;
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp::LspService;
+    use tower_lsp::jsonrpc::Request;
+
+    /// `c` is a carrier-set element, so comparing it to a number cannot type.
+    /// Nothing in the file is locally malformed: only the project check,
+    /// which infers types across the SEES edge, can see this.
+    const BAD_TYPE: &str = concat!(
+        "CONTEXT typing\n",
+        "SETS\n",
+        "    S\n",
+        "CONSTANTS\n",
+        "    c\n",
+        "AXIOMS\n",
+        "    @axm1 c \u{2208} S\n",
+        "    @axm2 c = 1\n",
+        "END\n",
+    );
+    const GOOD_TYPE: &str = concat!(
+        "CONTEXT typing\n",
+        "SETS\n",
+        "    S\n",
+        "CONSTANTS\n",
+        "    c\n",
+        "AXIOMS\n",
+        "    @axm1 c \u{2208} S\n",
+        "END\n",
+    );
+
+    async fn diagnostics_for(text: &str) -> Vec<Value> {
+        let workspace = TempWorkspace::new("project-diagnostics");
+        let uri = Url::from_file_path(workspace.as_ref().join("typing.eventb")).unwrap();
+
+        let (mut service, mut messages) = LspService::build(RossiLanguageServer::new).finish();
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": text,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        next_published_diagnostics(&mut messages).await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_type_error_is_published_and_anchored() {
+        let diagnostics = diagnostics_for(BAD_TYPE).await;
+        assert!(
+            !diagnostics.is_empty(),
+            "the ill-typed axiom must be reported; got {diagnostics:?}"
+        );
+
+        // Every finding must land on the offending line rather than on the
+        // whole-file default range, which is what an unmapped span produces.
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d["range"]["start"]["line"] == json!(7)),
+            "findings must anchor on @axm2 (line 7); got {diagnostics:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_well_typed_model_reports_nothing() {
+        let diagnostics = diagnostics_for(GOOD_TYPE).await;
+        assert!(
+            diagnostics.is_empty(),
+            "a well-typed context is clean; got {diagnostics:?}"
+        );
+    }
+
+    /// A refinement whose abstract machine is nowhere to be found: no
+    /// workspace was scanned, so the closure cannot load `base`, and `x`
+    /// comes from it.
+    const UNRESOLVED_PARENT: &str = concat!(
+        "MACHINE concrete\n",
+        "REFINES base\n",
+        "VARIABLES\n",
+        "    y\n",
+        "INVARIANTS\n",
+        "    @inv1 y = x\n",
+        "END\n",
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unloadable_dependency_reports_nothing_about_the_names_it_declares() {
+        // Opening a refinement on its own must not claim its inherited
+        // variables do not exist: the environment is incomplete, not wrong.
+        // The missing REFINES target is the dependency graph's finding, and
+        // the graph is gated on a scanned workspace.
+        let diagnostics = diagnostics_for(UNRESOLVED_PARENT).await;
+        assert!(
+            diagnostics.is_empty(),
+            "an unresolvable closure must report nothing; got {diagnostics:?}"
+        );
+    }
+}
+
 mod type_hierarchy {
     //! Wire-level tests for the refinement/extension type hierarchy: the
     //! capability is registered dynamically (the pinned lsp-types has no

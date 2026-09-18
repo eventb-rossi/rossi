@@ -237,6 +237,76 @@ pub(crate) fn lint_diagnostics<'a>(
         .map(move |d| build_diagnostic_to_lsp(&d, text))
 }
 
+/// Run the project-level static check over `doc`'s dependency closure and
+/// convert this file's findings to LSP diagnostics: scope errors, type
+/// inference failures, conservative well-typedness checks and Rodin-style
+/// drop behaviour, none of which a single-component pass can see.
+///
+/// `check_with_model` rather than `build`, because the static check is all
+/// this needs; `build` would additionally generate every proof obligation,
+/// which no diagnostic reads.
+///
+/// Only findings about `doc`'s own components are returned. A
+/// `rossi_build::Diagnostic` carries a span into *its owning component's*
+/// text, so a dependency's span indexes a different file and mapping it
+/// against `doc.text()` would underline unrelated characters. Dependencies
+/// are still in the project, because the check needs them to resolve names —
+/// they are only excluded from the output, and each will report its own
+/// findings when its own file is analyzed.
+///
+/// A component whose closure came back incomplete — a SEES / REFINES /
+/// EXTENDS target the loader could not resolve — reports nothing at all. Its
+/// environment is then missing everything the unresolved dependency declares,
+/// so every inherited name reads as an unknown identifier: a file opened on
+/// its own, or opened before the workspace scan filled the index, would be
+/// covered in errors about variables that do exist. The missing dependency
+/// itself is the graph's finding to report.
+pub(crate) fn project_diagnostics(
+    doc: &ParsedDocument,
+    loader: &crate::component_loader::ComponentLoader,
+) -> Vec<Diagnostic> {
+    let project = crate::closure::project_for(doc, loader, "lsp-diagnostics");
+    let local = crate::closure::local_names(doc);
+    let (result, _model) = rossi_build::check_with_model(&project);
+
+    let unresolved: std::collections::HashSet<&str> = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == Some(RuleId::CrossReferenceNotFound))
+        .map(|diagnostic| diagnostic.component())
+        .collect();
+
+    result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| local.contains(diagnostic.component()))
+        .filter(|diagnostic| !unresolved.contains(diagnostic.component()))
+        .filter(|diagnostic| !diagnostic.rule_id.is_some_and(reported_from_the_graph))
+        .map(|diagnostic| build_diagnostic_to_lsp(diagnostic, doc.text()))
+        .collect()
+}
+
+/// Whether the server reports this rule itself, from the workspace dependency
+/// graph, so the project check must not report it a second time.
+///
+/// These four are findings about how components relate, and the graph knows
+/// more about that than a single file's closure does. The graph's own pass is
+/// gated on the workspace scan having completed, which keeps a file opened on
+/// its own from being told its siblings are missing; the closure has no such
+/// gate and would report exactly that. It also anchors an unresolved
+/// reference on the offending SEES / REFINES / EXTENDS keyword rather than
+/// wherever the checker happened to stop.
+fn reported_from_the_graph(rule: rossi_build::RuleId) -> bool {
+    use rossi_build::RuleId;
+    matches!(
+        rule,
+        RuleId::CircularExtends
+            | RuleId::CircularRefines
+            | RuleId::CrossReferenceNotFound
+            | RuleId::DuplicateComponent
+    )
+}
+
 /// Convert a `rossi-build` lint/build diagnostic to an LSP diagnostic.
 ///
 /// The byte span maps to a UTF-16 range through [`crate::position`], the shared
