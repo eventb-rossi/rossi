@@ -74,9 +74,11 @@ pub use formula::{
 pub use nesting::MAX_NESTING_DEPTH;
 pub use parser::{
     ComponentNameOccurrence, ComponentNameSite, ParseSnapshot, component_name_occurrences,
-    component_name_occurrences_with_sites, parse, parse_action_str, parse_components,
-    parse_components_snapshot, parse_components_with_recovery, parse_expression_str,
-    parse_predicate_str, parse_with_recovery,
+    component_name_occurrences_with_sites, parse, parse_action_str, parse_action_str_with,
+    parse_components, parse_components_snapshot, parse_components_snapshot_with,
+    parse_components_with, parse_components_with_recovery, parse_expression_at,
+    parse_expression_str, parse_expression_str_with, parse_predicate_at, parse_predicate_str,
+    parse_predicate_str_with, parse_with_recovery,
 };
 pub use pretty::{
     DEFAULT_MAX_LINE_WIDTH, DeclListLayout, FormulaSpacing, HeaderClauseLayout, KeywordCase,
@@ -88,10 +90,10 @@ pub use selection::{
 };
 pub use xml::{
     DEFAULT_PROJECT_NAME, NamedComponent, NamedProject, component_filename,
-    descriptor_project_name, parse_named_components, parse_xml, parse_zip, parse_zip_file,
-    parse_zip_file_with_recovery, parse_zip_with_recovery, read_project_name, to_multi_project_zip,
-    to_project_zip, to_xml, to_zip, write_multi_project_directory, write_project_directory,
-    write_project_zip_file, write_zip_file,
+    descriptor_project_name, parse_named_components, parse_xml, parse_xml_with, parse_zip,
+    parse_zip_file, parse_zip_file_with_recovery, parse_zip_with, parse_zip_with_recovery,
+    read_project_name, to_multi_project_zip, to_project_zip, to_xml, to_zip,
+    write_multi_project_directory, write_project_directory, write_project_zip_file, write_zip_file,
 };
 
 #[cfg(test)]

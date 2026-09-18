@@ -454,6 +454,12 @@ pub fn parse_xml(xml: &str) -> Result<Component> {
     }
 }
 
+/// [`parse_xml`] with every formula attribute built by `ff` instead of the
+/// default factory, so operators `ff` defines resolve while parsing.
+pub fn parse_xml_with(xml: &str, ff: &crate::formula::FormulaFactory) -> Result<Component> {
+    crate::parser::with_factory(ff, || parse_xml(xml))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComponentType {
     Context,
@@ -1180,6 +1186,14 @@ pub fn parse_zip(zip_data: &[u8]) -> Result<Vec<NamedComponent>> {
         .into_iter()
         .map(|entry| parse_zip_entry(&mut archive, entry))
         .collect()
+}
+
+/// [`parse_zip`] with every formula attribute built by `ff`.
+pub fn parse_zip_with(
+    zip_data: &[u8],
+    ff: &crate::formula::FormulaFactory,
+) -> Result<Vec<NamedComponent>> {
+    crate::parser::with_factory(ff, || parse_zip(zip_data))
 }
 
 /// Parses all Event-B components from a zip file on disk

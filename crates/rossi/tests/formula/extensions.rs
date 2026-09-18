@@ -381,3 +381,65 @@ fn substitution_descends_into_extended_nodes() {
     assert!(pred.free_identifiers().contains(&"x".to_string()));
     assert!(substituted.free_identifiers().is_empty());
 }
+
+// --- parsing against a factory ---
+
+#[test]
+fn parse_predicate_str_with_builds_with_the_given_factory() {
+    let ff = extended_factory();
+    let pred = rossi::parse_predicate_str_with("x = 1 ∧ y ∈ ℕ", &ff).expect("parses");
+    assert_eq!(pred.factory(), &ff);
+    let rossi::PredicateKind::Associative { children, .. } = pred.kind() else {
+        panic!("expected a conjunction, got {pred:?}");
+    };
+    for child in children {
+        assert_eq!(
+            child.factory(),
+            &ff,
+            "every subformula belongs to the factory"
+        );
+    }
+
+    let expr = rossi::parse_expression_str_with("x + 1", &ff).expect("parses");
+    assert_eq!(expr.factory(), &ff);
+    let action = rossi::parse_action_str_with("x ≔ x + 1", &ff).expect("parses");
+    assert_eq!(action.assignment().expect("an assignment").factory(), &ff);
+
+    // The plain entry points keep building with the default factory, and the
+    // scope does not leak out of a `_with` call.
+    let plain = rossi::parse_predicate_str("x = 1").expect("parses");
+    assert_eq!(plain.factory(), &FormulaFactory::default_factory());
+    assert_ne!(plain.factory(), &ff);
+
+    let components =
+        rossi::parse_components_with("CONTEXT C\nAXIOMS\n  @a 1 = 1\nEND\n", &ff).expect("parses");
+    let rossi::Component::Context(ctx) = &components[0] else {
+        panic!("expected a context");
+    };
+    assert_eq!(ctx.axioms[0].predicate.factory(), &ff);
+}
+
+#[test]
+fn parse_predicate_at_shifts_spans() {
+    let ff = extended_factory();
+    let pred = rossi::parse_predicate_at("x = 1", 10, &ff).expect("parses");
+    assert_eq!(pred.factory(), &ff);
+    assert_eq!(
+        pred.span(),
+        Some(rossi::formula::Span { start: 10, end: 15 })
+    );
+    let rossi::PredicateKind::Relational { left, right, .. } = pred.kind() else {
+        panic!("expected a relational predicate, got {pred:?}");
+    };
+    assert_eq!(
+        left.span(),
+        Some(rossi::formula::Span { start: 10, end: 11 })
+    );
+    assert_eq!(
+        right.span(),
+        Some(rossi::formula::Span { start: 14, end: 15 })
+    );
+
+    let expr = rossi::parse_expression_at("x + 1", 3, &ff).expect("parses");
+    assert_eq!(expr.span(), Some(rossi::formula::Span { start: 3, end: 8 }));
+}
