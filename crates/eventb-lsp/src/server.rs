@@ -1574,6 +1574,7 @@ impl LanguageServer for RossiLanguageServer {
                 )),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -1968,6 +1969,33 @@ impl LanguageServer for RossiLanguageServer {
             .selection_range_provider
             .selection_ranges(&document, &params.positions);
         Ok(Some(ranges))
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        debug!("Range formatting request for: {} {:?}", uri, params.range);
+
+        // The stored parse, so the component spans index the text they
+        // are sliced from.
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return Ok(None);
+        };
+        let config = self.config_manager.get();
+        match crate::formatting::format_range(
+            doc.text(),
+            doc.components(),
+            params.range,
+            &config.format,
+        ) {
+            Ok(edits) => Ok(Some(edits)),
+            Err(e) => {
+                debug!("Failed to format range: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

@@ -4,6 +4,7 @@
 
 use crate::config::FormatConfig;
 use crate::lsp_types::{Position, Range, TextEdit};
+use rossi::Component;
 
 /// Format a document using the supplied server configuration.
 pub fn format(text: &str, config: &FormatConfig) -> Result<Vec<TextEdit>, String> {
@@ -20,6 +21,54 @@ pub fn format(text: &str, config: &FormatConfig) -> Result<Vec<TextEdit>, String
             start: Position::new(0, 0),
             end: Position::new(u32::MAX, u32::MAX),
         },
+        new_text: formatted,
+    }])
+}
+
+/// Format the components that `range` touches, leaving the rest of the
+/// document byte-for-byte alone.
+///
+/// The pretty printer works on whole components: a formula cannot be
+/// re-laid-out without the clause it sits in, and a clause not without its
+/// component. So the selection snaps outward to the components it
+/// intersects, and those are printed together as one slice. A selection
+/// touching no component (whitespace between two, or a file that did not
+/// parse far enough) formats nothing rather than guessing.
+pub fn format_range(
+    text: &str,
+    components: &[Component],
+    range: Range,
+    config: &FormatConfig,
+) -> Result<Vec<TextEdit>, String> {
+    let start = crate::position::position_to_offset(text, range.start)
+        .ok_or_else(|| "range start is outside the document".to_string())?;
+    let end = crate::position::position_to_offset(text, range.end)
+        .ok_or_else(|| "range end is outside the document".to_string())?;
+
+    let touched: Vec<rossi::ast::Span> = components
+        .iter()
+        .filter_map(|component| component.span())
+        .filter(|span| span.start <= end && start <= span.end)
+        .collect();
+    let (Some(first), Some(last)) = (touched.first(), touched.last()) else {
+        return Ok(Vec::new());
+    };
+    let slice = rossi::ast::Span {
+        start: first.start,
+        end: last.end,
+    };
+
+    let printer = config.printer();
+    let formatted = rossi::format_str(&text[slice.start..slice.end], &printer)
+        .map_err(|e| format!("Parse error: {}", e))?;
+    // `format_str` ends its output with a newline; the slice ends at the
+    // component's END, so drop the terminator to keep whatever followed it.
+    let formatted = formatted
+        .strip_suffix('\n')
+        .unwrap_or(&formatted)
+        .to_string();
+    Ok(vec![TextEdit {
+        range: crate::position::span_to_range(&slice, text),
         new_text: formatted,
     }])
 }
