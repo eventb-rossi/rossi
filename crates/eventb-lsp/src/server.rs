@@ -374,6 +374,7 @@ impl Analyzer {
                 doc.components(),
                 |name| xrefs.component_declarations(name),
                 doc.text(),
+                &xrefs.document_uris().key(uri.as_str()),
             ));
         }
         diags

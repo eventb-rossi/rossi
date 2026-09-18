@@ -6,7 +6,10 @@
 //! column convention can't drift from the rest of the server.
 
 use crate::document::ParsedDocument;
-use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+use crate::lsp_types::{
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString,
+    Position, Range, Url,
+};
 use rossi::deps::{ComponentKind, Cycle, EdgeKind, kind_and_name};
 use rossi::keywords::{self, KeywordId};
 use rossi_build::RuleId;
@@ -511,6 +514,7 @@ pub(crate) fn duplicate_component_diagnostics(
     components: &[rossi::Component],
     declarations: impl Fn(&str) -> Vec<(String, usize)>,
     text: &str,
+    this_file: &str,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for component in components {
@@ -534,14 +538,38 @@ pub(crate) fn duplicate_component_diagnostics(
                     .join(", ")
             ),
         };
-        out.push(lsp_diagnostic(
+        let mut diagnostic = lsp_diagnostic(
             name_range(component, text),
             rule_severity(RuleId::DuplicateComponent),
             Some(NumberOrString::String(
                 RuleId::DuplicateComponent.code().to_string(),
             )),
             message,
-        ));
+        );
+        // The *other* declaring files as related locations, so the editor
+        // offers a jump to each rather than only naming them. This file is
+        // skipped: the diagnostic already sits on its declaration, and a
+        // related location pointing back at it would jump nowhere. Their
+        // exact declaration positions are not indexed, so each points at the
+        // file start; the message already says which file.
+        //
+        // `files` holds index keys, so `this_file` must be the cursor
+        // document's key too (the caller resolves it through the shared
+        // `DocumentUris`); a raw URI comparison would let this file back in
+        // as a related location pointing at its own line 0.
+        let related: Vec<DiagnosticRelatedInformation> = files
+            .iter()
+            .filter(|(other, _)| other != this_file)
+            .filter_map(|(other, _)| Url::parse(other).ok())
+            .map(|other| DiagnosticRelatedInformation {
+                location: Location::new(other, crate::analysis::default_range()),
+                message: format!("`{name}` is also declared here"),
+            })
+            .collect();
+        if !related.is_empty() {
+            diagnostic.related_information = Some(related);
+        }
+        out.push(diagnostic);
     }
     out
 }
@@ -1076,6 +1104,12 @@ mod tests {
         vec![rossi::parse(text).expect("snippet parses cleanly")]
     }
 
+    /// The document the duplicate-component snippets stand for. It is not one
+    /// of the declaring files they list, so nothing is filtered as self.
+    fn test_uri() -> &'static str {
+        "file:///cursor.eventb"
+    }
+
     #[test]
     fn self_extends_is_eb007() {
         // A context that EXTENDS itself — a length-1 cycle (self-reference).
@@ -1181,7 +1215,8 @@ mod tests {
                 vec![]
             }
         };
-        let diags = duplicate_component_diagnostics(&parse_one(text), declarations, text);
+        let diags =
+            duplicate_component_diagnostics(&parse_one(text), declarations, text, test_uri());
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(code_of(&diags[0]), Some("EB019"));
         assert_eq!(
@@ -1205,7 +1240,8 @@ mod tests {
                 vec![]
             }
         };
-        let diags = duplicate_component_diagnostics(&parse_one(text), declarations, text);
+        let diags =
+            duplicate_component_diagnostics(&parse_one(text), declarations, text, test_uri());
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
             diags[0].message,
@@ -1223,7 +1259,7 @@ mod tests {
                 vec![]
             }
         };
-        let diags = duplicate_component_diagnostics(&parse_one(text), files, text);
+        let diags = duplicate_component_diagnostics(&parse_one(text), files, text, test_uri());
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(code_of(&diags[0]), Some("EB019"));
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
@@ -1239,6 +1275,8 @@ mod tests {
         let text = "CONTEXT c\nEND\n";
         // Defined in exactly one file — not a cross-file duplicate.
         let files = |_n: &str| vec![("c.eventb".to_string(), 1)];
-        assert!(duplicate_component_diagnostics(&parse_one(text), files, text).is_empty());
+        assert!(
+            duplicate_component_diagnostics(&parse_one(text), files, text, test_uri()).is_empty()
+        );
     }
 }
