@@ -40,6 +40,33 @@ fn with_span_base<T>(delta: usize, f: impl FnOnce() -> T) -> T {
     result
 }
 
+thread_local! {
+    /// The factory every formula built in the enclosing [`with_factory`]
+    /// scope belongs to; `None` means the default factory.
+    static FACTORY: std::cell::RefCell<Option<FormulaFactory>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with every formula built inside constructed by `ff`. The scope
+/// is a thread-local like `SPAN_BASE`, so the recovery paths, which re-enter
+/// the plain entry points on slices of the input, inherit the factory
+/// without it being threaded through the structural builders. It is never
+/// ambient across an API boundary: public callers go through the explicit
+/// `_with` twins, so a worker on another thread cannot silently lose it.
+pub(crate) fn with_factory<T>(ff: &FormulaFactory, f: impl FnOnce() -> T) -> T {
+    let previous = FACTORY.with(|slot| slot.replace(Some(ff.clone())));
+    let result = f();
+    FACTORY.with(|slot| *slot.borrow_mut() = previous);
+    result
+}
+
+/// The factory of the enclosing [`with_factory`] scope, else the default.
+fn scoped_factory() -> FormulaFactory {
+    FACTORY
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(FormulaFactory::default_factory)
+}
+
 /// Context for building formula-model nodes during the descent: the
 /// factory, the names bound by enclosing binders (innermost last), and
 /// the span base (see [`with_span_base`]).
@@ -52,7 +79,7 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         Fx {
-            ff: FormulaFactory::default_factory(),
+            ff: scoped_factory(),
             binders: Vec::new(),
             base: SPAN_BASE.with(|base| base.get()),
         }
@@ -1010,6 +1037,15 @@ fn parse_unguarded(input: &str) -> Result<Component, ParseError> {
 /// Returns `Ok(Vec<Component>)` with one entry per parsed component.
 pub fn parse_components(input: &str) -> Result<Vec<Component>, ParseError> {
     parse_components_guarded(input, |pair| components_from_pair(pair, input))
+}
+
+/// [`parse_components`] with every formula built by `ff` instead of the
+/// default factory, so operators `ff` defines resolve while parsing.
+pub fn parse_components_with(
+    input: &str,
+    ff: &FormulaFactory,
+) -> Result<Vec<Component>, ParseError> {
+    with_factory(ff, || parse_components(input))
 }
 
 pub(crate) fn parse_components_guarded<T>(
@@ -3251,6 +3287,22 @@ pub fn parse_predicate_str(input: &str) -> Result<Predicate, ParseError> {
     result.map_err(|e| assignment_in_predicate_error(input).unwrap_or(e))
 }
 
+/// [`parse_predicate_str`] with every formula built by `ff`.
+pub fn parse_predicate_str_with(input: &str, ff: &FormulaFactory) -> Result<Predicate, ParseError> {
+    with_factory(ff, || parse_predicate_str(input))
+}
+
+/// A predicate parsed out of its document position: `input` is the text at
+/// byte offset `base` of a larger document, and every span of the result is
+/// shifted by `base` so it stays in document coordinates.
+pub fn parse_predicate_at(
+    input: &str,
+    base: usize,
+    ff: &FormulaFactory,
+) -> Result<Predicate, ParseError> {
+    with_factory(ff, || with_span_base(base, || parse_predicate_str(input)))
+}
+
 /// Parse an expression from a string (used by XML parser)
 ///
 /// Uses `expression_complete` (with SOI/EOI) to ensure the entire input is consumed.
@@ -3266,6 +3318,23 @@ pub fn parse_expression_str(input: &str) -> Result<Expression, ParseError> {
             .ok_or(ParseError::EmptyExpression)?;
         parse_expression(expression_pair, &mut Fx::new())
     })
+}
+
+/// [`parse_expression_str`] with every formula built by `ff`.
+pub fn parse_expression_str_with(
+    input: &str,
+    ff: &FormulaFactory,
+) -> Result<Expression, ParseError> {
+    with_factory(ff, || parse_expression_str(input))
+}
+
+/// The expression counterpart of [`parse_predicate_at`].
+pub fn parse_expression_at(
+    input: &str,
+    base: usize,
+    ff: &FormulaFactory,
+) -> Result<Expression, ParseError> {
+    with_factory(ff, || with_span_base(base, || parse_expression_str(input)))
 }
 
 /// Parse an action from a string (used by XML parser)
@@ -3284,6 +3353,11 @@ pub fn parse_action_str(input: &str) -> Result<ActionBody, ParseError> {
         let action_pair = pairs.into_iter().next().ok_or(ParseError::MissingAction)?;
         parse_action(action_pair)
     })
+}
+
+/// [`parse_action_str`] with every formula built by `ff`.
+pub fn parse_action_str_with(input: &str, ff: &FormulaFactory) -> Result<ActionBody, ParseError> {
+    with_factory(ff, || parse_action_str(input))
 }
 
 /// The six "becomes" (assignment) operator spellings — both the Unicode and
@@ -4078,6 +4152,15 @@ pub fn parse_components_snapshot(input: impl Into<String>) -> ParseSnapshot {
         result,
         syntax,
     }
+}
+
+/// [`parse_components_snapshot`] with every formula built by `ff`; the
+/// recovery path inherits the factory.
+pub fn parse_components_snapshot_with(
+    input: impl Into<String>,
+    ff: &FormulaFactory,
+) -> ParseSnapshot {
+    with_factory(ff, || parse_components_snapshot(input))
 }
 
 fn recover_components_after_error(
