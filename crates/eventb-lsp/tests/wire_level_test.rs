@@ -1782,6 +1782,219 @@ mod pull_diagnostics {
     }
 }
 
+mod proof_obligations {
+    //! Wire-level tests for the proof obligation surface: opening a document
+    //! pushes `$/rossi/proofStatus`, `rossi/proofObligations` lists the
+    //! generated obligations anchored on their source elements, open
+    //! obligations show as hints grouped per element, and the lens counts
+    //! them.
+
+    use super::{next_message, notification};
+    use eventb_lsp::server::RossiLanguageServer;
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp::LspService;
+    use tower_lsp::jsonrpc::Request;
+
+    const URI: &str = "file:///proof.eventb";
+    const SOURCE: &str = concat!(
+        "MACHINE m\n",
+        "VARIABLES\n",
+        "    x y\n",
+        "INVARIANTS\n",
+        "    @inv1 x \u{2208} \u{2115}\n",
+        "    @inv2 y \u{2208} \u{2115}\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} 0\n",
+        "        @act2 y \u{2254} 0\n",
+        "    END\n",
+        "\n",
+        "    EVENT bump\n",
+        "    WHERE\n",
+        "        @grd1 x \u{2208} \u{2115}\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} x + 1\n",
+        "    END\n",
+        "END\n",
+    );
+
+    /// The three obligations `rossi build` generates for `SOURCE`, in the
+    /// generator's order.
+    const EXPECTED: [&str; 3] = [
+        "INITIALISATION/inv1/INV",
+        "INITIALISATION/inv2/INV",
+        "bump/inv1/INV",
+    ];
+
+    async fn open_service() -> (LspService<RossiLanguageServer>, tower_lsp::ClientSocket) {
+        let (mut service, socket) = LspService::build(RossiLanguageServer::new)
+            .custom_method(
+                eventb_lsp::proof::REQUEST_OBLIGATIONS,
+                RossiLanguageServer::proof_obligations,
+            )
+            .finish();
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": URI,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": SOURCE,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        (service, socket)
+    }
+
+    fn names(obligations: &Value) -> Vec<&str> {
+        obligations
+            .as_array()
+            .expect("an array of obligations")
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn opening_pushes_the_obligation_list() {
+        let (_service, mut messages) = open_service().await;
+        let params = next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("opening a document must push its obligations");
+        assert_eq!(params["uri"], json!(URI));
+        assert_eq!(names(&params["obligations"]), EXPECTED, "got {params}");
+        assert!(
+            params["obligations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o["status"] == json!("unattempted")),
+            "nothing is proved without a stored proof; got {params}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_request_lists_obligations_anchored_on_their_elements() {
+        let (mut service, mut messages) = open_service().await;
+        // Let the open-time refresh land first so the request is served
+        // from the overlay rather than recomputing.
+        next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("the open-time push");
+
+        let request = Request::build(eventb_lsp::proof::REQUEST_OBLIGATIONS)
+            .id(2)
+            .params(json!({ "textDocument": { "uri": URI } }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("rossi/proofObligations must respond");
+        let (_id, result) = response.into_parts();
+        let value: Value = result.expect("rossi/proofObligations must succeed");
+        assert_eq!(names(&value), EXPECTED, "got {value}");
+
+        let rows = value.as_array().unwrap();
+        // `evt/inv1/INV` anchors on the machine's `@inv1` line (4), not on
+        // the event: it is the invariant that must be preserved.
+        assert_eq!(rows[0]["range"]["start"]["line"], json!(4), "got {value}");
+        assert_eq!(rows[1]["range"]["start"]["line"], json!(5), "got {value}");
+        assert_eq!(rows[2]["range"]["start"]["line"], json!(4), "got {value}");
+        assert_eq!(rows[0]["component"], json!("m"));
+        assert_eq!(rows[2]["description"], json!("Invariant  preservation"));
+        assert_eq!(rows[2]["accurate"], json!(true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn open_obligations_are_hints_grouped_per_element_and_counted_by_a_lens() {
+        let (mut service, mut messages) = open_service().await;
+
+        // The push means the overlay is filled; the diagnostics republished
+        // with it carry the hints.
+        next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("the open-time push");
+        let mut hints: Vec<Value> = Vec::new();
+        while let Some(params) = next_message(
+            &mut messages,
+            "textDocument/publishDiagnostics",
+            std::time::Duration::from_millis(300),
+        )
+        .await
+        {
+            hints = params["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d["severity"] == json!(4))
+                .cloned()
+                .collect();
+        }
+        assert_eq!(hints.len(), 2, "one hint per invariant; got {hints:?}");
+        assert_eq!(hints[0]["range"]["start"]["line"], json!(4));
+        assert_eq!(
+            hints[0]["message"],
+            json!("2 open proof obligations: INITIALISATION/inv1/INV, bump/inv1/INV")
+        );
+        assert_eq!(hints[1]["range"]["start"]["line"], json!(5));
+        assert_eq!(
+            hints[1]["message"],
+            json!("1 open proof obligation: INITIALISATION/inv2/INV")
+        );
+
+        let request = Request::build("textDocument/codeLens")
+            .id(2)
+            .params(json!({ "textDocument": { "uri": URI } }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let lenses: Value = result.unwrap();
+        assert!(
+            lenses.as_array().unwrap().iter().any(|lens| {
+                lens["command"]["title"] == json!("0/3 proof obligations discharged")
+            }),
+            "the lens must count the obligations; got {lenses}"
+        );
+    }
+}
+
 mod document_highlight {
     //! Wire-level test for `textDocument/documentHighlight`: the capability is
     //! advertised, every occurrence of the symbol under the cursor comes back

@@ -35,6 +35,7 @@ pub mod identifier_utils;
 pub mod inlay_hints;
 pub mod position;
 pub(crate) mod progress;
+pub mod proof;
 pub mod references;
 pub mod rename;
 mod resolved_environment;
@@ -105,6 +106,10 @@ pub async fn run_stdio() -> Result<()> {
         .custom_method(
             "rossi/operatorTable",
             server::RossiLanguageServer::operator_table,
+        )
+        .custom_method(
+            proof::REQUEST_OBLIGATIONS,
+            server::RossiLanguageServer::proof_obligations,
         )
         .finish();
     let stdin = tokio::io::stdin();

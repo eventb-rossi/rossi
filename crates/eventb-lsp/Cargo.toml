@@ -49,6 +49,11 @@ rossi = { workspace = true, features = ["serde"] }
 # truth rather than re-implementing the scans in the server.
 rossi-build.workspace = true
 
+# Proof-status judgement for the obligation list: a stored `.bpr` proof is
+# checked against the regenerated sequent exactly as `rossi prove` does, so
+# the editor and the CLI cannot disagree about which proofs still apply.
+rossi-prove.workspace = true
+
 # File system operations
 walkdir.workspace = true
 

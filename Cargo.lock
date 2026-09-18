@@ -395,6 +395,7 @@ dependencies = [
  "ropey",
  "rossi",
  "rossi-build",
+ "rossi-prove",
  "serde",
  "serde_json",
  "stats_alloc",

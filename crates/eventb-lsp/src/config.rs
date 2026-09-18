@@ -37,6 +37,10 @@ pub struct RossiConfig {
     /// Inlay hints configuration
     #[serde(default)]
     pub inlay_hints: InlayHintsConfig,
+
+    /// Proof obligation configuration
+    #[serde(default)]
+    pub proof_obligations: ProofObligationsConfig,
 }
 
 impl RossiConfig {
@@ -441,6 +445,29 @@ fn default_time_limit_secs() -> u32 {
 
 fn default_disprove_timeout_ms() -> u32 {
     1000
+}
+
+/// Proof obligation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofObligationsConfig {
+    /// Generate the obligations of every open document on open and on
+    /// save, judge them against the stored proofs, and serve them as
+    /// diagnostics, lenses and `rossi/proofObligations`
+    #[serde(default = "default_proof_obligations_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for ProofObligationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_proof_obligations_enabled(),
+        }
+    }
+}
+
+fn default_proof_obligations_enabled() -> bool {
+    true
 }
 
 /// Inlay hints configuration
