@@ -31,6 +31,21 @@ This directory contains Emacs configuration for Event-B formal modeling, providi
 - **Selection Range**: Smart expand/shrink of the active region
 - **Open in Rodin**: Code lens on MACHINE/CONTEXT declarations that builds the
   model into a persistent Rodin workspace and launches the Rodin IDE
+- **Document Highlight, Type Hierarchy, Go-to-Implementation, Go-to-Type-Definition**:
+  every occurrence of the symbol under the cursor; REFINES/EXTENDS as a
+  hierarchy; the events and machines that refine the one under the cursor;
+  the carrier sets a symbol's type is built from
+- **Pull Diagnostics**: `textDocument/diagnostic` and `workspace/diagnostic`,
+  so a workspace-wide problem list covers files nobody has opened
+- **Range Formatting and Range Semantic Tokens**: format only the selected
+  components; highlight only the visible lines
+- **Project Static Check**: type errors and Rodin-style drops over the file's
+  dependency closure, the findings `rossi build` reports
+- **Proof Obligations** (server side): open obligations as hint diagnostics,
+  a `n/m proof obligations discharged` lens per component, and the
+  `rossi/proofObligations` / `rossi/proofState` requests. The tree view,
+  gutter marks and sequent document that consume them exist only in the VS
+  Code extension so far
 
 ### ✏️ Snippets (yasnippet)
 - Ready-made templates for the common Event-B constructs
