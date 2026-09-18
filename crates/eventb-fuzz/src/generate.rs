@@ -91,6 +91,20 @@ pub struct Config {
     /// nothing, so no layout decision straddles a run boundary and the token
     /// count is unchanged.
     pub ordered_clauses: bool,
+    /// Join a decorated component or event name with an underscore rather
+    /// than a hyphen.
+    ///
+    /// Rodin names these after files and event labels, so a hyphen is legal
+    /// and real models carry one; Camille refuses it outright with `Unknown
+    /// token: -` and stops reading the component. Measured as the largest
+    /// residual Camille blocker, so a differential run against eventb-checker
+    /// needs this on or most models report that one divergence in place of a
+    /// finding.
+    ///
+    /// Corpus-preserving like the rest: the two draws that build a decorated
+    /// name are unchanged and only the joining character differs, so the name
+    /// stays a single whitespace-delimited token and no layout decision moves.
+    pub plain_names: bool,
 }
 
 impl Default for Config {
@@ -103,6 +117,7 @@ impl Default for Config {
             unicode_operators: false,
             lowercase_keywords: false,
             ordered_clauses: false,
+            plain_names: false,
         }
     }
 }
@@ -683,7 +698,8 @@ impl<'a, 'b> Walk<'a, 'b> {
             return stem;
         }
         let tail = self.source.pick(NAME_TAILS).copied().unwrap_or("1");
-        format!("{stem}-{tail}")
+        let joiner = if self.config.plain_names { '_' } else { '-' };
+        format!("{stem}{joiner}{tail}")
     }
 
     fn emit_event_name(&mut self) {
@@ -1116,6 +1132,14 @@ mod tests {
         }
     }
 
+    /// The name joiner alone, with every spelling left as derived.
+    fn plain_name_config() -> Config {
+        Config {
+            plain_names: true,
+            ..Config::default()
+        }
+    }
+
     /// Every convention at once: what a checker gate actually feeds Camille,
     /// and what `gen --normalize` turns on.
     fn normalized_config() -> Config {
@@ -1123,6 +1147,7 @@ mod tests {
             unicode_operators: true,
             lowercase_keywords: true,
             ordered_clauses: true,
+            plain_names: true,
             ..Config::default()
         }
     }
@@ -1345,6 +1370,7 @@ mod tests {
             (unicode_config(), "--unicode"),
             (lowercase_config(), "--lowercase-keywords"),
             (ordered_config(), "--ordered-clauses"),
+            (plain_name_config(), "--plain-names"),
             (normalized_config(), "every flag"),
         ] {
             let normalized = generate_all_with(200, config);
@@ -1366,6 +1392,38 @@ mod tests {
             }
             assert!(differing > 0, "{what} changed nothing at all");
         }
+    }
+
+    /// `--plain-names` must retire the hyphen and nothing else: the decorated
+    /// names keep their stems and tails, and the two draws that build one are
+    /// unchanged, so the two runs are the same corpus in two conventions.
+    #[test]
+    fn plain_names_join_a_decorated_name_with_an_underscore() {
+        let hyphenated = generate_all(200);
+        if hyphenated.is_empty() {
+            return;
+        }
+        let plain = generate_all_with(200, plain_name_config());
+        let mut decorated = 0;
+        for (hyphenated, plain) in hyphenated.iter().zip(&plain) {
+            if surrounded_by_word_chars(&hyphenated.text, '-') {
+                decorated += 1;
+            }
+            assert!(
+                !surrounded_by_word_chars(&plain.text, '-'),
+                "a name was still joined with a hyphen:\n{}",
+                plain.text
+            );
+            assert_eq!(
+                hyphenated.text.replace('-', "_"),
+                plain.text.replace('-', "_"),
+                "--plain-names changed something other than the joiner"
+            );
+        }
+        assert!(
+            decorated > 0,
+            "no hyphenated name was generated, so the test proves nothing"
+        );
     }
 
     #[test]
