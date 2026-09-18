@@ -241,7 +241,7 @@ impl Analyzer {
                     // Commit both indexes while the exact snapshot remains current. A
                     // concurrent edit either happens before this guard (and skips the
                     // whole commit) or after it.
-                    let key = uri.to_string();
+                    let key = uri.as_str().to_owned();
                     let components = doc.components();
                     self.cross_reference_manager
                         .index_components(key.clone(), components);
@@ -1910,11 +1910,11 @@ impl LanguageServer for RossiLanguageServer {
         let text = params.text_document.text;
         let version = params.text_document.version;
 
-        debug!("Document opened: {}", uri);
+        debug!("Document opened: {}", uri.as_str());
 
         let symbols = Arc::clone(&self.workspace_symbol_provider);
         let xrefs = Arc::clone(&self.cross_reference_manager);
-        let uri_key = uri.to_string();
+        let uri_key = uri.as_str().to_owned();
         if let Err(error) = run_blocking(move || {
             symbols.register_document_uri(&uri_key);
             xrefs.register_document_uri(&uri_key);
@@ -1938,7 +1938,7 @@ impl LanguageServer for RossiLanguageServer {
         let version = params.text_document.version;
         let changes = params.content_changes;
 
-        debug!("Document changed: {} (version {})", uri, version);
+        debug!("Document changed: {} (version {})", uri.as_str(), version);
 
         // Apply the text edit synchronously (cheap); the (re)parse is deferred
         // to the analysis below so a burst of keystrokes parses at most once.
@@ -1971,7 +1971,7 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        debug!("Document closed: {}", uri);
+        debug!("Document closed: {}", uri.as_str());
 
         // Remove document from open-document tracking. Any debounced analysis
         // still pending for this URI finds no matching revision at wake-up and
@@ -1993,7 +1993,7 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
-        debug!("Document saved: {}", uri);
+        debug!("Document saved: {}", uri.as_str());
 
         // A save is a natural "done editing" signal: flush the analysis now
         // rather than leaving the user to wait out the remaining debounce window
@@ -2013,7 +2013,10 @@ impl LanguageServer for RossiLanguageServer {
             if let Err(error) =
                 run_blocking(move || refresh_saved_layers(&xrefs, &symbols, &save_uri)).await
             {
-                info!("Failed to refresh saved layers for {uri}: {error}");
+                info!(
+                    "Failed to refresh saved layers for {uri}: {error}",
+                    uri = uri.as_str()
+                );
             }
         }
 
@@ -2088,7 +2091,7 @@ impl LanguageServer for RossiLanguageServer {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
-        debug!("Document symbol request for: {}", uri);
+        debug!("Document symbol request for: {}", uri.as_str());
 
         // Read the document's shared parse (no per-request re-parse). A
         // multi-component file yields one root symbol per component, and
@@ -2096,12 +2099,15 @@ impl LanguageServer for RossiLanguageServer {
         // of collapsing it to nothing. Symbols are sliced from the parse's own
         // text, so spans always index in bounds.
         let Some(doc) = self.document_manager.parse_result(&uri) else {
-            debug!("Document not found: {}", uri);
+            debug!("Document not found: {}", uri.as_str());
             return Ok(None);
         };
         let components = doc.components();
         if components.is_empty() {
-            debug!("No components recovered for document symbols: {}", uri);
+            debug!(
+                "No components recovered for document symbols: {}",
+                uri.as_str()
+            );
             return Ok(None);
         }
 
@@ -2119,14 +2125,14 @@ impl LanguageServer for RossiLanguageServer {
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
         let uri = params.text_document.uri;
-        debug!("Selection range request for: {}", uri);
+        debug!("Selection range request for: {}", uri.as_str());
 
         let manager = Arc::clone(&self.document_manager);
         let parse_uri = uri.clone();
         let Some(document) =
             run_blocking(move || manager.parse_result_for_request(&parse_uri)).await?
         else {
-            debug!("Document not found: {}", uri);
+            debug!("Document not found: {}", uri.as_str());
             return Ok(None);
         };
 
@@ -2141,7 +2147,11 @@ impl LanguageServer for RossiLanguageServer {
         params: DocumentRangeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        debug!("Range formatting request for: {} {:?}", uri, params.range);
+        debug!(
+            "Range formatting request for: {} {:?}",
+            uri.as_str(),
+            params.range
+        );
 
         // The stored parse, so the component spans index the text they
         // are sliced from.
@@ -2165,13 +2175,13 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        debug!("Formatting request for: {}", uri);
+        debug!("Formatting request for: {}", uri.as_str());
 
         // Get document text
         let text = match self.document_manager.get_text(&uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2180,7 +2190,7 @@ impl LanguageServer for RossiLanguageServer {
         let config = self.config_manager.get();
         match crate::formatting::format(&text, &config.format) {
             Ok(edits) => {
-                debug!("Document formatted successfully: {}", uri);
+                debug!("Document formatted successfully: {}", uri.as_str());
                 Ok(Some(edits))
             }
             Err(e) => {
@@ -2194,13 +2204,13 @@ impl LanguageServer for RossiLanguageServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        debug!("Completion request for: {} at {:?}", uri, position);
+        debug!("Completion request for: {} at {:?}", uri.as_str(), position);
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2229,13 +2239,13 @@ impl LanguageServer for RossiLanguageServer {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Hover request for: {} at {:?}", uri, position);
+        debug!("Hover request for: {} at {:?}", uri.as_str(), position);
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2263,14 +2273,18 @@ impl LanguageServer for RossiLanguageServer {
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Signature help request for: {} at {:?}", uri, position);
+        debug!(
+            "Signature help request for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         let manager = Arc::clone(&self.document_manager);
         let parse_uri = uri.clone();
         let Some(document) =
             run_blocking(move || manager.parse_result_for_request(&parse_uri)).await?
         else {
-            debug!("Document not found: {}", uri);
+            debug!("Document not found: {}", uri.as_str());
             return Ok(None);
         };
 
@@ -2296,13 +2310,17 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Go-to-definition request for: {} at {:?}", uri, position);
+        debug!(
+            "Go-to-definition request for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2327,13 +2345,13 @@ impl LanguageServer for RossiLanguageServer {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        debug!("References request for: {} at {:?}", uri, position);
+        debug!("References request for: {} at {:?}", uri.as_str(), position);
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2357,7 +2375,11 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<request::GotoTypeDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Goto type definition for: {} at {:?}", uri, position);
+        debug!(
+            "Goto type definition for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return Ok(None);
@@ -2378,7 +2400,11 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<request::GotoImplementationResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Goto implementation for: {} at {:?}", uri, position);
+        debug!(
+            "Goto implementation for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         let provider = Arc::clone(&self.type_hierarchy_provider);
         let locations = run_blocking(move || provider.implementations(&uri, position)).await?;
@@ -2392,10 +2418,14 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<Vec<TypeHierarchyItem>>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        debug!("Prepare type hierarchy for: {} at {:?}", uri, position);
+        debug!(
+            "Prepare type hierarchy for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         let provider = Arc::clone(&self.type_hierarchy_provider);
-        Ok(run_blocking(move || provider.prepare(&uri, position)).await?)
+        run_blocking(move || provider.prepare(&uri, position)).await
     }
 
     async fn supertypes(
@@ -2425,7 +2455,7 @@ impl LanguageServer for RossiLanguageServer {
         params: DocumentDiagnosticParams,
     ) -> Result<DocumentDiagnosticReportResult> {
         let uri = params.text_document.uri;
-        debug!("Pull diagnostic request for: {}", uri);
+        debug!("Pull diagnostic request for: {}", uri.as_str());
 
         let analyzer = self.analyzer.clone();
         let previous = params.previous_result_id;
@@ -2537,7 +2567,8 @@ impl LanguageServer for RossiLanguageServer {
             .clone();
         debug!(
             "Document highlight request for: {} at {:?}",
-            uri, params.text_document_position_params.position
+            uri.as_str(),
+            params.text_document_position_params.position
         );
 
         // Same blocking-pool treatment as `references`, which this delegates
@@ -2640,13 +2671,17 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<PrepareRenameResponse>> {
         let uri = &params.text_document.uri;
         let position = params.position;
-        debug!("Prepare rename request for: {} at {:?}", uri, position);
+        debug!(
+            "Prepare rename request for: {} at {:?}",
+            uri.as_str(),
+            position
+        );
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2669,14 +2704,16 @@ impl LanguageServer for RossiLanguageServer {
         let new_name = &params.new_name;
         debug!(
             "Rename request for: {} at {:?} to '{}'",
-            uri, position, new_name
+            uri.as_str(),
+            position,
+            new_name
         );
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2705,7 +2742,8 @@ impl LanguageServer for RossiLanguageServer {
         let uri = &params.text_document.uri;
         debug!(
             "Semantic tokens range request for: {} {:?}",
-            uri, params.range
+            uri.as_str(),
+            params.range
         );
 
         let Some(doc) = self.document_manager.parse_result(uri) else {
@@ -2723,14 +2761,14 @@ impl LanguageServer for RossiLanguageServer {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = &params.text_document.uri;
-        debug!("Semantic tokens request for: {}", uri);
+        debug!("Semantic tokens request for: {}", uri.as_str());
 
         // Highlight from the document's shared parse (no per-request re-parse).
         // The builder slices text by component spans, so it must use the parse's
         // own text — never a separately fetched snapshot that a concurrent edit
         // could have advanced past those spans.
         let Some(doc) = self.document_manager.parse_result(uri) else {
-            debug!("Document not found: {}", uri);
+            debug!("Document not found: {}", uri.as_str());
             return Ok(None);
         };
         let response =
@@ -2751,13 +2789,13 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = &params.text_document.uri;
-        debug!("Document link request for: {}", uri);
+        debug!("Document link request for: {}", uri.as_str());
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2775,13 +2813,13 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
-        debug!("Code action request for: {}", uri);
+        debug!("Code action request for: {}", uri.as_str());
 
         // Get document text
         let text = match self.document_manager.get_text(uri) {
             Some(text) => text,
             None => {
-                debug!("Document not found: {}", uri);
+                debug!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
@@ -2805,7 +2843,7 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         let uri = params.text_document.uri;
-        debug!("Code lens request for: {}", uri);
+        debug!("Code lens request for: {}", uri.as_str());
 
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return Ok(None);
@@ -2844,13 +2882,13 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let uri = &params.text_document.uri;
-        debug!("Folding range request for: {}", uri);
+        debug!("Folding range request for: {}", uri.as_str());
 
         // Fold from the document's shared, recovery-tolerant parse (no
         // per-request re-parse), so folds are derived from the same AST every
         // other feature reads and survive a local syntax error.
         let Some(doc) = self.document_manager.parse_result(uri) else {
-            debug!("Document not found: {}", uri);
+            debug!("Document not found: {}", uri.as_str());
             return Ok(None);
         };
         let response = self
@@ -2867,7 +2905,7 @@ impl LanguageServer for RossiLanguageServer {
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
-        debug!("Inlay hint request for: {}", uri);
+        debug!("Inlay hint request for: {}", uri.as_str());
 
         let config = self.config_manager.get();
         if !config.inlay_hints.enabled {

@@ -469,7 +469,7 @@ mod tests {
         let uris: Vec<_> = loader
             .candidate_uris_for_component("C")
             .into_iter()
-            .map(|uri| uri.to_string())
+            .map(|uri| uri.as_str().to_owned())
             .collect();
 
         assert_eq!(uris, ["file:///c.eventb", "file:///m.eventb"]);

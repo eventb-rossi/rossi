@@ -530,7 +530,7 @@ impl CrossReferenceManager {
                 let content = std::fs::read_to_string(path).map_err(|error| {
                     std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
                 })?;
-                sources.push((uri.to_string(), content));
+                sources.push((uri.as_str().to_owned(), content));
             }
         }
 

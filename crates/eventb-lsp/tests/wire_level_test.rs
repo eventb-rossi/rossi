@@ -648,7 +648,7 @@ mod rodin_lens {
             .id(2)
             .params(json!({
                 "command": "rossi.rodin.open",
-                "arguments": [file_uri.to_string()]
+                "arguments": [file_uri.as_str().to_owned()]
             }))
             .finish();
         let response = service

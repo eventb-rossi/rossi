@@ -79,7 +79,7 @@ fn input_with_tool(
     let documents = Arc::new(DocumentManager::new());
     for (filename, text) in files {
         let uri = test_uri(filename);
-        cross_references.update_component(uri.to_string(), text);
+        cross_references.update_component(uri.as_str().to_owned(), text);
         documents.open(uri, 1, text.to_string());
     }
     Some(ExecuteInput {
