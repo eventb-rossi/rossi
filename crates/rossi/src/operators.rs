@@ -213,6 +213,16 @@ impl BuiltinPredicate {
     }
 
     /// Check whether the given argument count is valid for this built-in predicate
+    /// The argument count as an [`Arity`](crate::formula::extension::Arity),
+    /// the form the parser's arity diagnostics take.
+    pub fn arity(&self) -> crate::formula::extension::Arity {
+        use crate::formula::extension::Arity;
+        match self {
+            BuiltinPredicate::Finite => Arity::Fixed(1),
+            BuiltinPredicate::Partition => Arity::AtLeast(2),
+        }
+    }
+
     pub fn check_arity(&self, n: usize) -> bool {
         match self {
             BuiltinPredicate::Finite => n == 1,

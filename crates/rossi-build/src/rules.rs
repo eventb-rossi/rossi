@@ -488,6 +488,7 @@ impl RuleId {
             rossi::ParseError::ClauseOutOfOrder { .. } => Some(RuleId::ClauseOutOfOrder),
             rossi::ParseError::MissingLabel { .. } => Some(RuleId::MissingLabel),
             rossi::ParseError::AssignmentInPredicate { .. } => Some(RuleId::AssignmentInPredicate),
+            rossi::ParseError::NotAPrefixOperator { .. } => Some(RuleId::FormulaParseError),
             _ => None,
         }
     }

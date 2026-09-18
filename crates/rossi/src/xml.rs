@@ -149,17 +149,19 @@ fn validate_name_with(
     }
 }
 
-/// [`validate_math_identifier`] plus the kernel_lang §2.2 reserved-word
-/// check, for *mathematical declarations* (carrier sets, constants,
-/// variables, event parameters). Rodin's own `isValidIdentifierName` rejects
-/// these names, so no Rodin-exported XML contains them; a hand-crafted file
-/// that does would otherwise import into an AST the text grammar can no
-/// longer express (pretty-print → re-parse fails on the declaration).
-/// Structural names (component/event names, refines/sees targets) go through
-/// the hyphen-capable [`validate_component_name`] instead.
+/// [`validate_math_identifier`] plus the reserved-name check of the text
+/// grammar's declarations (the kernel_lang §2.2 words and the operator
+/// symbols of the factory in use), for *mathematical declarations* (carrier
+/// sets, constants, variables, event parameters). Rodin's own
+/// `isValidIdentifierName` rejects these names, so no Rodin-exported XML
+/// contains them; a hand-crafted file that does would otherwise import into
+/// an AST the text grammar can no longer express (pretty-print → re-parse
+/// fails on the declaration). Structural names (component/event names,
+/// refines/sees targets) go through the hyphen-capable
+/// [`validate_component_name`] instead.
 fn validate_declared_identifier(name: &str, origin: &str) -> Result<String> {
     let validated = validate_math_identifier(name, origin)?;
-    if crate::builtins::is_reserved_word(&validated) {
+    if crate::parser::is_reserved_declared_name(&validated) {
         return Err(ParseError::UnsupportedIdentifier {
             name: name.to_string(),
             origin: origin.to_string(),

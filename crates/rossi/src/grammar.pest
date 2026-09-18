@@ -337,13 +337,17 @@ lambda_expr = {
 //   `dom(f)∼ = (dom(f))∼`, `dom(f)[S] = (dom(f))[S]`.
 closed_unary_expr = { (op_domain | op_range) ~ lparen ~ expression ~ rparen }
 
-// Function application is single-argument (Rodin's FUNIMAGE is binary): `f(x)`,
-// with a pair written as a maplet `f(x ↦ y)` — never a comma list `f(a, b)`.
-// The `lbrace … rbrace` form is the function-update set `f{x ↦ y, …}` (a set
-// of maplets, so it keeps its commas); `lbracket … rbracket` is relational
-// image `r[S]`; `op_inverse` is postfix `∼`.
+// Postfix applications. Core function application takes exactly one
+// argument (Rodin's FUNIMAGE is binary; a pair is written with a maplet,
+// `f(x ↦ y)`); only a prefix extension operator of the factory in use takes
+// a comma list (`dist(a, b)`). The grammar admits the list for every head and
+// the AST builder resolves the head: a comma list on anything but a prefix
+// extension operator is `ParseError::NotAPrefixOperator`. The `lbrace …
+// rbrace` form is the function-update set `f{x ↦ y, …}` (a set of maplets,
+// so it keeps its commas); `lbracket … rbracket` is relational image `r[S]`;
+// `op_inverse` is postfix `∼`.
 function_application = {
-    (closed_unary_expr | primary_expr) ~ (lparen ~ expression ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
+    (closed_unary_expr | primary_expr) ~ (lparen ~ expression ~ (comma ~ expression)* ~ rparen | lbracket ~ expression ~ rbracket | lbrace ~ expression ~ (comma ~ expression)* ~ rbrace | op_inverse)*
 }
 
 // Unary Expressions

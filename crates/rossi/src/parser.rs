@@ -8,13 +8,15 @@ use pest_derive::Parser;
 use crate::ast::*;
 use crate::deps::{ComponentKind, EdgeKind};
 use crate::error::{ParseError, ParseResult};
+use crate::formula::extension::{Arity, Extension, Notation};
 use crate::formula::tag::{
     AssocExprOp, AssocPredOp, AtomicOp, BinaryExprOp, BinaryPredOp, LiteralPredOp, QuantExprOp,
     QuantPredOp, RelationalOp, UnaryExprOp,
 };
 use crate::formula::typecheck::type_from_expression;
 use crate::formula::{
-    BoundIdentDecl, Expression, ExpressionKind, Form, FormulaFactory, Predicate, PredicateKind,
+    BoundIdentDecl, Expression, ExpressionKind, FactoryError, Form, FormulaFactory, Predicate,
+    PredicateKind,
 };
 use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
 use crate::operators::{
@@ -67,6 +69,23 @@ fn scoped_factory() -> FormulaFactory {
         .unwrap_or_else(FormulaFactory::default_factory)
 }
 
+/// Whether `word` can never *name* a user identifier in the enclosing
+/// [`with_factory`] scope: a kernel_lang §2.2 reserved word
+/// ([`crate::builtins::is_reserved_word`]) or an operator symbol of the
+/// factory in use, which is a token to Rodin's lexer exactly like the builtin
+/// words. Every door that admits a declared name (the text grammar, error
+/// recovery, XML import) asks this one question. The scope is peeked rather
+/// than cloned out: this runs for every declared name, and the default
+/// factory has no symbols at all.
+pub(crate) fn is_reserved_declared_name(word: &str) -> bool {
+    crate::builtins::is_reserved_word(word)
+        || FACTORY.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|ff| ff.extension_by_symbol(word).is_some())
+        })
+}
+
 /// Context for building formula-model nodes during the descent: the
 /// factory, the names bound by enclosing binders (innermost last), and
 /// the span base (see [`with_span_base`]).
@@ -115,9 +134,10 @@ impl Fx {
 
     /// Build an expression for a bare `identifier` token. A reserved
     /// relational atom (`id`, `prj1`, `prj2`, `pred`, `succ` — exact case)
-    /// becomes the typed atomic builtin; every other word is an ordinary
-    /// (bound or free) identifier occurrence. Applying an atom (`prj1(x)`)
-    /// is then ordinary function application over that value.
+    /// becomes the typed atomic builtin, a nullary expression operator of the
+    /// factory becomes its extended node, and every other word is an
+    /// ordinary (bound or free) identifier occurrence. Applying an atom
+    /// (`prj1(x)`) is then ordinary function application over that value.
     fn atom_or_identifier(&self, name: &str, span: Option<Span>) -> Expression {
         match AtomicBuiltinKind::from_name(name) {
             Some(AtomicBuiltinKind::Id) => self.ff.atomic_expression(AtomicOp::KIdGen, span, None),
@@ -129,7 +149,13 @@ impl Fx {
             }
             Some(AtomicBuiltinKind::Pred) => self.ff.atomic_expression(AtomicOp::KPred, span, None),
             Some(AtomicBuiltinKind::Succ) => self.ff.atomic_expression(AtomicOp::KSucc, span, None),
-            None => self.identifier(name, span),
+            None => match self.ff.extension_by_symbol(name) {
+                Some((_, Extension::Expr(ext))) if ext.kind().is_nullary() => self
+                    .ff
+                    .extended_expression(ext, Vec::new(), Vec::new(), span, None)
+                    .expect("a nullary operator takes no children"),
+                _ => self.identifier(name, span),
+            },
         }
     }
 }
@@ -635,14 +661,48 @@ fn reserved_word_error(word: &str, span: pest::Span<'_>) -> ParseError {
 
 /// Extract an identifier that *names* a user identifier — a declaration
 /// (constant, variable, carrier set or element, event parameter, binder) or
-/// an assignment target — rejecting the kernel_lang §2.2 reserved words
-/// ([`crate::builtins::is_reserved_word`]). All declared names must come
-/// through here.
+/// an assignment target — rejecting what [`is_reserved_declared_name`]
+/// rejects. All declared names must come through here.
 fn declared_name(pair: &pest::iterators::Pair<Rule>) -> Result<String, ParseError> {
-    if crate::builtins::is_reserved_word(pair.as_str()) {
-        return Err(reserved_word_error(pair.as_str(), pair.as_span()));
+    let word = pair.as_str();
+    if is_reserved_declared_name(word) {
+        return Err(reserved_word_error(word, pair.as_span()));
     }
-    Ok(pair.as_str().to_string())
+    Ok(word.to_string())
+}
+
+/// [`ParseError::ArityMismatch`] for `symbol` applied to `actual` arguments.
+fn arity_mismatch(symbol: &str, expected: Arity, actual: usize) -> ParseError {
+    ParseError::ArityMismatch {
+        name: symbol.to_string(),
+        expected: expected.to_string(),
+        actual,
+    }
+}
+
+/// The error mapping for building an extension node the parser resolved
+/// itself: the extension comes from the factory's own index and no type is
+/// proposed, so the only factory error left is the argument count.
+fn extension_error(
+    symbol: &str,
+    expected: Arity,
+    actual: usize,
+) -> impl FnOnce(FactoryError) -> ParseError + '_ {
+    move |error| match error {
+        FactoryError::ArityMismatch => arity_mismatch(symbol, expected, actual),
+        other => unreachable!("extension construction: {other:?}"),
+    }
+}
+
+/// [`ParseError::NotAPrefixOperator`] anchored at the head `span`.
+fn not_a_prefix_operator(name: &str, span: pest::Span<'_>) -> ParseError {
+    let (line, column) = span.start_pos().line_col();
+    ParseError::NotAPrefixOperator {
+        name: name.to_string(),
+        line,
+        column,
+        span: Some(Span::from_pest(span)),
+    }
 }
 
 /// Reject reserved operator words (`card`, `dom`, `mod`, …) standing as a
@@ -2381,22 +2441,38 @@ fn parse_expression(
             // Check if there are any function applications or relational images
             let remaining: Vec<_> = inner.collect();
 
+            // Resolve a bare-identifier head once, before the postfixes.
             // A reserved operator word is only legal where the
             // `BuiltinFunction::from_name` resolution below consumes it.
             // Anywhere else — bare, under postfix `∼`, image `[…]`, or an
             // unresolvable application like `mod(x)` — it is an invalid
-            // identifier (see `builtins::RESERVED_OPERATOR_WORDS`). This is
-            // the expression-position check; predicate applications,
-            // assignment targets, and declarations have sibling checks.
-            if let ExpressionKind::FreeIdentifier(name) = base.kind()
-                && crate::builtins::is_reserved_operator_word(name)
-            {
-                let resolves = remaining
+            // identifier (see `builtins::RESERVED_OPERATOR_WORDS`). An
+            // operator symbol of the factory is likewise a token, never an
+            // identifier: applied with `(`, a prefix expression operator
+            // resolves below; standing bare it is an arity error (a nullary
+            // symbol never reaches here, `atom_or_identifier` builds it);
+            // any other symbol is as reserved as a builtin word. This is the
+            // expression-position check; predicate applications, assignment
+            // targets, and declarations have sibling checks.
+            let mut head_extension = None;
+            if let ExpressionKind::FreeIdentifier(name) = base.kind() {
+                let applied = remaining
                     .first()
-                    .is_some_and(|p| p.as_rule() == Rule::lparen)
-                    && BuiltinFunction::from_name(name).is_some();
-                if !resolves {
+                    .is_some_and(|p| p.as_rule() == Rule::lparen);
+                if crate::builtins::is_reserved_operator_word(name)
+                    && !(applied && BuiltinFunction::from_name(name).is_some())
+                {
                     return Err(reserved_word_error(name, base_span));
+                }
+                match fx.ff.extension_by_symbol(name) {
+                    Some((_, Extension::Expr(ext))) if ext.kind().notation == Notation::Prefix => {
+                        if !applied {
+                            return Err(arity_mismatch(name, ext.kind().children.exprs, 0));
+                        }
+                        head_extension = Some(ext.clone());
+                    }
+                    Some(_) => return Err(reserved_word_error(name, base_span)),
+                    None => {}
                 }
             }
 
@@ -2409,39 +2485,72 @@ fn parse_expression(
             let mut i = 0;
             while i < remaining.len() {
                 if remaining[i].as_rule() == Rule::lparen {
+                    let postfix = i;
                     i += 1; // Skip lparen
-                    // Function application takes exactly one argument — Rodin's
-                    // FUNIMAGE is binary (function, argument). The grammar admits
-                    // a single expression between the parens; a pair is written
-                    // with a maplet (`f(x ↦ y)`), never a comma list.
-                    let argument =
-                        if i < remaining.len() && remaining[i].as_rule() == Rule::expression {
-                            let a = parse_expression(remaining[i].clone(), fx)?;
-                            i += 1;
-                            a
-                        } else {
-                            return Err(ParseError::EmptyExpression);
-                        };
-
+                    let mut arguments = Vec::new();
+                    while i < remaining.len() {
+                        match remaining[i].as_rule() {
+                            Rule::expression => {
+                                arguments.push(parse_expression(remaining[i].clone(), fx)?);
+                            }
+                            Rule::comma => {}
+                            Rule::rparen => break,
+                            found => {
+                                return Err(ParseError::UnexpectedRule {
+                                    expected: "argument".to_string(),
+                                    found: format!("{found:?}"),
+                                });
+                            }
+                        }
+                        i += 1;
+                    }
+                    if arguments.is_empty() {
+                        return Err(ParseError::EmptyExpression);
+                    }
                     i += 1; // Skip rparen
 
-                    // A closed builtin (card/min/max/union/inter) applied to its
-                    // single argument; every other head is plain application.
-                    let builtin = match result.kind() {
-                        ExpressionKind::FreeIdentifier(name) => BuiltinFunction::from_name(name),
+                    // A prefix extension operator of the factory takes the
+                    // whole argument list. Otherwise this is core function
+                    // application, which takes exactly one argument — Rodin's
+                    // FUNIMAGE is binary (function, argument); a pair is
+                    // written with a maplet (`f(x ↦ y)`), never a comma list.
+                    // A closed builtin (card/min/max/union/inter) applied to
+                    // its single argument is the unary builtin; every other
+                    // head is plain application.
+                    let head = match result.kind() {
+                        ExpressionKind::FreeIdentifier(name) => Some(name.as_str()),
                         _ => None,
                     };
-                    result = match builtin {
-                        Some(builtin) => {
-                            fx.ff
-                                .unary_expression(builtin_unary_of(builtin), argument, node_span)
+                    // Only the bare base can be an operator; after any
+                    // postfix the head is no longer an identifier.
+                    result = if let Some((symbol, ext)) = head.zip(head_extension.take()) {
+                        let actual = arguments.len();
+                        fx.ff
+                            .extended_expression(&ext, arguments, Vec::new(), node_span, None)
+                            .map_err(extension_error(symbol, ext.kind().children.exprs, actual))?
+                    } else if arguments.len() > 1 {
+                        // The head as the source spells it: the base through
+                        // the postfix before this one.
+                        let head_end = postfix.checked_sub(1).map_or(base_span.end_pos(), |prev| {
+                            remaining[prev].as_span().end_pos()
+                        });
+                        let head = base_span.start_pos().span(&head_end);
+                        return Err(not_a_prefix_operator(head.as_str(), head));
+                    } else {
+                        let argument = arguments.pop().expect("one argument");
+                        match head.and_then(BuiltinFunction::from_name) {
+                            Some(builtin) => fx.ff.unary_expression(
+                                builtin_unary_of(builtin),
+                                argument,
+                                node_span,
+                            ),
+                            None => fx.ff.binary_expression(
+                                BinaryExprOp::FunImage,
+                                result,
+                                argument,
+                                node_span,
+                            ),
                         }
-                        None => fx.ff.binary_expression(
-                            BinaryExprOp::FunImage,
-                            result,
-                            argument,
-                            node_span,
-                        ),
                     };
                 } else if remaining[i].as_rule() == Rule::lbracket {
                     i += 1; // Skip lbracket
@@ -2770,17 +2879,14 @@ fn parse_predicate_application(
         }
     }
 
+    let extension = fx.ff.extension_by_symbol(&function);
     if let Some(builtin) = BuiltinPredicate::from_name(&function) {
         if !builtin.check_arity(arguments.len()) {
-            return Err(ParseError::ArityMismatch {
-                name: builtin.name().to_string(),
-                expected: if builtin.min_arity() == 1 {
-                    builtin.min_arity().to_string()
-                } else {
-                    format!("at least {}", builtin.min_arity())
-                },
-                actual: arguments.len(),
-            });
+            return Err(arity_mismatch(
+                builtin.name(),
+                builtin.arity(),
+                arguments.len(),
+            ));
         }
         Ok(match builtin {
             BuiltinPredicate::Finite => {
@@ -2789,13 +2895,26 @@ fn parse_predicate_application(
             }
             BuiltinPredicate::Partition => fx.ff.multiple_predicate(arguments, pred_span),
         })
-    } else if crate::builtins::is_reserved_name(&function) {
+    } else if let Some((_, Extension::Pred(ext))) = extension {
+        // A predicate operator of the factory takes the whole argument list.
+        let actual = arguments.len();
+        fx.ff
+            .extended_predicate(ext, arguments, Vec::new(), pred_span)
+            .map_err(extension_error(
+                &function,
+                ext.kind().children.exprs,
+                actual,
+            ))
+    } else if crate::builtins::is_reserved_name(&function) || extension.is_some() {
         // A reserved name applied where no builtin predicate resolves it:
         // the expression-only forms (`dom(x)`, `mod(x)`), the generic atoms
         // (`pred(x)`, `id(x)` — expressions, never predicates), and the
         // keyword-token and ASCII-operator spellings (`INT(x)`, `POW(x)`,
-        // `not(x)`). Reject like Rodin instead of fabricating a user-defined
-        // predicate application named by a reserved name.
+        // `not(x)`). An operator symbol of the factory that is not a
+        // predicate operator (`dist(x, y)`, `plus(x, y)`) is as reserved
+        // here as those words, exactly as in expression position. Reject
+        // like Rodin instead of fabricating a user-defined predicate
+        // application named by a reserved name.
         //
         // The wider `is_reserved_name` because this is an *applied* head, not
         // a bare identifier — see [`ParseError::ReservedWord`].
@@ -3551,7 +3670,7 @@ fn clause_region(
 /// kernel_lang reserved words, matching [`declared_name`]. Structural keywords
 /// remain valid when the grammar consumes them in an identifier position.
 fn accepts_declared_name(name: &str) -> bool {
-    crate::names::is_valid_math_identifier(name) && !crate::builtins::is_reserved_word(name)
+    crate::names::is_valid_math_identifier(name) && !is_reserved_declared_name(name)
 }
 
 /// Whether `name` is valid in the required first-name position after a clause

@@ -1011,6 +1011,7 @@ fn rule_for_parse_error(err: &ParseError) -> RuleId {
         // formula parser folds it into the same diagnostic class.
         ParseError::IncompatibleOperators { .. } => RuleId::FormulaParseError,
         ParseError::AssignmentArityMismatch { .. } => RuleId::FormulaParseError,
+        ParseError::NotAPrefixOperator { .. } => RuleId::FormulaParseError,
         // A predicate written as an assignment gets its own rule (EB026) rather
         // than the generic formula error.
         ParseError::AssignmentInPredicate { .. } => RuleId::AssignmentInPredicate,
