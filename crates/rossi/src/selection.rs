@@ -291,8 +291,8 @@ impl SyntaxSnapshot {
                     parameter: parameter_at(construct, offset >= dot_end, offset >= pipe_end),
                 })
             }
-            // `{x, y ∣ P}` — the value is the synthesized identifier
-            // chain, not spelled in the source.
+            // `{x ∣ P}` — the value is the synthesized identifier, not
+            // spelled in the source.
             Form::IdentList => {
                 let predicate_span = pred.span()?;
                 if offset >= predicate_span.end {

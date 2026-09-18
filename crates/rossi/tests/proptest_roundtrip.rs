@@ -324,23 +324,19 @@ fn arb_expression_impl(depth: u32, desired_size: u32) -> impl Strategy<Value = E
             // Type ascription e ⦂ T, whose right operand must denote a type.
             (inner.clone(), arb_type_expression())
                 .prop_map(|(expr, ty)| ff().ascription(expr, ty, None)),
-            // Ident-list comprehension {ids ∣ P}: the value is the binder
-            // chain in declaration order.
-            (
-                proptest::collection::vec(arb_bound_decl(), 1..3),
-                arb_leaf_predicate(),
-            )
-                .prop_map(|(decls, pred)| {
-                    let value = ff().bound_ident_chain(decls.len());
-                    ff().quantified_expression(
-                        QuantExprOp::CSet,
-                        decls,
-                        pred,
-                        value,
-                        None,
-                        Form::IdentList,
-                    )
-                }),
+            // Ident-list comprehension {x ∣ P}: one identifier, whose value
+            // is the identifier itself (a list there is not Event-B).
+            (arb_bound_decl(), arb_leaf_predicate()).prop_map(|(decl, pred)| {
+                let value = ff().bound_ident_chain(1);
+                ff().quantified_expression(
+                    QuantExprOp::CSet,
+                    vec![decl],
+                    pred,
+                    value,
+                    None,
+                    Form::IdentList,
+                )
+            }),
             // Explicit comprehension {ids · P ∣ E}.
             (
                 proptest::collection::vec(arb_bound_decl(), 1..3),
