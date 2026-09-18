@@ -156,7 +156,7 @@ fn at_limit_every_driver_construct_parses() {
     let union: String = (0..k).map(|i| format!("⋃ z{i} · 1=1 ∣ ")).collect();
     parse(&format!("context C axioms @a s = {union}{{1}} end")).expect("at-limit ⋃ chain");
 
-    // Unary keyword chains (dom/ran/ℙ) and unary minus. dom/ran require the
+    // Unary keyword chains (dom/ran/ℙ) and unary minus. dom/ran/ℙ require the
     // parenthesized form, so each level costs 2 (prefix word + bracket); the
     // chain only sits exactly at the limit while the limit is even.
     assert_eq!(n % 2, 0, "dom chain no longer exercises the exact limit");
@@ -167,8 +167,12 @@ fn at_limit_every_driver_construct_parses() {
         ")".repeat(k)
     ))
     .expect("at-limit dom chain");
-    let pow = "ℙ".repeat(n);
-    parse(&format!("context C constants S axioms @a T = {pow}S end")).expect("at-limit ℙ chain");
+    let pow = "ℙ(".repeat(k);
+    parse(&format!(
+        "context C constants S axioms @a T = {pow}S{} end",
+        ")".repeat(k)
+    ))
+    .expect("at-limit ℙ chain");
     let minus = "−".repeat(n);
     parse(&format!("context C axioms @a x = {minus}1 end")).expect("at-limit − chain");
 }
