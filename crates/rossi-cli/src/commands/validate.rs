@@ -62,6 +62,12 @@ pub struct ValidateArgs {
     #[arg(long)]
     show_info: bool,
 
+    /// Also run the EB1xx runtime-translation suitability checks over the
+    /// leaf machines and the contexts they see. Their INFO findings still
+    /// need --show-info.
+    #[arg(long)]
+    runtime: bool,
+
     /// Name this SARIF run's analysis category (`runs[].automationDetails.id`).
     /// A repository uploading more than one rossi run — one per project, say —
     /// keeps them apart by giving each its own category.
@@ -423,7 +429,7 @@ fn validate_text_source(
                     }
                 }
             }
-            if cli.show_info && !cli.no_semantic && input.kind == InputKind::File {
+            if (cli.show_info || cli.runtime) && !cli.no_semantic && input.kind == InputKind::File {
                 let filename = input
                     .path
                     .file_name()
@@ -448,8 +454,15 @@ fn validate_text_source(
                         .collect(),
                 );
                 let (_, model) = rossi_build::build_with_model(&project);
-                for diag in rossi_build::wd::run(&project, &model) {
-                    results.push(fold_diagnostic(input, diag, inner(), Some(source)));
+                if cli.show_info {
+                    for diag in rossi_build::wd::run(&project, &model) {
+                        results.push(fold_diagnostic(input, diag, inner(), Some(source)));
+                    }
+                }
+                if cli.runtime {
+                    for diag in runtime_findings(&project, &model, cli) {
+                        results.push(fold_diagnostic(input, diag, inner(), Some(source)));
+                    }
                 }
             }
             results
@@ -850,6 +863,28 @@ fn fold_semantic(
             out.push(fold_project_diagnostic(input, diag, project, prefix));
         }
     }
+    if cli.runtime {
+        for diag in runtime_findings(project, &model, cli) {
+            out.push(fold_project_diagnostic(input, diag, project, prefix));
+        }
+    }
+}
+
+/// The runtime-translation findings to report for `project`.
+///
+/// The pass emits both severities in one run, so INFO findings are filtered
+/// here rather than by skipping the pass: `--runtime` alone answers "what
+/// could a translation not read", and `--show-info` widens that to the
+/// advisory half.
+fn runtime_findings(
+    project: &Project,
+    model: &rossi_build::sc_model::ScModel,
+    cli: &ValidateArgs,
+) -> Vec<rossi_build::Diagnostic> {
+    rossi_build::runtime::run(project, model)
+        .into_iter()
+        .filter(|diag| cli.show_info || diag.severity != Severity::Info)
+        .collect()
 }
 
 fn success_result(input: Input, inner: Option<String>, component: &Component) -> ValidationResult {
@@ -1310,6 +1345,7 @@ mod tests {
             show_info: false,
             sarif_category: None,
             stdin_filename: None,
+            runtime: false,
         };
         let results = validate_text_source(Input::file(Path::new("m.eventb")), None, source, &cli);
         let failures: Vec<_> = results.iter().filter(|r| !r.success).collect();
@@ -1346,6 +1382,7 @@ mod tests {
             show_info: false,
             sarif_category: None,
             stdin_filename: None,
+            runtime: false,
         };
         let results = validate_text_source(Input::file(Path::new("m.eventb")), None, source, &cli);
         assert!(

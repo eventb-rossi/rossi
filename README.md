@@ -194,6 +194,9 @@ rossi validate --format sarif --output rossi.sarif ./my-project
 # Fail on advisory lints too, not just errors
 rossi validate --deny-warnings ./my-project
 
+# Also check whether the model suits a runtime translation (EB1xx)
+rossi validate --runtime crates/rossi/examples/base-model.zip
+
 # Name the analysis a SARIF run belongs to
 rossi validate --format sarif --sarif-category rossi ./my-project
 ```
@@ -224,6 +227,14 @@ Summary:
   }
 ]
 ```
+
+`--runtime` adds the EB1xx runtime-translation suitability checks, which ask
+whether a code generator, animator or trace checker could reproduce the model
+faithfully: they report constructs whose value the model leaves open and
+domains no terminating evaluation can cover. They run over the leaf machines
+and the contexts those see, and are off by default because well-proven Event-B
+routinely uses the constructs they name. Their INFO findings need
+`--show-info` as well.
 
 For `.eventb` files, `validate` parses the text and reports component results.
 For `.zip` archives, it also runs rossi-build semantic checks and advisory

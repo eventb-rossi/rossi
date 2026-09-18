@@ -9,10 +9,13 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme (`"EB001"`..`"EB034"`); the one gap
-/// is a rule removed as valueless (EB013 dead
-/// constant — every hit was already an EB006 typing Error). EB023, EB024,
-/// EB028, EB031 and EB034 are rossi-only extensions; EB025 is a refinement
+/// Codes use the stable `EBnnn` scheme: `"EB001"`..`"EB034"` for the
+/// validation rules, with one gap for a rule removed as valueless (EB013
+/// dead constant — every hit was already an EB006 typing Error), and
+/// `"EB100"`.. for the runtime-translation suitability rules of
+/// [`crate::runtime`], which `rossi validate --runtime` reports. EB023,
+/// EB024, EB028, EB031, EB034 and every EB1xx code are rossi-only
+/// extensions; EB025 is a refinement
 /// static-check emitted by `crate::build`; EB029, EB030 and EB032 are
 /// structural parse errors raised by the Camille grammar
 /// (`rossi::ParseError`), not by a check.
@@ -110,10 +113,25 @@ pub enum RuleId {
     /// precede (`SETS` below `AXIOMS`, say). rossi accepts it, as Rodin and
     /// CamilleX do; stock Camille does not. (rossi-only.)
     SectionOutOfOrder,
+
+    // Runtime-translation suitability (EB1xx). Reported by
+    // `crate::runtime` over the leaf machines and the contexts they see,
+    // and only when `rossi validate --runtime` asks for them.
+    /// EB100 — An ordinary event of a leaf machine chooses from a set
+    /// (`x :∈ S`) that is not a singleton, so the model does not say which
+    /// value a run takes. (rossi-only.)
+    BecomesMemberOfInEvent,
+    /// EB101 — An ordinary event of a leaf machine assigns by predicate
+    /// (`x :∣ P`) outside the form a translation can read a value from.
+    /// (rossi-only.)
+    NonCanonicalBecomesSuchThat,
+    /// EB102 — A leaf machine's INITIALISATION does not determine the
+    /// initial state, or reads a variable that has none yet. (rossi-only.)
+    NondeterministicInitialisation,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB034"`).
+    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB102"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -150,6 +168,9 @@ impl RuleId {
             RuleId::MissingLabel => "EB032",
             RuleId::PrimedDeclaredName => "EB033",
             RuleId::SectionOutOfOrder => "EB034",
+            RuleId::BecomesMemberOfInEvent => "EB100",
+            RuleId::NonCanonicalBecomesSuchThat => "EB101",
+            RuleId::NondeterministicInitialisation => "EB102",
         }
     }
 
@@ -190,6 +211,11 @@ impl RuleId {
             RuleId::MissingLabel => "Missing label",
             RuleId::PrimedDeclaredName => "Primed declared name",
             RuleId::SectionOutOfOrder => "Section out of order",
+            RuleId::BecomesMemberOfInEvent => "Nondeterministic choice in an event",
+            RuleId::NonCanonicalBecomesSuchThat => {
+                "Assignment by predicate is not in canonical form"
+            }
+            RuleId::NondeterministicInitialisation => "Initial state is not determined",
         }
     }
 
@@ -292,6 +318,15 @@ impl RuleId {
             RuleId::SectionOutOfOrder => {
                 "A context or machine writes a section after one it must precede — `SETS` below `AXIOMS`, `VARIABLES` below `INVARIANTS`. Rodin stores a component's children as an unordered set and cannot express an order, so rossi accepts any, but stock Camille fixes the order in its lexer and refuses to open the file (\"Set declarations are only allowed before the constants declarations\"). Run `rossi fmt -i` to reorder the sections."
             }
+            RuleId::BecomesMemberOfInEvent => {
+                "An ordinary event of a leaf machine assigns by choice from a set (`x :∈ S`) whose set is not a singleton. Event-B leaves the choice to the refinement; a runtime translation has to make it, and the model does not say which value to take, so two faithful translations can disagree on every run. Refine the action into a deterministic assignment, or narrow the set to one element. Only a singleton set is exempt: the choice is then certain."
+            }
+            RuleId::NonCanonicalBecomesSuchThat => {
+                "An ordinary event of a leaf machine assigns by predicate (`x :∣ P`) whose condition is not a disjunction of branches that each fix every assigned variable with one equality over its primed name (`x′ = E`). A translation reads the value out of those equalities; outside that form it has to solve the predicate, which needs a solver and may admit several solutions. Rewrite the condition as `(p₁ ∧ x′ = E₁) ∨ … ∨ (pₙ ∧ x′ = Eₙ)`, or refine the action into a deterministic assignment. A condition in that form with more than one branch is reported at INFO: the shape is recognised, but that the branches are exhaustive and mutually exclusive is not verified here."
+            }
+            RuleId::NondeterministicInitialisation => {
+                "A leaf machine's INITIALISATION does not pin the initial state: an action chooses from a non-singleton set, assigns by a predicate outside the canonical form, or reads a machine variable, which has no value before initialisation. A runtime translation must then be given the initial state from outside the model, and every consumer supplies it differently. Give each variable a deterministic initial value."
+            }
         }
     }
 
@@ -332,7 +367,10 @@ impl RuleId {
             | RuleId::ShadowedName
             | RuleId::KeywordName
             | RuleId::NonPortableWhitespace
-            | RuleId::SectionOutOfOrder => Severity::Warning,
+            | RuleId::SectionOutOfOrder
+            | RuleId::BecomesMemberOfInEvent
+            | RuleId::NonCanonicalBecomesSuchThat
+            | RuleId::NondeterministicInitialisation => Severity::Warning,
         }
     }
 
@@ -394,6 +432,9 @@ impl RuleId {
             RuleId::MissingLabel,
             RuleId::PrimedDeclaredName,
             RuleId::SectionOutOfOrder,
+            RuleId::BecomesMemberOfInEvent,
+            RuleId::NonCanonicalBecomesSuchThat,
+            RuleId::NondeterministicInitialisation,
         ]
     }
 }
@@ -442,6 +483,9 @@ mod tests {
         assert_eq!(RuleId::MissingLabel.code(), "EB032");
         assert_eq!(RuleId::PrimedDeclaredName.code(), "EB033");
         assert_eq!(RuleId::SectionOutOfOrder.code(), "EB034");
+        assert_eq!(RuleId::BecomesMemberOfInEvent.code(), "EB100");
+        assert_eq!(RuleId::NonCanonicalBecomesSuchThat.code(), "EB101");
+        assert_eq!(RuleId::NondeterministicInitialisation.code(), "EB102");
     }
 
     /// `all()` is a hand-maintained array with no exhaustiveness check, unlike
@@ -453,9 +497,11 @@ mod tests {
     /// order also subsumes the uniqueness and length checks.
     #[test]
     fn all_lists_every_rule() {
-        // `EB001`..`EB034` minus the one documented gap (EB013).
+        // `EB001`..`EB034` minus the one documented gap (EB013), then the
+        // runtime-translation block `EB100`..`EB102`.
         let expected: Vec<String> = (1..=34)
             .filter(|n| *n != 13)
+            .chain(100..=102)
             .map(|n| format!("EB{n:03}"))
             .collect();
         let listed: Vec<&str> = RuleId::all().iter().map(|r| r.code()).collect();

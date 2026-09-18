@@ -38,6 +38,7 @@ pub mod proofs;
 pub mod repack;
 pub mod rodin_ids;
 pub mod rules;
+pub mod runtime;
 pub mod sc_model;
 pub mod sc_view;
 pub mod type_env;
