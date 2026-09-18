@@ -1278,6 +1278,7 @@ impl PrettyPrinter {
 // a declaration keeps its hint unless a name visible in its body would
 // be captured, in which case it is freshened.
 
+use crate::formula::extension::Notation;
 use crate::formula::tag::{
     AssocExprOp, AssocPredOp, AtomicOp, BinaryExprOp, BinaryPredOp, LiteralPredOp, QuantExprOp,
     QuantPredOp, RelationalOp, UnaryExprOp,
@@ -1377,6 +1378,18 @@ fn effective_binary(kind: &FExprKind) -> Option<BinaryOp> {
         FExprKind::Associative { op, .. } => Some(legacy_assoc(*op)),
         FExprKind::Ascription { .. } => Some(BinaryOp::OfType),
         _ => None,
+    }
+}
+
+/// Whether an expression is an extension operator printed in infix notation
+/// (`a sym b`), the one extension form with a precedence of its own.
+fn is_infix_extended(expr: &formula::Expression) -> bool {
+    match expr.kind() {
+        FExprKind::Extended { tag, .. } => expr
+            .factory()
+            .extension(*tag)
+            .is_some_and(|ext| ext.common().kind().notation == Notation::Infix),
+        _ => false,
     }
 }
 
@@ -1597,7 +1610,7 @@ impl PrettyPrinter {
             } => {
                 let left = self.visible_expr(left);
                 let mut applied = self.fm_expr(left, context, names);
-                if Self::fm_parens_for_image(left.kind()) {
+                if Self::fm_parens_for_image(left) {
                     applied = format!("({applied})");
                 }
                 let argument = self.fm_expr(right, context, names);
@@ -1849,6 +1862,12 @@ impl PrettyPrinter {
         if fm_above_pair(child.kind()) || self.rodin_parenthesizes_operand(child.kind()) {
             return true;
         }
+        // An infix extension operand binds looser than every core binary
+        // operator except the pair constructor, whose level sits just below
+        // the extension group.
+        if is_infix_extended(child) {
+            return parent_op != BinaryOp::Maplet;
+        }
         // A nested child of the same associative operator keeps its
         // parentheses on either side, as in Rodin (`(A∪B)∪C`): the parser
         // flattens a left-nested chain, so one that reaches the printer was
@@ -1900,8 +1919,8 @@ impl PrettyPrinter {
 
     /// Mirror of the relational-image / application head rule: binary
     /// and prefix-unary operands bind looser than `f(x)` / `r[S]`.
-    fn fm_parens_for_image(kind: &FExprKind) -> bool {
-        match kind {
+    fn fm_parens_for_image(expr: &formula::Expression) -> bool {
+        match expr.kind() {
             FExprKind::Unary {
                 op: UnaryExprOp::Converse,
                 ..
@@ -1925,6 +1944,8 @@ impl PrettyPrinter {
             | FExprKind::Unary { .. } => true,
             // The binder forms follow the pair-level rule.
             kind @ FExprKind::Quantified { .. } => fm_above_pair(kind),
+            // An infix extension node binds looser than an application.
+            FExprKind::Extended { .. } => is_infix_extended(expr),
             _ => false,
         }
     }
@@ -2150,19 +2171,64 @@ impl PrettyPrinter {
         context: FormulaContext,
         names: &mut Vec<String>,
     ) -> String {
-        let symbol = factory
-            .extension(tag)
-            .map(|ext| ext.common().symbol().to_string())
-            .unwrap_or_else(|| format!("[[ext:{tag}]]"));
+        let extension = factory.extension(tag).map(|ext| ext.common());
+        let fallback;
+        let symbol: &str = match extension {
+            Some(ext) => ext.symbol(),
+            None => {
+                fallback = format!("[[ext:{tag}]]");
+                &fallback
+            }
+        };
+        // An infix operator joins its operands by the symbol; the word needs
+        // its spaces in every mode, like the word-spelled core operators.
+        if extension.is_some_and(|ext| ext.kind().notation == Notation::Infix) {
+            let mut out = String::new();
+            for (i, operand) in exprs.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                    out.push_str(symbol);
+                    out.push(' ');
+                }
+                out.push_str(&self.fm_infix_operand(operand, context, names));
+            }
+            return out;
+        }
         let mut args: Vec<String> = exprs
             .iter()
             .map(|e| self.fm_expr(e, context, names))
             .collect();
         args.extend(preds.iter().map(|p| self.fm_pred(p, context, names)));
         if args.is_empty() {
-            symbol
+            symbol.to_string()
         } else {
             format!("{}({})", symbol, args.join(self.comma_separator()))
+        }
+    }
+
+    /// An operand of an infix extension operator, parenthesised when its own
+    /// operator binds looser than, or is incompatible with, the extension
+    /// group: everything the head of an application is parenthesised for
+    /// ([`Self::fm_parens_for_image`]), except that only the unary minus
+    /// among the prefix forms needs it, plus a negative literal. This mirrors the
+    /// parser's operand rule, so the text re-parses to the same tree.
+    fn fm_infix_operand(
+        &self,
+        operand: &formula::Expression,
+        context: FormulaContext,
+        names: &mut Vec<String>,
+    ) -> String {
+        let text = self.fm_expr(operand, context, names);
+        let visible = self.visible_expr(operand);
+        let needs_parens = match visible.kind() {
+            FExprKind::Unary { op, .. } => *op == UnaryExprOp::UnMinus,
+            FExprKind::IntegerLiteral(value) => value.sign() == num_bigint::Sign::Minus,
+            _ => Self::fm_parens_for_image(visible),
+        };
+        if needs_parens {
+            format!("({text})")
+        } else {
+            text
         }
     }
 
@@ -2592,7 +2658,7 @@ impl PrettyPrinter {
             } => {
                 let left = self.visible_expr(left);
                 let mut applied = self.fm_expr(left, context, names);
-                if Self::fm_parens_for_image(left.kind()) {
+                if Self::fm_parens_for_image(left) {
                     applied = format!("({applied})");
                 }
                 let inner_col = col + applied.chars().count() + 1;
