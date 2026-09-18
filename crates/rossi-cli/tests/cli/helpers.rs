@@ -290,3 +290,24 @@ pub fn run_cli_with_stdin(args: &[&str], stdin_data: &str) -> std::process::Outp
     // `wait_with_output` closes stdin (signalling EOF) before collecting output.
     child.wait_with_output().expect("wait for rossi-cli")
 }
+
+/// A machine whose only defect is a nondeterministic choice in an ordinary
+/// event: EB100, a runtime-translation warning, with nothing else to raise a
+/// warning of any kind. Used to isolate the `--runtime` exit-code behaviour
+/// from the bundled examples, which carry broken proofs of their own.
+pub fn runtime_fixture_dir(prefix: &str) -> PathBuf {
+    const MACHINE: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_x" org.eventb.core.identifier="x"/>
+<org.eventb.core.invariant name="_type" org.eventb.core.label="type" org.eventb.core.predicate="x ∈ 0 ‥ 9"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_init_action" org.eventb.core.assignment="x ≔ 0" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+<org.eventb.core.event name="_pick" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="pick">
+<org.eventb.core.action name="_pick_action" org.eventb.core.assignment="x :∈ 0 ‥ 9" org.eventb.core.label="act1"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+    let tmp = tempdir_unique(prefix);
+    std::fs::write(tmp.join("Pick.bum"), MACHINE).unwrap();
+    tmp
+}

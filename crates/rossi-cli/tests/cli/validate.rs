@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::helpers::{
     DUP_VARIABLE_MACHINE, lint_fixture_dir, lint_fixture_zip, project_descriptor, rossi_command,
-    run_cli_with_stdin, tempdir_unique, wd_fixture_dir, write_zip,
+    run_cli_with_stdin, runtime_fixture_dir, tempdir_unique, wd_fixture_dir, write_zip,
 };
 
 #[test]
@@ -2000,4 +2000,200 @@ fn assert_validate_zip_json_contains_rule(
     );
 
     std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// `--runtime` is opt-in, and has to stay that way: the rules fire on
+/// well-proven models, so turning them on by default would change what
+/// `--deny-warnings` gates on in every existing CI job.
+#[test]
+fn validate_runtime_checks_are_opt_in() {
+    let model = "../rossi/examples/file-system.zip";
+
+    let off = rossi_command()
+        .args(["validate", model])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&off.stdout);
+    assert!(off.status.success());
+    assert!(
+        !stdout.contains("[EB104]") && !stdout.contains("[EB106]"),
+        "no runtime finding without the flag: {stdout}"
+    );
+
+    let on = rossi_command()
+        .args(["validate", "--runtime", model])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&on.stdout);
+    assert!(
+        on.status.success(),
+        "the findings are advisory, so the run still passes"
+    );
+    assert!(
+        stdout.contains("[EB104]") && stdout.contains("[EB106]"),
+        "the flag reports the warnings: {stdout}"
+    );
+    assert!(
+        stdout.contains("bound variable `n`"),
+        "the message names what could not be verified: {stdout}"
+    );
+}
+
+/// The pass emits both severities in one walk, so `--runtime` alone shows
+/// the half a translation certainly cannot read, and `--show-info` widens it
+/// to the advisory half. Neither is promoted by `--deny-warnings` beyond the
+/// severity it already carries.
+#[test]
+fn validate_runtime_info_findings_need_show_info() {
+    let model = "../rossi/examples/file-system.zip";
+
+    let warnings_only = rossi_command()
+        .args(["validate", "--runtime", model])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&warnings_only.stdout);
+    assert!(
+        !stdout.contains("[EB103]"),
+        "INFO findings stay hidden: {stdout}"
+    );
+
+    let everything = rossi_command()
+        .args(["validate", "--runtime", "--show-info", model])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&everything.stdout);
+    assert!(
+        stdout.contains("[EB103]") && stdout.contains("[EB111]"),
+        "--show-info adds the advisory half: {stdout}"
+    );
+}
+
+/// `--deny-warnings` is what a CI job would gate on, so the warning half has
+/// to reach it — and the INFO half must not. Both directions are checked on
+/// a fixture whose only defect is a runtime one; the bundled examples carry
+/// broken proofs, which would fail the gate whatever this pass reports.
+#[test]
+fn validate_runtime_warnings_reach_deny_warnings() {
+    let tmp = runtime_fixture_dir("rossi-cli-runtime-deny");
+
+    let without = rossi_command()
+        .args(["validate", "--deny-warnings", tmp.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        without.status.success(),
+        "the fixture raises no warning of any other kind: {}",
+        String::from_utf8_lossy(&without.stdout)
+    );
+
+    let with = rossi_command()
+        .args([
+            "validate",
+            "--runtime",
+            "--deny-warnings",
+            tmp.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&with.stdout);
+    assert_eq!(with.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("[EB100]"), "{stdout}");
+
+    // The same run without the gate reports the finding and still passes.
+    let advisory = rossi_command()
+        .args(["validate", "--runtime", tmp.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute command");
+    assert!(advisory.status.success());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// INFO findings are advisory whatever else is asked for: `--deny-warnings`
+/// never promotes them.
+#[test]
+fn validate_runtime_info_is_never_denied() {
+    let output = rossi_command()
+        .args([
+            "validate",
+            "--runtime",
+            "--show-info",
+            "--format",
+            "json",
+            "../rossi/examples/traffic-light.zip",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).expect("JSON output should be valid");
+    let eb112 = rows
+        .iter()
+        .find(|row| row["rule_id"] == "EB112")
+        .expect("EB112 row");
+    assert_eq!(eb112["severity"], "info");
+    assert_eq!(eb112["success"], true);
+}
+
+/// Loose text has no project, but a single file is enough for the rules that
+/// read one component.
+#[test]
+fn validate_runtime_runs_on_a_loose_file() {
+    let output = rossi_command()
+        .args([
+            "validate",
+            "--runtime",
+            "--show-info",
+            "../rossi/examples/refinement_abstract.eventb",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(
+        stdout.contains("[EB101]") && stdout.contains("abstract_state"),
+        "the such-that action is reported: {stdout}"
+    );
+    assert!(
+        stdout.contains(":26:"),
+        "and positioned in the file: {stdout}"
+    );
+}
+
+/// Every runtime rule needs a SARIF descriptor, or a consumer rejects the
+/// run for naming a rule it was not told about.
+#[test]
+fn validate_sarif_describes_every_runtime_rule() {
+    let output = rossi_command()
+        .args([
+            "validate",
+            "--runtime",
+            "--show-info",
+            "--format",
+            "sarif",
+            "../rossi/examples/file-system.zip",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("SARIF output should be valid");
+    let rules: Vec<&str> = doc["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .expect("rules array")
+        .iter()
+        .filter_map(|rule| rule["id"].as_str())
+        .collect();
+    for code in [
+        "EB100", "EB101", "EB102", "EB103", "EB104", "EB105", "EB106", "EB107", "EB108", "EB109",
+        "EB110", "EB111", "EB112", "EB113",
+    ] {
+        assert!(rules.contains(&code), "{code} has no SARIF descriptor");
+    }
+
+    let eb104 = doc["runs"][0]["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .find(|result| result["ruleId"] == "EB104")
+        .expect("EB104 is reported");
+    assert_eq!(eb104["level"], "warning");
 }
