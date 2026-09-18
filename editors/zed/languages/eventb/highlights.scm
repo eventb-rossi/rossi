@@ -123,6 +123,9 @@
   ":∣"
 ] @operator
 
+; A user-defined infix operator is a word; it is an operator nonetheless.
+(infix_operator) @operator
+
 ; The closed operator words that are functions rather than relational
 ; operators; `dom`/`ran` sit with the operators above.
 [
@@ -143,6 +146,10 @@
   (bool_set)
   (empty_set)
 ] @constant.builtin
+
+; The number-set glyphs are tokens of their own (their ASCII spellings alias
+; to them), so they are captured as tokens as well as through their nodes.
+["ℤ" "ℕ" "ℕ1"] @constant.builtin
 
 (builtin) @function.builtin
 
