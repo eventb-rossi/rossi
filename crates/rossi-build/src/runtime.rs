@@ -56,6 +56,8 @@ pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
         check_parameters(machine, &scope, &mut diags);
     }
     check_formulas(&scope, &mut diags);
+    check_contexts(&scope, &mut diags);
+    check_integers(&scope, &mut diags);
 
     diags
 }
@@ -70,8 +72,12 @@ pub fn run(project: &Project, model: &ScModel) -> Vec<Diagnostic> {
 /// model's `HashMap` order, so a run's diagnostics come out in a stable
 /// sequence.
 struct Scope<'a> {
+    model: &'a ScModel,
     machines: Vec<&'a CheckedMachine>,
     contexts: Vec<&'a CheckedContext>,
+    /// Every axiom conjunct visible in the scope, in context then source
+    /// order. Several rules read the same axioms; they are flattened once.
+    axioms: Vec<&'a Predicate>,
     /// Carrier sets a visible axiom gives a finite cardinality. The type
     /// alone never says so: a given set may be infinite.
     finite_sets: BTreeSet<String>,
@@ -127,19 +133,40 @@ impl<'a> Scope<'a> {
             contexts.push(context);
         }
 
-        let finite_sets = contexts
+        let axioms: Vec<&Predicate> = contexts
             .iter()
             .flat_map(|context| context.record.axioms.iter())
             .flat_map(|axiom| conjuncts(&axiom.typed))
-            .filter_map(finitely_bounded_set)
+            .collect();
+        let finite_sets = axioms
+            .iter()
+            .filter_map(|axiom| finitely_bounded_set(axiom))
             .map(str::to_string)
             .collect();
 
         Self {
+            model,
             machines,
             contexts,
+            axioms,
             finite_sets,
         }
+    }
+
+    /// Every invariant that constrains `machine`'s state: those it inherits
+    /// from its refinement ancestors, oldest first, then its own.
+    ///
+    /// A refinement keeps an abstract variable's constraints without
+    /// restating them, so reading only the machine's own invariants would
+    /// report an inherited variable as unconstrained when its bound is one
+    /// level up.
+    fn invariants(&self, machine: &'a CheckedMachine) -> Vec<&'a Predicate> {
+        self.model
+            .inherited_invariants(machine)
+            .into_iter()
+            .chain(machine.record.invariants.iter())
+            .flat_map(|invariant| conjuncts(&invariant.typed))
+            .collect()
     }
 
     /// Whether every value of `ty` can be enumerated: the structural test
@@ -180,16 +207,22 @@ fn finitely_bounded_set(pred: &Predicate) -> Option<&str> {
 /// What an axiom says about the members of a set, when it lists them.
 ///
 /// Two spellings list members: `partition(S, {a}, {b})` and `S = {a, b}`.
-/// They carry the same information about the set being finite; which one a
-/// model uses is a matter of style, and every rule that reads one reads the
-/// other through this.
+/// They carry the same information about which constants are elements and
+/// about the set being finite; which one a model uses is a matter of style,
+/// and every rule that reads one reads the other through this. They differ
+/// in one respect only, recorded in `disjoint`.
 struct Listing<'a> {
     /// The set listed — a carrier set or a set-valued constant.
     set: &'a Expression,
+    /// Constants the axiom names as single elements.
+    named: Vec<&'a str>,
     /// Whether every block is a literal set extension, so that the whole set
     /// is finite. `partition(S, A, B)` splits `S` in two without bounding
     /// either half and says nothing about its size.
     finite: bool,
+    /// Whether the named constants are known to differ. A partition's blocks
+    /// are disjoint by definition; an enumeration's members may coincide.
+    disjoint: bool,
 }
 
 fn listing(pred: &Predicate) -> Option<Listing<'_>> {
@@ -198,9 +231,19 @@ fn listing(pred: &Predicate) -> Option<Listing<'_>> {
             let (set, blocks) = exprs.split_first()?;
             Some(Listing {
                 set,
+                named: blocks
+                    .iter()
+                    .filter_map(|block| match block.kind() {
+                        ExpressionKind::SetExtension(members) if members.len() == 1 => {
+                            free_identifier(&members[0])
+                        }
+                        _ => None,
+                    })
+                    .collect(),
                 finite: blocks
                     .iter()
                     .all(|block| matches!(block.kind(), ExpressionKind::SetExtension(_))),
+                disjoint: true,
             })
         }
         PredicateKind::Relational {
@@ -210,10 +253,15 @@ fn listing(pred: &Predicate) -> Option<Listing<'_>> {
         } => [(left, right), (right, left)]
             .into_iter()
             .find_map(|(set, members)| {
-                let ExpressionKind::SetExtension(_) = members.kind() else {
+                let ExpressionKind::SetExtension(members) = members.kind() else {
                     return None;
                 };
-                Some(Listing { set, finite: true })
+                Some(Listing {
+                    set,
+                    named: members.iter().filter_map(free_identifier).collect(),
+                    finite: true,
+                    disjoint: false,
+                })
             }),
         _ => None,
     }
@@ -1272,4 +1320,397 @@ fn expression_children(expr: &Expression) -> (Vec<&Predicate>, Vec<&Expression>)
             (preds.iter().collect(), exprs.iter().collect())
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// EB107, EB108, EB109 — what the contexts leave open
+// ---------------------------------------------------------------------
+
+/// EB108 and EB109 over the contexts the leaf machines see.
+fn check_contexts(scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    check_constant_definitions(scope, diags);
+    check_carrier_set_constants(scope, diags);
+}
+
+/// EB108 — every constant a visible axiom does not pin to a value.
+///
+/// A definition may name other constants, so this is a reachability question
+/// over the definition graph rather than a per-axiom test: `SIZE = WIDTH *
+/// HEIGHT` determines `SIZE` exactly when `WIDTH` and `HEIGHT` are
+/// themselves determined. A cycle never reaches a fixed point and is
+/// reported like any other unmet dependency, naming what the definition
+/// waits on.
+fn check_constant_definitions(scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    let constants: BTreeSet<&str> = scope
+        .contexts
+        .iter()
+        .flat_map(|context| context.record.constants.iter())
+        .map(|constant| constant.name.as_str())
+        .collect();
+    if constants.is_empty() {
+        return;
+    }
+    fn constant_name<'e>(expr: &'e Expression, constants: &BTreeSet<&str>) -> Option<&'e str> {
+        free_identifier(expr).filter(|name| constants.contains(name))
+    }
+
+    // Alternative definitions per constant, each carrying what it depends
+    // on. Several axioms may define one constant; any one of them suffices.
+    let mut definitions: BTreeMap<&str, Vec<BTreeSet<&str>>> = BTreeMap::new();
+    let mut finite_constants: BTreeSet<&str> = BTreeSet::new();
+    let mut sized_constants: BTreeSet<&str> = BTreeSet::new();
+
+    for axiom in &scope.axioms {
+        collect_definitions(axiom, &constants, &mut definitions);
+        // `finite(c)` and `card(c) = n` together bound a set-valued constant
+        // without naming its members, which is the shape the cardinality
+        // restriction asks for.
+        match axiom.kind() {
+            PredicateKind::Simple(expr) => {
+                finite_constants.extend(constant_name(expr, &constants));
+            }
+            PredicateKind::Relational {
+                op: RelationalOp::Equal,
+                left,
+                right,
+            } => {
+                for side in [left, right] {
+                    sized_constants
+                        .extend(card_operand(side).and_then(|set| constant_name(set, &constants)));
+                }
+            }
+            _ => {}
+        }
+    }
+    for name in finite_constants.intersection(&sized_constants) {
+        definitions.entry(name).or_default().push(BTreeSet::new());
+    }
+
+    // Least fixed point: start with nothing determined and keep admitting
+    // constants all of whose dependencies are already determined.
+    let mut determined: BTreeSet<&str> = BTreeSet::new();
+    loop {
+        let mut grew = false;
+        for (name, alternatives) in &definitions {
+            if determined.contains(name) {
+                continue;
+            }
+            let settled = alternatives.iter().any(|deps| {
+                deps.iter()
+                    // A name that is not a constant is a carrier set or a
+                    // literal: nothing to determine.
+                    .all(|dep| !constants.contains(dep) || determined.contains(dep))
+            });
+            if settled {
+                determined.insert(name);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    for context in &scope.contexts {
+        for constant in &context.record.constants {
+            let name = constant.name.as_str();
+            if determined.contains(name) {
+                continue;
+            }
+            let waiting: Vec<&str> = definitions
+                .get(name)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|dep| constants.contains(*dep) && !determined.contains(*dep))
+                .copied()
+                .collect();
+            let message = if waiting.is_empty() {
+                format!(
+                    "Could not verify the value of constant `{name}`: no axiom of the form `{name} = …`, and no `partition` block or `finite` plus `card` pair naming it"
+                )
+            } else {
+                format!(
+                    "Could not verify the value of constant `{name}`: its defining axiom waits on {}, which {} not determined either",
+                    quoted_list(&waiting),
+                    if waiting.len() == 1 { "is" } else { "are" }
+                )
+            };
+            diags.push(Diagnostic {
+                severity: RuleId::UndeterminedConstant.default_severity(),
+                origin: format!("{}.{name}", context.name()),
+                message,
+                rule_id: Some(RuleId::UndeterminedConstant),
+                span: None,
+            });
+        }
+    }
+}
+
+/// Record what each constant this conjunct defines depends on.
+///
+/// A listing fixes each constant it names outright: a partition's blocks
+/// are disjoint, so its singleton constants are determined up to naming
+/// whatever set is split, and an enumeration of a carrier set names the
+/// whole universe. An enumeration of a set-valued constant only says who its
+/// members are and defines the constant itself, through the equality. An
+/// equality defines the constant on one side in terms of the other.
+fn collect_definitions<'a>(
+    pred: &'a Predicate,
+    constants: &BTreeSet<&str>,
+    out: &mut BTreeMap<&'a str, Vec<BTreeSet<&'a str>>>,
+) {
+    if let Some(listing) = listing(pred)
+        && (listing.disjoint || carrier_set_name(listing.set).is_some())
+    {
+        for name in listing.named {
+            if constants.contains(name) {
+                out.entry(name).or_default().push(BTreeSet::new());
+            }
+        }
+    }
+    if let PredicateKind::Relational {
+        op: RelationalOp::Equal,
+        left,
+        right,
+    } = pred.kind()
+    {
+        define_from_equality(left, right, constants, out);
+    }
+}
+
+/// Record the definitions an equality between `target` and `value` yields.
+///
+/// A maplet equality is a pair of equalities written as one, so
+/// `a ↦ b = 2 ↦ TRUE` defines `a` and `b` separately. The two sides are
+/// walked together and each leaf pair is read in both orientations, since
+/// which side names the constant is a matter of spelling.
+fn define_from_equality<'a>(
+    target: &'a Expression,
+    value: &'a Expression,
+    constants: &BTreeSet<&str>,
+    out: &mut BTreeMap<&'a str, Vec<BTreeSet<&'a str>>>,
+) {
+    if let (
+        ExpressionKind::Binary {
+            op: BinaryExprOp::Mapsto,
+            left: target_left,
+            right: target_right,
+        },
+        ExpressionKind::Binary {
+            op: BinaryExprOp::Mapsto,
+            left: value_left,
+            right: value_right,
+        },
+    ) = (target.kind(), value.kind())
+    {
+        define_from_equality(target_left, value_left, constants, out);
+        define_from_equality(target_right, value_right, constants, out);
+        return;
+    }
+
+    for (defined, definition) in [(target, value), (value, target)] {
+        let Some(name) = free_identifier(defined) else {
+            continue;
+        };
+        if !constants.contains(name) {
+            continue;
+        }
+        // A self-reference is not a definition: `c = c + 1` determines
+        // nothing, and admitting it would let a cycle look settled.
+        if definition
+            .free_identifiers()
+            .iter()
+            .any(|free| free == name)
+        {
+            continue;
+        }
+        let deps = definition
+            .free_identifiers()
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<&str>>();
+        out.entry(name).or_default().push(deps);
+    }
+}
+
+/// EB109 — pairs of same-carrier-set constants no axiom tells apart.
+fn check_carrier_set_constants(scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    // Group by carrier set, keeping the declaring context so each finding
+    // can be filed where the constants are written.
+    let mut groups: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for context in &scope.contexts {
+        for constant in &context.record.constants {
+            if let Type::Given(set) = &constant.ty {
+                groups
+                    .entry(set.as_str())
+                    .or_default()
+                    .push((context.name(), constant.name.as_str()));
+            }
+        }
+    }
+    if groups.values().all(|members| members.len() < 2) {
+        return;
+    }
+
+    // One pass over the axioms answers every pair: which constants a
+    // `partition` of each set gives a block of their own — a `partition`
+    // relates every pair at once, which is why models with four constants
+    // write one predicate instead of six inequalities — and which pairs an
+    // axiom relates by `=` or `≠` outright.
+    let mut partitioned: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut related: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for axiom in &scope.axioms {
+        if let Some(listing) = listing(axiom)
+            && listing.disjoint
+            && let Some(set) = carrier_set_name(listing.set)
+        {
+            partitioned.entry(set).or_default().extend(listing.named);
+        }
+        if let Some((first, second)) = related_pair(axiom) {
+            related.insert((first.min(second), first.max(second)));
+        }
+    }
+
+    for (set, members) in groups {
+        let partitioned = partitioned.get(set);
+        for (index, (context, first)) in members.iter().enumerate() {
+            for (_, second) in &members[index + 1..] {
+                if partitioned.is_some_and(|names| names.contains(first) && names.contains(second))
+                {
+                    continue;
+                }
+                if related.contains(&(*first.min(second), *first.max(second))) {
+                    continue;
+                }
+                diags.push(Diagnostic {
+                    severity: RuleId::IndistinctCarrierSetConstants.default_severity(),
+                    origin: format!("{context}.{first}"),
+                    message: format!(
+                        "Could not verify whether `{first}` and `{second}` denote different elements of `{set}`: no axiom relates them by `=` or `≠`, and no `partition` of `{set}` names both"
+                    ),
+                    rule_id: Some(RuleId::IndistinctCarrierSetConstants),
+                    span: None,
+                });
+            }
+        }
+    }
+}
+
+/// The two identifiers this conjunct states to be equal or different.
+fn related_pair(pred: &Predicate) -> Option<(&str, &str)> {
+    let PredicateKind::Relational {
+        op: RelationalOp::Equal | RelationalOp::NotEqual,
+        left,
+        right,
+    } = pred.kind()
+    else {
+        return None;
+    };
+    Some((free_identifier(left)?, free_identifier(right)?))
+}
+
+// ---------------------------------------------------------------------
+// EB107 — unbounded integer
+// ---------------------------------------------------------------------
+
+/// Report every integer identifier whose only constraints give it its type.
+///
+/// Reported at INFO: an unbounded integer is usually harmless, it becomes a
+/// machine integer and only matters at the edges. The edges are where the
+/// surveyed translations differ from each other, which is why it is reported
+/// at all.
+fn check_integers(scope: &Scope, diags: &mut Vec<Diagnostic>) {
+    for context in &scope.contexts {
+        for constant in &context.record.constants {
+            if constant.ty != Type::Int {
+                continue;
+            }
+            if bounded(&constant.name, &scope.axioms) {
+                continue;
+            }
+            diags.push(integer_diagnostic(
+                format!("{}.{}", context.name(), constant.name),
+                &constant.name,
+                "constant",
+            ));
+        }
+    }
+
+    for machine in &scope.machines {
+        let invariants = scope.invariants(machine);
+        for variable in &machine.record.variables {
+            if variable.ty != Type::Int {
+                continue;
+            }
+            if bounded(&variable.name, &invariants) {
+                continue;
+            }
+            diags.push(integer_diagnostic(
+                format!("{}.{}", machine.name(), variable.name),
+                &variable.name,
+                "variable",
+            ));
+        }
+
+        for event in &machine.record.events {
+            let guards: Vec<&Predicate> = event_guards(event)
+                .flat_map(|(_, guard)| conjuncts(&guard.typed))
+                .collect();
+            for parameter in event.chain_parameters() {
+                if parameter.ty != Type::Int || bounded(&parameter.name, &guards) {
+                    continue;
+                }
+                diags.push(integer_diagnostic(
+                    format!("{}.{}/{}", machine.name(), event.label, parameter.name),
+                    &parameter.name,
+                    "parameter",
+                ));
+            }
+        }
+    }
+}
+
+fn integer_diagnostic(origin: String, name: &str, kind: &str) -> Diagnostic {
+    Diagnostic {
+        severity: RuleId::UnboundedInteger.default_severity(),
+        origin,
+        message: format!(
+            "Could not verify a range for integer {kind} `{name}`: its only constraints give it its type, so the width a translation gives it is not the model's choice"
+        ),
+        rule_id: Some(RuleId::UnboundedInteger),
+        span: None,
+    }
+}
+
+/// Whether anything among `constraints` says more about `name` than that it
+/// is an integer.
+///
+/// A typing conjunct over `ℤ`, `ℕ` or `ℕ1` is exactly the declaration Rodin
+/// requires and says nothing about range; `ℕ` bounds one end and is counted
+/// as typing for that reason. Anything else that mentions the name at all —
+/// an interval membership, a comparison, an equality — is treated as a
+/// bound, deliberately generously: this rule guesses at intent, and the
+/// costly mistake is the false positive.
+fn bounded(name: &str, constraints: &[&Predicate]) -> bool {
+    constraints
+        .iter()
+        .filter(|constraint| {
+            constraint
+                .free_identifiers()
+                .iter()
+                .any(|free| free == name)
+        })
+        .any(|constraint| !is_integer_typing(constraint, name))
+}
+
+fn is_integer_typing(pred: &Predicate, name: &str) -> bool {
+    let Some((typed_name, bound)) = crate::lint::typing_conjunct(pred) else {
+        return false;
+    };
+    typed_name == name
+        && matches!(
+            bound.kind(),
+            ExpressionKind::Atomic(AtomicOp::Integer | AtomicOp::Natural | AtomicOp::Natural1)
+        )
 }

@@ -36,6 +36,11 @@ fn codes(diags: &[Diagnostic]) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// The origins of an already-filtered finding list.
+fn origins<'a>(diags: &[&'a Diagnostic]) -> Vec<&'a str> {
+    diags.iter().map(|d| d.origin.as_str()).collect()
+}
+
 fn only(diags: &[Diagnostic], rule: RuleId) -> Vec<&Diagnostic> {
     diags.iter().filter(|d| d.rule_id == Some(rule)).collect()
 }
@@ -48,7 +53,7 @@ const CTX: &str = "context C\nconstants n\naxioms\n    @a1 n = 5\nend\n";
 
 #[test]
 fn eb100_flags_set_choice_in_an_ordinary_event() {
-    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ 0 ‥ n\nend\nend\n";
     let diags = findings(&[("C.eventb", CTX), ("M.eventb", machine)]);
@@ -65,7 +70,7 @@ fn eb100_flags_set_choice_in_an_ordinary_event() {
 
 #[test]
 fn eb100_exempts_a_singleton_set() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ {3}\nend\nend\n";
     assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
@@ -75,10 +80,10 @@ fn eb100_exempts_a_singleton_set() {
 fn eb100_stays_silent_on_an_abstract_machine() {
     // The pass checks the machine a translation consumes. `M0` is refined by
     // `M1`, so its `:∈` is an abstraction that `M1` has already resolved.
-    let abstract_machine = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let abstract_machine = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ 0 ‥ 9\nend\nend\n";
-    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step refines step\n  then\n    @act1 x ≔ 4\nend\nend\n";
     let diags = findings(&[("M0.eventb", abstract_machine), ("M1.eventb", leaf)]);
@@ -91,7 +96,7 @@ fn eb100_stays_silent_on_an_abstract_machine() {
 
 #[test]
 fn eb101_flags_a_condition_that_only_constrains() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∣ x' > x\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -107,7 +112,7 @@ fn eb101_flags_a_condition_that_only_constrains() {
 
 #[test]
 fn eb101_is_silent_on_a_single_determining_equality() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∣ x' = x + 1\nend\nend\n";
     assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
@@ -115,7 +120,7 @@ fn eb101_is_silent_on_a_single_determining_equality() {
 
 #[test]
 fn eb101_reports_unverified_branch_conditions_at_info() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∣ (x > 0 ∧ x' = 1) ∨ (x ≤ 0 ∧ x' = 2)\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -140,7 +145,7 @@ fn eb101_reports_unverified_branch_conditions_at_info() {
 fn eb101_rejects_a_branch_that_leaves_a_variable_open() {
     // The second branch fixes `x` but only bounds `y`, so a translation
     // taking it still has to choose.
-    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ ℤ\n    @i2 y ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 y ≔ 0\nend\n\
         event step\n  then\n    @act1 x, y :∣ (x > 0 ∧ x' = 1 ∧ y' = 2) ∨ (x ≤ 0 ∧ x' = 3 ∧ y' > 0)\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -152,7 +157,7 @@ fn eb101_rejects_a_branch_that_leaves_a_variable_open() {
 fn eb101_rejects_an_after_state_read_on_the_defining_side() {
     // `x' = y' + 1` defines `x'` in terms of another after-state value, which
     // is a simultaneous constraint, not a value to read off.
-    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ ℤ\n    @i2 y ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\n    @act2 y ≔ 0\nend\n\
         event step\n  then\n    @act1 x, y :∣ x' = y' + 1 ∧ y' = 2\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -166,7 +171,7 @@ fn eb101_rejects_an_after_state_read_on_the_defining_side() {
 
 #[test]
 fn eb102_flags_set_choice_in_initialisation() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x :∈ 0 ‥ 9\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
     assert_eq!(codes(&diags), vec![("EB102", "M.INITIALISATION/act1")]);
@@ -197,7 +202,7 @@ fn eb102_flags_a_read_of_the_variable_being_assigned() {
 fn eb102_flags_a_read_of_uninitialised_state() {
     // `y` has no value yet, so `x`'s initial value is whatever the
     // translation leaves in the slot.
-    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ ℤ\n    @i2 y ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\n    y\ninvariants\n    @i1 x ∈ 0 ‥ 9\n    @i2 y ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ y + 1\n    @act2 y ≔ 0\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
     assert_eq!(codes(&diags), vec![("EB102", "M.INITIALISATION/act1")]);
@@ -210,7 +215,7 @@ fn eb102_flags_a_read_of_uninitialised_state() {
 
 #[test]
 fn eb102_accepts_a_deterministic_initialisation() {
-    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ n\nend\nend\n";
     assert_eq!(
         codes(&findings(&[("C.eventb", CTX), ("M.eventb", machine)])),
@@ -221,14 +226,14 @@ fn eb102_accepts_a_deterministic_initialisation() {
 
 #[test]
 fn eb102_accepts_a_canonical_such_that_initialisation() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x :∣ x' = 7\nend\nend\n";
     assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
 }
 
 #[test]
 fn eb102_flags_a_non_canonical_such_that_initialisation() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x :∣ x' ∈ ℕ\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
     assert_eq!(codes(&diags), vec![("EB102", "M.INITIALISATION/act1")]);
@@ -250,10 +255,10 @@ fn inherited_actions_are_checked_without_a_span() {
     // `M1.step` extends `M0.step`, so the abstract `:∈` runs in the leaf and
     // is reported there — but its text lives in `M0.eventb`, and a span
     // would index the wrong file.
-    let abstract_machine = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let abstract_machine = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ 0 ‥ 9\nend\nend\n";
-    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let leaf = "machine M1\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION extends INITIALISATION\nend\n\
         event step extends step\nend\nend\n";
     let diags = findings(&[("M0.eventb", abstract_machine), ("M1.eventb", leaf)]);
@@ -266,12 +271,12 @@ fn inherited_actions_are_checked_without_a_span() {
 
 #[test]
 fn every_leaf_of_a_forked_refinement_is_checked() {
-    let root = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let root = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\nend\n";
-    let left = "machine L\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let left = "machine L\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ 0 ‥ 9\nend\nend\n";
-    let right = "machine R\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let right = "machine R\nrefines M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x :∈ 0 ‥ 9\nend\nend\n";
     let diags = findings(&[("M0.eventb", root), ("L.eventb", left), ("R.eventb", right)]);
@@ -288,29 +293,36 @@ fn every_leaf_of_a_forked_refinement_is_checked() {
 
 #[test]
 fn eb103_flags_a_parameter_no_guard_fixes() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  any p\n  where\n    @grd1 p ∈ ℕ\n    @grd2 p > x\n  then\n    @act1 x ≔ p\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
-    assert_eq!(codes(&diags), vec![("EB103", "M.step/p")]);
+    let undetermined = only(&diags, RuleId::UndeterminedParameter);
+    assert_eq!(origins(&undetermined), vec!["M.step/p"]);
     assert_eq!(
-        diags[0].severity,
+        undetermined[0].severity,
         Severity::Info,
         "a trace-driven consumer supplies the parameter, so this is advisory"
     );
     assert!(
-        diags[0].message.contains("supplied outside the model"),
+        undetermined[0]
+            .message
+            .contains("supplied outside the model"),
         "an unbounded parameter cannot even be enumerated: {}",
-        diags[0].message
+        undetermined[0].message
     );
 }
 
 #[test]
 fn eb103_accepts_a_determining_equality_guard() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  any p\n  where\n    @grd1 p = x + 1\n  then\n    @act1 x ≔ p\nend\nend\n";
-    assert_eq!(codes(&findings(&[("M.eventb", machine)])), Vec::new());
+    let diags = findings(&[("M.eventb", machine)]);
+    assert!(
+        only(&diags, RuleId::UndeterminedParameter).is_empty(),
+        "the equality guard fixes the parameter: {diags:#?}"
+    );
 }
 
 #[test]
@@ -333,7 +345,7 @@ fn eb103_says_so_when_the_parameter_is_at_least_enumerable() {
 
 #[test]
 fn eb103_counts_an_interval_guard_as_enumerable() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  any p\n  where\n    @grd1 p ∈ 1 ‥ 10\n  then\n    @act1 x ≔ p\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -356,16 +368,17 @@ fn eb103_counts_an_interval_guard_as_enumerable() {
 #[test]
 fn eb104_flags_a_bound_variable_with_only_an_inequality() {
     let context = "context C\nsets NAMES\nconstants here\naxioms\n    @a1 here ∈ NAMES\nend\n";
-    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  where\n    @grd1 ∀n · n ≠ here ⇒ n ∈ NAMES\n  then\n    @act1 x ≔ 1\nend\nend\n";
     let diags = findings(&[("C.eventb", context), ("M.eventb", machine)]);
-    assert_eq!(codes(&diags), vec![("EB104", "M.step/grd1")]);
-    assert_eq!(diags[0].severity, Severity::Warning);
+    let unbounded = only(&diags, RuleId::UnboundedQuantifier);
+    assert_eq!(origins(&unbounded), vec!["M.step/grd1"]);
+    assert_eq!(unbounded[0].severity, Severity::Warning);
     assert!(
-        diags[0].message.contains("`n`"),
+        unbounded[0].message.contains("`n`"),
         "message names the bound variable: {}",
-        diags[0].message
+        unbounded[0].message
     );
 }
 
@@ -401,7 +414,7 @@ fn eb104_exempts_a_finite_type() {
     // `BOOL` is its own domain, and so is a partitioned carrier set.
     let context =
         "context C\nsets S\nconstants a\n    b\naxioms\n    @a1 partition(S, {a}, {b})\nend\n";
-    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nsees C\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  where\n    @grd1 (∀v · v ≠ a ⇒ v ∈ S) ∧ (∀w · w = TRUE ⇒ w = TRUE)\n  then\n    @act1 x ≔ 1\nend\nend\n";
     assert_eq!(
@@ -425,7 +438,7 @@ fn eb104_covers_a_set_comprehension() {
 
 #[test]
 fn eb105_flags_cardinality_of_an_infinite_set() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x ≔ card(ℕ)\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -448,7 +461,7 @@ fn eb105_exempts_a_typing_position() {
 
 #[test]
 fn eb105_flags_a_relation_space_that_must_be_built() {
-    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
         event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
         event step\n  then\n    @act1 x ≔ card(ℤ ↔ ℤ)\nend\nend\n";
     let diags = findings(&[("M.eventb", machine)]);
@@ -563,4 +576,186 @@ fn eb106_accepts_each_way_of_bounding_a_set() {
             "`{axioms}` bounds the set: {diags:#?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// EB107 — unbounded integer
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb107_flags_an_integer_with_only_a_typing_constraint() {
+    let context = "context C\nconstants n\naxioms\n    @a1 n ∈ ℕ\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    let ints = only(&diags, RuleId::UnboundedInteger);
+    assert_eq!(origins(&ints), vec!["C.n"]);
+    assert_eq!(ints[0].severity, Severity::Info);
+    assert!(
+        ints[0].message.contains("width"),
+        "message says what a translation has to invent: {}",
+        ints[0].message
+    );
+}
+
+#[test]
+fn eb107_accepts_any_real_bound() {
+    for axioms in ["@a1 n ∈ 0 ‥ 20", "@a1 n ∈ ℕ\n    @a2 n ≤ 20", "@a1 n = 20"] {
+        let context = format!("context C\nconstants n\naxioms\n    {axioms}\nend\n");
+        let diags = findings(&[("C.eventb", &context)]);
+        assert!(
+            only(&diags, RuleId::UnboundedInteger).is_empty(),
+            "`{axioms}` bounds the constant: {diags:#?}"
+        );
+    }
+}
+
+#[test]
+fn eb107_reads_an_inherited_invariant() {
+    // A refinement does not restate an abstract variable's constraints, so
+    // the bound one level up still counts.
+    let root = "machine M0\nvariables x\ninvariants\n    @i1 x ∈ 0 ‥ 9\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\nend\n";
+    let leaf = "machine M1\nrefines M0\nvariables x\nevents\n\
+        event INITIALISATION extends INITIALISATION\nend\nend\n";
+    let diags = findings(&[("M0.eventb", root), ("M1.eventb", leaf)]);
+    assert!(
+        only(&diags, RuleId::UnboundedInteger).is_empty(),
+        "the inherited invariant bounds `x`: {diags:#?}"
+    );
+}
+
+#[test]
+fn eb107_covers_variables_and_parameters() {
+    let machine = "machine M\nvariables x\ninvariants\n    @i1 x ∈ ℤ\nevents\n\
+        event INITIALISATION\n  then\n    @act1 x ≔ 0\nend\n\
+        event step\n  any p\n  where\n    @grd1 p ∈ ℤ\n  then\n    @act1 x ≔ p\nend\nend\n";
+    let diags = findings(&[("M.eventb", machine)]);
+    assert_eq!(
+        origins(&only(&diags, RuleId::UnboundedInteger)),
+        vec!["M.x", "M.step/p"]
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB108 — constant not determined by an equality
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb108_flags_a_constant_that_is_only_constrained() {
+    // The design document's worked example: a bound, a type and a
+    // membership determine nothing.
+    let context = "context C\nconstants n\n    f\n    v\naxioms\n\
+        @a1 n ∈ ℕ\n    @a2 f ∈ (0 ‥ n − 1) → ℤ\n    @a3 v ∈ ran(f)\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    assert_eq!(
+        origins(&only(&diags, RuleId::UndeterminedConstant)),
+        vec!["C.f", "C.n", "C.v"]
+    );
+}
+
+#[test]
+fn eb108_accepts_a_chain_of_definitions() {
+    // A defining expression may name other constants as long as they are
+    // themselves determined.
+    let context = "context C\nconstants width\n    height\n    area\naxioms\n\
+        @a1 width = 4\n    @a2 height = width + 1\n    @a3 area = width ∗ height\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    assert!(
+        only(&diags, RuleId::UndeterminedConstant).is_empty(),
+        "every definition resolves: {diags:#?}"
+    );
+}
+
+#[test]
+fn eb108_reports_a_definition_cycle_by_what_it_waits_on() {
+    let context = "context C\nconstants a\n    b\naxioms\n\
+        @a1 a ∈ ℤ\n    @a2 b ∈ ℤ\n    @a3 a = b + 1\n    @a4 b = a − 1\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    let undetermined = only(&diags, RuleId::UndeterminedConstant);
+    assert_eq!(undetermined.len(), 2, "a cycle settles neither constant");
+    assert!(
+        undetermined[0].message.contains("waits on"),
+        "a cycle is reported as an unmet dependency, not as a missing axiom: {}",
+        undetermined[0].message
+    );
+}
+
+#[test]
+fn eb108_accepts_a_maplet_equality() {
+    let context = "context C\nconstants pair\n    left\n    right\naxioms\n\
+        @a1 pair = 2 ↦ TRUE\n    @a2 left ↦ right = 3 ↦ FALSE\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    assert!(
+        only(&diags, RuleId::UndeterminedConstant).is_empty(),
+        "a maplet equality is a pair of equalities: {diags:#?}"
+    );
+}
+
+#[test]
+fn eb108_accepts_partition_and_enumeration_alike() {
+    for axioms in [
+        "@a1 partition(S, {a}, {b})",
+        "@a1 S = {a, b}\n    @a2 a ≠ b",
+    ] {
+        let context = format!("context C\nsets S\nconstants a\n    b\naxioms\n    {axioms}\nend\n");
+        let diags = findings(&[("C.eventb", &context)]);
+        assert!(
+            only(&diags, RuleId::UndeterminedConstant).is_empty(),
+            "`{axioms}` names both constants: {diags:#?}"
+        );
+    }
+}
+
+#[test]
+fn eb108_accepts_finite_plus_card_for_a_set_constant() {
+    let context = "context C\nsets S\nconstants block\naxioms\n\
+        @a1 block ⊆ S\n    @a2 finite(block)\n    @a3 card(block) = 4\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    assert!(
+        only(&diags, RuleId::UndeterminedConstant).is_empty(),
+        "a size is enough for a set whose members are not named: {diags:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// EB109 — carrier-set objects not mutually distinguished
+// ---------------------------------------------------------------------
+
+#[test]
+fn eb109_flags_two_constants_nothing_relates() {
+    let context =
+        "context C\nsets S\nconstants a\n    b\naxioms\n    @a1 a ∈ S\n    @a2 b ∈ S\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    let pairs = only(&diags, RuleId::IndistinctCarrierSetConstants);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].origin, "C.a");
+    assert_eq!(pairs[0].severity, Severity::Info);
+    assert!(
+        pairs[0].message.contains("`a`") && pairs[0].message.contains("`b`"),
+        "message names both constants: {}",
+        pairs[0].message
+    );
+}
+
+#[test]
+fn eb109_accepts_an_inequality_or_a_partition() {
+    for axioms in [
+        "@a1 a ∈ S\n    @a2 b ∈ S\n    @a3 a ≠ b",
+        "@a1 partition(S, {a}, {b})",
+    ] {
+        let context = format!("context C\nsets S\nconstants a\n    b\naxioms\n    {axioms}\nend\n");
+        let diags = findings(&[("C.eventb", &context)]);
+        assert!(
+            only(&diags, RuleId::IndistinctCarrierSetConstants).is_empty(),
+            "`{axioms}` relates the pair: {diags:#?}"
+        );
+    }
+}
+
+#[test]
+fn eb109_reports_each_unrelated_pair() {
+    // Three constants, one relation: the other two pairs stay open.
+    let context = "context C\nsets S\nconstants a\n    b\n    c\naxioms\n\
+        @a1 a ∈ S\n    @a2 b ∈ S\n    @a3 c ∈ S\n    @a4 a ≠ b\nend\n";
+    let diags = findings(&[("C.eventb", context)]);
+    assert_eq!(only(&diags, RuleId::IndistinctCarrierSetConstants).len(), 2);
 }

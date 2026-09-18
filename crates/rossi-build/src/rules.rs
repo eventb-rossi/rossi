@@ -140,10 +140,18 @@ pub enum RuleId {
     /// EB106 — A carrier set used as a value has no axiom giving it a finite
     /// cardinality. (rossi-only.)
     DeferredSetWithoutCardinality,
+    /// EB107 — An integer identifier is bounded only by its type, so nothing
+    /// says which machine integer can hold it. (rossi-only.)
+    UnboundedInteger,
+    /// EB108 — A constant has no axiom determining its value. (rossi-only.)
+    UndeterminedConstant,
+    /// EB109 — Two constants of the same carrier set are never related by
+    /// `=` or `≠`, so nothing says whether they differ. (rossi-only.)
+    IndistinctCarrierSetConstants,
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB106"`).
+    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB109"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -187,6 +195,9 @@ impl RuleId {
             RuleId::UnboundedQuantifier => "EB104",
             RuleId::InfiniteSetValue => "EB105",
             RuleId::DeferredSetWithoutCardinality => "EB106",
+            RuleId::UnboundedInteger => "EB107",
+            RuleId::UndeterminedConstant => "EB108",
+            RuleId::IndistinctCarrierSetConstants => "EB109",
         }
     }
 
@@ -236,6 +247,9 @@ impl RuleId {
             RuleId::UnboundedQuantifier => "Quantifier has no finite domain",
             RuleId::InfiniteSetValue => "Infinite set used as a value",
             RuleId::DeferredSetWithoutCardinality => "Carrier set has no cardinality",
+            RuleId::UnboundedInteger => "Unbounded integer",
+            RuleId::UndeterminedConstant => "Constant is not determined by an equality",
+            RuleId::IndistinctCarrierSetConstants => "Carrier-set constants are not distinguished",
         }
     }
 
@@ -359,6 +373,15 @@ impl RuleId {
             RuleId::DeferredSetWithoutCardinality => {
                 "A carrier set is used where a value is needed, and no visible axiom bounds it. Every carrier set in Event-B is deferred — the language has no enumerated declaration — so nothing says how many elements it has, and a translation that has to build it either invents a size or grows the set on demand, where `card` then answers with the population so far rather than the modelled size. Add `finite(S)`, `partition(S, …)`, an enumeration `S = {a, b}`, or `card(S) = n`. A `partition` is usually the one to reach for: it settles this and EB109 at once."
             }
+            RuleId::UnboundedInteger => {
+                "A variable, constant or event parameter of type `ℤ` is constrained by nothing but its type: no relational bound, no interval, no enumerated set. Event-B integers are mathematical and unbounded; every implementation type is not, so a translation has to pick a width the model never mentions, and the tools surveyed pick different ones — a 201-element window, the int16 range, a 256-bit signed integer. The model is only wrong at the edges, which is exactly where those choices differ. Give the identifier an interval or a relational bound, or adopt a bounded integer type throughout."
+            }
+            RuleId::UndeterminedConstant => {
+                "A constant has no axiom that fixes its value: no defining equality, no membership in a `partition`, and, for a set-valued constant, no `finite` plus `card` pair. A translation has to have values for the constants before it can run anything, and with only a constraint like `n ∈ ℕ` it has to solve for one, ask the user, or invent one. A defining expression may refer to other constants as long as they are themselves determined and the definitions do not form a cycle; a cycle is reported the same way, naming the constant the definition waits on."
+            }
+            RuleId::IndistinctCarrierSetConstants => {
+                "Two constants of the same carrier set are never related by `=` or `≠`, so the model does not say whether they denote the same element. A translation that has to give them values cannot tell whether one object or two is meant. Relate them, or declare the set with a `partition`, which settles every pair at once and is what most models do — with four constants that is one predicate instead of six inequalities. Reported at INFO because a model lacking the relation is more often under-specified than wrong."
+            }
         }
     }
 
@@ -389,7 +412,10 @@ impl RuleId {
             | RuleId::MissingLabel
             | RuleId::PrimedDeclaredName
             | RuleId::DuplicateComponent => Severity::Error,
-            RuleId::WellDefinedness | RuleId::UndeterminedParameter => Severity::Info,
+            RuleId::WellDefinedness
+            | RuleId::UndeterminedParameter
+            | RuleId::UnboundedInteger
+            | RuleId::IndistinctCarrierSetConstants => Severity::Info,
             RuleId::DeadVariable
             | RuleId::UnmodifiedVariable
             | RuleId::IncompleteInitialisation
@@ -405,7 +431,8 @@ impl RuleId {
             | RuleId::NondeterministicInitialisation
             | RuleId::UnboundedQuantifier
             | RuleId::InfiniteSetValue
-            | RuleId::DeferredSetWithoutCardinality => Severity::Warning,
+            | RuleId::DeferredSetWithoutCardinality
+            | RuleId::UndeterminedConstant => Severity::Warning,
         }
     }
 
@@ -474,6 +501,9 @@ impl RuleId {
             RuleId::UnboundedQuantifier,
             RuleId::InfiniteSetValue,
             RuleId::DeferredSetWithoutCardinality,
+            RuleId::UnboundedInteger,
+            RuleId::UndeterminedConstant,
+            RuleId::IndistinctCarrierSetConstants,
         ]
     }
 }
@@ -529,6 +559,9 @@ mod tests {
         assert_eq!(RuleId::UnboundedQuantifier.code(), "EB104");
         assert_eq!(RuleId::InfiniteSetValue.code(), "EB105");
         assert_eq!(RuleId::DeferredSetWithoutCardinality.code(), "EB106");
+        assert_eq!(RuleId::UnboundedInteger.code(), "EB107");
+        assert_eq!(RuleId::UndeterminedConstant.code(), "EB108");
+        assert_eq!(RuleId::IndistinctCarrierSetConstants.code(), "EB109");
     }
 
     /// `all()` is a hand-maintained array with no exhaustiveness check, unlike
@@ -541,10 +574,10 @@ mod tests {
     #[test]
     fn all_lists_every_rule() {
         // `EB001`..`EB034` minus the one documented gap (EB013), then the
-        // runtime-translation block `EB100`..`EB106`.
+        // runtime-translation block `EB100`..`EB109`.
         let expected: Vec<String> = (1..=34)
             .filter(|n| *n != 13)
-            .chain(100..=106)
+            .chain(100..=109)
             .map(|n| format!("EB{n:03}"))
             .collect();
         let listed: Vec<&str> = RuleId::all().iter().map(|r| r.code()).collect();

@@ -37,8 +37,8 @@ use rossi::ast::Span;
 use rossi::formula::tag::{AssocPredOp, RelationalOp};
 use rossi::keywords::{DeclSite, KeywordId, camille_unreadable_separator, clause_holds_only_names};
 use rossi::{
-    Component, ComponentId, DependencyGraph, Event, ExpressionKind, InitialisationEvent, Machine,
-    Predicate, PredicateKind,
+    Component, ComponentId, DependencyGraph, Event, Expression, ExpressionKind,
+    InitialisationEvent, Machine, Predicate, PredicateKind,
 };
 
 use crate::ast_util::lhs_variables;
@@ -605,6 +605,31 @@ pub fn run_source(component: &Component, source: &str) -> Vec<Diagnostic> {
 // passed as initial bound names so a guard mentioning a parameter doesn't
 // leak that name into the machine-level reference set.
 
+/// The name a typing-shaped conjunct types, and the bound it types it with:
+/// `v ∈ E` or `v ⊆ E` with a bare identifier on the left.
+///
+/// Shared with [`crate::runtime`], which asks the same question from the
+/// other side — whether a conjunct says anything about an identifier beyond
+/// its type. Deliberately narrow, and the narrowing is the point: strict
+/// subset, negation and equality all constrain the value, not just the type.
+/// Whether the bound itself is static is the caller's business, because the
+/// answer differs between a machine (where a bound may read a variable) and
+/// a context (where nothing is dynamic).
+pub(crate) fn typing_conjunct(pred: &Predicate) -> Option<(&str, &Expression)> {
+    let PredicateKind::Relational {
+        op: RelationalOp::In | RelationalOp::SubsetEq,
+        left,
+        right,
+    } = pred.kind()
+    else {
+        return None;
+    };
+    match left.kind() {
+        ExpressionKind::FreeIdentifier(name) => Some((name.as_str(), right)),
+        _ => None,
+    }
+}
+
 /// Collect the identifiers `pred` references, except that a top-level
 /// `∧`-conjunct of the typing shape `v ∈ E` / `v ⊆ E` (bare identifier on
 /// the left, `E` free of machine variables) does not count as a reference
@@ -619,31 +644,28 @@ pub fn run_source(component: &Component, source: &str) -> Vec<Diagnostic> {
 /// real uses, even though the type checker can also read a type out of
 /// them. `vars` is the owning machine's variable set.
 fn collect_non_typing_refs(pred: &Predicate, vars: &BTreeSet<&str>, acc: &mut BTreeSet<String>) {
-    match pred.kind() {
-        PredicateKind::Associative {
-            op: AssocPredOp::LAnd,
-            children,
-        } => {
-            for child in children {
-                collect_non_typing_refs(child, vars, acc);
-            }
+    if let PredicateKind::Associative {
+        op: AssocPredOp::LAnd,
+        children,
+    } = pred.kind()
+    {
+        for child in children {
+            collect_non_typing_refs(child, vars, acc);
         }
-        PredicateKind::Relational {
-            op: RelationalOp::In | RelationalOp::SubsetEq,
-            left,
-            right,
-        } if matches!(left.kind(), ExpressionKind::FreeIdentifier(_)) => {
-            let mut bound_refs = BTreeSet::new();
-            collect_referenced_in_expression(right, &mut bound_refs);
-            let bound_is_static = bound_refs.iter().all(|r| !vars.contains(r.as_str()));
-            acc.extend(bound_refs);
-            if !bound_is_static {
-                // The bound reads machine state: a constraint between
-                // variables, not typing — the LHS occurrence counts too.
-                collect_referenced_in_predicate(pred, acc);
-            }
-        }
-        _ => collect_referenced_in_predicate(pred, acc),
+        return;
+    }
+    let Some((_, right)) = typing_conjunct(pred) else {
+        collect_referenced_in_predicate(pred, acc);
+        return;
+    };
+    let mut bound_refs = BTreeSet::new();
+    collect_referenced_in_expression(right, &mut bound_refs);
+    let bound_is_static = bound_refs.iter().all(|r| !vars.contains(r.as_str()));
+    acc.extend(bound_refs);
+    if !bound_is_static {
+        // The bound reads machine state: a constraint between
+        // variables, not typing — the LHS occurrence counts too.
+        collect_referenced_in_predicate(pred, acc);
     }
 }
 
