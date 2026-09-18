@@ -121,14 +121,16 @@ pub struct ProofOverlay {
 }
 
 impl ProofOverlay {
-    /// Replace one document's list. Returns whether anything changed, so a
-    /// caller republishes only then.
+    /// Replace one document's list. Returns whether anything visible changed,
+    /// so a caller republishes and pushes only then. A document not seen
+    /// before counts as having had no obligations: opening a component that
+    /// generates none must not announce an empty list, which is the same
+    /// nothing the client already shows.
     pub(crate) fn apply(&mut self, uri: Uri, obligations: Vec<Obligation>) -> bool {
-        if self.by_uri.get(&uri) == Some(&obligations) {
-            return false;
-        }
+        let previous = self.by_uri.get(&uri).map_or(&[][..], Vec::as_slice);
+        let changed = previous != obligations.as_slice();
         self.by_uri.insert(uri, obligations);
-        true
+        changed
     }
 
     pub(crate) fn remove(&mut self, uri: &Uri) -> bool {
@@ -408,6 +410,29 @@ mod tests {
             status,
             accurate: true,
         }
+    }
+
+    #[test]
+    fn an_obligation_free_document_is_not_a_change_on_first_sight() {
+        let mut overlay = ProofOverlay::default();
+        let uri: Uri = "file:///c.eventb".parse().unwrap();
+        assert!(!overlay.apply(uri.clone(), Vec::new()));
+        assert!(
+            overlay.get(&uri).is_some(),
+            "the empty list is still stored"
+        );
+        assert!(overlay.apply(
+            uri.clone(),
+            vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)]
+        ));
+        assert!(!overlay.apply(
+            uri.clone(),
+            vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)]
+        ));
+        assert!(
+            overlay.apply(uri, Vec::new()),
+            "losing the obligations is a change"
+        );
     }
 
     #[test]

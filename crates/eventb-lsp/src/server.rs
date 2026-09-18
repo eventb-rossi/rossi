@@ -222,7 +222,16 @@ impl Analyzer {
     /// truth once and fans it out to every eager index (none of which
     /// re-parses). Go-to-definition keeps no index — it resolves on demand
     /// against this same stored parse.
-    pub(crate) async fn analyze(&self, uri: Uri) {
+    ///
+    /// `proof_sources` is where the document's stored proofs are looked for,
+    /// on open and on save; `None` skips the obligation refresh (a keystroke,
+    /// a watched-file change). The obligations are computed before the
+    /// diagnostics so the one publish already carries their hints, and the
+    /// client's copy of the list is pushed afterwards without holding this
+    /// handler: the socket buffers one message, so a second send here would
+    /// wait on a client that is itself waiting for the notification to
+    /// return.
+    pub(crate) async fn analyze(&self, uri: Uri, proof_sources: Option<Vec<PathBuf>>) {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return;
         };
@@ -245,6 +254,10 @@ impl Analyzer {
                 });
 
             if let Some(version) = version {
+                let obligations_changed = match proof_sources {
+                    Some(sources) => self.compute_proof_obligations(&uri, &doc, sources).await,
+                    None => false,
+                };
                 // Workspace-wide diagnostics can be expensive, so derive them outside
                 // the per-document state lock and recheck the snapshot before sending.
                 let diagnostics = if self.config_manager.get().diagnostics.enabled {
@@ -260,6 +273,12 @@ impl Analyzer {
                     self.client
                         .publish_diagnostics(uri.clone(), diagnostics, Some(version))
                         .await;
+                    // Only behind the publish it belongs with: a push whose
+                    // diagnostics were dropped as superseded would leave the
+                    // client holding ranges nothing published agrees with.
+                    if obligations_changed {
+                        self.push_proof_status(&uri, &doc);
+                    }
                 }
             }
         }
@@ -527,33 +546,67 @@ impl Analyzer {
             .unwrap_or_default()
     }
 
-    /// Replace one document's proof obligations and, if anything changed,
-    /// republish its diagnostics and push the new list to the client.
-    pub(crate) async fn apply_proof_obligations(
+    /// Generate and judge `doc`'s obligations against the stored proofs under
+    /// `sources`, and store them. Returns whether the stored list changed. A
+    /// document that does not parse keeps its previous list.
+    async fn compute_proof_obligations(
         &self,
-        uri: Uri,
-        obligations: Vec<crate::proof::Obligation>,
-    ) {
-        if !self
-            .proof_obligations
-            .write()
-            .apply(uri.clone(), obligations)
-        {
-            return;
+        uri: &Uri,
+        doc: &Arc<ParsedDocument>,
+        sources: Vec<PathBuf>,
+    ) -> bool {
+        if !self.config_manager.get().proof_obligations.enabled {
+            return false;
         }
-        self.republish_diagnostics(uri.clone()).await;
-        // Pushed through the same accessor the request and the diagnostics
-        // use, so a client never holds ranges the diagnostics disagree with.
-        let obligations = self
-            .document_manager
-            .parse_result(&uri)
-            .map(|doc| self.proof_obligations_for(&uri, &doc))
-            .unwrap_or_default();
-        self.client
-            .send_notification::<crate::proof::ProofStatusNotification>(
-                crate::proof::ProofStatusParams { uri, obligations },
-            )
-            .await;
+        let doc = Arc::clone(doc);
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        let documents = Arc::clone(&self.document_manager);
+        let computed = run_blocking(move || {
+            let loader = ComponentLoader::new(&xrefs, Some(&documents));
+            crate::proof::compute(&doc, &loader, &sources)
+        })
+        .await;
+        match computed {
+            Ok(Some(obligations)) => self
+                .proof_obligations
+                .write()
+                .apply(uri.clone(), obligations),
+            _ => false,
+        }
+    }
+
+    /// Push the document's list to the client through the same accessor the
+    /// request and the diagnostics use, so a client never holds ranges the
+    /// diagnostics disagree with. Spawned rather than awaited: the caller is
+    /// a notification handler the client may be waiting on.
+    fn push_proof_status(&self, uri: &Uri, doc: &ParsedDocument) {
+        let obligations = self.proof_obligations_for(uri, doc);
+        let client = self.client.clone();
+        let uri = uri.clone();
+        tokio::spawn(async move {
+            client
+                .send_notification::<crate::proof::ProofStatusNotification>(
+                    crate::proof::ProofStatusParams { uri, obligations },
+                )
+                .await;
+        });
+    }
+
+    /// Recompute a document's obligations outside the open/save analysis (a
+    /// request that arrived before the first refresh finished), republishing
+    /// its diagnostics when the list changed.
+    pub(crate) async fn refresh_proof_obligations(&self, uri: Uri, sources: Vec<PathBuf>) {
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return;
+        };
+        if self.compute_proof_obligations(&uri, &doc, sources).await {
+            self.republish_diagnostics(uri.clone()).await;
+            // The parse the republish used, not the one the compute started
+            // from, so the pushed ranges match the diagnostics just sent.
+            if let Some(doc) = self.document_manager.parse_result(&uri) {
+                self.push_proof_status(&uri, &doc);
+            }
+        }
     }
 
     /// Whether a list has been computed for `uri` since it was opened.
@@ -1018,38 +1071,19 @@ impl RossiLanguageServer {
         })
     }
 
-    /// Recompute the proof obligations of the document at `uri` from its
-    /// current parse and the stored proofs, then publish what changed.
-    /// Called on open and on save, never per keystroke: the generator
-    /// runs the full static check plus proof-obligation generation over
-    /// the closure, which is save-cadence work.
-    async fn refresh_proof_obligations(&self, uri: Uri) {
+    /// Where the stored proofs of the document at `uri` are looked for, or
+    /// `None` when proof obligations are turned off. Resolved here because the
+    /// Rodin workspace project depends on server-level configuration; the
+    /// analyzer only consumes the list.
+    fn proof_sources(&self, uri: &Uri) -> Option<Vec<PathBuf>> {
         if !self.config_manager.get().proof_obligations.enabled {
-            return;
+            return None;
         }
-        let Some(doc) = self.document_manager.parse_result(&uri) else {
-            return;
-        };
-        let sources = crate::proof::sources_for(
-            &uri,
-            self.rodin_project_target(&uri)
+        Some(crate::proof::sources_for(
+            uri,
+            self.rodin_project_target(uri)
                 .map(|target| target.project_dir),
-        );
-        let xrefs = Arc::clone(&self.cross_reference_manager);
-        let documents = Arc::clone(&self.document_manager);
-        let computed = run_blocking(move || {
-            let loader = crate::component_loader::ComponentLoader::new(&xrefs, Some(&documents));
-            crate::proof::compute(&doc, &loader, &sources)
-        })
-        .await;
-        // `None` is a document that does not parse: the previous list
-        // stays until a clean parse replaces it.
-        let Ok(Some(obligations)) = computed else {
-            return;
-        };
-        self.analyzer
-            .apply_proof_obligations(uri, obligations)
-            .await;
+        ))
     }
 
     /// The "Open in Rodin" command: resolve the request up front, refuse a
@@ -1933,8 +1967,8 @@ impl LanguageServer for RossiLanguageServer {
 
         // Opening analyzes promptly (not debounced): refresh the eager indexes
         // and publish diagnostics from the document's stored parse.
-        self.analyzer.analyze(uri.clone()).await;
-        self.refresh_proof_obligations(uri).await;
+        let sources = self.proof_sources(&uri);
+        self.analyzer.analyze(uri, sources).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -1953,7 +1987,7 @@ impl LanguageServer for RossiLanguageServer {
         // window analyzes inline (the previous behaviour).
         let debounce_ms = self.config_manager.get().diagnostics.debounce_ms;
         if debounce_ms == 0 {
-            self.analyzer.analyze(uri).await;
+            self.analyzer.analyze(uri, None).await;
             return;
         }
 
@@ -1968,7 +2002,7 @@ impl LanguageServer for RossiLanguageServer {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(debounce_ms as u64)).await;
             if analyzer.document_manager.revision(&uri) == Some(revision) {
-                analyzer.analyze(uri).await;
+                analyzer.analyze(uri, None).await;
             }
         });
     }
@@ -2005,7 +2039,8 @@ impl LanguageServer for RossiLanguageServer {
         // same version then finds nothing newer and re-runs an identical (cheap,
         // memoised-parse) analysis.
         if self.document_manager.version(&uri).is_some() {
-            self.analyzer.analyze(uri.clone()).await;
+            let sources = self.proof_sources(&uri);
+            self.analyzer.analyze(uri.clone(), sources).await;
             // Both saved layers, not just the symbol one: a client without
             // dynamic registration sends no watched-file event, and this is
             // then the only moment either index learns the file changed.
@@ -2025,7 +2060,6 @@ impl LanguageServer for RossiLanguageServer {
         }
 
         self.schedule_rodin_rebuild(&uri);
-        self.refresh_proof_obligations(uri).await;
     }
 
     /// Refresh the disk-backed indexes when Event-B files change outside the
@@ -2986,8 +3020,12 @@ impl RossiLanguageServer {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return Ok(Vec::new());
         };
-        if !self.analyzer.has_proof_obligations(&uri) {
-            self.refresh_proof_obligations(uri.clone()).await;
+        if !self.analyzer.has_proof_obligations(&uri)
+            && let Some(sources) = self.proof_sources(&uri)
+        {
+            self.analyzer
+                .refresh_proof_obligations(uri.clone(), sources)
+                .await;
         }
         Ok(self.analyzer.proof_obligations_for(&uri, &doc))
     }
