@@ -1652,6 +1652,8 @@ impl LanguageServer for RossiLanguageServer {
                 // One level down the refinement graph: the machines that
                 // refine this one, or the events that refine this event.
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+                // From a symbol to the carrier sets its inferred type mentions.
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 // Pull diagnostics alongside the push ones: a client that
                 // supports pull uses it and ignores the pushes, and one that
                 // does not keeps working unchanged. `interFileDependencies`
@@ -2346,6 +2348,27 @@ impl LanguageServer for RossiLanguageServer {
         );
 
         Ok(response)
+    }
+
+    async fn goto_type_definition(
+        &self,
+        params: request::GotoTypeDefinitionParams,
+    ) -> Result<Option<request::GotoTypeDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        debug!("Goto type definition for: {} at {:?}", uri, position);
+
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return Ok(None);
+        };
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        let documents = Arc::clone(&self.document_manager);
+        let locations = run_blocking(move || {
+            let loader = crate::component_loader::ComponentLoader::new(&xrefs, Some(&documents));
+            crate::type_definition::type_definitions(&doc, &loader, position)
+        })
+        .await?;
+        Ok(locations.map(request::GotoTypeDefinitionResponse::Array))
     }
 
     async fn goto_implementation(
