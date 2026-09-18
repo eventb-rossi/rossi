@@ -12,7 +12,7 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 
 ### ✅ Current Features
 
-- **Real-time diagnostics** - Syntax errors as you type, using parser recovery
+- **Real-time diagnostics** - Syntax errors as you type, using parser recovery, plus the component-local semantic lints (`EBnnn` rule codes), circular `EXTENDS` / `REFINES`, unresolved or duplicated component names, and an operator-convention advisory
 - **Document synchronization** - Efficient incremental text updates using rope data structure
 - **Document symbols** - Navigate your Event-B models with hierarchical outline
 - **Code formatting** - Auto-format documents with Unicode or ASCII operators
@@ -27,6 +27,9 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 - **Code actions** - ASCII/Unicode operator conversion, missing-clause fixes, missing `END`, sorting, and rename hints
 - **Folding** - Folding ranges for components, events, initialisation, and clauses
 - **Signature help** - Parameter hints for quantifiers, lambdas, and set comprehensions
+- **Inlay hints** - Inferred declaration types and well-definedness markers
+- **Selection ranges** - Expand the selection along enclosing AST nodes
+- **Code lenses** - `Open in Rodin` on every component and `Model-check` / `Disprove POs` on every machine, backed by the Rodin bridge and eventb-animate integrations
 
 ## Installation
 
@@ -154,9 +157,16 @@ Errors appear with:
 - Clear error messages
 - Error recovery (continues parsing after errors)
 
-Semantic diagnostics from the static checker are not wired into the LSP yet.
-See [Semantic Analysis Reuse](#semantic-analysis-reuse) for the intended
-integration path.
+A clean parse also yields the component-local semantic lints that
+`rossi validate` runs (duplicate identifiers and labels, primed declarations,
+shadowed and keyword names, section order, non-portable whitespace), circular
+`EXTENDS` / `REFINES` chains, and, once the workspace scan has completed,
+unresolved and duplicated component names. Every such finding carries its
+stable `EBnnn` rule code.
+
+The project-level static check (`rossi_build::build`: type inference over the
+dependency closure and Rodin-style drop diagnostics) is not yet published as
+diagnostics. See [Semantic Analysis Reuse](#semantic-analysis-reuse).
 
 ### Document Symbols
 
@@ -255,6 +265,12 @@ highlighting. Folding ranges cover `CONTEXT`, `MACHINE`, `EVENT`,
 
 Document links make `SEES`, `REFINES`, and `EXTENDS` targets clickable when the
 referenced component is known to the workspace index.
+
+Inlay hints show the inferred type of every declaration and mark predicates
+that carry a well-definedness condition; both are computed by `rossi-build`
+over the file's dependency closure. Selection ranges expand the selection along
+enclosing AST nodes. Code lenses drive the Rodin and eventb-animate
+integrations through `workspace/executeCommand`.
 
 ### Code Actions
 
@@ -398,46 +414,31 @@ general integration.
 
 ## Semantic Analysis Reuse
 
-The LSP currently reports parser diagnostics only. The `rossi-build` crate
-already contains most of the static-checking machinery needed for semantic
-diagnostics, and it should be reused rather than reimplemented in the LSP.
+The LSP reuses `rossi-build` rather than reimplementing static checking. What
+is wired today:
 
-Reusable `rossi-build` surfaces:
+- `component_semantic_diagnostics`, `lint::run_component` and
+  `lint::run_source` run on every clean parse (`diagnostics.rs`), so the
+  editor and `rossi validate` report the same component-local findings.
+- `check_with_model` runs over the open file's dependency closure to serve
+  inlay hints (`inlay_hints.rs`), and `build` runs over the same closure to
+  stage a throwaway Rodin project for eventb-animate (`animate/closure.rs`).
 
-- `Project`, `ProjectComponent`, and `build(Project)` for project-level static checking
-- `BuildResult::diagnostics` and `Severity` for checker findings
-- `TypeEnv` and `Type` for scoped type environments
-- `infer::*` for type inference over expressions, predicates, constants, variables, and event parameters
-- `checked_predicate::*` for free-identifier checks plus Rodin-canonical predicate, expression, and action forms
-- `wellformed::*` for conservative type-shape checks over predicates, expressions, and actions
-- `enrich::*` for inferred binder type stamping and set-comprehension lowering
-- `normalize::*` for Rodin-style canonical formatting of checked formulas
+What remains is publishing the project-level check itself: run
+`rossi_build::build` over the closure on save and map
+`BuildResult::diagnostics` through the existing `build_diagnostic_to_lsp`
+adapter, which already turns a `rossi_build::Diagnostic` (origin plus source
+span) into an LSP diagnostic. That would surface scope errors, type inference
+errors, conservative well-typedness checks and Rodin-style static-check drop
+behaviour.
 
-Recommended integration path:
-
-1. Add `rossi-build` as an `eventb-lsp` dependency.
-2. Add a small LSP semantic diagnostics adapter instead of calling
-   `rossi-build` internals directly from `server.rs`.
-3. Build an in-memory `Project` from open `.eventb` documents and workspace
-   components using `ProjectComponent` with default `RodinIds`.
-4. Run `rossi_build::build(&project)` after successful parsing.
-5. Map `rossi-build` diagnostics to LSP diagnostics by resolving diagnostic
-   origins such as `Machine`, `Machine.inv1`, or `Machine.Event.grd1` back to
-   labels and component names in source text.
-6. Use exact label/name ranges when available; otherwise fall back to the
-   component declaration or file-level range.
-
-This reuse should cover scope errors, many type inference errors, conservative
-well-typedness checks, missing `SEES` / `REFINES` / `EXTENDS` targets, circular
-dependency diagnostics, and Rodin-style static-check drop/accuracy behavior.
-
-It should not be presented as full proof support. `rossi-build` does not yet
-generate proof obligations, prove invariants, or implement complete Event-B
-well-definedness and refinement proof checks.
+It should not be presented as full proof support. `rossi-build` generates
+proof obligations but does not prove them, and `rossi-prove` checks stored
+proofs rather than discharging open ones.
 
 ## Known Limitations
 
-- LSP diagnostics are syntax-only until the semantic diagnostics adapter is added.
+- Diagnostics cover parse errors and the component-local checks above; the project-level static check (type inference across the dependency closure) is not yet published.
 - Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
 - Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
 - Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
@@ -506,6 +507,7 @@ The server is organized into focused modules (principal ones shown):
 ```
 eventb-lsp/src/
 ├── server.rs            # LSP protocol implementation (tower-lsp)
+├── diagnostics.rs       # Parse, lint, cross-reference and overlay diagnostics
 ├── document.rs          # Document management (ropey, dashmap)
 ├── analysis.rs          # Document symbol extraction
 ├── cross_references.rs  # Workspace component index and dependency graph
@@ -520,10 +522,13 @@ eventb-lsp/src/
 ├── signature_help.rs    # Signature help provider
 ├── document_links.rs    # Document links provider
 ├── selection_range.rs   # Selection range provider
+├── inlay_hints.rs       # Inlay hint provider (types, WD markers)
 ├── symbols.rs           # Cursor symbol resolution (definition / references)
 ├── formula_walk.rs      # Formula AST walker (binder scope)
 ├── formatting.rs        # Formatting via the rossi pretty printer
 ├── config.rs            # Server configuration (the `rossi` settings section)
+├── rodin/               # Rodin workspace build, launch, bridge and sync
+├── animate/             # eventb-animate model checking and PO disproof
 └── main.rs              # Entry point and initialization
 ```
 
@@ -552,7 +557,8 @@ eventb-lsp/src/
 
 5. **Feature Providers**
    - Completion, hover, definition, references, rename, workspace symbols,
-     semantic tokens, document links, code actions, folding, and signature help
+     semantic tokens, document links, code actions, folding, signature help,
+     inlay hints, selection ranges, and code lenses
    - Each provider owns a narrow LSP feature and reuses shared document and
      cross-reference state where needed
 
