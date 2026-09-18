@@ -203,7 +203,7 @@ impl RenameProvider {
         &self,
         old_name: &str,
         new_name: &str,
-        changes: &mut HashMap<Url, Vec<TextEdit>>,
+        changes: &mut HashMap<Uri, Vec<TextEdit>>,
     ) {
         let manager = match &self.cross_ref_manager {
             Some(m) => m,
@@ -258,7 +258,7 @@ fn is_keyword(s: &str) -> bool {
 fn find_all_references(
     text: &str,
     identifier: &str,
-    uri: &Url,
+    uri: &Uri,
     boundary: identifier_utils::WordBoundary,
 ) -> Option<Vec<Location>> {
     let locations =
@@ -275,7 +275,7 @@ fn find_all_references(
 fn text_rename_edits(
     text: &str,
     identifier: &str,
-    uri: &Url,
+    uri: &Uri,
     new_name: &str,
 ) -> Option<Vec<TextEdit>> {
     let locations = find_all_references(
@@ -401,18 +401,18 @@ pub(crate) fn sort_edits_reverse(edits: &mut [TextEdit]) {
 mod tests {
     use super::*;
 
-    fn make_uri() -> Url {
-        Url::parse("file:///test.eventb").unwrap()
+    fn make_uri() -> Uri {
+        ("file:///test.eventb").parse::<Uri>().unwrap()
     }
 
-    fn make_position_params(line: u32, character: u32, uri: Url) -> TextDocumentPositionParams {
+    fn make_position_params(line: u32, character: u32, uri: Uri) -> TextDocumentPositionParams {
         TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
             position: Position::new(line, character),
         }
     }
 
-    fn make_rename_params(line: u32, character: u32, uri: Url, new_name: String) -> RenameParams {
+    fn make_rename_params(line: u32, character: u32, uri: Uri, new_name: String) -> RenameParams {
         RenameParams {
             text_document_position: make_position_params(line, character, uri),
             new_name,
@@ -886,12 +886,12 @@ END
         assert_eq!(text_edits.len(), 3);
     }
 
-    fn collision_provider(context: &str, machine: &str) -> (RenameProvider, Url, Url) {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+    fn collision_provider(context: &str, machine: &str) -> (RenameProvider, Uri, Uri) {
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), machine);
         let documents = Arc::new(DocumentManager::new());
         documents.open(context_uri.clone(), 1, context.to_string());
         documents.open(machine_uri.clone(), 1, machine.to_string());
@@ -1016,14 +1016,14 @@ END
 
     #[test]
     fn component_rename_includes_a_headerless_open_dependent() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT C\nEND";
         let indexed_machine = "MACHINE M\nSEES C\nEND";
         let current_machine = "SEES C\nEND";
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), indexed_machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), indexed_machine);
         let documents = Arc::new(DocumentManager::new());
         documents.open(context_uri.clone(), 1, context.to_string());
         documents.open(machine_uri.clone(), 1, indexed_machine.to_string());
@@ -1057,18 +1057,18 @@ END
 
     #[test]
     fn component_rename_visits_every_duplicate_declaration_file() {
-        let first_uri = Url::parse("file:///a.eventb").unwrap();
-        let second_uri = Url::parse("file:///b.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let first_uri = ("file:///a.eventb").parse::<Uri>().unwrap();
+        let second_uri = ("file:///b.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT C\nEND";
         let machine = "MACHINE M\nSEES C\nEND";
         let crm = Arc::new(CrossReferenceManager::new());
         let documents = Arc::new(DocumentManager::new());
         for uri in [&first_uri, &second_uri] {
-            crm.update_component(uri.to_string(), context);
+            crm.update_component(uri.as_str().to_owned(), context);
             documents.open(uri.clone(), 1, context.to_string());
         }
-        crm.update_component(machine_uri.to_string(), machine);
+        crm.update_component(machine_uri.as_str().to_owned(), machine);
         documents.open(machine_uri.clone(), 1, machine.to_string());
         let mut provider = RenameProvider::new();
         provider.set_cross_reference_manager(crm);
@@ -1102,8 +1102,8 @@ END
         let machine = "MACHINE M\nSEES C\nEND";
         std::fs::write(&context_path, context).unwrap();
         std::fs::write(&machine_path, machine).unwrap();
-        let context_uri = Url::from_file_path(&context_path).unwrap();
-        let machine_uri = Url::from_file_path(&machine_path).unwrap();
+        let context_uri = Uri::from_file_path(&context_path).unwrap();
+        let machine_uri = Uri::from_file_path(&machine_path).unwrap();
 
         let crm = Arc::new(CrossReferenceManager::new());
         crm.scan_workspace(&root).unwrap();

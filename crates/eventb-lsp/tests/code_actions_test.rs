@@ -4,13 +4,13 @@ use eventb_lsp::code_actions::{CodeActionProvider, FIX_ALL_KIND};
 use eventb_lsp::diagnostics::ASCII_OPERATOR_CODE;
 use eventb_lsp::lsp_types::{
     CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position, Range,
-    TextDocumentIdentifier, Url, WorkDoneProgressParams,
+    TextDocumentIdentifier, Uri, WorkDoneProgressParams,
 };
 
 fn create_test_params(uri: &str, range: Range) -> CodeActionParams {
     CodeActionParams {
         text_document: TextDocumentIdentifier {
-            uri: Url::parse(uri).unwrap(),
+            uri: uri.parse::<Uri>().unwrap(),
         },
         range,
         context: CodeActionContext {
@@ -142,7 +142,7 @@ fn fix_all_normalizes_operators_to_the_convention() {
     // `useUnicode` and nothing else — layout, comment prose, and label text
     // are untouched.
     let provider = CodeActionProvider::new();
-    let uri = Url::parse("file:///m.eventb").unwrap();
+    let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
     let cases = [
         (
             true,
@@ -580,7 +580,7 @@ fn eb026_offers_equality_swap_for_becomes_equal() {
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     assert!(fix.diagnostics.is_some(), "fix attaches to the diagnostic");
     let edit = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()][0];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()][0];
     assert_eq!(edit.new_text, "=");
     assert_eq!(edit.range, op, "edit replaces exactly the operator");
 }
@@ -650,7 +650,7 @@ fn ascii_operator_advisory_offers_the_unicode_spelling() {
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     assert!(fix.diagnostics.is_some(), "fix attaches to the diagnostic");
     let edit = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()][0];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()][0];
     assert_eq!(edit.new_text, "∧");
     assert_eq!(edit.range, op, "edit replaces exactly the operator");
 }
@@ -818,7 +818,7 @@ fn eb029_offers_to_remove_an_empty_clause() {
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     assert!(fix.diagnostics.is_some(), "fix attaches to the diagnostic");
     let edit = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()][0];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()][0];
     assert_eq!(edit.new_text, "");
     assert_eq!(
         edit.range,
@@ -875,7 +875,7 @@ fn eb032_offers_to_insert_a_label() {
     assert_eq!(fix.title, "Insert label @act1");
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     let edit = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()][0];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()][0];
     assert_eq!(edit.new_text, "@act1 ");
     assert_eq!(
         edit.range,
@@ -1008,7 +1008,7 @@ fn eb030_offers_to_move_the_clause_above_the_one_it_must_precede() {
     assert_eq!(fix.title, "Move WITH above THEN");
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()];
     // Insert the clause above THEN, then delete it where it was written.
     assert_eq!(edits.len(), 2, "{edits:?}");
     assert_eq!(
@@ -1046,7 +1046,7 @@ fn eb030_move_stays_inside_its_own_event() {
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///m.eventb").unwrap()];
+        [&("file:///m.eventb").parse::<Uri>().unwrap()];
     assert_eq!(
         edits[0].range.start,
         Position::new(9, 0),
@@ -1072,7 +1072,7 @@ fn eb034_offers_to_move_the_section_above_the_one_it_must_precede() {
     assert_eq!(fix.title, "Move SETS above AXIOMS");
     assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///c.eventb").unwrap()];
+        [&("file:///c.eventb").parse::<Uri>().unwrap()];
     assert_eq!(edits.len(), 2, "{edits:?}");
     assert_eq!(
         edits[0].range,
@@ -1125,7 +1125,7 @@ fn eb034_move_stays_inside_its_own_component() {
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///c.eventb").unwrap()];
+        [&("file:///c.eventb").parse::<Uri>().unwrap()];
     assert_eq!(
         edits[0].range.start,
         Position::new(5, 0),
@@ -1150,7 +1150,7 @@ fn eb034_carries_an_attached_comment_with_the_section() {
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///c.eventb").unwrap()];
+        [&("file:///c.eventb").parse::<Uri>().unwrap()];
     assert_eq!(edits[0].new_text, "// the carrier sets\nSETS\n    S\n");
     assert_eq!(
         edits[1].range,
@@ -1179,7 +1179,7 @@ fn eb034_leaves_the_target_section_with_its_own_comment() {
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///c.eventb").unwrap()];
+        [&("file:///c.eventb").parse::<Uri>().unwrap()];
     assert_eq!(
         edits[0].range.start,
         Position::new(1, 0),
@@ -1204,7 +1204,7 @@ fn eb034_never_splits_a_comment_opened_on_a_code_line() {
         .unwrap_or_default();
     let fix = action_titled(&actions, "Move").expect("a Move quick fix must be offered");
     let edits = &fix.edit.as_ref().unwrap().changes.as_ref().unwrap()
-        [&Url::parse("file:///c.eventb").unwrap()];
+        [&("file:///c.eventb").parse::<Uri>().unwrap()];
     assert_eq!(edits[0].new_text, "SETS\n    S\n");
     assert_eq!(
         edits[1].range.start,

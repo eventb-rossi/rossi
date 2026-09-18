@@ -104,14 +104,14 @@ impl ReferenceProvider {
     }
 
     /// Find all references in the current document
-    fn find_references_in_text(&self, text: &str, uri: &Url, identifier: &str) -> Vec<Location> {
+    fn find_references_in_text(&self, text: &str, uri: &Uri, identifier: &str) -> Vec<Location> {
         self.find_references_in_text_range(text, uri, identifier, None)
     }
 
     fn find_references_in_text_range(
         &self,
         text: &str,
-        uri: &Url,
+        uri: &Uri,
         identifier: &str,
         line_range: Option<(usize, usize)>,
     ) -> Vec<Location> {
@@ -129,7 +129,7 @@ impl ReferenceProvider {
     fn find_symbol_references_in_text_range(
         &self,
         text: &str,
-        uri: &Url,
+        uri: &Uri,
         identifier: &str,
         line_range: Option<(usize, usize)>,
     ) -> Vec<Location> {
@@ -145,7 +145,7 @@ impl ReferenceProvider {
         &self,
         text: &str,
         masked: &str,
-        uri: &Url,
+        uri: &Uri,
         position: Position,
         identifier: &str,
         cursor: Option<&ParsedDocument>,
@@ -291,7 +291,7 @@ fn push_unique_locations(
 fn ast_symbol_references(
     component: &Component,
     text: &str,
-    uri: &Url,
+    uri: &Uri,
     name: &str,
 ) -> Vec<Location> {
     let mut spans: Vec<Span> = Vec::new();
@@ -307,7 +307,7 @@ fn ast_symbol_references(
 fn ast_parameter_references(
     component: &Component,
     text: &str,
-    uri: &Url,
+    uri: &Uri,
     event_name: &str,
     name: &str,
 ) -> Vec<Location> {
@@ -332,7 +332,7 @@ fn ast_parameter_references(
 fn spans_to_locations(
     spans: impl IntoIterator<Item = Span>,
     text: &str,
-    uri: &Url,
+    uri: &Uri,
     name: &str,
 ) -> Vec<Location> {
     spans
@@ -386,11 +386,11 @@ fn get_identifier_at_position(text: &str, position: Position) -> Option<String> 
 mod tests {
     use super::*;
 
-    fn make_uri() -> Url {
-        Url::parse("file:///test.eventb").unwrap()
+    fn make_uri() -> Uri {
+        ("file:///test.eventb").parse::<Uri>().unwrap()
     }
 
-    fn make_params(line: u32, character: u32, uri: Url) -> ReferenceParams {
+    fn make_params(line: u32, character: u32, uri: Uri) -> ReferenceParams {
         ReferenceParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -414,9 +414,9 @@ mod tests {
     /// straight back to a whole-document text scan.)
     fn provider_with(uri: &str, source: &str) -> ReferenceProvider {
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(uri.to_string(), source);
+        crm.update_component(uri.to_owned(), source);
         let dm = Arc::new(DocumentManager::new());
-        dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
+        dm.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
         let mut provider = ReferenceProvider::new();
         provider.set_cross_reference_manager(crm);
         provider.set_document_manager(dm);
@@ -440,7 +440,7 @@ mod tests {
 
         let refs = provider
             .find_references(
-                &make_params(5, 16, Url::parse(uri).unwrap()),
+                &make_params(5, 16, uri.parse::<Uri>().unwrap()),
                 SHADOWING_BINDER,
             )
             .expect("references");
@@ -460,7 +460,7 @@ mod tests {
 
         let refs = provider
             .find_references(
-                &make_params(4, 10, Url::parse(uri).unwrap()),
+                &make_params(4, 10, uri.parse::<Uri>().unwrap()),
                 SHADOWING_BINDER,
             )
             .expect("references");
@@ -482,7 +482,7 @@ mod tests {
 
         // Line 2: "    @i1 ∀ x · …" → outer binder `x` at col 10.
         let refs = provider
-            .find_references(&make_params(2, 10, Url::parse(uri).unwrap()), source)
+            .find_references(&make_params(2, 10, uri.parse::<Uri>().unwrap()), source)
             .expect("references");
         assert_eq!(refs.len(), 1, "only the outer binder declaration: {refs:?}");
     }
@@ -498,7 +498,7 @@ mod tests {
         let provider = provider_with(uri, source);
 
         let refs = provider
-            .find_references(&make_params(2, 12, Url::parse(uri).unwrap()), source)
+            .find_references(&make_params(2, 12, uri.parse::<Uri>().unwrap()), source)
             .expect("references");
         assert_eq!(refs.len(), 2, "only @inv1's binder + bound use: {refs:?}");
         assert!(
@@ -509,15 +509,15 @@ mod tests {
 
     #[test]
     fn references_include_open_dependents_before_graph_reindexing() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT c\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k ∈ ℕ\nEND";
         let old_machine = "MACHINE m\nEND";
         let current_machine = "MACHINE m\nSEES\n    c\nINVARIANTS\n    @inv1 k = k\nEND";
 
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), old_machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), old_machine);
         let dm = Arc::new(DocumentManager::new());
         dm.open(context_uri, 1, context.to_string());
         dm.open(machine_uri.clone(), 1, old_machine.to_string());
@@ -569,8 +569,8 @@ mod tests {
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
         for (uri, source) in sources {
-            crm.update_component(uri.to_string(), source);
-            dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
+            crm.update_component(uri.to_owned(), source);
+            dm.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
         }
 
         let mut provider = ReferenceProvider::new();
@@ -580,7 +580,7 @@ mod tests {
         crate::benchmark_metrics::start();
         let refs = provider
             .find_references(
-                &make_params(2, 4, Url::parse(sources[0].0).unwrap()),
+                &make_params(2, 4, (sources[0].0).parse::<Uri>().unwrap()),
                 sources[0].1,
             )
             .expect("references for inherited k");
@@ -594,7 +594,7 @@ mod tests {
             uris,
             sources
                 .into_iter()
-                .map(|(uri, _)| Url::parse(uri).unwrap())
+                .map(|(uri, _)| uri.parse::<Uri>().unwrap())
                 .collect()
         );
         assert_eq!(metrics.environments, 1);
@@ -603,16 +603,16 @@ mod tests {
 
     #[test]
     fn references_find_open_component_rename_before_graph_reindexing() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let old_context = "CONTEXT old\nEND";
         let current_context = "CONTEXT new\nEND";
         let old_machine = "MACHINE m\nEND";
         let current_machine = "MACHINE m\nSEES\n    new\nEND";
 
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), old_context);
-        crm.update_component(machine_uri.to_string(), old_machine);
+        crm.update_component(context_uri.as_str().to_owned(), old_context);
+        crm.update_component(machine_uri.as_str().to_owned(), old_machine);
         let dm = Arc::new(DocumentManager::new());
         dm.open(context_uri.clone(), 1, old_context.to_string());
         dm.open(machine_uri.clone(), 1, old_machine.to_string());
@@ -649,14 +649,14 @@ mod tests {
 
     #[test]
     fn component_references_exclude_same_spelling_in_formulas_and_labels() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT C\nCONSTANTS\n    C\nAXIOMS\n    @C C =\nEND";
         let machine = "MACHINE M\nSEES C\nVARIABLES\n    C\nINVARIANTS\n    @C C ∈\nEND";
 
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), machine);
         let dm = Arc::new(DocumentManager::new());
         dm.open(context_uri.clone(), 1, context.to_string());
         dm.open(machine_uri.clone(), 1, machine.to_string());
@@ -686,13 +686,13 @@ mod tests {
 
     #[test]
     fn component_references_accept_the_name_trailing_edge() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT C \nEND";
         let machine = "MACHINE M\nSEES C\nEND";
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), machine);
         let dm = Arc::new(DocumentManager::new());
         dm.open(context_uri.clone(), 1, context.to_string());
         dm.open(machine_uri.clone(), 1, machine.to_string());
@@ -713,13 +713,13 @@ mod tests {
 
     #[test]
     fn component_references_include_a_repeated_dependency_clause() {
-        let context_uri = Url::parse("file:///d.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///d.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT D\nEND";
         let machine = "MACHINE M\nSEES C\nSEES D\nEND";
         let crm = Arc::new(CrossReferenceManager::new());
-        crm.update_component(context_uri.to_string(), context);
-        crm.update_component(machine_uri.to_string(), machine);
+        crm.update_component(context_uri.as_str().to_owned(), context);
+        crm.update_component(machine_uri.as_str().to_owned(), machine);
         let dm = Arc::new(DocumentManager::new());
         dm.open(context_uri.clone(), 1, context.to_string());
         dm.open(machine_uri.clone(), 1, machine.to_string());
@@ -749,14 +749,14 @@ mod tests {
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
         for (uri, source) in sources {
-            crm.update_component(uri.to_string(), source);
-            dm.open(Url::parse(uri).unwrap(), 1, source.to_string());
+            crm.update_component(uri.to_owned(), source);
+            dm.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
         }
         let mut provider = ReferenceProvider::new();
         provider.set_cross_reference_manager(crm);
         provider.set_document_manager(dm);
 
-        let context_uri = Url::parse(sources[0].0).unwrap();
+        let context_uri = (sources[0].0).parse::<Uri>().unwrap();
         let context_refs = provider
             .find_references(&make_params(0, 8, context_uri.clone()), sources[0].1)
             .expect("context references");
@@ -777,15 +777,15 @@ mod tests {
             HashSet::from([
                 (context_uri, 0, 8,),
                 (
-                    Url::parse(sources[1].0).unwrap(),
+                    (sources[1].0).parse::<Uri>().unwrap(),
                     utf16_extends.line,
                     utf16_extends.character,
                 ),
-                (Url::parse(sources[3].0).unwrap(), 2, 5),
+                ((sources[3].0).parse::<Uri>().unwrap(), 2, 5),
             ])
         );
 
-        let machine_uri = Url::parse(sources[2].0).unwrap();
+        let machine_uri = (sources[2].0).parse::<Uri>().unwrap();
         let machine_refs = provider
             .find_references(&make_params(0, 8, machine_uri.clone()), sources[2].1)
             .expect("machine references");
@@ -803,7 +803,7 @@ mod tests {
             machine_sites,
             HashSet::from([
                 (machine_uri, 0, 8),
-                (Url::parse(sources[3].0).unwrap(), 1, 8),
+                ((sources[3].0).parse::<Uri>().unwrap(), 1, 8),
             ])
         );
     }

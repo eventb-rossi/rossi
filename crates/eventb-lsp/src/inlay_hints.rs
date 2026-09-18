@@ -24,7 +24,7 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip, MarkupContent, MarkupKind, Range,
-    Url,
+    Uri,
 };
 use crate::position::PositionIndex;
 use crate::text_utils::line_tight_end;
@@ -33,7 +33,7 @@ use crate::text_utils::line_tight_end;
 pub struct InlayHintsProvider {
     document_manager: Arc<DocumentManager>,
     cross_reference_manager: Arc<CrossReferenceManager>,
-    cache: parking_lot::Mutex<HashMap<Url, CachedHints>>,
+    cache: parking_lot::Mutex<HashMap<Uri, CachedHints>>,
 }
 
 /// One cached whole-document hint computation. Valid while no buffer anywhere
@@ -66,7 +66,7 @@ impl InlayHintsProvider {
     /// handler thread: a lock, two binary searches, and the response clones.
     pub fn cached_hints(
         &self,
-        uri: &Url,
+        uri: &Uri,
         range: Range,
         config: &Arc<RossiConfig>,
     ) -> Option<Vec<InlayHint>> {
@@ -84,7 +84,7 @@ impl InlayHintsProvider {
     /// is preferred over another lock order to reason about.
     pub fn compute_hints(
         &self,
-        uri: &Url,
+        uri: &Uri,
         range: Range,
         config: &Arc<RossiConfig>,
     ) -> Option<Vec<InlayHint>> {
@@ -110,7 +110,7 @@ impl InlayHintsProvider {
     /// and moves only a miss to the blocking pool).
     pub fn inlay_hints(
         &self,
-        uri: &Url,
+        uri: &Uri,
         range: Range,
         config: &Arc<RossiConfig>,
     ) -> Option<Vec<InlayHint>> {
@@ -119,7 +119,7 @@ impl InlayHintsProvider {
     }
 
     /// Drop the cached hints of a closed document.
-    pub fn evict(&self, uri: &Url) {
+    pub fn evict(&self, uri: &Uri) {
         self.cache.lock().remove(uri);
     }
 
@@ -127,7 +127,7 @@ impl InlayHintsProvider {
     /// from current buffer snapshots, run the static check (without proof
     /// obligations), and join the typed declaration records back to this
     /// file's AST declaration sites, which carry the spans.
-    fn compute(&self, uri: &Url, config: &RossiConfig) -> Option<Vec<InlayHint>> {
+    fn compute(&self, uri: &Uri, config: &RossiConfig) -> Option<Vec<InlayHint>> {
         let doc = self.document_manager.parse_result(uri)?;
 
         // The loadable closure of every component in this file, assembled by

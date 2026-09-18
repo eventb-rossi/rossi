@@ -101,7 +101,7 @@ pub struct ProofObligationsParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProofStatusParams {
-    pub uri: Url,
+    pub uri: Uri,
     pub obligations: Vec<Obligation>,
 }
 
@@ -117,13 +117,13 @@ impl notification::Notification for ProofStatusNotification {
 /// diagnostics, the lenses and the custom request.
 #[derive(Default)]
 pub struct ProofOverlay {
-    by_uri: HashMap<Url, Vec<Obligation>>,
+    by_uri: HashMap<Uri, Vec<Obligation>>,
 }
 
 impl ProofOverlay {
     /// Replace one document's list. Returns whether anything changed, so a
     /// caller republishes only then.
-    pub(crate) fn apply(&mut self, uri: Url, obligations: Vec<Obligation>) -> bool {
+    pub(crate) fn apply(&mut self, uri: Uri, obligations: Vec<Obligation>) -> bool {
         if self.by_uri.get(&uri) == Some(&obligations) {
             return false;
         }
@@ -131,11 +131,11 @@ impl ProofOverlay {
         true
     }
 
-    pub(crate) fn remove(&mut self, uri: &Url) -> bool {
+    pub(crate) fn remove(&mut self, uri: &Uri) -> bool {
         self.by_uri.remove(uri).is_some()
     }
 
-    pub(crate) fn get(&self, uri: &Url) -> Option<&[Obligation]> {
+    pub(crate) fn get(&self, uri: &Uri) -> Option<&[Obligation]> {
         self.by_uri.get(uri).map(Vec::as_slice)
     }
 }
@@ -384,13 +384,12 @@ pub(crate) fn code_lenses(
 /// writes there live while a session runs), then the document's own
 /// directory (the proof mirror's session-end copies, or a plain Rodin
 /// export). The same order the animate lens reads recorded proof state in.
-pub(crate) fn sources_for(uri: &Url, rodin_project_dir: Option<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn sources_for(uri: &Uri, rodin_project_dir: Option<PathBuf>) -> Vec<PathBuf> {
     rodin_project_dir
         .filter(|dir| dir.is_dir())
         .into_iter()
         .chain(
             uri.to_file_path()
-                .ok()
                 .and_then(|path| path.parent().map(Path::to_path_buf)),
         )
         .collect()

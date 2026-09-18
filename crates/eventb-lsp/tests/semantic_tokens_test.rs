@@ -1,6 +1,6 @@
 //! Tests for semantic tokens provider
 
-use eventb_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Url};
+use eventb_lsp::lsp_types::{SemanticTokensParams, TextDocumentIdentifier, Uri};
 use eventb_lsp::semantic_tokens::SemanticTokensProvider;
 
 mod common;
@@ -9,7 +9,7 @@ use common::{decode_tokens, decode_tokens_with_modifiers, slice_range};
 #[test]
 fn test_semantic_tokens_returns_none_for_unparseable_input() {
     let provider = SemanticTokensProvider::new();
-    let uri = Url::parse("file:///test.eventb").unwrap();
+    let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
 
     for text in ["", "INVALID SYNTAX HERE\nTHIS IS NOT VALID EVENT-B\n"] {
         let params = SemanticTokensParams {

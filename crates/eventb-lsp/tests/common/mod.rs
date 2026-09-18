@@ -3,7 +3,7 @@
 use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
     PartialResultParams, Range, SemanticTokensParams, SemanticTokensResult, TextDocumentIdentifier,
-    Url, WorkDoneProgressParams,
+    Uri, WorkDoneProgressParams,
 };
 use eventb_lsp::semantic_tokens::SemanticTokensProvider;
 
@@ -36,7 +36,7 @@ pub fn decode_tokens_with_modifiers(text: &str) -> Vec<(u32, u32, u32, u32, u32)
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: PartialResultParams::default(),
         text_document: TextDocumentIdentifier {
-            uri: Url::parse("file:///decode-probe.eventb").unwrap(),
+            uri: ("file:///decode-probe.eventb").parse::<Uri>().unwrap(),
         },
     };
     let parsed = rossi::parse_components_with_recovery(text);

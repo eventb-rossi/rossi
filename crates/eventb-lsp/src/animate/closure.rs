@@ -14,7 +14,7 @@ use std::path::Path;
 use crate::component_loader::ComponentLoader;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
-use crate::lsp_types::Url;
+use crate::lsp_types::Uri;
 
 use super::{AnimateError, AnimateMode};
 
@@ -29,7 +29,7 @@ pub(crate) struct InvariantInfo {
     /// The machine that declares it.
     pub component: String,
     /// The file that held that machine when the run started.
-    pub uri: Url,
+    pub uri: Uri,
     /// Whitespace-stripped renderings (Rodin-canonical and ASCII) of the
     /// predicate; the tool prints the `.bcm` predicate code, which our
     /// build derives from the same AST.
@@ -42,7 +42,7 @@ pub(crate) struct InvariantInfo {
 #[derive(Debug)]
 pub(crate) struct ComponentInfo {
     pub name: String,
-    pub uri: Url,
+    pub uri: Uri,
     /// Event names, including `INITIALISATION` when present.
     pub event_names: HashSet<String>,
 }
@@ -53,7 +53,7 @@ pub(crate) struct Closure {
     /// Name of the clicked machine.
     pub machine: String,
     /// The clicked file (diagnostic fallback anchor).
-    pub uri: Url,
+    pub uri: Uri,
     /// All components (machine, refinement ancestors, visible contexts).
     pub components: Vec<rossi::NamedComponent>,
     /// Every labeled invariant declared across the closure's machines.
@@ -79,7 +79,7 @@ pub(crate) struct Prepared {
 pub(crate) fn prepare(
     cross_references: &CrossReferenceManager,
     documents: &DocumentManager,
-    uri: &Url,
+    uri: &Uri,
     machine: &str,
     mode: AnimateMode,
     rodin_project_dir: Option<&Path>,
@@ -152,7 +152,7 @@ fn recorded_proof_file(
         .strip_suffix(".bpo")
         .or_else(|| name.strip_suffix(".bps"))?;
     let info = closure.infos.iter().find(|info| info.name == stem)?;
-    let path = info.uri.to_file_path().ok()?;
+    let path = info.uri.to_file_path()?;
     std::fs::read_to_string(path.parent()?.join(name)).ok()
 }
 
@@ -167,13 +167,13 @@ fn recorded_proof_file(
 pub(crate) fn collect_closure(
     cross_references: &CrossReferenceManager,
     documents: &DocumentManager,
-    uri: &Url,
+    uri: &Uri,
     machine: &str,
 ) -> Result<Closure, AnimateError> {
     let loader = ComponentLoader::new(cross_references, Some(documents));
     let clicked = loader
         .parsed(uri)
-        .ok_or_else(|| AnimateError::SourceUnavailable(uri.to_string()))?;
+        .ok_or_else(|| AnimateError::SourceUnavailable(uri.as_str().to_owned()))?;
     ensure_clean_parse(&clicked, machine)?;
     let component = clicked
         .components()
@@ -228,9 +228,9 @@ fn ensure_clean_parse(
 fn resolve_dependency(
     loader: &ComponentLoader<'_>,
     clicked: &std::sync::Arc<crate::document::ParsedDocument>,
-    clicked_uri: &Url,
+    clicked_uri: &Uri,
     name: &str,
-) -> Result<(std::sync::Arc<crate::document::ParsedDocument>, Url), AnimateError> {
+) -> Result<(std::sync::Arc<crate::document::ParsedDocument>, Uri), AnimateError> {
     if clicked.components().iter().any(|c| c.name() == name) {
         return Ok((std::sync::Arc::clone(clicked), clicked_uri.clone()));
     }
@@ -240,12 +240,12 @@ fn resolve_dependency(
             return Ok((doc, dep_uri));
         }
     }
-    if let Ok(path) = clicked_uri.to_file_path()
+    if let Some(path) = clicked_uri.to_file_path()
         && let Some(dir) = path.parent()
     {
         for ext in ["eventb", "txt"] {
             let candidate = dir.join(format!("{name}.{ext}"));
-            if let Ok(candidate_uri) = Url::from_file_path(&candidate)
+            if let Some(candidate_uri) = Uri::from_file_path(&candidate)
                 && let Some(doc) = loader.parsed(&candidate_uri)
                 && doc.components().iter().any(|c| c.name() == name)
             {
@@ -260,7 +260,7 @@ fn resolve_dependency(
 /// names (REFINES/SEES for machines, EXTENDS for contexts — read through the
 /// shared edge SSOT, so the closure can never miss an edge kind the
 /// cross-reference checks know about).
-fn record_component(component: &rossi::Component, uri: &Url, closure: &mut Closure) -> Vec<String> {
+fn record_component(component: &rossi::Component, uri: &Uri, closure: &mut Closure) -> Vec<String> {
     let mut info = ComponentInfo {
         name: component.name().to_string(),
         uri: uri.clone(),
@@ -383,9 +383,9 @@ mod tests {
     use crate::test_util::TempDir;
 
     fn open(documents: &DocumentManager, xref: &CrossReferenceManager, uri: &str, text: &str) {
-        let url = Url::parse(uri).unwrap();
+        let url = uri.parse::<Uri>().unwrap();
         documents.open(url.clone(), 1, text.to_string());
-        xref.update_component(url.to_string(), text);
+        xref.update_component(url.as_str().to_owned(), text);
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
             "MACHINE m1\nREFINES m0\nSEES c1\nEND\n",
         );
 
-        let uri = Url::parse("file:///m1.eventb").unwrap();
+        let uri = ("file:///m1.eventb").parse::<Uri>().unwrap();
         let closure = collect_closure(&xref, &documents, &uri, "m1").unwrap();
         let mut names: Vec<&str> = closure
             .components
@@ -447,7 +447,7 @@ mod tests {
         // resolve `c0`.
         let documents = DocumentManager::new();
         let xref = CrossReferenceManager::new();
-        let uri = Url::from_file_path(&machine_path).unwrap();
+        let uri = Uri::from_file_path(&machine_path).unwrap();
         let closure = collect_closure(&xref, &documents, &uri, "m0").unwrap();
         assert_eq!(closure.components.len(), 2);
     }
@@ -462,7 +462,7 @@ mod tests {
             "file:///m.eventb",
             "MACHINE m\nVARIABLES\n    x y (\nEND\n",
         );
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let error = collect_closure(&xref, &documents, &uri, "m").unwrap_err();
         assert_eq!(error, AnimateError::ParseFailed("m".to_string()));
     }
@@ -472,7 +472,7 @@ mod tests {
         let documents = DocumentManager::new();
         let xref = CrossReferenceManager::new();
         open(&documents, &xref, "file:///c.eventb", "CONTEXT c\nEND\n");
-        let uri = Url::parse("file:///c.eventb").unwrap();
+        let uri = ("file:///c.eventb").parse::<Uri>().unwrap();
         assert_eq!(
             collect_closure(&xref, &documents, &uri, "c").unwrap_err(),
             AnimateError::NotAMachine("c".to_string())
@@ -488,7 +488,7 @@ mod tests {
         let documents = DocumentManager::new();
         let xref = CrossReferenceManager::new();
         open(&documents, &xref, "file:///m.eventb", PROVABLE_MACHINE);
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let prepared = prepare(&xref, &documents, &uri, "m", AnimateMode::Check, None).unwrap();
         let dir = prepared.temp_dir.path();
         assert!(dir.join("m.bum").is_file());
@@ -514,7 +514,7 @@ mod tests {
             "file:///m.eventb",
             "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 y ∈ ℕ\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x := 0\n    END\nEND\n",
         );
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         match prepare(&xref, &documents, &uri, "m", AnimateMode::Check, None).unwrap_err() {
             AnimateError::BuildFailed(findings) => {
                 assert!(!findings.is_empty());
@@ -562,11 +562,11 @@ mod tests {
     /// state: the generated `m.bpo`/`m.bps` pair with every confidence
     /// doctored to 1000 (discharged), written into a directory posing as
     /// the shared Rodin workspace project.
-    fn discharged_fixture() -> (DocumentManager, CrossReferenceManager, Url, TempDir, usize) {
+    fn discharged_fixture() -> (DocumentManager, CrossReferenceManager, Uri, TempDir, usize) {
         let documents = DocumentManager::new();
         let xref = CrossReferenceManager::new();
         open(&documents, &xref, "file:///m.eventb", PROVABLE_MACHINE);
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
 
         let baseline = prepare(&xref, &documents, &uri, "m", AnimateMode::Po, None).unwrap();
         assert!(baseline.po_count >= 1, "the fixture machine must have POs");
@@ -636,7 +636,7 @@ mod tests {
         std::fs::write(&machine_path, PROVABLE_MACHINE).unwrap();
         let documents = DocumentManager::new();
         let xref = CrossReferenceManager::new();
-        let uri = Url::from_file_path(&machine_path).unwrap();
+        let uri = Uri::from_file_path(&machine_path).unwrap();
 
         let baseline = prepare(&xref, &documents, &uri, "m", AnimateMode::Po, None).unwrap();
         write_discharged(baseline.temp_dir.path(), tmp.path());

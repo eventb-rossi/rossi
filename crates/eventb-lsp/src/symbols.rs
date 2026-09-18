@@ -588,7 +588,7 @@ mod tests {
 
     use crate::cross_references::CrossReferenceManager;
     use crate::document::DocumentManager;
-    use crate::lsp_types::Url;
+    use crate::lsp_types::Uri;
 
     #[test]
     fn shared_symbol_resolution_reaches_beyond_ten_refinements() {
@@ -601,8 +601,8 @@ mod tests {
                 format!("\nREFINES\n    m{}", i + 1)
             };
             let source = format!("MACHINE m{i}{body}\nEND");
-            let uri = Url::parse(&format!("file:///m{i}.eventb")).unwrap();
-            manager.update_component(uri.to_string(), &source);
+            let uri = format!("file:///m{i}.eventb").parse::<Uri>().unwrap();
+            manager.update_component(uri.as_str().to_owned(), &source);
             documents.open(uri, 1, source);
         }
         let root = crate::component_util::parse_all("MACHINE m0\nREFINES\n    m1\nEND")
@@ -633,8 +633,8 @@ mod tests {
             ),
         ];
         for (uri, source) in sources {
-            manager.update_component(uri.to_string(), source);
-            documents.open(Url::parse(uri).unwrap(), 1, source.to_string());
+            manager.update_component(uri.to_owned(), source);
+            documents.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
         }
         let concrete = "MACHINE concrete\nREFINES\n    abstract\nSEES\n    seen\nEVENTS\n    EVENT step extends step\n    THEN\n        @act1 skip\n    END\nEND";
         let loader = ComponentLoader::new(&manager, Some(&documents));

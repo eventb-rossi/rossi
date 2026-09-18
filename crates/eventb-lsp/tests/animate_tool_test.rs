@@ -26,7 +26,7 @@ use eventb_lsp::animate::{AnimateMode, ExecuteInput, execute};
 use eventb_lsp::config::AnimateConfig;
 use eventb_lsp::cross_references::CrossReferenceManager;
 use eventb_lsp::document::DocumentManager;
-use eventb_lsp::lsp_types::Url;
+use eventb_lsp::lsp_types::Uri;
 
 const OK_CTX: &str = "CONTEXT ok_ctx\nCONSTANTS\n    bound\nAXIOMS\n    @axm1 bound = 3\nEND\n";
 
@@ -62,8 +62,10 @@ fn available_tool() -> Option<String> {
     }
 }
 
-fn test_uri(filename: &str) -> Url {
-    Url::parse(&format!("file:///animate-tool-test/{filename}")).unwrap()
+fn test_uri(filename: &str) -> Uri {
+    format!("file:///animate-tool-test/{filename}")
+        .parse::<Uri>()
+        .unwrap()
 }
 
 /// An [`ExecuteInput`] over in-memory buffers, or `None` (skip) when the

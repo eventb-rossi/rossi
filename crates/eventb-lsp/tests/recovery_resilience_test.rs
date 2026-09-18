@@ -61,8 +61,8 @@ invariants
 end
 "#;
 
-fn uri() -> Url {
-    Url::parse("file:///model.eventb").unwrap()
+fn uri() -> Uri {
+    ("file:///model.eventb").parse::<Uri>().unwrap()
 }
 
 fn goto_params(line: u32, character: u32) -> GotoDefinitionParams {
@@ -192,8 +192,8 @@ EVENTS
 END
 ";
 
-fn broken_guard_uri() -> Url {
-    Url::parse("file:///broken.eventb").unwrap()
+fn broken_guard_uri() -> Uri {
+    ("file:///broken.eventb").parse::<Uri>().unwrap()
 }
 
 fn setup_broken_guard() -> DefinitionProvider {

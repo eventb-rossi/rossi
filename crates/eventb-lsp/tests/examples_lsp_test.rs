@@ -87,7 +87,7 @@ fn examples_dir() -> PathBuf {
 /// where this component begins, so position helpers can search within it.
 struct ModelFile {
     name: String,
-    uri: Url,
+    uri: Uri,
     component: rossi::Component,
     text: String,
     /// 0-indexed first line of this component within `text` (0 when the
@@ -105,7 +105,9 @@ fn load_model(zip_name: &str) -> Vec<ModelFile> {
         .map(|named| {
             let name = named.component.name().to_string();
             ModelFile {
-                uri: Url::parse(&format!("file:///{model}/{name}.eventb")).unwrap(),
+                uri: format!("file:///{model}/{name}.eventb")
+                    .parse::<Uri>()
+                    .unwrap(),
                 // Render with the LSP default printer (not the flat
                 // library default) so the converted text is exactly what
                 // formatting would produce — the identity premise of
@@ -200,7 +202,9 @@ impl Workspace {
     fn from_merged_text(model: &str, text: &str) -> Self {
         let components = rossi::parse_components(text)
             .unwrap_or_else(|e| panic!("{model}: merged text does not parse: {e}"));
-        let uri = Url::parse(&format!("file:///{model}/merged.eventb")).unwrap();
+        let uri = format!("file:///{model}/merged.eventb")
+            .parse::<Uri>()
+            .unwrap();
 
         let files: Vec<ModelFile> = components
             .into_iter()
@@ -243,8 +247,10 @@ impl Workspace {
     fn add_document(&mut self, model: &str, text: &str) {
         let component = rossi::parse(text).expect("extra document must parse");
         let name = component.name().to_string();
-        let uri = Url::parse(&format!("file:///{model}/{name}.eventb")).unwrap();
-        self.crm.update_component(uri.to_string(), text);
+        let uri = format!("file:///{model}/{name}.eventb")
+            .parse::<Uri>()
+            .unwrap();
+        self.crm.update_component(uri.as_str().to_owned(), text);
         self.dm.open(uri.clone(), 1, text.to_string());
         self.files.push(ModelFile {
             name,
@@ -266,16 +272,16 @@ impl Workspace {
         &self.entry(name).text
     }
 
-    fn uri(&self, name: &str) -> Url {
+    fn uri(&self, name: &str) -> Uri {
         self.entry(name).uri.clone()
     }
 
-    fn text_for_uri(&self, uri: &Url) -> &str {
+    fn text_for_uri(&self, uri: &Uri) -> &str {
         &self
             .files
             .iter()
             .find(|f| f.uri == *uri)
-            .unwrap_or_else(|| panic!("no component at {uri}"))
+            .unwrap_or_else(|| panic!("no component at {}", uri.as_str()))
             .text
     }
 }
@@ -284,8 +290,8 @@ impl Workspace {
 // Position and text helpers (char-based columns, like the providers)
 // ============================================================================
 
-fn probe_uri() -> Url {
-    Url::parse("file:///probe.eventb").unwrap()
+fn probe_uri() -> Uri {
+    ("file:///probe.eventb").parse::<Uri>().unwrap()
 }
 
 /// Char-based start position of the `n`-th whole-word occurrence of `word`.
@@ -408,7 +414,7 @@ fn range_contains(outer: &Range, inner: &Range) -> bool {
 // LSP params builders and provider factories
 // ============================================================================
 
-fn goto_params(uri: Url, position: Position) -> GotoDefinitionParams {
+fn goto_params(uri: Uri, position: Position) -> GotoDefinitionParams {
     GotoDefinitionParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -419,7 +425,7 @@ fn goto_params(uri: Url, position: Position) -> GotoDefinitionParams {
     }
 }
 
-fn reference_params(uri: Url, position: Position) -> ReferenceParams {
+fn reference_params(uri: Uri, position: Position) -> ReferenceParams {
     ReferenceParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -433,7 +439,7 @@ fn reference_params(uri: Url, position: Position) -> ReferenceParams {
     }
 }
 
-fn rename_params(uri: Url, position: Position, new_name: &str) -> RenameParams {
+fn rename_params(uri: Uri, position: Position, new_name: &str) -> RenameParams {
     RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -444,7 +450,7 @@ fn rename_params(uri: Url, position: Position, new_name: &str) -> RenameParams {
     }
 }
 
-fn hover_params(uri: Url, position: Position) -> HoverParams {
+fn hover_params(uri: Uri, position: Position) -> HoverParams {
     HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -454,7 +460,7 @@ fn hover_params(uri: Url, position: Position) -> HoverParams {
     }
 }
 
-fn doclink_params(uri: Url) -> DocumentLinkParams {
+fn doclink_params(uri: Uri) -> DocumentLinkParams {
     DocumentLinkParams {
         text_document: TextDocumentIdentifier { uri },
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -701,9 +707,9 @@ fn cars_rename_component_cross_file() {
         .expect("rename C0");
     let changes = edit.changes.expect("rename returns changes");
 
-    let mut touched: Vec<Url> = changes.keys().cloned().collect();
+    let mut touched: Vec<Uri> = changes.keys().cloned().collect();
     touched.sort();
-    let mut expected: Vec<Url> = ["C0", "C2", "M0", "M1"].iter().map(|n| ws.uri(n)).collect();
+    let mut expected: Vec<Uri> = ["C0", "C2", "M0", "M1"].iter().map(|n| ws.uri(n)).collect();
     expected.sort();
     assert_eq!(
         touched, expected,
@@ -745,7 +751,7 @@ fn cars_rename_constant_is_single_file() {
         .expect("rename cars_limit");
     let changes = edit.changes.expect("rename returns changes");
 
-    let touched: Vec<Url> = changes.keys().cloned().collect();
+    let touched: Vec<Uri> = changes.keys().cloned().collect();
     assert_eq!(
         touched,
         vec![ws.uri("M0")],
@@ -1516,7 +1522,7 @@ fn workspace_scan_builds_cross_ref_graph() {
         // Kept in sync with the cars-on-bridge exact tests near the top.
         match zip_name {
             CARS => {
-                let c0_uri = Url::from_file_path(model_dir.join("C0.eventb"))
+                let c0_uri = Uri::from_file_path(model_dir.join("C0.eventb"))
                     .unwrap()
                     .to_string();
                 assert_eq!(crm.find_component_uri("C0"), Some(c0_uri));

@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use super::bridge::{self, Bridge};
 use super::model_sync::{self, MergeOutcome};
-use crate::lsp_types::Url;
+use crate::lsp_types::Uri;
 use crate::server::Analyzer;
 
 /// The ancestor a live merge runs against, per source file.
@@ -171,7 +171,7 @@ const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
 /// The version is the signal rather than the text, because it is a lookup
 /// instead of a copy of the whole rope, and any echo at all bumps it. If none
 /// comes, the merge is left no worse off than before this wait existed.
-async fn settle(analyzer: &Analyzer, target: Option<(Url, i32)>) {
+async fn settle(analyzer: &Analyzer, target: Option<(Uri, i32)>) {
     let Some((uri, applied_to)) = target else {
         // Written straight to disk, so the next read already sees it.
         return;

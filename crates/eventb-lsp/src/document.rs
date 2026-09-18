@@ -3,7 +3,7 @@
 //! This module handles in-memory storage of open documents, text synchronization,
 //! and provides efficient text editing operations.
 
-use crate::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
+use crate::lsp_types::{Position, TextDocumentContentChangeEvent, Uri};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use ropey::Rope;
@@ -65,7 +65,7 @@ impl ParsedDocument {
 /// the same (recovery-tolerant) AST, and a burst of keystrokes parses at most
 /// once — when analysis finally reads the parse — rather than once per edit.
 pub struct DocumentManager {
-    documents: DashMap<Url, Arc<RwLock<Document>>>,
+    documents: DashMap<Uri, Arc<RwLock<Document>>>,
     next_revision: AtomicU64,
 }
 
@@ -97,7 +97,7 @@ impl DocumentManager {
     }
 
     /// Open a new document
-    pub fn open(&self, uri: Url, version: i32, text: String) {
+    pub fn open(&self, uri: Uri, version: i32, text: String) {
         let rope = Rope::from_str(&text);
         let document = Document {
             open: true,
@@ -115,7 +115,7 @@ impl DocumentManager {
     }
 
     /// Update document with incremental changes
-    pub fn change(&self, uri: &Url, version: i32, changes: Vec<TextDocumentContentChangeEvent>) {
+    pub fn change(&self, uri: &Uri, version: i32, changes: Vec<TextDocumentContentChangeEvent>) {
         if let Some(document) = self.document(uri) {
             let mut doc = document.write();
             if !doc.open {
@@ -157,7 +157,7 @@ impl DocumentManager {
     }
 
     /// Close a document
-    pub fn close(&self, uri: &Url) {
+    pub fn close(&self, uri: &Uri) {
         let Some(document) = self.document(uri) else {
             return;
         };
@@ -181,19 +181,19 @@ impl DocumentManager {
     /// a cached snapshot is a cheap `Arc` clone, while concurrent misses share
     /// one initialization. An edit swaps in a fresh empty cache without waiting
     /// for an older parse, and that older caller returns `None` when superseded.
-    pub fn parse_result(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+    pub fn parse_result(&self, uri: &Uri) -> Option<Arc<ParsedDocument>> {
         self.parse_result_with_hook(uri, || {}, rossi::parse_components_snapshot)
     }
 
     /// Resolve an interactive request against the current revision, retrying
     /// once when an edit supersedes the parse that was in flight.
-    pub(crate) fn parse_result_for_request(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+    pub(crate) fn parse_result_for_request(&self, uri: &Uri) -> Option<Arc<ParsedDocument>> {
         self.parse_result_for_request_with_hook(uri, || {}, rossi::parse_components_snapshot)
     }
 
     fn parse_result_for_request_with_hook(
         &self,
-        uri: &Url,
+        uri: &Uri,
         before_initialize: impl FnOnce(),
         parse: impl Fn(String) -> ParseSnapshot,
     ) -> Option<Arc<ParsedDocument>> {
@@ -203,7 +203,7 @@ impl DocumentManager {
 
     fn parse_result_with_hook(
         &self,
-        uri: &Url,
+        uri: &Uri,
         before_initialize: impl FnOnce(),
         parse: impl Fn(String) -> ParseSnapshot,
     ) -> Option<Arc<ParsedDocument>> {
@@ -245,7 +245,7 @@ impl DocumentManager {
     /// reopen from interleaving with the synchronous commit.
     pub(crate) fn with_current_snapshot<T>(
         &self,
-        uri: &Url,
+        uri: &Uri,
         snapshot: &Arc<ParsedDocument>,
         commit: impl FnOnce(i32) -> T,
     ) -> Option<T> {
@@ -269,14 +269,14 @@ impl DocumentManager {
         self.next_revision.load(Ordering::Relaxed)
     }
 
-    fn document(&self, uri: &Url) -> Option<Arc<RwLock<Document>>> {
+    fn document(&self, uri: &Uri) -> Option<Arc<RwLock<Document>>> {
         self.documents
             .get(uri)
             .map(|entry| Arc::clone(entry.value()))
     }
 
     /// The current internal revision of `uri`, including lifecycle changes.
-    pub(crate) fn revision(&self, uri: &Url) -> Option<u64> {
+    pub(crate) fn revision(&self, uri: &Uri) -> Option<u64> {
         let document = self.document(uri)?;
         let doc = document.read();
         if !doc.open {
@@ -287,7 +287,7 @@ impl DocumentManager {
     }
 
     /// The current LSP version of `uri`, if open.
-    pub fn version(&self, uri: &Url) -> Option<i32> {
+    pub fn version(&self, uri: &Uri) -> Option<i32> {
         let document = self.document(uri)?;
         let doc = document.read();
         if !doc.open {
@@ -300,7 +300,7 @@ impl DocumentManager {
     /// An open document's version and text, read under one lock so the pair
     /// is a consistent snapshot (callers compare the version against an
     /// earlier one to detect edits made in between).
-    pub fn open_text_and_version(&self, uri: &Url) -> Option<(i32, String)> {
+    pub fn open_text_and_version(&self, uri: &Uri) -> Option<(i32, String)> {
         let document = self.document(uri)?;
         let doc = document.read();
         if !doc.open {
@@ -310,7 +310,7 @@ impl DocumentManager {
     }
 
     /// Get document text as string
-    pub fn get_text(&self, uri: &Url) -> Option<String> {
+    pub fn get_text(&self, uri: &Uri) -> Option<String> {
         let document = self.document(uri)?;
         let doc = document.read();
         if !doc.open {
@@ -332,8 +332,8 @@ impl DocumentManager {
                 if !doc.open {
                     return None;
                 }
-                let path = entry.key().to_file_path().ok()?;
-                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                let path = entry.key().to_file_path()?;
+                let path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.into_owned());
                 Some((path, doc.text.to_string()))
             })
             .collect()
@@ -343,20 +343,21 @@ impl DocumentManager {
     /// as `(uri, version, current text)`. `path` must already be
     /// canonicalized. The version lets callers that mutate the document
     /// later detect (and reject) edits computed against a stale snapshot.
-    pub fn open_document_by_path(&self, path: &std::path::Path) -> Option<(Url, i32, String)> {
+    pub fn open_document_by_path(&self, path: &std::path::Path) -> Option<(Uri, i32, String)> {
         self.documents.iter().find_map(|entry| {
             let doc = entry.value().read();
             if !doc.open {
                 return None;
             }
-            let doc_path = entry.key().to_file_path().ok()?;
-            let doc_path = std::fs::canonicalize(&doc_path).unwrap_or(doc_path);
+            let doc_path = entry.key().to_file_path()?;
+            let doc_path =
+                std::fs::canonicalize(&doc_path).unwrap_or_else(|_| doc_path.into_owned());
             (doc_path == path).then(|| (entry.key().clone(), doc.version, doc.text.to_string()))
         })
     }
 
     /// URIs of every currently open document.
-    pub(crate) fn all_uris(&self) -> Vec<Url> {
+    pub(crate) fn all_uris(&self) -> Vec<Uri> {
         self.documents
             .iter()
             .map(|entry| entry.key().clone())
@@ -410,7 +411,7 @@ mod tests {
     #[test]
     fn test_document_manager_open_close() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
 
         // Open document
         manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());
@@ -426,7 +427,7 @@ mod tests {
     #[test]
     fn stored_parse_tracks_the_document_lifecycle() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
 
         // Open populates the stored parse.
         manager.open(
@@ -476,7 +477,7 @@ mod tests {
     #[test]
     fn parse_result_is_lazy_and_memoised_per_revision() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///lazy.eventb").unwrap();
+        let uri = ("file:///lazy.eventb").parse::<Uri>().unwrap();
         manager.open(uri.clone(), 1, "CONTEXT C0\nEND\n".to_string());
 
         // Two reads at the same version share one parse — the second is a cheap
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn reopen_with_colliding_version_does_not_serve_stale_parse() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///reopen.eventb").unwrap();
+        let uri = ("file:///reopen.eventb").parse::<Uri>().unwrap();
 
         manager.open(uri.clone(), 1, "CONTEXT A\nEND\n".to_string());
         assert_eq!(
@@ -535,7 +536,7 @@ mod tests {
     #[test]
     fn slower_old_parse_cannot_overwrite_a_newer_snapshot() {
         let manager = Arc::new(DocumentManager::new());
-        let uri = Url::parse("file:///concurrent.eventb").unwrap();
+        let uri = ("file:///concurrent.eventb").parse::<Uri>().unwrap();
         manager.open(uri.clone(), 1, "CONTEXT old\nEND\n".to_string());
 
         let (parse_started_tx, parse_started_rx) = mpsc::channel();
@@ -576,7 +577,9 @@ mod tests {
     #[test]
     fn interactive_request_retries_a_superseded_parse() {
         let manager = Arc::new(DocumentManager::new());
-        let uri = Url::parse("file:///interactive-concurrent.eventb").unwrap();
+        let uri = ("file:///interactive-concurrent.eventb")
+            .parse::<Uri>()
+            .unwrap();
         manager.open(uri.clone(), 1, "CONTEXT old\nEND\n".to_string());
 
         let (parse_started_tx, parse_started_rx) = mpsc::channel();
@@ -618,7 +621,7 @@ mod tests {
     #[test]
     fn concurrent_misses_parse_a_revision_once() {
         let manager = Arc::new(DocumentManager::new());
-        let uri = Url::parse("file:///single-flight.eventb").unwrap();
+        let uri = ("file:///single-flight.eventb").parse::<Uri>().unwrap();
         manager.open(uri.clone(), 1, "CONTEXT shared\nEND\n".to_string());
 
         let parses = Arc::new(AtomicUsize::new(0));
@@ -661,7 +664,7 @@ mod tests {
     #[test]
     fn only_the_exact_current_snapshot_can_commit() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///commit.eventb").unwrap();
+        let uri = ("file:///commit.eventb").parse::<Uri>().unwrap();
         manager.open(uri.clone(), 1, "CONTEXT old\nEND\n".to_string());
         let stale = manager.parse_result(&uri).unwrap();
 
@@ -712,7 +715,7 @@ mod tests {
         // its errors from the store — the single source of truth diagnostics
         // and the symbol features both read.
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///broken.eventb").unwrap();
+        let uri = ("file:///broken.eventb").parse::<Uri>().unwrap();
         manager.open(
             uri.clone(),
             1,
@@ -747,7 +750,7 @@ mod tests {
     #[test]
     fn test_incremental_change() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
 
         // Open document
         manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());
@@ -776,7 +779,7 @@ mod tests {
         // UTF-16 columns, so the position just after `𝔹` is column 2, not 1.
         // Char-indexing the column would splice in the wrong place.
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
         manager.open(uri.clone(), 1, "𝔹x\n".to_string());
 
         // Insert "Y" at UTF-16 column 2 = between `𝔹` and `x`.
@@ -796,7 +799,7 @@ mod tests {
     #[test]
     fn test_full_document_sync() {
         let manager = DocumentManager::new();
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
 
         // Open document
         manager.open(uri.clone(), 1, "CONTEXT test\nEND\n".to_string());

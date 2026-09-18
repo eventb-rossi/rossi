@@ -8,7 +8,7 @@
 
 use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Position, Range, TextEdit, Url, WorkspaceEdit,
+    Position, Range, TextEdit, Uri, WorkspaceEdit,
 };
 use crate::text_utils::{line_keyword, line_keyword_is};
 use rossi::keywords::KeywordId;
@@ -137,7 +137,7 @@ fn kind_requested(params: &CodeActionParams, kind: &CodeActionKind) -> bool {
 }
 
 /// A workspace edit replacing `range` of the document at `uri` with `new_text`.
-fn single_edit(uri: &Url, range: Range, new_text: String) -> WorkspaceEdit {
+fn single_edit(uri: &Uri, range: Range, new_text: String) -> WorkspaceEdit {
     WorkspaceEdit {
         changes: Some(HashMap::from([(
             uri.clone(),
@@ -149,7 +149,7 @@ fn single_edit(uri: &Url, range: Range, new_text: String) -> WorkspaceEdit {
 }
 
 /// A workspace edit replacing the whole of `text` (at `uri`) with `new_text`.
-fn full_document_edit(uri: &Url, text: &str, new_text: String) -> WorkspaceEdit {
+fn full_document_edit(uri: &Uri, text: &str, new_text: String) -> WorkspaceEdit {
     let range = Range {
         start: Position::new(0, 0),
         end: document_end_position(text),
@@ -433,7 +433,7 @@ impl CodeActionProvider {
     /// when the document is already there.
     fn create_convert_all_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
         to_unicode: bool,
         private_use_glyphs: bool,
@@ -464,7 +464,7 @@ impl CodeActionProvider {
     /// equals the `original` selected slice).
     fn create_convert_selection_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         title: &str,
         new_text: String,
         original: &str,
@@ -705,7 +705,7 @@ impl CodeActionProvider {
     /// `replacement`, attached to that diagnostic.
     fn replace_operator_fix(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         operator: &str,
         replacement: &str,
@@ -730,7 +730,7 @@ impl CodeActionProvider {
     /// so no fix is offered for it (the diagnostic still stands).
     fn create_fix_assignment_in_predicate_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
@@ -751,7 +751,7 @@ impl CodeActionProvider {
     /// missing formula is the user's to write.
     fn create_remove_empty_clause_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
@@ -786,7 +786,7 @@ impl CodeActionProvider {
     /// around it and cannot collide with one.
     fn create_insert_label_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
@@ -849,7 +849,7 @@ impl CodeActionProvider {
     /// the enclosing region, so a clause is never lifted out of it.
     fn create_move_clause_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
         scope: MoveScope,
@@ -960,7 +960,7 @@ impl CodeActionProvider {
     /// Create action to add missing END keyword
     fn create_add_missing_end_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
     ) -> Option<CodeAction> {
@@ -1088,7 +1088,7 @@ impl CodeActionProvider {
     /// Create action to add a missing clause
     fn create_add_clause_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
         clause_name: &str,
         example_content: &str,
@@ -1162,19 +1162,19 @@ impl CodeActionProvider {
     }
 
     /// Create action to sort VARIABLES clause
-    fn create_sort_variables_action(&self, uri: &Url, text: &str) -> Option<CodeAction> {
+    fn create_sort_variables_action(&self, uri: &Uri, text: &str) -> Option<CodeAction> {
         self.create_sort_clause_action(uri, text, "VARIABLES")
     }
 
     /// Create action to sort CONSTANTS clause
-    fn create_sort_constants_action(&self, uri: &Url, text: &str) -> Option<CodeAction> {
+    fn create_sort_constants_action(&self, uri: &Uri, text: &str) -> Option<CodeAction> {
         self.create_sort_clause_action(uri, text, "CONSTANTS")
     }
 
     /// Generic method to create a sort clause action
     fn create_sort_clause_action(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
         clause_name: &str,
     ) -> Option<CodeAction> {
@@ -1536,7 +1536,7 @@ mod tests {
     #[test]
     fn test_sort_clause_action_lowercase_keywords() {
         let provider = CodeActionProvider::new();
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         // Lowercase keywords; an out-of-order `variables` clause ended by `events`.
         let text = "machine m\nvariables\n    b\n    a\n    c\nevents\nend";
         let action = provider
@@ -1548,7 +1548,7 @@ mod tests {
     #[test]
     fn test_add_clause_inserts_after_lowercase_header() {
         let provider = CodeActionProvider::new();
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let text = "machine m\nvariables\n    x\nend";
         let action = provider
             .create_add_clause_action(&uri, text, "INVARIANTS", "    @inv1 TRUE")

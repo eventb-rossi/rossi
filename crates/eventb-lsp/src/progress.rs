@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::lsp_types::*;
-use tower_lsp::Client;
+use tower_lsp_server::Client;
 
 pub(crate) struct Progress {
     client: Client,

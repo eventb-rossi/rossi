@@ -269,7 +269,7 @@ impl RodinSessionMonitor {
     /// never opened must not receive surprise writes.
     pub(crate) fn arm(
         slot: &SessionMonitorSlot,
-        client: &tower_lsp::Client,
+        client: &tower_lsp_server::Client,
         workspace_dir: &Path,
         project_name: &str,
         seeded: bool,
@@ -309,7 +309,7 @@ impl RodinSessionMonitor {
 }
 
 async fn monitor_task(
-    client: tower_lsp::Client,
+    client: tower_lsp_server::Client,
     workspace_dir: PathBuf,
     projects: Arc<parking_lot::Mutex<BTreeMap<String, bool>>>,
     written: super::sync::WrittenFiles,

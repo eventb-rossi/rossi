@@ -16,7 +16,7 @@
 //! - **On-disk components** are read and parsed once, into the same
 //!   [`ParsedDocument`] bundle (text + recovered AST) the store uses.
 //!
-//! Results are memoised per [`Url`], so a file holding several merged components
+//! Results are memoised per [`Uri`], so a file holding several merged components
 //! (the output of `rossi import --merge`) is parsed once no matter how many of
 //! its component names are requested. The cache lives for one request only
 //! (it holds a `!Sync` `RefCell`); it is never stored on a provider.
@@ -31,7 +31,7 @@ use crate::component_util::component_reference_clause;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils::{self, WordBoundary};
-use crate::lsp_types::{Range, Url};
+use crate::lsp_types::{Range, Uri};
 use crate::position::span_to_range;
 
 /// One component declaration or dependency occurrence in the workspace.
@@ -39,7 +39,7 @@ use crate::position::span_to_range;
 /// Providers map this neutral record to their own LSP response shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceComponentOccurrence {
-    pub(crate) uri: Url,
+    pub(crate) uri: Uri,
     pub(crate) range: Range,
 }
 
@@ -48,14 +48,14 @@ pub(crate) struct WorkspaceComponentOccurrence {
 /// the whole [`ParsedDocument`] keeps every span the caller later slices indexed
 /// against the exact `text` it was parsed from.
 pub struct LoadedComponent {
-    uri: Url,
+    uri: Uri,
     doc: Arc<ParsedDocument>,
     index: usize,
 }
 
 impl LoadedComponent {
     /// The file URI this component is defined in.
-    pub fn uri(&self) -> &Url {
+    pub fn uri(&self) -> &Uri {
         &self.uri
     }
 
@@ -77,9 +77,9 @@ pub struct ComponentLoader<'a> {
     manager: &'a CrossReferenceManager,
     documents: Option<&'a DocumentManager>,
     /// One parsed snapshot per file URI, built on first use.
-    cache: RefCell<HashMap<Url, Arc<ParsedDocument>>>,
+    cache: RefCell<HashMap<Uri, Arc<ParsedDocument>>>,
     /// Components from current open-document snapshots, computed on demand.
-    open_components: OnceCell<BTreeMap<String, Url>>,
+    open_components: OnceCell<BTreeMap<String, Uri>>,
 }
 
 impl<'a> ComponentLoader<'a> {
@@ -116,7 +116,7 @@ impl<'a> ComponentLoader<'a> {
     /// Reuses the open-document store when the file is open (no re-parse),
     /// otherwise reads it from disk and parses it once. Returns `None` only when
     /// the file is neither open nor a readable local path.
-    pub fn parsed(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+    pub fn parsed(&self, uri: &Uri) -> Option<Arc<ParsedDocument>> {
         // Clone the cached handle out and drop the borrow before parsing, so a
         // miss never holds a borrow across `build` (which itself takes the
         // cache mutably).
@@ -140,7 +140,7 @@ impl<'a> ComponentLoader<'a> {
     /// Component occurrence queries need only the recovery scanner's exact
     /// source locations. Open documents come directly from the document store;
     /// closed documents incur one disk read and no otherwise-unused full parse.
-    fn source_text(&self, uri: &Url) -> Option<String> {
+    fn source_text(&self, uri: &Uri) -> Option<String> {
         if let Some(documents) = self.documents {
             if let Some(text) = documents.get_text(uri) {
                 return Some(text);
@@ -156,7 +156,7 @@ impl<'a> ComponentLoader<'a> {
 
     /// Parse the file at `uri` from the open-document store or disk. Never
     /// touches the cache itself.
-    fn build(&self, uri: &Url) -> Option<Arc<ParsedDocument>> {
+    fn build(&self, uri: &Uri) -> Option<Arc<ParsedDocument>> {
         if let Some(documents) = self.documents {
             if let Some(doc) = documents.parse_result(uri) {
                 #[cfg(test)]
@@ -190,7 +190,7 @@ impl<'a> ComponentLoader<'a> {
         if let Some(uri) = self
             .manager
             .find_component_uri(name)
-            .and_then(|uri| Url::parse(&uri).ok())
+            .and_then(|uri| uri.parse::<Uri>().ok())
             && let Some(loaded) = self.load_from_uri(uri, name)
         {
             return Some(loaded);
@@ -207,7 +207,7 @@ impl<'a> ComponentLoader<'a> {
         self.open_components().keys().map(String::as_str)
     }
 
-    fn open_components(&self) -> &BTreeMap<String, Url> {
+    fn open_components(&self) -> &BTreeMap<String, Uri> {
         self.open_components.get_or_init(|| {
             let mut components = BTreeMap::new();
             if let Some(documents) = self.documents {
@@ -228,7 +228,7 @@ impl<'a> ComponentLoader<'a> {
     /// Files that can contain a declaration or direct structural reference to
     /// `target`, plus every open document whose graph overlay may still be
     /// waiting for the diagnostics debounce.
-    fn candidate_uris_for_component(&self, target: &str) -> Vec<Url> {
+    fn candidate_uris_for_component(&self, target: &str) -> Vec<Uri> {
         let mut names = HashSet::from([target.to_string()]);
         names.extend(
             self.manager
@@ -237,11 +237,11 @@ impl<'a> ComponentLoader<'a> {
                 .map(|component| component.name),
         );
 
-        let mut uris: Vec<Url> = self
+        let mut uris: Vec<Uri> = self
             .manager
             .component_uris_for_names(&names)
             .into_iter()
-            .filter_map(|uri| Url::parse(&uri).ok())
+            .filter_map(|uri| uri.parse::<Uri>().ok())
             .collect();
         if let Some(documents) = self.documents {
             uris.extend(documents.all_uris());
@@ -286,7 +286,7 @@ impl<'a> ComponentLoader<'a> {
         occurrences
     }
 
-    fn load_from_uri(&self, uri: Url, name: &str) -> Option<LoadedComponent> {
+    fn load_from_uri(&self, uri: Uri, name: &str) -> Option<LoadedComponent> {
         let doc = self.parsed(&uri)?;
         let index = doc.components().iter().position(|c| c.name() == name)?;
         Some(LoadedComponent { uri, doc, index })
@@ -298,7 +298,7 @@ impl<'a> ComponentLoader<'a> {
 /// fallback; ordinary parsed components stay on the recovery scanner alone.
 fn component_occurrences_in_source(
     text: &str,
-    uri: &Url,
+    uri: &Uri,
     name: &str,
 ) -> Vec<WorkspaceComponentOccurrence> {
     let occurrences = rossi::component_name_occurrences_with_sites(text);
@@ -350,8 +350,8 @@ fn component_occurrences_in_source(
     workspace_occurrences
 }
 
-fn read_source_file(uri: &Url) -> Option<String> {
-    std::fs::read_to_string(uri.to_file_path().ok()?).ok()
+fn read_source_file(uri: &Uri) -> Option<String> {
+    std::fs::read_to_string(uri.to_file_path()?).ok()
 }
 
 #[cfg(test)]
@@ -363,11 +363,11 @@ mod tests {
         // A file holding two merged components: looking up both names resolves
         // to one cached snapshot (one cache entry, the same `Arc`), so the file
         // is parsed once however many of its names are requested.
-        let uri = Url::parse("file:///merged.eventb").unwrap();
+        let uri = ("file:///merged.eventb").parse::<Uri>().unwrap();
         let text = "CONTEXT A\nEND\n\nCONTEXT B\nEND\n";
 
         let manager = CrossReferenceManager::new();
-        manager.update_component(uri.to_string(), text);
+        manager.update_component(uri.as_str().to_owned(), text);
         let documents = DocumentManager::new();
         documents.open(uri.clone(), 1, text.to_string());
 
@@ -400,10 +400,13 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("merged.eventb");
         std::fs::write(&path, "CONTEXT A\nEND\n\nCONTEXT B\nEND\n").unwrap();
-        let uri = Url::from_file_path(&path).unwrap();
+        let uri = Uri::from_file_path(&path).unwrap();
 
         let manager = CrossReferenceManager::new();
-        manager.update_component(uri.to_string(), &std::fs::read_to_string(&path).unwrap());
+        manager.update_component(
+            uri.as_str().to_owned(),
+            &std::fs::read_to_string(&path).unwrap(),
+        );
 
         let loader = ComponentLoader::new(&manager, None);
         let a = loader.load("A").expect("A loads from disk");
@@ -424,11 +427,11 @@ mod tests {
     fn duplicate_name_resolves_to_first_occurrence() {
         // Two blocks of the same name in one file: `load` picks the first,
         // matching the parser-based lookup it replaced.
-        let uri = Url::parse("file:///dup.eventb").unwrap();
+        let uri = ("file:///dup.eventb").parse::<Uri>().unwrap();
         let text = "CONTEXT C\nCONSTANTS\n    k1\nEND\n\nCONTEXT C\nCONSTANTS\n    k2\nEND\n";
 
         let manager = CrossReferenceManager::new();
-        manager.update_component(uri.to_string(), text);
+        manager.update_component(uri.as_str().to_owned(), text);
         let documents = DocumentManager::new();
         documents.open(uri.clone(), 1, text.to_string());
 
@@ -441,8 +444,8 @@ mod tests {
     fn current_open_name_resolves_before_debounced_reindexing() {
         let manager = CrossReferenceManager::new();
         let documents = DocumentManager::new();
-        let uri = Url::parse("file:///renamed.eventb").unwrap();
-        manager.update_component(uri.to_string(), "CONTEXT old\nEND");
+        let uri = ("file:///renamed.eventb").parse::<Uri>().unwrap();
+        manager.update_component(uri.as_str().to_owned(), "CONTEXT old\nEND");
         documents.open(uri.clone(), 1, "CONTEXT old\nEND".to_string());
         documents.change(
             &uri,
@@ -477,15 +480,15 @@ mod tests {
 
     #[test]
     fn component_occurrences_prefer_headerless_open_text_and_use_utf16_ranges() {
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
-        let machine_uri = Url::parse("file:///m.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
+        let machine_uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let context = "CONTEXT C\nEND";
         let indexed_machine = "MACHINE M\nSEES C\nEND";
         let current_machine = "SEES /* 😀 */ C\nVARIABLES\n    C\nEND\n\nMACHINE N\nEND";
 
         let manager = CrossReferenceManager::new();
-        manager.update_component(context_uri.to_string(), context);
-        manager.update_component(machine_uri.to_string(), indexed_machine);
+        manager.update_component(context_uri.as_str().to_owned(), context);
+        manager.update_component(machine_uri.as_str().to_owned(), indexed_machine);
         let documents = DocumentManager::new();
         documents.open(context_uri.clone(), 1, context.to_string());
         documents.open(machine_uri.clone(), 2, current_machine.to_string());

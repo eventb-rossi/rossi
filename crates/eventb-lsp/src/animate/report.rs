@@ -366,7 +366,7 @@ pub(crate) fn match_violated<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp_types::Url;
+    use crate::lsp_types::Uri;
 
     // Trimmed from docs/examples/json-report-v4-exhaustive.json in the
     // eventb-animate repository.
@@ -581,7 +581,7 @@ mod tests {
         InvariantInfo {
             label: label.to_string(),
             component: component.to_string(),
-            uri: Url::parse("file:///m.eventb").unwrap(),
+            uri: ("file:///m.eventb").parse::<Uri>().unwrap(),
             renderings: renderings.iter().map(|r| r.to_string()).collect(),
         }
     }
