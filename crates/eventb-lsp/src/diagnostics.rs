@@ -7,8 +7,8 @@
 
 use crate::document::ParsedDocument;
 use crate::lsp_types::{
-    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString,
-    Position, Range, Uri,
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DiagnosticTag, Location,
+    NumberOrString, Position, Range, Uri,
 };
 use rossi::deps::{ComponentKind, Cycle, EdgeKind, kind_and_name};
 use rossi::keywords::{self, KeywordId};
@@ -323,13 +323,20 @@ fn build_diagnostic_to_lsp(d: &rossi_build::Diagnostic, text: &str) -> Diagnosti
         Some(span) => crate::position::span_to_range(&span, text),
         None => crate::analysis::default_range(),
     };
-    lsp_diagnostic(
+    let mut diagnostic = lsp_diagnostic(
         range,
         build_severity_to_lsp(d.severity),
         d.rule_id
             .map(|r| NumberOrString::String(r.code().to_string())),
         d.message.clone(),
-    )
+    );
+    // A dead variable is the one finding that says "this declaration does
+    // nothing", which is what the Unnecessary tag means: editors fade the
+    // name rather than underline it.
+    if d.rule_id == Some(RuleId::DeadVariable) {
+        diagnostic.tags = Some(vec![DiagnosticTag::UNNECESSARY]);
+    }
+    diagnostic
 }
 
 /// Map a `rossi-build` severity onto the LSP severity scale.
@@ -577,13 +584,16 @@ pub(crate) fn duplicate_component_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::{
-        ascii_operator_diagnostics, cross_reference_diagnostics, cycle_diagnostics,
-        document_diagnostics, duplicate_component_diagnostics, lint_diagnostics,
+        ascii_operator_diagnostics, build_diagnostic_to_lsp, cross_reference_diagnostics,
+        cycle_diagnostics, document_diagnostics, duplicate_component_diagnostics, lint_diagnostics,
         parse_error_to_diagnostic, proof_status_diagnostics,
     };
     use crate::document::ParsedDocument;
-    use crate::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position};
+    use crate::lsp_types::{
+        Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString, Position,
+    };
     use rossi::deps::{ComponentKind, Cycle, EdgeKind};
+    use rossi_build::RuleId;
 
     /// A name's own segments read as ASCII spellings (see
     /// `rossi::comments::LexicalSpans::names`); none of them is code.
@@ -1108,6 +1118,25 @@ mod tests {
     /// of the declaring files they list, so nothing is filtered as self.
     fn test_uri() -> &'static str {
         "file:///cursor.eventb"
+    }
+
+    #[test]
+    fn a_dead_variable_carries_the_unnecessary_tag() {
+        let finding = rossi_build::Diagnostic {
+            severity: rossi_build::Severity::Warning,
+            origin: "m.x".to_string(),
+            message: "variable `x` is never used".to_string(),
+            rule_id: Some(RuleId::DeadVariable),
+            span: None,
+        };
+        let diagnostic = build_diagnostic_to_lsp(&finding, "");
+        assert_eq!(diagnostic.tags, Some(vec![DiagnosticTag::UNNECESSARY]));
+        // Any other rule stays untagged.
+        let other = rossi_build::Diagnostic {
+            rule_id: Some(RuleId::DuplicateComponent),
+            ..finding
+        };
+        assert_eq!(build_diagnostic_to_lsp(&other, "").tags, None);
     }
 
     #[test]
