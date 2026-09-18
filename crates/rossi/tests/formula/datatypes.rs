@@ -21,12 +21,16 @@ fn list() -> &'static Datatype {
     &LIST
 }
 
-fn list_int() -> Type {
+fn list_of(param: Type) -> Type {
     Type::Parametric {
         tag: list().tag(),
         symbol: "List".into(),
-        params: vec![Type::Int],
+        params: vec![param],
     }
+}
+
+fn list_int() -> Type {
+    list_of(Type::Int)
 }
 
 #[test]
@@ -199,4 +203,92 @@ fn single_constructor_destructors_are_total() {
         typed.wd_lemma(),
         ff.literal_predicate(rossi::formula::tag::LiteralPredOp::BTrue, None)
     );
+}
+
+// --- parametric types as expressions ---
+
+#[test]
+fn list_type_spells_as_a_type_constructor_expression() {
+    let dt = list();
+    let ff = dt.factory();
+    let expr = list_int().to_expression(&ff);
+    assert_eq!(expr.ty(), Some(&Type::pow(list_int())));
+    assert!(
+        matches!(expr.kind(), ExpressionKind::Extended { tag, exprs, preds }
+            if *tag == dt.tag() && exprs.len() == 1 && preds.is_empty()),
+        "{expr:?}"
+    );
+    let canonical = rossi::PrettyPrinter::rodin_canonical();
+    assert_eq!(canonical.print_formula_expression(&expr), "List(ℤ)");
+    assert_eq!(
+        rossi::formula::typecheck::type_from_expression(&expr),
+        Some(list_int())
+    );
+
+    // Nested under the core type constructors, and a given set as parameter.
+    let nested = Type::pow(Type::prod(list_of(Type::given("T")), Type::given("T")));
+    let expr = nested.to_expression(&ff);
+    assert_eq!(expr.ty(), Some(&Type::pow(nested.clone())));
+    assert_eq!(canonical.print_formula_expression(&expr), "ℙ(List(T) × T)");
+    assert_eq!(nested.to_rodin_canonical(), "ℙ(List(T)×T)");
+    assert_eq!(
+        rossi::formula::typecheck::type_from_expression(&expr),
+        Some(nested)
+    );
+}
+
+#[test]
+fn parse_rodin_with_reads_parametric_types() {
+    let dt = list();
+    let ff = dt.factory();
+    for (spelling, ty) in [
+        ("List(ℤ)", list_int()),
+        (
+            "ℙ(List(T)×T)",
+            Type::pow(Type::prod(list_of(Type::given("T")), Type::given("T"))),
+        ),
+        ("List(List(BOOL))", list_of(list_of(Type::Bool))),
+        // The extension-free forms still take the fast path.
+        ("ℙ(S×ℤ)", Type::pow(Type::prod(Type::given("S"), Type::Int))),
+    ] {
+        let parsed = Type::parse_rodin_with(spelling, &ff);
+        assert_eq!(parsed, Some(ty.clone()), "{spelling}");
+        assert_eq!(ty.to_rodin_canonical(), spelling);
+    }
+    // A constructor symbol is never a given set under its factory, and a
+    // parametric spelling is nothing under the default factory.
+    assert_eq!(Type::parse_rodin_with("List", &ff), None);
+    assert_eq!(Type::parse_rodin("List"), Some(Type::given("List")));
+    assert_eq!(Type::parse_rodin("List(ℤ)"), None);
+    assert_eq!(Type::parse_rodin_with("List(1)", &ff), None);
+}
+
+#[test]
+fn ascribed_nullary_constructor_parses_and_prints() {
+    let dt = list();
+    let ff = dt.factory();
+    let expr = rossi::parse_expression_str_with("nil ⦂ List(T)", &ff).expect("parses");
+    let ExpressionKind::Ascription {
+        expr: inner,
+        type_expr,
+    } = expr.kind()
+    else {
+        panic!("expected an ascription, got {expr:?}");
+    };
+    assert!(matches!(inner.kind(), ExpressionKind::Extended { exprs, .. } if exprs.is_empty()));
+    assert_eq!(
+        rossi::formula::typecheck::type_from_expression(type_expr),
+        Some(list_of(Type::given("T")))
+    );
+    for printer in [
+        rossi::PrettyPrinter::new(),
+        rossi::PrettyPrinter::rodin_canonical(),
+    ] {
+        let printed = printer.print_formula_expression(&expr);
+        assert_eq!(printed, "nil ⦂ List(T)");
+        assert_eq!(
+            rossi::parse_expression_str_with(&printed, &ff).expect("re-parses"),
+            expr
+        );
+    }
 }

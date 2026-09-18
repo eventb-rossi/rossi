@@ -139,7 +139,9 @@ impl TypeCheckMediator<'_, '_> {
 }
 
 /// Interprets an expression as a type spelling: `ℤ`, `BOOL`, a free
-/// identifier as a given set, `ℙ(·)`, products and relations.
+/// identifier as a given set, `ℙ(·)`, products and relations, and a type
+/// constructor of the expression's factory applied to type spellings
+/// (`List(T)`) as the parametric type.
 ///
 /// The accepted set is Rodin's, which pairs `Expression.isATypeExpression`
 /// with `Expression.toType`: `ℙ1(·)` is a set constructor and not a type,
@@ -174,6 +176,23 @@ pub fn type_from_expression(expr: &Expression) -> Option<Type> {
             type_from_expression(left)?,
             type_from_expression(right)?,
         )),
+        ExpressionKind::Extended { tag, exprs, preds } => {
+            let super::extension::Extension::Expr(constructor) = expr.factory().extension(*tag)?
+            else {
+                return None;
+            };
+            if !constructor.is_a_type_constructor() || !preds.is_empty() {
+                return None;
+            }
+            Some(Type::Parametric {
+                tag: *tag,
+                symbol: constructor.symbol().to_string(),
+                params: exprs
+                    .iter()
+                    .map(type_from_expression)
+                    .collect::<Option<Vec<_>>>()?,
+            })
+        }
         _ => None,
     }
 }
