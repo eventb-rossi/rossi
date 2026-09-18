@@ -111,6 +111,10 @@ pub async fn run_stdio() -> Result<()> {
             proof::REQUEST_OBLIGATIONS,
             server::RossiLanguageServer::proof_obligations,
         )
+        .custom_method(
+            proof::state::REQUEST_STATE,
+            server::RossiLanguageServer::proof_state,
+        )
         .finish();
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

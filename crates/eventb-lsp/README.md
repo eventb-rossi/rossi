@@ -418,7 +418,7 @@ while `documentSymbol` reports them as `FUNCTION` and `INITIALISATION` as
 
 ### Custom requests
 
-Three non-standard methods exist, each because standard LSP has no
+Four non-standard methods exist, each because standard LSP has no
 equivalent; everything else the server offers is a standard LSP method.
 
 `rossi/operatorTable` returns the operator spelling table, so an editor can
@@ -434,6 +434,16 @@ obligation is about, and `status` is one of `discharged`, `reviewed`,
 of `rossi prove`. The list is computed on open and on save; a request before
 the first computation finishes computes it on the spot. Unlike
 `rossi/operatorTable`, the `params` object is required.
+
+`rossi/proofState` takes `{ textDocument: { uri }, name }` and returns the
+named obligation's sequent: `{ name, component, description, identifiers,
+hypotheses, goal, text }`. `identifiers` are `{ name, type }` pairs,
+`hypotheses` and `goal` are formulas printed in the configured operator
+style, and `text` is the whole sequent as Event-B text (metadata in
+comments, one formula per line, a `⊢` line before the goal) for a client
+that shows it in a read-only editor. This is rossi's counterpart of Lean's
+`$/lean/plainGoal`. `null` when the document does not parse or has no such
+obligation.
 
 `$/rossi/proofStatus` is a server-to-client notification carrying
 `{ uri, obligations }`, the full list for one document, pushed whenever it is

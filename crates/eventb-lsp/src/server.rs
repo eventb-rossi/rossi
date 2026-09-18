@@ -2657,6 +2657,30 @@ impl RossiLanguageServer {
         }
         Ok(self.analyzer.proof_obligations_for(&uri, &doc))
     }
+
+    /// `rossi/proofState`: one obligation's sequent, regenerated from the
+    /// current closure and printed in the configured operator style. `None`
+    /// when the document does not parse or names no such obligation.
+    pub async fn proof_state(
+        &self,
+        params: crate::proof::state::ProofStateParams,
+    ) -> Result<Option<crate::proof::state::ProofState>> {
+        let uri = params.text_document.uri;
+        if !self.config_manager.get().proof_obligations.enabled {
+            return Ok(None);
+        }
+        let Some(doc) = self.document_manager.parse_result(&uri) else {
+            return Ok(None);
+        };
+        let printer = self.config_manager.get().format.printer();
+        let xrefs = Arc::clone(&self.cross_reference_manager);
+        let documents = Arc::clone(&self.document_manager);
+        run_blocking(move || {
+            let loader = crate::component_loader::ComponentLoader::new(&xrefs, Some(&documents));
+            crate::proof::state::compute(&doc, &loader, &params.name, &printer)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
