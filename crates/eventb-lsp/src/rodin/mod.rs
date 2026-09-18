@@ -99,6 +99,8 @@ pub struct OpenRequest {
     pub configured_rodin_path: String,
     /// Whether the client advertised `window.workDoneProgress`.
     pub progress_supported: bool,
+    /// Where the flow's progress registers for `window/workDoneProgress/cancel`.
+    pub cancels: std::sync::Arc<crate::progress::CancelRegistry>,
     /// Shared record of files the server wrote into the workspace, so the
     /// sync watcher can tell the server's own writes from Rodin's.
     pub written: sync::WrittenFiles,
@@ -178,7 +180,13 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     let project_name = request.project_name.clone();
     let project_dir = request.workspace_dir.join(&project_name);
 
-    let progress = Progress::begin(&client, request.progress_supported, "Open in Rodin").await;
+    let progress = Progress::begin(
+        &client,
+        request.progress_supported,
+        "Open in Rodin",
+        &request.cancels,
+    )
+    .await;
 
     // The checkout's proof files are authoritative at session start: copy
     // them into the project before the build so the seeded `.bpo`/`.bps`
@@ -227,6 +235,11 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
         drop(seed_guard);
     }
 
+    if progress.is_cancelled() {
+        return progress
+            .finish(MessageType::INFO, "Open in Rodin cancelled.".to_string())
+            .await;
+    }
     progress.report("building the Rodin project").await;
 
     let outcome = build_into_workspace(
@@ -382,6 +395,14 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
     }
     launch::seed_workspace_prefs(&request.workspace_dir, request.proving_perspective);
 
+    if progress.is_cancelled() {
+        return progress
+            .finish(
+                MessageType::INFO,
+                format!("Open in Rodin cancelled; {project_name} was built but not opened."),
+            )
+            .await;
+    }
     progress.report("launching Rodin").await;
     let (command, args) = launch::launch_command(&rodin_path, &request.workspace_dir, platform);
     if let Err(message) = launch::launch_gui(&command, &args) {
