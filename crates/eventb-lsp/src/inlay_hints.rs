@@ -11,11 +11,10 @@
 //! over the document's dependency closure, and repeated requests at an
 //! unchanged buffer state are served from a per-URI cache.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rossi::ast::NamedElement;
-use rossi::deps::kind_and_name;
 use rossi::formula::{FormulaFactory, Type};
 use rossi::{Component, PrettyPrinter};
 
@@ -28,7 +27,6 @@ use crate::lsp_types::{
     Url,
 };
 use crate::position::PositionIndex;
-use crate::resolved_environment::ResolvedEnvironments;
 use crate::text_utils::line_tight_end;
 
 /// Serves `textDocument/inlayHint` from per-URI cached whole-document lists.
@@ -132,55 +130,16 @@ impl InlayHintsProvider {
     fn compute(&self, uri: &Url, config: &RossiConfig) -> Option<Vec<InlayHint>> {
         let doc = self.document_manager.parse_result(uri)?;
 
-        // The loadable closure of every component in this file, the roots
-        // first. Dedup dependencies against the roots by kind and name: a
-        // merged file's machine may SEES a context sitting right next to it.
-        // Roots themselves are never deduped — genuine same-name duplicates
-        // must reach the static check so its duplicate-component error empties
-        // the model instead of hints joining every copy to one record.
+        // The loadable closure of every component in this file, assembled by
+        // the shared builder so hints and semantic diagnostics agree on what
+        // a file depends on. Only this file's declaration sites are read
+        // below: a dependency's spans index its own text.
         let loader =
             ComponentLoader::new(&self.cross_reference_manager, Some(&self.document_manager));
-        let mut environments = ResolvedEnvironments::new();
-        let mut seen = HashSet::new();
-        let mut components = Vec::new();
-        for component in doc.components() {
-            seen.insert(kind_and_name(component));
-            components.push(component.clone());
-        }
-        // This file's components, keyed the same way the dedup above keys
-        // them. The WD pass below is fed these and not the dependencies,
-        // whose spans index their own files.
-        let local = seen.clone();
-        for component in doc.components() {
-            let environment = environments.resolve(component, &loader);
-            for dependency in environment
-                .refined_machines()
-                .into_iter()
-                .chain(environment.visible_contexts())
-                .chain(environment.extended_contexts())
-            {
-                if seen.insert(kind_and_name(dependency)) {
-                    components.push(dependency.clone());
-                }
-            }
-        }
-
-        // Spans stay resolvable against `doc.text()`; the project needs no
-        // `source` of its own. Dependencies imported from Rodin XML carry no
-        // spans, but only this file's declaration sites are read below.
-        let project = rossi_build::Project::new(
-            "lsp-inlay-hints",
-            components
-                .into_iter()
-                .map(|component| {
-                    rossi_build::ProjectComponent::from_parsed(
-                        format!("{}.eventb", component.name()),
-                        component,
-                        None,
-                    )
-                })
-                .collect(),
-        );
+        let project = crate::closure::project_for(&doc, &loader, "lsp-inlay-hints");
+        // This file's components, for the WD pass, which must not be fed the
+        // dependencies.
+        let local = crate::closure::local_names(&doc);
         // Drop-but-continue: whatever failed to check is simply absent from
         // the model, and its declarations get no hints.
         let (_result, model) = rossi_build::check_with_model(&project);
@@ -262,7 +221,7 @@ impl InlayHintsProvider {
                 project
                     .components
                     .iter()
-                    .filter(|component| local.contains(&kind_and_name(&component.component))),
+                    .filter(|component| local.contains(component.component.name())),
                 doc.text(),
                 &model,
                 &index,

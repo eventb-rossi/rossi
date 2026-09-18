@@ -14,6 +14,7 @@ pub use tower_lsp::lsp_types;
 // Re-export modules for testing and library use
 pub mod analysis;
 pub mod animate;
+pub mod closure;
 pub mod code_actions;
 pub mod completion;
 pub mod component_loader;

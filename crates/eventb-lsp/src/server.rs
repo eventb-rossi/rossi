@@ -271,6 +271,17 @@ impl Analyzer {
         if !doc.parse().errors.is_empty() {
             return diags;
         }
+        // The project-level static check over this file's dependency closure:
+        // scope errors, type inference, Rodin-style drops. It sits behind the
+        // clean-parse gate with the other AST-derived checks, and behind the
+        // `debounceMs` window, so it runs once per settled edit rather than
+        // per keystroke. It is the same `check_with_model` over the same
+        // closure that inlay hints already run, so the cost profile is one the
+        // server was paying.
+        diags.extend(crate::diagnostics::project_diagnostics(
+            doc,
+            &crate::component_loader::ComponentLoader::new(xrefs, Some(&self.document_manager)),
+        ));
         // Circular EXTENDS/REFINES need no workspace gating: a detected cycle is
         // always real (a self-loop is length-1).
         diags.extend(crate::diagnostics::cycle_diagnostics(

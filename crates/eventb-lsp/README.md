@@ -165,9 +165,13 @@ shadowed and keyword names, section order, non-portable whitespace), circular
 unresolved and duplicated component names. Every such finding carries its
 stable `EBnnn` rule code.
 
-The project-level static check (`rossi_build::build`: type inference over the
-dependency closure and Rodin-style drop diagnostics) is not yet published as
-diagnostics. See [Semantic Analysis Reuse](#semantic-analysis-reuse).
+The project-level static check runs too, over the open file's dependency
+closure: scope errors, type inference failures, conservative well-typedness
+checks and Rodin-style drop behaviour, none of which a single-component pass
+can see. These are the findings `rossi build` reports, not the smaller set
+`rossi validate` does, so an editor may flag something the `validate`
+subcommand passes. Only findings about the open file's own components are
+published; a dependency reports its own when its file is analyzed.
 
 Diagnostics are available both ways. The server pushes
 `textDocument/publishDiagnostics` for open buffers, and it answers the pull
@@ -426,31 +430,32 @@ general integration.
 
 ## Semantic Analysis Reuse
 
-The LSP reuses `rossi-build` rather than reimplementing static checking. What
-is wired today:
+The LSP reuses `rossi-build` rather than reimplementing static checking:
 
 - `component_semantic_diagnostics`, `lint::run_component` and
   `lint::run_source` run on every clean parse (`diagnostics.rs`), so the
   editor and `rossi validate` report the same component-local findings.
-- `check_with_model` runs over the open file's dependency closure to serve
-  inlay hints (`inlay_hints.rs`), and `build` runs over the same closure to
-  stage a throwaway Rodin project for eventb-animate (`animate/closure.rs`).
+- `check_with_model` runs over the open file's dependency closure for both
+  the project-level diagnostics (`diagnostics::project_diagnostics`) and the
+  inlay hints (`inlay_hints.rs`). Both assemble that closure through
+  `closure::project_for`, so they cannot disagree about what a file depends
+  on.
+- `build` runs over the same closure to stage a throwaway Rodin project for
+  eventb-animate (`animate/closure.rs`).
 
-What remains is publishing the project-level check itself: run
-`rossi_build::build` over the closure on save and map
-`BuildResult::diagnostics` through the existing `build_diagnostic_to_lsp`
-adapter, which already turns a `rossi_build::Diagnostic` (origin plus source
-span) into an LSP diagnostic. That would surface scope errors, type inference
-errors, conservative well-typedness checks and Rodin-style static-check drop
-behaviour.
+Four rules are deliberately *not* taken from the project check: circular
+EXTENDS and REFINES, unresolved cross-references, and duplicate component
+names. The server reports those from the workspace dependency graph instead,
+which knows about files outside one closure and is gated on the initial scan,
+so a file opened on its own is not told its siblings are missing.
 
-It should not be presented as full proof support. `rossi-build` generates
-proof obligations but does not prove them, and `rossi-prove` checks stored
-proofs rather than discharging open ones.
+None of this is proof support. `rossi-build` generates proof obligations but
+does not prove them, and `rossi-prove` checks stored proofs rather than
+discharging open ones.
 
 ## Known Limitations
 
-- Diagnostics cover parse errors and the component-local checks above; the project-level static check (type inference across the dependency closure) is not yet published.
+- Diagnostics cover parse errors, the component-local checks above and the project-level static check over the open file's dependency closure. A component whose closure is incomplete (an unresolvable `SEES` / `REFINES` / `EXTENDS` target) reports no project-level findings at all, since every inherited name would otherwise read as unknown.
 - Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
 - Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
 - Workspace indexing is eager/basic; there is no LRU eviction, cancellation support, or parallel indexing yet.
