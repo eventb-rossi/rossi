@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use eventb_lsp::formula_walk::declaration_span;
 use serde::Deserialize;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CompletionParams, CompletionResponse, HoverParams, PartialResultParams, Position,
     ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
-    TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    TextDocumentPositionParams, Uri, WorkDoneProgressParams,
 };
 
 pub const DEFAULT_WARMUPS: usize = 5;
@@ -110,12 +110,11 @@ pub fn allocation_samples() -> usize {
     env_count("ROSSI_LSP_BENCH_ALLOC_SAMPLES", 5)
 }
 
-pub fn file_uri(path: &Path) -> Url {
-    Url::from_file_path(path)
-        .unwrap_or_else(|()| panic!("invalid fixture path: {}", path.display()))
+pub fn file_uri(path: &Path) -> Uri {
+    Uri::from_file_path(path).unwrap_or_else(|| panic!("invalid fixture path: {}", path.display()))
 }
 
-pub fn hover_params(uri: Url, position: Position) -> HoverParams {
+pub fn hover_params(uri: Uri, position: Position) -> HoverParams {
     HoverParams {
         text_document_position_params: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -125,7 +124,7 @@ pub fn hover_params(uri: Url, position: Position) -> HoverParams {
     }
 }
 
-pub fn completion_params(uri: Url, position: Position) -> CompletionParams {
+pub fn completion_params(uri: Uri, position: Position) -> CompletionParams {
     CompletionParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -137,7 +136,7 @@ pub fn completion_params(uri: Url, position: Position) -> CompletionParams {
     }
 }
 
-pub fn reference_params(uri: Url, position: Position) -> ReferenceParams {
+pub fn reference_params(uri: Uri, position: Position) -> ReferenceParams {
     ReferenceParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -151,7 +150,7 @@ pub fn reference_params(uri: Url, position: Position) -> ReferenceParams {
     }
 }
 
-pub fn rename_params(uri: Url, position: Position) -> RenameParams {
+pub fn rename_params(uri: Uri, position: Position) -> RenameParams {
     RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },

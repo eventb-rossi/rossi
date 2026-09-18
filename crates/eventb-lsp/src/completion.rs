@@ -980,7 +980,9 @@ mod tests {
         let params = CompletionParams {
             text_document_position: crate::lsp_types::TextDocumentPositionParams {
                 text_document: crate::lsp_types::TextDocumentIdentifier {
-                    uri: crate::lsp_types::Url::parse("file:///test.eventb").unwrap(),
+                    uri: "file:///test.eventb"
+                        .parse::<crate::lsp_types::Uri>()
+                        .unwrap(),
                 },
                 position: Position::new(0, 20), // inside the comment
             },
@@ -1121,7 +1123,9 @@ mod tests {
         let params = CompletionParams {
             text_document_position: crate::lsp_types::TextDocumentPositionParams {
                 text_document: crate::lsp_types::TextDocumentIdentifier {
-                    uri: crate::lsp_types::Url::parse("file:///test.eventb").unwrap(),
+                    uri: "file:///test.eventb"
+                        .parse::<crate::lsp_types::Uri>()
+                        .unwrap(),
                 },
                 position: Position::new(0, 1),
             },
@@ -1323,7 +1327,7 @@ mod tests {
 
     #[test]
     fn test_completion_refined_variables() {
-        use crate::lsp_types::Url;
+        use crate::lsp_types::Uri;
 
         let abstract_source = "MACHINE abstract_mch\nVARIABLES\n    abstract_state\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 abstract_state := 0\n    END\nEND";
         let concrete_source = "MACHINE concrete_mch\nREFINES\n    abstract_mch\nVARIABLES\n    concrete_state\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 concrete_state := 0\n    END\nEND";
@@ -1332,11 +1336,11 @@ mod tests {
         let dm = Arc::new(DocumentManager::new());
 
         crm.update_component("file:///abstract_mch.eventb".to_string(), abstract_source);
-        let url = Url::parse("file:///abstract_mch.eventb").unwrap();
+        let url = ("file:///abstract_mch.eventb").parse::<Uri>().unwrap();
         dm.open(url, 1, abstract_source.to_string());
 
         crm.update_component("file:///concrete_mch.eventb".to_string(), concrete_source);
-        let concrete_url = Url::parse("file:///concrete_mch.eventb").unwrap();
+        let concrete_url = ("file:///concrete_mch.eventb").parse::<Uri>().unwrap();
         dm.open(concrete_url.clone(), 1, concrete_source.to_string());
 
         let mut provider = CompletionProvider::new();
@@ -1368,14 +1372,14 @@ mod tests {
 
     #[test]
     fn completion_includes_symbols_beyond_ten_seen_contexts() {
-        use crate::lsp_types::Url;
+        use crate::lsp_types::Uri;
 
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
         for i in 0..=10 {
-            let uri = Url::parse(&format!("file:///c{i}.eventb")).unwrap();
+            let uri = format!("file:///c{i}.eventb").parse::<Uri>().unwrap();
             let source = format!("CONTEXT c{i}\nCONSTANTS\n    k{i}\nEND");
-            crm.update_component(uri.to_string(), &source);
+            crm.update_component(uri.as_str().to_owned(), &source);
             dm.open(uri, 1, source);
         }
 
@@ -1386,8 +1390,8 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        let uri = Url::parse("file:///m.eventb").unwrap();
-        crm.update_component(uri.to_string(), &machine);
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
+        crm.update_component(uri.as_str().to_owned(), &machine);
         dm.open(uri.clone(), 1, machine.clone());
 
         let mut provider = CompletionProvider::new();
@@ -1425,12 +1429,12 @@ mod tests {
     /// the `(label, detail)` of every produced item — the same path an editor
     /// drives, so the scope wiring (not just the helpers) is exercised.
     fn complete_labels(source: &str, position: Position) -> Vec<(String, Option<String>)> {
-        use crate::lsp_types::Url;
+        use crate::lsp_types::Uri;
 
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
-        let url = Url::parse("file:///m.eventb").unwrap();
-        crm.update_component(url.to_string(), source);
+        let url = ("file:///m.eventb").parse::<Uri>().unwrap();
+        crm.update_component(url.as_str().to_owned(), source);
         dm.open(url.clone(), 1, source.to_string());
 
         let mut provider = CompletionProvider::new();

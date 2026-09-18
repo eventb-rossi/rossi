@@ -182,7 +182,7 @@ impl WorkspaceSymbolProvider {
         if components.is_empty() {
             return vec![];
         }
-        let Ok(uri) = Url::parse(uri) else {
+        let Ok(uri) = uri.parse::<Uri>() else {
             return vec![];
         };
         let positions = PositionIndex::new(text);
@@ -200,7 +200,7 @@ impl WorkspaceSymbolProvider {
     fn extract_symbols_from_component(
         &self,
         component: &Component,
-        uri: &Url,
+        uri: &Uri,
         positions: &PositionIndex<'_>,
     ) -> Vec<SymbolEntry> {
         let mut symbols = Vec::new();
@@ -267,7 +267,7 @@ impl WorkspaceSymbolProvider {
 
     /// Wrap the position at byte offset `start` in `text` into a zero-width
     /// [`Location`] in `uri`.
-    fn locate_at(&self, uri: &Url, positions: &PositionIndex<'_>, start: usize) -> Location {
+    fn locate_at(&self, uri: &Uri, positions: &PositionIndex<'_>, start: usize) -> Location {
         let pos = positions.position(start);
         Location::new(uri.clone(), Range::new(pos, pos))
     }

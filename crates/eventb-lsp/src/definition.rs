@@ -119,7 +119,7 @@ impl Default for DefinitionProvider {
 mod tests {
     use super::*;
     use crate::lsp_types::{
-        Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+        Position, Range, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
     };
 
     /// Register every component in both managers and open each in the document
@@ -132,7 +132,7 @@ mod tests {
 
         for (uri, source) in components {
             crm.update_component(uri.to_string(), source);
-            let url = Url::parse(uri).unwrap();
+            let url = uri.parse::<Uri>().unwrap();
             dm.open(url, 1, source.to_string());
         }
 
@@ -146,7 +146,7 @@ mod tests {
         GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {
-                    uri: Url::parse(uri).unwrap(),
+                    uri: uri.parse::<Uri>().unwrap(),
                 },
                 position: Position::new(line, character),
             },

@@ -8,7 +8,7 @@
 use crate::document::ParsedDocument;
 use crate::lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString,
-    Position, Range, Url,
+    Position, Range, Uri,
 };
 use rossi::deps::{ComponentKind, Cycle, EdgeKind, kind_and_name};
 use rossi::keywords::{self, KeywordId};
@@ -560,7 +560,7 @@ pub(crate) fn duplicate_component_diagnostics(
         let related: Vec<DiagnosticRelatedInformation> = files
             .iter()
             .filter(|(other, _)| other != this_file)
-            .filter_map(|(other, _)| Url::parse(other).ok())
+            .filter_map(|(other, _)| other.parse::<Uri>().ok())
             .map(|other| DiagnosticRelatedInformation {
                 location: Location::new(other, crate::analysis::default_range()),
                 message: format!("`{name}` is also declared here"),

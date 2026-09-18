@@ -23,7 +23,7 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::lsp_types::*;
 use crate::progress::Progress;
-use tower_lsp::Client;
+use tower_lsp_server::Client;
 
 /// The `workspace/executeCommand` command behind the "Model-check" lens.
 pub const COMMAND_CHECK: &str = "rossi.animate.check";
@@ -116,7 +116,7 @@ impl std::fmt::Display for AnimateError {
 /// (mid-edit breakage), fall back to scanning `MACHINE <name>` header lines;
 /// a header whose name is still missing gets no lens, because the commands
 /// need the machine name as an argument.
-pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Url) -> Vec<CodeLens> {
+pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Uri) -> Vec<CodeLens> {
     let lenses: Vec<CodeLens> = components
         .iter()
         .filter_map(|component| {
@@ -138,14 +138,14 @@ pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Url) -> Ve
     header_line_scan(text, uri)
 }
 
-fn machine_lenses(range: Range, uri: &Url, machine: &str) -> [CodeLens; 2] {
+fn machine_lenses(range: Range, uri: &Uri, machine: &str) -> [CodeLens; 2] {
     let lens = |title: &str, command: &str| CodeLens {
         range,
         command: Some(Command {
             title: title.to_string(),
             command: command.to_string(),
             arguments: Some(vec![
-                serde_json::json!(uri.to_string()),
+                serde_json::json!(uri.as_str().to_owned()),
                 serde_json::json!(machine),
             ]),
         }),
@@ -157,7 +157,7 @@ fn machine_lenses(range: Range, uri: &Url, machine: &str) -> [CodeLens; 2] {
     ]
 }
 
-fn header_line_scan(text: &str, uri: &Url) -> Vec<CodeLens> {
+fn header_line_scan(text: &str, uri: &Uri) -> Vec<CodeLens> {
     crate::text_utils::header_lines(text)
         .filter(|header| header.is_machine)
         .filter_map(|header| {
@@ -189,7 +189,7 @@ pub struct AnimateRequest {
 pub struct ExecuteInput {
     pub mode: AnimateMode,
     /// The clicked document.
-    pub uri: Url,
+    pub uri: Uri,
     /// The machine named by the lens arguments.
     pub machine: String,
     pub documents: Arc<DocumentManager>,
@@ -300,9 +300,8 @@ fn unopened_finding_files(
         let name = finding
             .uri
             .to_file_path()
-            .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| finding.uri.to_string());
+            .unwrap_or_else(|| finding.uri.as_str().to_owned());
         if !names.contains(&name) {
             names.push(name);
         }
@@ -502,7 +501,7 @@ mod tests {
 
     #[test]
     fn machine_lenses_only_and_carry_the_machine_name() {
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let text = "CONTEXT c\nEND\n\nMACHINE counters\nSEES c\nEND\n";
         let components = rossi::parse_components(text).unwrap();
         let lenses = code_lenses(&components, text, &uri);
@@ -533,7 +532,7 @@ mod tests {
 
     #[test]
     fn header_scan_extracts_machine_names_and_skips_nameless_headers() {
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let text = "CONTEXT c\nEND\nMACHINE m\nMACHINE\nMACHINERY x\n";
         let lenses = header_line_scan(text, &uri);
         assert_eq!(lenses.len(), 2, "only the named MACHINE header gets lenses");

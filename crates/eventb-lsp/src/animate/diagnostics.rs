@@ -28,7 +28,7 @@ pub(crate) const SOURCE: &str = "eventb-animate";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     /// The file that declared the anchored element when the run started.
-    pub uri: Url,
+    pub uri: Uri,
     /// The component the anchor lives in.
     pub component: String,
     pub anchor: Anchor,
@@ -95,7 +95,7 @@ impl FindingsOverlay {
 /// proof-status overlay, this is not gated on a clean parse — the text-scan
 /// fallbacks keep the anchors meaningful mid-edit.
 pub(crate) fn animate_diagnostics(
-    uri: &Url,
+    uri: &Uri,
     doc: &ParsedDocument,
     overlay: &FindingsOverlay,
 ) -> Vec<Diagnostic> {
@@ -450,7 +450,7 @@ pub(crate) fn build_findings<'a>(
 /// The file, component, and anchor for a build diagnostic's origin. The uri
 /// only ever comes from an exact component-name match in the closure, so a
 /// mis-parsed origin degrades to a header — never to the wrong file.
-fn resolve_build_anchor(origin: &str, closure: &Closure) -> (Url, String, Anchor) {
+fn resolve_build_anchor(origin: &str, closure: &Closure) -> (Uri, String, Anchor) {
     let (component, element) = match origin.split_once('.') {
         Some((component, element)) => (component, Some(element)),
         None => (origin, None),
@@ -514,7 +514,7 @@ fn po_findings(disproved: &[PoResult], closure: &Closure) -> Vec<Finding> {
         .collect()
 }
 
-fn resolve_po_anchor(name: &str, closure: &Closure) -> (Url, String, Anchor) {
+fn resolve_po_anchor(name: &str, closure: &Closure) -> (Uri, String, Anchor) {
     let fallback = || {
         (
             closure.uri.clone(),
@@ -573,7 +573,7 @@ mod tests {
     }
 
     fn test_closure() -> Closure {
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         Closure {
             machine: "m".to_string(),
             uri: uri.clone(),
@@ -596,7 +596,7 @@ mod tests {
         let mut overlay = FindingsOverlay::default();
         overlay.apply("m".to_string(), AnimateMode::Check, findings);
         animate_diagnostics(
-            &Url::parse("file:///m.eventb").unwrap(),
+            &("file:///m.eventb").parse::<Uri>().unwrap(),
             &parsed(),
             &overlay,
         )
@@ -746,7 +746,7 @@ mod tests {
             findings(&verdicts[0], &test_closure()),
         );
         let diags = animate_diagnostics(
-            &Url::parse("file:///m.eventb").unwrap(),
+            &("file:///m.eventb").parse::<Uri>().unwrap(),
             &parsed(),
             &overlay,
         );
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn context_axiom_build_errors_anchor_on_the_axiom_line() {
         let mut closure = test_closure();
-        let context_uri = Url::parse("file:///c.eventb").unwrap();
+        let context_uri = ("file:///c.eventb").parse::<Uri>().unwrap();
         closure.infos.push(ComponentInfo {
             name: "c".to_string(),
             uri: context_uri.clone(),
@@ -941,7 +941,7 @@ mod tests {
     fn new_run_replaces_and_empty_run_retracts() {
         let mut overlay = FindingsOverlay::default();
         let finding = Finding {
-            uri: Url::parse("file:///m.eventb").unwrap(),
+            uri: ("file:///m.eventb").parse::<Uri>().unwrap(),
             component: "m".to_string(),
             anchor: Anchor::MachineHeader,
             code: "animate-deadlock",
@@ -966,7 +966,7 @@ mod tests {
         // region, not on m0's identical label / section / header.
         let text = "MACHINE m0\nINVARIANTS\n    @inv1 x ∈ ℕ\nEND\nMACHINE m1\nINVARIANTS\n    @inv1 y ∈ ℕ\nEND\nMACHINE (\n";
         let doc = ParsedDocument::from_text(text.to_string());
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let finding = |anchor| Finding {
             uri: uri.clone(),
             component: "m1".to_string(),
@@ -1001,14 +1001,18 @@ mod tests {
             "m".to_string(),
             AnimateMode::Check,
             vec![Finding {
-                uri: Url::parse("file:///m.eventb").unwrap(),
+                uri: ("file:///m.eventb").parse::<Uri>().unwrap(),
                 component: "m".to_string(),
                 anchor: Anchor::InvariantLabel("inv1".to_string()),
                 code: "animate-inv",
                 message: "violated".to_string(),
             }],
         );
-        let diags = animate_diagnostics(&Url::parse("file:///m.eventb").unwrap(), &doc, &overlay);
+        let diags = animate_diagnostics(
+            &("file:///m.eventb").parse::<Uri>().unwrap(),
+            &doc,
+            &overlay,
+        );
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].range.start.line, 2, "the @inv1 text line");
     }

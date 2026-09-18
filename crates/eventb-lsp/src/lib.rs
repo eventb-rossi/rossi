@@ -4,12 +4,12 @@
 //! for the Event-B formal modeling language.
 
 use anyhow::Result;
-use tower_lsp::{LspService, Server};
+use tower_lsp_server::{LspService, Server};
 use tracing::info;
 
 // Re-export tower-lsp's protocol types so this crate cannot drift to a
 // different lsp-types version than the server framework uses internally.
-pub use tower_lsp::lsp_types;
+pub use tower_lsp_server::ls_types as lsp_types;
 
 // Re-export modules for testing and library use
 pub mod analysis;

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::lsp_types::*;
 use crate::progress::Progress;
-use tower_lsp::Client;
+use tower_lsp_server::Client;
 
 /// The `workspace/executeCommand` command behind the code lens.
 pub const COMMAND_OPEN: &str = "rossi.rodin.open";
@@ -44,7 +44,7 @@ const REOPEN_NOTE: &str = "Editors already open on a component show the new \
 /// the component's name. When the parse yields no components (mid-edit
 /// breakage), fall back to scanning for `MACHINE`/`CONTEXT` header lines so
 /// the lens stays visible while the user types.
-pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Url) -> Vec<CodeLens> {
+pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Uri) -> Vec<CodeLens> {
     let lenses: Vec<CodeLens> = components
         .iter()
         .filter_map(|component| {
@@ -58,19 +58,19 @@ pub fn code_lenses(components: &[rossi::Component], text: &str, uri: &Url) -> Ve
     header_line_scan(text, uri)
 }
 
-fn lens_at(range: Range, uri: &Url) -> CodeLens {
+fn lens_at(range: Range, uri: &Uri) -> CodeLens {
     CodeLens {
         range,
         command: Some(Command {
             title: "Open in Rodin".to_string(),
             command: COMMAND_OPEN.to_string(),
-            arguments: Some(vec![serde_json::json!(uri.to_string())]),
+            arguments: Some(vec![serde_json::json!(uri.as_str().to_owned())]),
         }),
         data: None,
     }
 }
 
-fn header_line_scan(text: &str, uri: &Url) -> Vec<CodeLens> {
+fn header_line_scan(text: &str, uri: &Uri) -> Vec<CodeLens> {
     crate::text_utils::header_lines(text)
         .map(|header| {
             lens_at(
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn header_scan_finds_machine_and_context_only() {
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let text = "CONTEXT c\nEND\nMACHINE m\nEND\nMACHINERY x\nCONTEXTUAL y\n";
         let lenses = header_line_scan(text, &uri);
         assert_eq!(lenses.len(), 2);
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn parsed_components_anchor_lenses_on_name_spans() {
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         let text = "MACHINE counters\nEND\n";
         let components = rossi::parse_components(text).unwrap();
         let lenses = code_lenses(&components, text, &uri);

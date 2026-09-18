@@ -105,7 +105,7 @@ fn declaration_of(
     project: &rossi_build::Project,
     loader: &ComponentLoader,
 ) -> Option<Location> {
-    let in_context = |component: &Component, text: &str, uri: &Url| {
+    let in_context = |component: &Component, text: &str, uri: &Uri| {
         let Component::Context(context) = component else {
             return None;
         };

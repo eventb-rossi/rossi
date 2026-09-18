@@ -149,7 +149,7 @@ fn signature_for(syntax: SyntaxAtOffset) -> Option<(RossiSignature, u32)> {
 mod tests {
     use super::*;
     use crate::lsp_types::{
-        Position, TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
     use crate::position::offset_to_position;
 
@@ -167,7 +167,7 @@ mod tests {
         SignatureHelpParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {
-                    uri: Url::parse("file:///test.eventb").unwrap(),
+                    uri: ("file:///test.eventb").parse::<Uri>().unwrap(),
                 },
                 position,
             },

@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 # LSP framework
-tower-lsp.workspace = true
+tower-lsp-server.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -73,7 +73,7 @@ libc = "0.2"
 
 [dev-dependencies]
 # `ServiceExt::ready` for driving the LspService in the rossi/operatorTable
-# wire-level test. Pinned to the 0.4 line tower-lsp uses internally.
+# wire-level test. The 0.5 line tower-lsp-server uses internally.
 tower = { version = "0.5", features = ["util"] }
 # `StreamExt::next` for reading server-to-client notifications (the
 # `ClientSocket` stream) in the debounce wire-level test.

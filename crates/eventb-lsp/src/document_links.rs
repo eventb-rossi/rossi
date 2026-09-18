@@ -5,7 +5,7 @@
 //! - REFINES references (concrete machine → abstract machine)
 //! - EXTENDS references (context → parent context)
 
-use crate::lsp_types::{DocumentLink, DocumentLinkParams, Url};
+use crate::lsp_types::{DocumentLink, DocumentLinkParams, Uri};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -82,7 +82,7 @@ impl DocumentLinkProvider {
 
         for token in clause_identifier_tokens(text, clause_keyword) {
             if let Some(target_uri) = cross_ref_manager.find_component_uri(&token.name) {
-                if let Ok(url) = Url::parse(&target_uri) {
+                if let Ok(url) = target_uri.parse::<Uri>() {
                     // `token.start`/`end` are char columns from the scanner;
                     // route them through the single UTF-16 converter against the
                     // real source line.
@@ -314,7 +314,7 @@ mod tests {
     fn make_params(filename: &str) -> DocumentLinkParams {
         DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse(&format!("file:///{filename}")).unwrap(),
+                uri: format!("file:///{filename}").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -376,7 +376,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///test_mch.eventb").unwrap(),
+                uri: ("file:///test_mch.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -603,7 +603,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///concrete_mch.eventb").unwrap(),
+                uri: ("file:///concrete_mch.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -649,7 +649,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///derived_ctx.eventb").unwrap(),
+                uri: ("file:///derived_ctx.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -691,7 +691,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///test_mch.eventb").unwrap(),
+                uri: ("file:///test_mch.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -757,7 +757,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///simple_ctx.eventb").unwrap(),
+                uri: ("file:///simple_ctx.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -786,7 +786,7 @@ END
 
         let params = DocumentLinkParams {
             text_document: crate::lsp_types::TextDocumentIdentifier {
-                uri: Url::parse("file:///test_mch.eventb").unwrap(),
+                uri: ("file:///test_mch.eventb").parse::<Uri>().unwrap(),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),

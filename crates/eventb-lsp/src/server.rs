@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, watch};
-use tower_lsp::jsonrpc::{Error, Result};
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::jsonrpc::{Error, Result};
+use tower_lsp_server::{Client, LanguageServer};
 use tracing::{debug, info};
 
 use rossi::operators::{OperatorId, spelling};
@@ -60,27 +60,27 @@ impl WorkspaceScanState {
 fn refresh_saved_layers(
     xrefs: &CrossReferenceManager,
     symbols: &WorkspaceSymbolProvider,
-    uri: &Url,
+    uri: &Uri,
 ) {
-    let text = match uri.to_file_path().map(std::fs::read_to_string) {
-        Ok(Ok(text)) => text,
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+    let Some(path) = uri.to_file_path() else {
+        info!("Not a file URI, so nothing to read: {}", uri.as_str());
+        return;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             xrefs.remove_disk_document(uri.as_str());
             symbols.remove_disk_document(uri.as_str());
             return;
         }
-        Ok(Err(error)) => {
-            info!("Failed to read {uri}: {error}");
-            return;
-        }
-        Err(()) => {
-            info!("Not a file URI, so nothing to read: {uri}");
+        Err(error) => {
+            info!("Failed to read {}: {error}", uri.as_str());
             return;
         }
     };
     let components = crate::component_util::parse_all(&text);
-    xrefs.index_disk_components(uri.to_string(), &components);
-    symbols.index_disk_components(uri.to_string(), &components, &text);
+    xrefs.index_disk_components(uri.as_str().to_owned(), &components);
+    symbols.index_disk_components(uri.as_str().to_owned(), &components, &text);
 }
 
 /// The workspace edit that renames the component a renamed file declares,
@@ -94,15 +94,9 @@ fn component_rename_for_file(
     loader: &ComponentLoader,
     file: &FileRename,
 ) -> Option<WorkspaceEdit> {
-    let old_uri = Url::parse(&file.old_uri).ok()?;
-    let new_uri = Url::parse(&file.new_uri).ok()?;
-    let stem = |uri: &Url| {
-        uri.to_file_path()
-            .ok()?
-            .file_stem()?
-            .to_str()
-            .map(str::to_owned)
-    };
+    let old_uri = file.old_uri.parse::<Uri>().ok()?;
+    let new_uri = file.new_uri.parse::<Uri>().ok()?;
+    let stem = |uri: &Uri| uri.to_file_path()?.file_stem()?.to_str().map(str::to_owned);
     let old_stem = stem(&old_uri)?;
     let new_stem = stem(&new_uri)?;
     if old_stem == new_stem {
@@ -206,7 +200,7 @@ pub(crate) struct Analyzer {
     cross_reference_manager: Arc<CrossReferenceManager>,
     workspace_symbol_provider: Arc<WorkspaceSymbolProvider>,
     config_manager: Arc<ConfigManager>,
-    diagnostic_locks: Arc<DashMap<Url, Arc<Mutex<()>>>>,
+    diagnostic_locks: Arc<DashMap<Uri, Arc<Mutex<()>>>>,
     /// Per-component proof-status lines from the shared Rodin workspace,
     /// scoped to the source file each project was built from, maintained by
     /// the rodin sync watcher. Empty until a Rodin workspace exists.
@@ -228,7 +222,7 @@ impl Analyzer {
     /// truth once and fans it out to every eager index (none of which
     /// re-parses). Go-to-definition keeps no index — it resolves on demand
     /// against this same stored parse.
-    pub(crate) async fn analyze(&self, uri: Url) {
+    pub(crate) async fn analyze(&self, uri: Uri) {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return;
         };
@@ -274,7 +268,7 @@ impl Analyzer {
 
     /// Clear diagnostics after every earlier analysis for this URI has either
     /// published or bowed out. The same lock also orders a subsequent reopen.
-    async fn clear_diagnostics(&self, uri: Url) {
+    async fn clear_diagnostics(&self, uri: Uri) {
         let diagnostic_lock = self.diagnostic_lock(&uri);
         {
             let _publish_guard = diagnostic_lock.lock().await;
@@ -285,7 +279,7 @@ impl Analyzer {
         self.evict_diagnostic_lock(&uri, &diagnostic_lock);
     }
 
-    fn diagnostic_lock(&self, uri: &Url) -> Arc<Mutex<()>> {
+    fn diagnostic_lock(&self, uri: &Uri) -> Arc<Mutex<()>> {
         let entry = self
             .diagnostic_locks
             .entry(uri.clone())
@@ -293,7 +287,7 @@ impl Analyzer {
         Arc::clone(entry.value())
     }
 
-    fn evict_diagnostic_lock(&self, uri: &Url, lock: &Arc<Mutex<()>>) {
+    fn evict_diagnostic_lock(&self, uri: &Uri, lock: &Arc<Mutex<()>>) {
         self.diagnostic_locks.remove_if(uri, |_, current| {
             Arc::ptr_eq(current, lock) && Arc::strong_count(current) == 2
         });
@@ -313,7 +307,7 @@ impl Analyzer {
     /// instantly so. A change arriving from disk is not mid-anything, so
     /// [`RossiLanguageServer::did_change_watched_files`] does republish every
     /// open document.
-    fn diagnostics_for(&self, uri: &Url, doc: &ParsedDocument) -> Vec<Diagnostic> {
+    fn diagnostics_for(&self, uri: &Uri, doc: &ParsedDocument) -> Vec<Diagnostic> {
         let xrefs = &self.cross_reference_manager;
         let mut diags = crate::diagnostics::document_diagnostics(doc);
         // The proof-status overlay comes from disk, not the AST, so it is
@@ -387,14 +381,13 @@ impl Analyzer {
     /// the lens, which also survives mid-edit breakage. Cheap when no Rodin
     /// workspace exists, and the canonicalize syscall stays off the overlay
     /// lock.
-    fn proof_status_diagnostics(&self, uri: &Url, doc: &ParsedDocument) -> Vec<Diagnostic> {
+    fn proof_status_diagnostics(&self, uri: &Uri, doc: &ParsedDocument) -> Vec<Diagnostic> {
         if self.proof_status.read().is_empty() {
             return Vec::new();
         }
         let path = uri
             .to_file_path()
-            .ok()
-            .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+            .map(|p| std::fs::canonicalize(&p).unwrap_or_else(|_| p.into_owned()));
         let proof_status = self.proof_status.read();
         crate::diagnostics::proof_status_diagnostics(doc, path.as_deref(), &proof_status)
     }
@@ -418,7 +411,7 @@ impl Analyzer {
     pub(crate) fn source_text(
         &self,
         path: &std::path::Path,
-    ) -> Option<(Option<(Url, i32)>, String)> {
+    ) -> Option<(Option<(Uri, i32)>, String)> {
         if let Some((uri, version, text)) = self.document_manager.open_document_by_path(path) {
             return Some((Some((uri, version)), text));
         }
@@ -428,7 +421,7 @@ impl Analyzer {
     /// The open buffer's version, if the document is open. A direct lookup
     /// that copies nothing, unlike [`Self::source_text`], so it is cheap
     /// enough to poll.
-    pub(crate) fn document_version(&self, uri: &Url) -> Option<i32> {
+    pub(crate) fn document_version(&self, uri: &Uri) -> Option<i32> {
         self.document_manager.version(uri)
     }
 
@@ -443,7 +436,7 @@ impl Analyzer {
     pub(crate) async fn apply_source_text(
         &self,
         path: &std::path::Path,
-        target: Option<(Url, i32)>,
+        target: Option<(Uri, i32)>,
         new_text: &str,
     ) -> std::result::Result<(), String> {
         let Some((uri, version)) = target else {
@@ -521,7 +514,7 @@ impl Analyzer {
     /// current parse; empty when none were computed or the feature is off.
     pub(crate) fn proof_obligations_for(
         &self,
-        uri: &Url,
+        uri: &Uri,
         doc: &ParsedDocument,
     ) -> Vec<crate::proof::Obligation> {
         if !self.config_manager.get().proof_obligations.enabled {
@@ -538,7 +531,7 @@ impl Analyzer {
     /// republish its diagnostics and push the new list to the client.
     pub(crate) async fn apply_proof_obligations(
         &self,
-        uri: Url,
+        uri: Uri,
         obligations: Vec<crate::proof::Obligation>,
     ) {
         if !self
@@ -564,12 +557,12 @@ impl Analyzer {
     }
 
     /// Whether a list has been computed for `uri` since it was opened.
-    pub(crate) fn has_proof_obligations(&self, uri: &Url) -> bool {
+    pub(crate) fn has_proof_obligations(&self, uri: &Uri) -> bool {
         self.proof_obligations.read().get(uri).is_some()
     }
 
     /// Forget a closed document's obligations.
-    pub(crate) fn drop_proof_obligations(&self, uri: &Url) {
+    pub(crate) fn drop_proof_obligations(&self, uri: &Uri) {
         self.proof_obligations.write().remove(uri);
     }
 
@@ -600,7 +593,7 @@ impl Analyzer {
     /// echoed a revision-based id would never see the warning a save's
     /// broken proof produced. Hashing the report also gives a file read from
     /// disk an id, which a revision cannot.
-    pub(crate) fn pull_report(&self, uri: &Url) -> Option<(Option<String>, Vec<Diagnostic>)> {
+    pub(crate) fn pull_report(&self, uri: &Uri) -> Option<(Option<String>, Vec<Diagnostic>)> {
         // The buffer if it is open, the file otherwise, through the loader
         // every other cross-file path reads with.
         let doc = crate::component_loader::ComponentLoader::new(
@@ -622,12 +615,12 @@ impl Analyzer {
 
     /// Every workspace file worth reporting on: the indexed components plus
     /// any open document the index has not caught up with.
-    pub(crate) fn pull_uris(&self) -> Vec<Url> {
-        let mut uris: Vec<Url> = self
+    pub(crate) fn pull_uris(&self) -> Vec<Uri> {
+        let mut uris: Vec<Uri> = self
             .cross_reference_manager
             .all_component_uris()
             .iter()
-            .filter_map(|uri| Url::parse(uri).ok())
+            .filter_map(|uri| uri.parse::<Uri>().ok())
             .chain(self.document_manager.all_uris())
             .collect();
         uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -639,7 +632,7 @@ impl Analyzer {
     /// without re-committing the cross-reference/symbol indexes — the cheap
     /// half of [`Self::analyze`], for refreshes where only diagnostic inputs
     /// (like the proof-status overlay) changed.
-    async fn republish_diagnostics(&self, uri: Url) {
+    async fn republish_diagnostics(&self, uri: Uri) {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return;
         };
@@ -832,19 +825,19 @@ struct RodinProjectTarget {
 /// The `file://` document URI every lens command carries as its first
 /// argument — the shared decode for the `workspace/executeCommand` handlers,
 /// erroring with the command's own name.
-fn file_uri_argument(params: &ExecuteCommandParams) -> Result<Url> {
+fn file_uri_argument(params: &ExecuteCommandParams) -> Result<Uri> {
     let uri = params
         .arguments
         .first()
         .and_then(|value| value.as_str())
-        .and_then(|value| Url::parse(value).ok())
+        .and_then(|value| value.parse::<Uri>().ok())
         .ok_or_else(|| {
             Error::invalid_params(format!(
                 "{} expects a document URI argument",
                 params.command
             ))
         })?;
-    if uri.to_file_path().is_err() {
+    if uri.to_file_path().is_none() {
         return Err(Error::invalid_params(format!(
             "{} needs a file:// URI",
             params.command
@@ -1001,10 +994,9 @@ impl RossiLanguageServer {
     /// rebuild-on-save and the animate po lens read exactly the directory
     /// Rodin records into. `None` for non-file URIs, files without a usable
     /// parent, and when no workspace resolves.
-    fn rodin_project_target(&self, uri: &Url) -> Option<RodinProjectTarget> {
+    fn rodin_project_target(&self, uri: &Uri) -> Option<RodinProjectTarget> {
         let source_dir = uri
-            .to_file_path()
-            .ok()?
+            .to_file_path()?
             .parent()
             .map(std::path::Path::to_path_buf)
             .filter(|dir| !dir.as_os_str().is_empty())?;
@@ -1027,7 +1019,7 @@ impl RossiLanguageServer {
     /// Called on open and on save, never per keystroke: the generator
     /// runs the full static check plus proof-obligation generation over
     /// the closure, which is save-cadence work.
-    async fn refresh_proof_obligations(&self, uri: Url) {
+    async fn refresh_proof_obligations(&self, uri: Uri) {
         if !self.config_manager.get().proof_obligations.enabled {
             return;
         }
@@ -1282,7 +1274,7 @@ impl RossiLanguageServer {
     /// its seeded polling auto-refresh then picks the edit up within a few
     /// seconds, without another lens click. Errors only log — the editor
     /// already shows this document's diagnostics.
-    fn schedule_rodin_rebuild(&self, uri: &Url) {
+    fn schedule_rodin_rebuild(&self, uri: &Uri) {
         if !self.config_manager.get().rodin.sync {
             return;
         }
@@ -1515,7 +1507,6 @@ impl RossiLanguageServer {
     }
 }
 
-#[tower_lsp::async_trait]
 impl LanguageServer for RossiLanguageServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         info!(
@@ -1528,16 +1519,19 @@ impl LanguageServer for RossiLanguageServer {
             .workspace_folders
             .iter()
             .flatten()
-            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .filter_map(|folder| folder.uri.to_file_path())
+            .map(|path| path.into_owned())
             .collect();
         let workspace_root: Option<PathBuf> = folders
             .first()
             .cloned()
             .or_else(|| {
+                #[allow(deprecated)]
                 params
                     .root_uri
                     .as_ref()
-                    .and_then(|uri| uri.to_file_path().ok())
+                    .and_then(|uri| uri.to_file_path())
+                    .map(|path| path.into_owned())
             })
             .or_else(|| {
                 #[allow(deprecated)]
@@ -1611,6 +1605,7 @@ impl LanguageServer for RossiLanguageServer {
         }
 
         Ok(InitializeResult {
+            offset_encoding: None,
             server_info: Some(ServerInfo {
                 name: "eventb-language-server".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1783,13 +1778,15 @@ impl LanguageServer for RossiLanguageServer {
             .event
             .removed
             .iter()
-            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .filter_map(|folder| folder.uri.to_file_path())
+            .map(|path| path.into_owned())
             .collect();
         let added: Vec<PathBuf> = params
             .event
             .added
             .iter()
-            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .filter_map(|folder| folder.uri.to_file_path())
+            .map(|path| path.into_owned())
             .collect();
         info!(
             "Workspace folders changed: +{} -{}",
@@ -1825,9 +1822,10 @@ impl LanguageServer for RossiLanguageServer {
             let symbols = Arc::clone(&self.workspace_symbol_provider);
             if let Err(error) = run_blocking(move || {
                 for uri in xrefs.all_component_uris() {
-                    let under_removed = Url::parse(&uri)
+                    let under_removed = uri
+                        .parse::<Uri>()
                         .ok()
-                        .and_then(|u| u.to_file_path().ok())
+                        .and_then(|u| u.to_file_path().map(|path| path.into_owned()))
                         .is_some_and(|path| removed.iter().any(|folder| path.starts_with(folder)));
                     if under_removed {
                         xrefs.remove_disk_document(&uri);
@@ -2047,12 +2045,12 @@ impl LanguageServer for RossiLanguageServer {
         // (a create plus a change), and re-reading it would be pure waste
         // since the refresh below reads from disk anyway. Order does not
         // matter for the same reason.
-        let changed: std::collections::HashSet<Url> = params
+        let changed: std::collections::HashSet<Uri> = params
             .changes
             .into_iter()
             .map(|change| change.uri)
             .filter(|uri| {
-                uri.to_file_path().is_ok_and(|path| {
+                uri.to_file_path().is_some_and(|path| {
                     rossi_build::walk::is_source_file(&path)
                         && rossi_build::walk::is_within_source_walk(&root, &path)
                 })
@@ -2437,7 +2435,7 @@ impl LanguageServer for RossiLanguageServer {
         // Cold sibling components are read and parsed here, so this belongs
         // on the blocking pool like the other cross-file lookups.
         let provider = Arc::clone(&self.type_hierarchy_provider);
-        Ok(run_blocking(move || provider.supertypes(&params.item)).await?)
+        run_blocking(move || provider.supertypes(&params.item)).await
     }
 
     async fn subtypes(
@@ -2447,7 +2445,7 @@ impl LanguageServer for RossiLanguageServer {
         debug!("Type hierarchy subtypes for: {}", params.item.name);
 
         let provider = Arc::clone(&self.type_hierarchy_provider);
-        Ok(run_blocking(move || provider.subtypes(&params.item)).await?)
+        run_blocking(move || provider.subtypes(&params.item)).await
     }
 
     async fn diagnostic(
@@ -2506,7 +2504,7 @@ impl LanguageServer for RossiLanguageServer {
         self.workspace_scan_state.wait().await;
 
         let analyzer = self.analyzer.clone();
-        let previous: std::collections::HashMap<Url, String> = params
+        let previous: std::collections::HashMap<Uri, String> = params
             .previous_result_ids
             .into_iter()
             .map(|previous| (previous.uri, previous.value))
@@ -2593,7 +2591,7 @@ impl LanguageServer for RossiLanguageServer {
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
-    ) -> Result<Option<Vec<SymbolInformation>>> {
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
         let query = &params.query;
         debug!("Workspace symbol search for: '{}'", query);
 
@@ -2604,7 +2602,7 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!("Workspace symbol search returned {} symbols", symbols.len());
 
-        Ok(Some(symbols))
+        Ok(Some(WorkspaceSymbolResponse::Flat(symbols)))
     }
 
     async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
@@ -2614,7 +2612,7 @@ impl LanguageServer for RossiLanguageServer {
         let xrefs = Arc::clone(&self.cross_reference_manager);
         run_blocking(move || {
             let loader = ComponentLoader::new(&xrefs, Some(&documents));
-            let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+            let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> =
                 std::collections::HashMap::new();
             for file in &params.files {
                 let Some(edit) = component_rename_for_file(&provider, &loader, file) else {
@@ -2648,10 +2646,10 @@ impl LanguageServer for RossiLanguageServer {
         // sends no other signal for either.
         let xrefs = Arc::clone(&self.cross_reference_manager);
         let symbols = Arc::clone(&self.workspace_symbol_provider);
-        let uris: Vec<Url> = params
+        let uris: Vec<Uri> = params
             .files
             .iter()
-            .flat_map(|file| [Url::parse(&file.old_uri), Url::parse(&file.new_uri)])
+            .flat_map(|file| [file.old_uri.parse::<Uri>(), file.new_uri.parse::<Uri>()])
             .filter_map(|parsed| parsed.ok())
             .collect();
         if let Err(error) = run_blocking(move || {

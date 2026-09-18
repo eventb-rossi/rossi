@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, warn};
 
-use crate::lsp_types::Url;
+use crate::lsp_types::Uri;
 
 /// Canonical component / edge kinds, re-exported from the shared
 /// [`rossi::deps`] dependency model so existing call sites keep referring to
@@ -271,7 +271,7 @@ impl CrossReferenceManager {
     /// Closing an editor needs no file read: the saved layer is already here.
     pub(crate) fn remove_document(&self, uri: &str) {
         debug!("Removing open components for URI: {}", uri);
-        self.write_layer(uri.to_string(), |document| {
+        self.write_layer(uri.to_owned(), |document| {
             let previous = document.open.take();
             previous.is_some_and(|open| open != document.disk)
         });
@@ -281,7 +281,7 @@ impl CrossReferenceManager {
     /// buffer outlives the file until the editor closes it.
     pub(crate) fn remove_disk_document(&self, uri: &str) {
         debug!("Removing disk components for URI: {}", uri);
-        self.write_layer(uri.to_string(), |document| {
+        self.write_layer(uri.to_owned(), |document| {
             let moved = document.open.is_none() && !document.disk.is_empty();
             document.disk.clear();
             moved
@@ -292,7 +292,7 @@ impl CrossReferenceManager {
     /// index is never observed holding half of a removed file.
     pub fn remove_component(&self, uri: &str) {
         debug!("Removing components for URI: {}", uri);
-        self.write_layer(uri.to_string(), |document| {
+        self.write_layer(uri.to_owned(), |document| {
             let moved = !document.effective().is_empty();
             document.open = None;
             document.disk.clear();
@@ -521,7 +521,7 @@ impl CrossReferenceManager {
             let entry = entry?;
             let path = entry.path();
             if entry.file_type().is_file() && rossi_build::walk::is_source_file(path) {
-                let uri = Url::from_file_path(path).map_err(|()| {
+                let uri = Uri::from_file_path(path).ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!("cannot convert {} to a file URI", path.display()),
@@ -1042,9 +1042,9 @@ END
         std::fs::write(root.join("real").join("m.eventb"), "CONTEXT c\nEND\n").unwrap();
 
         let manager = CrossReferenceManager::new();
-        let uri = Url::from_file_path(root.join("link").join("m.eventb")).unwrap();
-        manager.index_disk_components(uri.to_string(), &parse("CONTEXT c\nEND\n"));
-        manager.update_component(uri.to_string(), "CONTEXT c\nEND\n");
+        let uri = Uri::from_file_path(root.join("link").join("m.eventb")).unwrap();
+        manager.index_disk_components(uri.as_str().to_owned(), &parse("CONTEXT c\nEND\n"));
+        manager.update_component(uri.as_str().to_owned(), "CONTEXT c\nEND\n");
 
         let declarations = manager.component_declarations("c");
         assert_eq!(declarations.len(), 1, "{declarations:?}");

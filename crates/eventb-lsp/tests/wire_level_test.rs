@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use tower_lsp::jsonrpc::Request;
+use tower_lsp_server::jsonrpc::Request;
 
 fn notification(method: &'static str, params: Value) -> Request {
     Request::build(method).params(params).finish()
@@ -106,8 +106,8 @@ mod debounce {
     use serde_json::{Value, json};
     use std::time::Duration;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const DEBOUNCE_MS: u64 = 120;
     const URI: &str = "file:///debounce.eventb";
@@ -357,13 +357,13 @@ mod workspace_symbols {
     //! Wire-level regressions for the disk-backed workspace symbol index.
 
     use super::{TempWorkspace, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::StreamExt;
     use serde_json::json;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     #[tokio::test(flavor = "current_thread")]
     async fn disk_symbols_are_overlaid_while_open_and_restored_on_close() {
@@ -376,8 +376,8 @@ mod workspace_symbols {
         .unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&path, workspace.as_ref().join("alias.eventb")).unwrap();
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let file_uri = Url::from_file_path(&path).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let file_uri = Uri::from_file_path(&path).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
@@ -512,14 +512,14 @@ mod rodin_lens {
     //! (the error must point at the `rossi.rodin.path` setting).
 
     use super::{TempWorkspace, next_show_message, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::StreamExt;
     use serde_json::{Value, json};
     use std::time::Duration;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const SOURCE: &str = "CONTEXT wire_ctx\nCONSTANTS\n    lo\nAXIOMS\n    @axm1 lo ∈ ℤ\nEND\n\nMACHINE wire_m\nSEES wire_ctx\nEND\n";
 
@@ -610,8 +610,8 @@ mod rodin_lens {
         let source_path = workspace.as_ref().join("model.eventb");
         std::fs::write(&source_path, SOURCE).unwrap();
         let rodin_workspace = workspace.as_ref().join("rodin-ws");
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let file_uri = Url::from_file_path(&source_path).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let file_uri = Uri::from_file_path(&source_path).unwrap();
 
         let (mut service, mut messages) = LspService::build(RossiLanguageServer::new).finish();
         let init = Request::build("initialize")
@@ -726,8 +726,8 @@ mod inlay_hints {
     use futures::StreamExt;
     use serde_json::json;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const SOURCE: &str = "CONTEXT wire_ctx\nCONSTANTS\n    lo\nAXIOMS\n    @axm1 lo ∈ ℤ\nEND\n";
 
@@ -822,8 +822,8 @@ mod operator_convention {
     use futures::StreamExt;
     use serde_json::json;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const SOURCE: &str = "MACHINE m\nVARIABLES x\nINVARIANTS\n    @inv1 x : NAT\nEND\n";
 
@@ -940,8 +940,8 @@ mod animate_lens {
     use serde_json::{Value, json};
     use std::time::Duration;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const SOURCE: &str = "MACHINE animate_m\nEND\n";
     const URI: &str = "file:///animate.eventb";
@@ -1062,8 +1062,8 @@ mod operator_table {
     use eventb_lsp::server::RossiLanguageServer;
     use serde_json::json;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     #[tokio::test(flavor = "current_thread")]
     async fn operator_table_succeeds_without_params_field() {
@@ -1114,12 +1114,12 @@ mod project_diagnostics {
     //! offending element, and a clean model stays clean.
 
     use super::{TempWorkspace, next_published_diagnostics, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use serde_json::{Value, json};
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     /// `c` is a carrier-set element, so comparing it to a number cannot type.
     /// Nothing in the file is locally malformed: only the project check,
@@ -1148,7 +1148,7 @@ mod project_diagnostics {
 
     async fn diagnostics_for(text: &str) -> Vec<Value> {
         let workspace = TempWorkspace::new("project-diagnostics");
-        let uri = Url::from_file_path(workspace.as_ref().join("typing.eventb")).unwrap();
+        let uri = Uri::from_file_path(workspace.as_ref().join("typing.eventb")).unwrap();
 
         let (mut service, mut messages) = LspService::build(RossiLanguageServer::new).finish();
         let init = Request::build("initialize")
@@ -1238,13 +1238,13 @@ mod type_hierarchy {
     //! REFINES, and its subtypes are the machines that refine it.
 
     use super::{TempWorkspace, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::{SinkExt, StreamExt};
     use serde_json::{Value, json};
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::{Request, Response};
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::{Request, Response};
 
     const ABSTRACT: &str = concat!(
         "MACHINE base\n",
@@ -1278,7 +1278,7 @@ mod type_hierarchy {
     #[tokio::test(flavor = "current_thread")]
     async fn the_capability_is_registered_dynamically() {
         let workspace = TempWorkspace::new("type-hierarchy-register");
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
 
@@ -1344,8 +1344,8 @@ mod type_hierarchy {
         std::fs::write(workspace.as_ref().join("base.eventb"), ABSTRACT).unwrap();
         let concrete_path = workspace.as_ref().join("refined.eventb");
         std::fs::write(&concrete_path, CONCRETE).unwrap();
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let concrete_uri = Url::from_file_path(&concrete_path).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let concrete_uri = Uri::from_file_path(&concrete_path).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
@@ -1451,8 +1451,8 @@ mod type_hierarchy {
         let abstract_path = workspace.as_ref().join("base.eventb");
         std::fs::write(&abstract_path, ABSTRACT).unwrap();
         std::fs::write(workspace.as_ref().join("refined.eventb"), CONCRETE).unwrap();
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let abstract_uri = Url::from_file_path(&abstract_path).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let abstract_uri = Uri::from_file_path(&abstract_path).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
@@ -1558,13 +1558,13 @@ mod pull_diagnostics {
     //! never opened.
 
     use super::{TempWorkspace, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::StreamExt;
     use serde_json::{Value, json};
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     /// A context whose `CONSTANS` typo the parser reports.
     const BROKEN: &str = "CONTEXT broken\nCONSTANS\n    c\nEND\n";
@@ -1574,8 +1574,8 @@ mod pull_diagnostics {
     #[tokio::test(flavor = "current_thread")]
     async fn a_document_pull_reports_and_then_answers_unchanged() {
         let workspace = TempWorkspace::new("pull-diagnostics-doc");
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let file_uri = Url::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let file_uri = Uri::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
@@ -1718,8 +1718,8 @@ mod pull_diagnostics {
         let broken = workspace.as_ref().join("broken.eventb");
         std::fs::write(&broken, BROKEN).unwrap();
         std::fs::write(workspace.as_ref().join("clean.eventb"), CLEAN).unwrap();
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
-        let broken_uri = Url::from_file_path(&broken).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let broken_uri = Uri::from_file_path(&broken).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
@@ -1793,8 +1793,8 @@ mod proof_obligations {
     use eventb_lsp::server::RossiLanguageServer;
     use serde_json::{Value, json};
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const URI: &str = "file:///proof.eventb";
     const SOURCE: &str = concat!(
@@ -1828,7 +1828,10 @@ mod proof_obligations {
         "bump/inv1/INV",
     ];
 
-    async fn open_service() -> (LspService<RossiLanguageServer>, tower_lsp::ClientSocket) {
+    async fn open_service() -> (
+        LspService<RossiLanguageServer>,
+        tower_lsp_server::ClientSocket,
+    ) {
         let (mut service, socket) = LspService::build(RossiLanguageServer::new)
             .custom_method(
                 eventb_lsp::proof::REQUEST_OBLIGATIONS,
@@ -2004,8 +2007,8 @@ mod document_highlight {
     use eventb_lsp::server::RossiLanguageServer;
     use serde_json::{Value, json};
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::Request;
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
 
     const SOURCE: &str = concat!(
         "MACHINE m\n",
@@ -2158,14 +2161,14 @@ mod watched_files {
     //! cross-file diagnostics are checked against.
 
     use super::{TempWorkspace, next_published_diagnostics, notification};
-    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::{SinkExt, StreamExt};
     use serde_json::{Value, json};
     use std::path::Path;
     use tower::{Service, ServiceExt};
-    use tower_lsp::LspService;
-    use tower_lsp::jsonrpc::{Request, Response};
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::{Request, Response};
 
     /// A machine whose `SEES` target is missing until a sibling file appears.
     const MACHINE: &str = "MACHINE m\nSEES ctx\nEND\n";
@@ -2186,7 +2189,7 @@ mod watched_files {
     /// protocol's `FileChangeType` (1 created, 2 changed, 3 deleted).
     fn watched_change(path: &Path, kind: u8) -> Value {
         json!({
-            "changes": [{ "uri": Url::from_file_path(path).unwrap(), "type": kind }]
+            "changes": [{ "uri": Uri::from_file_path(path).unwrap(), "type": kind }]
         })
     }
 
@@ -2219,7 +2222,7 @@ mod watched_files {
         LspService<RossiLanguageServer>,
         futures::channel::mpsc::UnboundedReceiver<Request>,
     ) {
-        let root_uri = Url::from_file_path(root).unwrap();
+        let root_uri = Uri::from_file_path(root).unwrap();
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         let (sender, messages) = futures::channel::mpsc::unbounded();
         tokio::spawn(async move {
@@ -2259,7 +2262,7 @@ mod watched_files {
             "textDocument/didOpen",
             json!({
                 "textDocument": {
-                    "uri": Url::from_file_path(&machine_path).unwrap(),
+                    "uri": Uri::from_file_path(&machine_path).unwrap(),
                     "languageId": "eventb",
                     "version": 1,
                     "text": MACHINE
@@ -2273,7 +2276,7 @@ mod watched_files {
     #[tokio::test(flavor = "current_thread")]
     async fn the_server_registers_the_eventb_watcher_itself() {
         let workspace = TempWorkspace::new("watched-files-registration");
-        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
 
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         let init = Request::build("initialize")
@@ -2379,8 +2382,8 @@ mod watched_files {
             "workspace/didChangeWatchedFiles",
             json!({
                 "changes": [
-                    { "uri": Url::from_file_path(&renamed_path).unwrap(), "type": 1 },
-                    { "uri": Url::from_file_path(&context_path).unwrap(), "type": 3 },
+                    { "uri": Uri::from_file_path(&renamed_path).unwrap(), "type": 1 },
+                    { "uri": Uri::from_file_path(&context_path).unwrap(), "type": 3 },
                 ]
             }),
         )

@@ -46,7 +46,7 @@ impl TypeHierarchyProvider {
     /// for the refinement tree while reading an invariant means the machine
     /// that invariant belongs to. A file holding several components resolves
     /// to the one whose span covers the cursor.
-    pub fn prepare(&self, uri: &Url, position: Position) -> Option<Vec<TypeHierarchyItem>> {
+    pub fn prepare(&self, uri: &Uri, position: Position) -> Option<Vec<TypeHierarchyItem>> {
         let doc = self.document_manager.parse_result(uri)?;
         let offset = crate::position::position_to_offset(doc.text(), position)?;
 
@@ -97,7 +97,7 @@ impl TypeHierarchyProvider {
     /// this one. Anywhere else in a component, the components that refine or
     /// extend it. Both are one level down, matching the hierarchy's one-step
     /// answers rather than flattening a whole chain into the jump list.
-    pub fn implementations(&self, uri: &Url, position: Position) -> Option<Vec<Location>> {
+    pub fn implementations(&self, uri: &Uri, position: Position) -> Option<Vec<Location>> {
         let documents = &*self.document_manager;
         let manager = &*self.cross_ref_manager;
         let doc = documents.parse_result(uri)?;
@@ -168,7 +168,7 @@ impl TypeHierarchyProvider {
 fn refining_events(
     component: &rossi::Component,
     text: &str,
-    uri: &Url,
+    uri: &Uri,
     name: &str,
 ) -> Vec<Location> {
     let rossi::Component::Machine(machine) = component else {
@@ -213,7 +213,7 @@ fn refinement_edge(kind: ComponentKind) -> ReferenceKind {
 
 /// One hierarchy row for a parsed component. `None` when the component has no
 /// name span, which only a recovered parse produces.
-fn item_for(component: &rossi::Component, text: &str, uri: &Url) -> Option<TypeHierarchyItem> {
+fn item_for(component: &rossi::Component, text: &str, uri: &Uri) -> Option<TypeHierarchyItem> {
     let selection_range = span_to_range(&component.name_span()?, text);
     // `range` must enclose `selection_range`; a component whose outer span was
     // lost to recovery falls back to the name itself rather than to a range

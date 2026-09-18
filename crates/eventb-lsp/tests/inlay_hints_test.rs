@@ -10,7 +10,7 @@ use eventb_lsp::document::DocumentManager;
 use eventb_lsp::inlay_hints::InlayHintsProvider;
 use eventb_lsp::lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip, Position, Range,
-    TextDocumentContentChangeEvent, Url,
+    TextDocumentContentChangeEvent, Uri,
 };
 use eventb_lsp::position::offset_to_position;
 
@@ -32,14 +32,14 @@ impl Fixture {
         }
     }
 
-    fn open(&self, uri: &str, text: &str) -> Url {
-        let url = Url::parse(uri).unwrap();
-        self.manager.update_component(uri.to_string(), text);
+    fn open(&self, uri: &str, text: &str) -> Uri {
+        let url = uri.parse::<Uri>().unwrap();
+        self.manager.update_component(uri.to_owned(), text);
         self.documents.open(url.clone(), 1, text.to_string());
         url
     }
 
-    fn hints(&self, uri: &Url, config: &Arc<RossiConfig>) -> Vec<InlayHint> {
+    fn hints(&self, uri: &Uri, config: &Arc<RossiConfig>) -> Vec<InlayHint> {
         self.provider
             .inlay_hints(uri, full_range(), config)
             .expect("document is open")

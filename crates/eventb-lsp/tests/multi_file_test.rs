@@ -10,13 +10,13 @@ use eventb_lsp::references::ReferenceProvider;
 use std::sync::Arc;
 
 /// Helper to create a URI from a simple filename
-fn make_uri(filename: &str) -> Url {
-    Url::parse(&format!("file:///{}", filename)).unwrap()
+fn make_uri(filename: &str) -> Uri {
+    format!("file:///{}", filename).parse::<Uri>().unwrap()
 }
 
 /// Helper to create ReferenceParams
 #[allow(dead_code)]
-fn make_reference_params(uri: Url, line: u32, character: u32) -> ReferenceParams {
+fn make_reference_params(uri: Uri, line: u32, character: u32) -> ReferenceParams {
     ReferenceParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -32,7 +32,7 @@ fn make_reference_params(uri: Url, line: u32, character: u32) -> ReferenceParams
 
 /// Helper to create RenameParams
 #[allow(dead_code)]
-fn make_rename_params(uri: Url, line: u32, character: u32, new_name: &str) -> RenameParams {
+fn make_rename_params(uri: Uri, line: u32, character: u32, new_name: &str) -> RenameParams {
     RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri },
@@ -43,12 +43,12 @@ fn make_rename_params(uri: Url, line: u32, character: u32, new_name: &str) -> Re
     }
 }
 
-fn make_reference_provider(documents: &[(Url, &str)]) -> ReferenceProvider {
+fn make_reference_provider(documents: &[(Uri, &str)]) -> ReferenceProvider {
     let cross_ref_manager = Arc::new(CrossReferenceManager::new());
     let document_manager = Arc::new(DocumentManager::new());
 
     for (uri, source) in documents {
-        cross_ref_manager.update_component(uri.to_string(), source);
+        cross_ref_manager.update_component(uri.as_str().to_owned(), source);
         document_manager.open(uri.clone(), 1, (*source).to_string());
     }
 

@@ -272,7 +272,7 @@ mod tests {
 
     use crate::cross_references::CrossReferenceManager;
     use crate::document::DocumentManager;
-    use crate::lsp_types::{TextDocumentContentChangeEvent, Url};
+    use crate::lsp_types::{TextDocumentContentChangeEvent, Uri};
 
     fn register(
         manager: &CrossReferenceManager,
@@ -280,8 +280,8 @@ mod tests {
         uri: &str,
         source: &str,
     ) {
-        manager.update_component(uri.to_string(), source);
-        documents.open(Url::parse(uri).unwrap(), 1, source.to_string());
+        manager.update_component(uri.to_owned(), source);
+        documents.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
     }
 
     fn parse_one(source: &str) -> Component {
@@ -486,7 +486,7 @@ mod tests {
         );
 
         documents.open(
-            Url::parse("file:///root.eventb").unwrap(),
+            ("file:///root.eventb").parse::<Uri>().unwrap(),
             2,
             new_root.to_string(),
         );
@@ -603,7 +603,7 @@ mod tests {
         register(&manager, &documents, "file:///c.eventb", "CONTEXT c\nEND");
         register(&manager, &documents, "file:///m.eventb", "MACHINE m\nEND");
 
-        let uri = Url::parse("file:///m.eventb").unwrap();
+        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
         documents.change(
             &uri,
             2,
@@ -651,7 +651,7 @@ mod tests {
             "file:///mid.eventb",
             "CONTEXT mid\nEXTENDS\n    old\nEND",
         );
-        let mid_uri = Url::parse("file:///mid.eventb").unwrap();
+        let mid_uri = ("file:///mid.eventb").parse::<Uri>().unwrap();
         documents.change(
             &mid_uri,
             2,

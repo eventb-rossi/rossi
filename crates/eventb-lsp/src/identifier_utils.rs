@@ -6,7 +6,7 @@
 
 use rossi::keywords::{self, KeywordId};
 
-use crate::lsp_types::{Location, Position, Range, Url};
+use crate::lsp_types::{Location, Position, Range, Uri};
 use crate::position::{line_run_to_range, utf16_to_char_col, utf16_to_char_col_checked};
 use crate::text_utils;
 
@@ -247,7 +247,7 @@ impl WordBoundary {
 pub fn find_whole_word_locations(
     text: &str,
     identifier: &str,
-    uri: &Url,
+    uri: &Uri,
     line_range: Option<(usize, usize)>,
     boundary: WordBoundary,
 ) -> Vec<Location> {
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn component_boundary_protects_longer_names() {
-        let uri = Url::parse("file:///t.eventb").unwrap();
+        let uri = ("file:///t.eventb").parse::<Uri>().unwrap();
         let text = "MACHINE m1\nSEES ENV_C ENV_C-1\nEND\n";
         // Math boundary (today's behavior): `ENV_C` also matches the prefix
         // of `ENV_C-1` because `-` is a boundary char there.
@@ -475,7 +475,7 @@ mod tests {
         // before an occurrence must shift its range by two units, not the one
         // char it spans, since LSP columns are UTF-16. (`𝔹` is code here, not a
         // comment, so masking leaves it in place.)
-        let uri = Url::parse("file:///t.eventb").unwrap();
+        let uri = ("file:///t.eventb").parse::<Uri>().unwrap();
         let text = "MACHINE m\nINVARIANTS\n  𝔹 count\n";
         let locs =
             find_whole_word_locations(text, "count", &uri, None, WordBoundary::MathIdentifier);
@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn locations_keep_utf16_columns_when_an_astral_char_is_masked() {
-        let uri = Url::parse("file:///test.eventb").unwrap();
+        let uri = ("file:///test.eventb").parse::<Uri>().unwrap();
         let text = "/* 😀 */ C";
         let locations =
             find_whole_word_locations(text, "C", &uri, None, WordBoundary::ComponentName);

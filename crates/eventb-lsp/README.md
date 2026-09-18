@@ -560,7 +560,7 @@ The server is organized into focused modules (principal ones shown):
 
 ```
 eventb-lsp/src/
-├── server.rs            # LSP protocol implementation (tower-lsp)
+├── server.rs            # LSP protocol implementation (tower-lsp-server)
 ├── diagnostics.rs       # Parse, lint, cross-reference and overlay diagnostics
 ├── document.rs          # Document management (ropey, dashmap)
 ├── analysis.rs          # Document symbol extraction
@@ -589,7 +589,7 @@ eventb-lsp/src/
 ### Components
 
 1. **Server** (`server.rs`)
-   - Implements LSP protocol using tower-lsp
+   - Implements LSP protocol using tower-lsp-server
    - Handles client communication
    - Manages LSP capabilities and requests
 
@@ -753,5 +753,5 @@ at your option.
 
 - **LSP Specification**: https://microsoft.github.io/language-server-protocol/
 - **Event-B Language**: https://wiki.event-b.org/index.php/Event-B_Language
-- **tower-lsp Documentation**: https://docs.rs/tower-lsp
+- **tower-lsp-server Documentation**: https://docs.rs/tower-lsp-server
 - **Rodin Platform**: https://www.event-b.org/
