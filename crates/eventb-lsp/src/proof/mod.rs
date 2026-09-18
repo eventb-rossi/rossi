@@ -14,6 +14,7 @@
 //! status is a faithful account of what the stored proofs cover, no more.
 
 pub(crate) mod anchor;
+pub mod state;
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::BufReader;
