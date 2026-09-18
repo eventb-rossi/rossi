@@ -471,7 +471,6 @@ impl CrossReferenceManager {
     ///
     /// For example, find all machines that SEE a context, or all machines that
     /// REFINE a given abstract machine.
-    #[allow(dead_code)]
     pub fn find_referencing_components(
         &self,
         target_name: &str,

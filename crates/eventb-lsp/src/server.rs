@@ -22,6 +22,7 @@ use crate::definition::DefinitionProvider;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::document_links::DocumentLinkProvider;
 use crate::folding::FoldingRangeProvider;
+use crate::hierarchy::TypeHierarchyProvider;
 use crate::hover::HoverProvider;
 use crate::inlay_hints::InlayHintsProvider;
 use crate::references::ReferenceProvider;
@@ -594,6 +595,7 @@ pub struct RossiLanguageServer {
     inlay_hints_provider: Arc<InlayHintsProvider>,
     /// Selection range provider (smart expand/shrink selection)
     selection_range_provider: Arc<SelectionRangeProvider>,
+    type_hierarchy_provider: Arc<TypeHierarchyProvider>,
     /// Signature help provider
     signature_help_provider: Arc<SignatureHelpProvider>,
     /// Shared handles for the post-edit analysis, reused by the inline and
@@ -619,6 +621,10 @@ pub struct RossiLanguageServer {
     /// `workspace.didChangeWatchedFiles.dynamicRegistration`, i.e. whether it
     /// will watch the source tree for us if asked.
     supports_watched_files_registration: std::sync::atomic::AtomicBool,
+    /// Whether the client advertised dynamic registration for
+    /// `textDocument/prepareTypeHierarchy`, which is how that capability
+    /// is announced (see [`RossiLanguageServer::register_type_hierarchy`]).
+    supports_type_hierarchy_registration: std::sync::atomic::AtomicBool,
     /// Watcher over the shared Rodin workspace, started lazily once such a
     /// workspace exists; dropped (stopped) on shutdown. `Arc`'d because the
     /// slow watcher creation completes on a detached thread.
@@ -773,6 +779,11 @@ impl RossiLanguageServer {
             Arc::clone(&cross_reference_manager),
         ));
 
+        let type_hierarchy_provider = Arc::new(TypeHierarchyProvider::new(
+            Arc::clone(&cross_reference_manager),
+            Arc::clone(&document_manager),
+        ));
+
         Self {
             client,
             config_manager,
@@ -791,6 +802,7 @@ impl RossiLanguageServer {
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             inlay_hints_provider,
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
+            type_hierarchy_provider,
             signature_help_provider: Arc::new(SignatureHelpProvider::new()),
             analyzer,
             rodin_open_in_flight: SingleFlight::default(),
@@ -798,6 +810,7 @@ impl RossiLanguageServer {
             supports_work_done_progress: std::sync::atomic::AtomicBool::new(false),
             supports_inlay_hint_refresh: std::sync::atomic::AtomicBool::new(false),
             supports_watched_files_registration: std::sync::atomic::AtomicBool::new(false),
+            supports_type_hierarchy_registration: std::sync::atomic::AtomicBool::new(false),
             rodin_sync: Arc::new(parking_lot::Mutex::new(RodinSyncState::Off)),
             rodin_live: Arc::new(parking_lot::Mutex::new(LiveSyncState::Off)),
             rodin_live_lease: std::sync::atomic::AtomicU64::new(0),
@@ -1253,6 +1266,36 @@ impl RossiLanguageServer {
     /// A failure is logged and the session continues on the startup snapshot;
     /// the capability guard lives at the call site, since a server must not
     /// send requests the client never announced support for.
+    /// Announce `textDocument/prepareTypeHierarchy`.
+    ///
+    /// This goes through `client/registerCapability` rather than the
+    /// `initialize` response because the pinned `lsp-types` predates the 3.17
+    /// `typeHierarchyProvider` server capability: its `ServerCapabilities` has
+    /// no such field, so there is nothing to set. Dynamic registration is the
+    /// protocol's own alternative and needs no dependency bump; a client that
+    /// does not advertise `textDocument.typeHierarchy.dynamicRegistration`
+    /// never asks, which is the same outcome as not advertising at all.
+    async fn register_type_hierarchy(&self) {
+        let registration = Registration {
+            id: "rossi-eventb-type-hierarchy".to_string(),
+            method: "textDocument/prepareTypeHierarchy".to_string(),
+            // A `TypeHierarchyRegistrationOptions` scoped to Event-B sources,
+            // so the client does not offer the tree for unrelated files. The
+            // selector matches on the extension rather than naming the
+            // language id, which keeps this in step with the watcher
+            // registration below and with the one constant both derive from.
+            register_options: Some(serde_json::json!({
+                "documentSelector": [{
+                    "scheme": "file",
+                    "pattern": format!("**/*.{SOURCE_EXTENSION}"),
+                }]
+            })),
+        };
+        if let Err(error) = self.client.register_capability(vec![registration]).await {
+            info!("Failed to register the type hierarchy provider: {error}");
+        }
+    }
+
     async fn register_source_watcher(&self) {
         let registration = Registration {
             id: "rossi-eventb-source-watcher".to_string(),
@@ -1320,6 +1363,17 @@ impl LanguageServer for RossiLanguageServer {
                 .as_ref()
                 .and_then(|workspace| workspace.inlay_hint.as_ref())
                 .and_then(|inlay_hint| inlay_hint.refresh_support)
+                .unwrap_or(false),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        self.supports_type_hierarchy_registration.store(
+            params
+                .capabilities
+                .text_document
+                .as_ref()
+                .and_then(|text_document| text_document.type_hierarchy.as_ref())
+                .and_then(|type_hierarchy| type_hierarchy.dynamic_registration)
                 .unwrap_or(false),
             std::sync::atomic::Ordering::Relaxed,
         );
@@ -1491,6 +1545,13 @@ impl LanguageServer for RossiLanguageServer {
             && self.cross_reference_manager.workspace_root().is_some()
         {
             self.register_source_watcher().await;
+        }
+
+        if self
+            .supports_type_hierarchy_registration
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.register_type_hierarchy().await;
         }
 
         // A Rodin workspace left by an earlier session carries proof state
@@ -1975,6 +2036,40 @@ impl LanguageServer for RossiLanguageServer {
         );
 
         Ok(response)
+    }
+
+    async fn prepare_type_hierarchy(
+        &self,
+        params: TypeHierarchyPrepareParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        debug!("Prepare type hierarchy for: {} at {:?}", uri, position);
+
+        let provider = Arc::clone(&self.type_hierarchy_provider);
+        Ok(run_blocking(move || provider.prepare(&uri, position)).await?)
+    }
+
+    async fn supertypes(
+        &self,
+        params: TypeHierarchySupertypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        debug!("Type hierarchy supertypes for: {}", params.item.name);
+
+        // Cold sibling components are read and parsed here, so this belongs
+        // on the blocking pool like the other cross-file lookups.
+        let provider = Arc::clone(&self.type_hierarchy_provider);
+        Ok(run_blocking(move || provider.supertypes(&params.item)).await?)
+    }
+
+    async fn subtypes(
+        &self,
+        params: TypeHierarchySubtypesParams,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>> {
+        debug!("Type hierarchy subtypes for: {}", params.item.name);
+
+        let provider = Arc::clone(&self.type_hierarchy_provider);
+        Ok(run_blocking(move || provider.subtypes(&params.item)).await?)
     }
 
     async fn diagnostic(

@@ -28,6 +28,7 @@ pub mod document_links;
 pub mod folding;
 pub mod formatting;
 pub mod formula_walk;
+pub mod hierarchy;
 pub mod hover;
 pub mod identifier_utils;
 pub mod inlay_hints;

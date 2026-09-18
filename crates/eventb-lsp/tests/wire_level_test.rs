@@ -1108,6 +1108,221 @@ mod operator_table {
     }
 }
 
+mod type_hierarchy {
+    //! Wire-level tests for the refinement/extension type hierarchy: the
+    //! capability is registered dynamically (the pinned lsp-types has no
+    //! server-capability field for it), a machine's supertype is what it
+    //! REFINES, and its subtypes are the machines that refine it.
+
+    use super::{TempWorkspace, notification};
+    use eventb_lsp::lsp_types::Url;
+    use eventb_lsp::server::RossiLanguageServer;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp::LspService;
+    use tower_lsp::jsonrpc::{Request, Response};
+
+    const ABSTRACT: &str = concat!(
+        "MACHINE base\n",
+        "VARIABLES\n",
+        "    x\n",
+        "INVARIANTS\n",
+        "    @inv1 x \u{2208} \u{2115}\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} 0\n",
+        "    END\n",
+        "END\n",
+    );
+    const CONCRETE: &str = concat!(
+        "MACHINE refined\n",
+        "REFINES\n",
+        "    base\n",
+        "VARIABLES\n",
+        "    x\n",
+        "INVARIANTS\n",
+        "    @inv1 x \u{2208} \u{2115}\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} 0\n",
+        "    END\n",
+        "END\n",
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_capability_is_registered_dynamically() {
+        let workspace = TempWorkspace::new("type-hierarchy-register");
+        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                // Only the type hierarchy opts into dynamic registration, so
+                // this is the sole registration the server will send.
+                "capabilities": {
+                    "textDocument": { "typeHierarchy": { "dynamicRegistration": true } }
+                },
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+
+        // `initialized` waits for the client's answer to
+        // `client/registerCapability`, so the socket has to be served while the
+        // notification is still in flight, exactly as a real client does.
+        let drive_initialized = async {
+            service
+                .ready()
+                .await
+                .unwrap()
+                .call(notification("initialized", json!({})))
+                .await
+                .unwrap();
+        };
+        let answer = async {
+            loop {
+                let request = socket
+                    .next()
+                    .await
+                    .expect("the server must ask to register the type hierarchy");
+                if request.method() != "client/registerCapability" {
+                    continue;
+                }
+                let (_method, id, params) = request.into_parts();
+                let registration =
+                    &params.expect("a registration must be sent")["registrations"][0];
+                assert_eq!(registration["method"], "textDocument/prepareTypeHierarchy");
+                assert_eq!(
+                    registration["registerOptions"]["documentSelector"][0]["pattern"],
+                    "**/*.eventb",
+                    "the selector must be scoped to Event-B sources"
+                );
+                socket
+                    .send(Response::from_ok(
+                        id.expect("a request carries an id"),
+                        json!(null),
+                    ))
+                    .await
+                    .unwrap();
+                break;
+            }
+        };
+        tokio::join!(drive_initialized, answer);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_machine_resolves_to_what_it_refines_and_what_refines_it() {
+        let workspace = TempWorkspace::new("type-hierarchy-edges");
+        std::fs::write(workspace.as_ref().join("base.eventb"), ABSTRACT).unwrap();
+        let concrete_path = workspace.as_ref().join("refined.eventb");
+        std::fs::write(&concrete_path, CONCRETE).unwrap();
+        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let concrete_uri = Url::from_file_path(&concrete_path).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+
+        // No dynamic registration here: the handlers answer regardless of how
+        // the capability was announced, and advertising it would make
+        // `initialized` block on a registration this drainer never answers.
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification("initialized", json!({})))
+            .await
+            .unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": concrete_uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": CONCRETE,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        macro_rules! ask {
+            ($id:expr, $method:expr, $params:expr) => {{
+                let request = Request::build($method).id($id).params($params).finish();
+                let response = service
+                    .ready()
+                    .await
+                    .unwrap()
+                    .call(request)
+                    .await
+                    .unwrap()
+                    .expect("the request must produce a response");
+                let (_id, result) = response.into_parts();
+                result.expect("the request must succeed")
+            }};
+        }
+
+        fn names(value: &Value) -> Vec<&str> {
+            value
+                .as_array()
+                .expect("an array of hierarchy items")
+                .iter()
+                .map(|row| row["name"].as_str().unwrap())
+                .collect()
+        }
+
+        // Prepare from inside the machine body, not on its name: a user asking
+        // while reading an invariant means the enclosing machine.
+        let prepared: Value = ask!(
+            2,
+            "textDocument/prepareTypeHierarchy",
+            json!({
+                "textDocument": { "uri": concrete_uri },
+                "position": { "line": 6, "character": 12 },
+            })
+        );
+        assert_eq!(names(&prepared), ["refined"], "got {prepared}");
+        assert_eq!(prepared[0]["detail"], json!("Machine"));
+        let refined = prepared[0].clone();
+
+        let supertypes: Value = ask!(3, "typeHierarchy/supertypes", json!({ "item": refined }));
+        assert_eq!(
+            names(&supertypes),
+            ["base"],
+            "refined REFINES base; got {supertypes}"
+        );
+        let base = supertypes[0].clone();
+
+        let subtypes: Value = ask!(4, "typeHierarchy/subtypes", json!({ "item": base.clone() }));
+        assert_eq!(
+            names(&subtypes),
+            ["refined"],
+            "base is refined by refined; got {subtypes}"
+        );
+
+        // The abstract machine refines nothing, so the tree ends there.
+        let top: Value = ask!(5, "typeHierarchy/supertypes", json!({ "item": base }));
+        assert!(names(&top).is_empty(), "base refines nothing; got {top}");
+    }
+}
+
 mod pull_diagnostics {
     //! Wire-level tests for `textDocument/diagnostic` and
     //! `workspace/diagnostic`: the capability is advertised, an open buffer's
