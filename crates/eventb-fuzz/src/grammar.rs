@@ -44,18 +44,26 @@ pub enum Node {
     Pattern { value: String },
     /// A node that wraps another without changing what it derives.
     ///
-    /// Four kinds collapse to one here because a generator can tell them
+    /// Five kinds collapse to one here because a generator can tell them
     /// apart only by what they produce, and they all produce their content:
     /// `TOKEN` assembles a terminal without interleaved extras, `ALIAS`
-    /// renames a node in the parse tree, and the three `PREC` forms steer the
-    /// LR parser's conflict resolution. Any derivation they permit is still a
+    /// renames a node in the parse tree, the three `PREC` forms steer the LR
+    /// parser's conflict resolution, and `RESERVED` swaps the reserved word
+    /// set its subtree lexes under. Any derivation they permit is still a
     /// derivation.
+    ///
+    /// `RESERVED` does restrict what the *parser* accepts, but not what the
+    /// grammar derives: the word sets live in a top-level table this model
+    /// does not read, and the terminal a reserved word would collide with is
+    /// the `identifier` pattern, which derives whatever the pattern allows
+    /// either way.
     #[serde(rename = "TOKEN")]
     #[serde(alias = "ALIAS")]
     #[serde(alias = "PREC")]
     #[serde(alias = "PREC_LEFT")]
     #[serde(alias = "PREC_RIGHT")]
     #[serde(alias = "PREC_DYNAMIC")]
+    #[serde(alias = "RESERVED")]
     Wrapper { content: Box<Node> },
     /// Like a [`Node::Wrapper`], and additionally forbidden to be preceded by
     /// whitespace. Kept distinct because that is a fact about the emitted
