@@ -8,6 +8,9 @@ extension/changelog.md
 extension/dist/extension.js
 extension/fonts/bravesansmono_roman.ttf
 extension/icons/eventb-icon.svg
+extension/icons/po-broken.svg
+extension/icons/po-closed.svg
+extension/icons/po-open.svg
 extension/icons/rossi-icon.png
 extension/language-configuration.json
 extension/package.json

@@ -42,7 +42,9 @@
     "onCommand:rossi.convertCurrentFileToAscii",
     "onCommand:rossi.checkToolchain",
     "onCommand:rossi.newProject",
-    "onCommand:rossi.installMathFont"
+    "onCommand:rossi.installMathFont",
+    "onCommand:rossi.proofObligations.showState",
+    "onView:rossi.proofObligations"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -131,6 +133,47 @@
         "command": "rossi.newProject",
         "title": "New Event-B Project",
         "category": "Rossi"
+      },
+      {
+        "command": "rossi.proofObligations.showState",
+        "title": "Show Proof Obligation Sequent",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.proofObligations.refresh",
+        "title": "Refresh Proof Obligations",
+        "category": "Rossi",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "rossi.proofObligations.reveal",
+        "title": "Reveal Proof Obligation",
+        "category": "Rossi"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rossi",
+          "title": "Event-B",
+          "icon": "icons/eventb-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rossi": [
+        {
+          "id": "rossi.proofObligations",
+          "name": "Proof Obligations",
+          "icon": "icons/eventb-icon.svg",
+          "contextualTitle": "Event-B Proof Obligations"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "rossi.proofObligations",
+        "contents": "Open an Event-B file to see its proof obligations.\n\nObligations are generated on open and on save and judged against the stored proofs; rossi does not discharge them itself."
       }
     ],
     "menus": {
@@ -219,6 +262,21 @@
         {
           "command": "rossi.exportCurrentFileToRodinZip",
           "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.proofObligations.showState",
+          "when": "editorLangId == eventb"
+        },
+        {
+          "command": "rossi.proofObligations.reveal",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "rossi.proofObligations.refresh",
+          "when": "view == rossi.proofObligations",
+          "group": "navigation"
         }
       ]
     },
@@ -377,6 +435,11 @@
           "default": 120,
           "description": "Maximum line width when formatting, in characters (a tab counts as one); long formulas wrap onto operator-leading continuation lines. 0 disables wrapping."
         },
+        "rossi.proofObligations.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate each open file's proof obligations on open and on save, judge them against the stored proofs (next to the sources or in the shared Rodin workspace), and show them in the Proof Obligations view, the gutter, the status bar and as hint diagnostics. rossi does not discharge obligations itself."
+        },
         "rossi.inlayHints.enabled": {
           "type": "boolean",
           "default": true,
@@ -528,13 +591,14 @@
     "watch": "npm run bundle -- --watch",
     "lint": "eslint src --ext ts",
     "test:matcher": "tsc -p ./ && node out/symbolMatcher.test.js",
+    "test:po": "tsc -p ./ && node out/proofObligationModel.test.js",
     "test:region": "tsc -p ./ && node out/validationRegion.test.js",
     "test:cache": "tsc -p ./ && node out/binaryCache.test.js",
     "test:cwd": "tsc -p ./ && node out/commandCwd.test.js",
     "test:styleflags": "tsc -p ./ && node out/styleFlags.test.js",
     "test:manifest": "tsc -p ./ && node out/manifest.test.js",
     "test:mathfont": "tsc -p ./ && node out/mathFont.test.js",
-    "test": "tsc -p ./ && node out/symbolMatcher.test.js && node out/validationRegion.test.js && node out/binaryCache.test.js && node out/commandCwd.test.js && node out/styleFlags.test.js && node out/manifest.test.js && node out/mathFont.test.js",
+    "test": "tsc -p ./ && node out/symbolMatcher.test.js && node out/validationRegion.test.js && node out/binaryCache.test.js && node out/commandCwd.test.js && node out/styleFlags.test.js && node out/manifest.test.js && node out/mathFont.test.js && node out/proofObligationModel.test.js",
     "package": "vsce package --baseContentUrl https://github.com/eventb-rossi/rossi/blob/HEAD/editors/vscode --baseImagesUrl https://github.com/eventb-rossi/rossi/raw/HEAD/editors/vscode",
     "check:vsix": "node scripts/check-vsix.js",
     "publish:vsce": "vsce publish --packagePath $npm_package_name-$npm_package_version.vsix",

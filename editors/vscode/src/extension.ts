@@ -7,6 +7,7 @@ import {
 } from 'vscode-languageclient/node';
 import { registerRossiCommands } from './rossiCommands';
 import { registerSymbolInput } from './symbolInput';
+import { registerProofObligations } from './proofObligations';
 import { resolveBinaries, ResolvedBinaries, pruneToolchainCache } from './binaryManager';
 
 let client: LanguageClient;
@@ -48,6 +49,9 @@ interface RossiConfiguration {
         timeLimitSecs: number;
         disproveTimeoutMs: number;
     };
+    proofObligations: {
+        enabled: boolean;
+    };
 }
 
 function getRossiConfiguration(): RossiConfiguration {
@@ -88,6 +92,9 @@ function getRossiConfiguration(): RossiConfiguration {
             path: config.get<string>('animate.path', ''),
             timeLimitSecs: config.get<number>('animate.timeLimitSecs', 120),
             disproveTimeoutMs: config.get<number>('animate.disproveTimeoutMs', 1000),
+        },
+        proofObligations: {
+            enabled: config.get<boolean>('proofObligations.enabled', true),
         },
     };
 }
@@ -166,6 +173,10 @@ export async function activate(context: ExtensionContext) {
 
     // Editor-side ASCII -> Unicode input method (type `=>`, `\and`, ...).
     registerSymbolInput(context, client, languageServerReady, output);
+
+    // Proof obligations: tree view, gutter marks, status bar and the
+    // sequent document, all fed by the server.
+    registerProofObligations(context, client, languageServerReady, output);
 }
 
 export function deactivate(): Thenable<void> | undefined {
