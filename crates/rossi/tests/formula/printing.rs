@@ -9,6 +9,7 @@ use rossi::formula::tag::{
 use rossi::formula::{Expression, Form, Predicate, Type};
 
 use crate::common::{bid, decl, decl_ty, eq_pred, ff, fid, forall, int};
+use crate::extensions::parse_factory;
 
 fn readable() -> PrettyPrinter {
     PrettyPrinter::new()
@@ -539,4 +540,105 @@ fn literals_and_special_predicates() {
 fn dangling_indices_render_visibly() {
     let stray: Predicate = eq_pred(bid(3), int(1));
     assert_eq!(readable().print_formula_predicate(&stray), "[[3]] = 1");
+}
+
+// --- extension operators ---
+
+#[test]
+fn infix_extension_prints_operands_by_group() {
+    let ff = parse_factory();
+    for (text, canonical_text) in [
+        // Readable mode reproduces the source spelling; the word keeps its
+        // spaces in every mode.
+        ("a plus b", "a plus b"),
+        // Just above the pair constructor: no parentheses either way round.
+        ("a ↦ b plus c", "a ↦ b plus c"),
+        ("a plus b ↦ c", "a plus b ↦ c"),
+        ("(a ↦ b) plus c", "(a ↦ b) plus c"),
+        // Below every other binary level, in both directions.
+        ("(a + b) plus c", "(a+b) plus c"),
+        ("(a plus b) + c", "(a plus b)+c"),
+        ("(a ∪ b) plus (c ∖ d)", "(a∪b) plus (c ∖ d)"),
+        ("(a plus b) ⦂ ℤ", "(a plus b) ⦂ ℤ"),
+        // Nested same operator keeps its parentheses; different operators too.
+        ("a plus (b plus c)", "a plus (b plus c)"),
+        ("a minus (b minus c)", "a minus (b minus c)"),
+        // Applications, images and prefix forms are ordinary operands.
+        (
+            "f(x) plus r[y] plus dist(a, b)",
+            "f(x) plus r[y] plus dist(a,b)",
+        ),
+        ("(a plus b)(x)", "(a plus b)(x)"),
+        ("card(a plus zero)", "card(a plus zero)"),
+        ("dist(a plus b, zero)", "dist(a plus b,zero)"),
+    ] {
+        let expr =
+            rossi::parse_expression_str_with(text, &ff).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(readable().print_formula_expression(&expr), text);
+        assert_eq!(
+            canonical().print_formula_expression(&expr),
+            canonical_text,
+            "{text}"
+        );
+    }
+    let pred =
+        rossi::parse_predicate_str_with("even(a plus b) ∧ a plus b ∈ S", &ff).expect("parses");
+    assert_eq!(
+        readable().print_formula_predicate(&pred),
+        "even(a plus b) ∧ a plus b ∈ S"
+    );
+    assert_eq!(
+        canonical().print_formula_predicate(&pred),
+        "even(a plus b)∧a plus b∈S"
+    );
+}
+
+#[test]
+fn extended_nodes_round_trip_print_parse() {
+    let ff = parse_factory();
+    for text in [
+        "dist(a, b)",
+        "zero",
+        "dist(zero, dist(a, b))",
+        "a plus b plus c",
+        "a plus (b plus c)",
+        "(a plus b) plus c",
+        "a minus (b minus c)",
+        "(a + b) plus c",
+        "(a plus b) + c",
+        "a ↦ b plus c",
+        "(a ↦ b) plus c",
+        "f(a plus b)",
+        "(a plus b)(x)",
+        "(a plus b)∼",
+        "card(a plus b)",
+        "−(a plus b)",
+        "{a plus b, zero}",
+        "(λx·x ∈ ℤ ∣ x) plus a",
+        "{x·x ∈ ℤ ∣ x plus 1} plus S",
+    ] {
+        let expr =
+            rossi::parse_expression_str_with(text, &ff).unwrap_or_else(|e| panic!("{text}: {e}"));
+        for printer in [readable(), canonical(), formula_string()] {
+            let printed = printer.print_formula_expression(&expr);
+            let reparsed = rossi::parse_expression_str_with(&printed, &ff)
+                .unwrap_or_else(|e| panic!("{text} printed as {printed:?}: {e}"));
+            assert_eq!(reparsed, expr, "{text} printed as {printed:?}");
+        }
+    }
+    // An ascribed operand keeps its parentheses in the modes that print
+    // ascriptions (formula-string mode drops them by design).
+    let expr = rossi::parse_expression_str_with("(a plus b) ⦂ ℤ", &ff).expect("parses");
+    for printer in [readable(), canonical()] {
+        let printed = printer.print_formula_expression(&expr);
+        let reparsed = rossi::parse_expression_str_with(&printed, &ff).expect("re-parses");
+        assert_eq!(reparsed, expr, "{printed:?}");
+    }
+    let pred =
+        rossi::parse_predicate_str_with("even(a plus b) ∧ ¬even(zero)", &ff).expect("parses");
+    for printer in [readable(), canonical(), formula_string()] {
+        let printed = printer.print_formula_predicate(&pred);
+        let reparsed = rossi::parse_predicate_str_with(&printed, &ff).expect("re-parses");
+        assert_eq!(reparsed, pred, "{printed:?}");
+    }
 }

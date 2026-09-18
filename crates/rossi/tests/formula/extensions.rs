@@ -161,9 +161,9 @@ fn tag_of(ff: &FormulaFactory, symbol: &str) -> tag::Tag {
     ff.extension_by_symbol(symbol).expect("registered").0
 }
 
-/// The factory the parsing tests build against: `dist`, `even`, `zero`,
-/// `plus` and `minus`.
-fn parse_factory() -> FormulaFactory {
+/// The factory the parsing and printing tests build against: `dist`,
+/// `even`, `zero`, `plus` and `minus`.
+pub(crate) fn parse_factory() -> FormulaFactory {
     FormulaFactory::with_extensions([
         Extension::Expr(dist_ext()),
         Extension::Pred(even_ext()),
