@@ -532,3 +532,37 @@ fn test_extended_event_keeps_only_first_refines_target() {
     assert_eq!(back.events[0].refines.len(), 1);
     assert!(back.events[0].extended);
 }
+
+#[test]
+fn repeated_event_node_keeps_the_first_like_rodin() {
+    // Rodin's element store keys children by internal name: a second DOM
+    // node with the same name is logged and dropped, the first kept
+    // (`Buffer.getChildren`). A file carrying such a repeat therefore holds
+    // one event to Rodin, not a label conflict.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="5">
+    <org.eventb.core.variable name="v" identifier="x"/>
+    <org.eventb.core.event name="evt1" convergence="0" extended="false" label="step">
+        <org.eventb.core.action name="a" label="act1" assignment="x ≔ 1"/>
+    </org.eventb.core.event>
+    <org.eventb.core.event name="evt1" convergence="0" extended="false" label="step">
+        <org.eventb.core.action name="a" label="act1" assignment="x ≔ 2"/>
+    </org.eventb.core.event>
+    <org.eventb.core.event name="evt2" convergence="0" extended="false" label="other">
+    </org.eventb.core.event>
+</org.eventb.core.machineFile>"#;
+
+    let component = parse_xml(xml).expect("parse");
+    let Component::Machine(m) = &component else {
+        panic!("Expected Machine component");
+    };
+    let names: Vec<&str> = m.events.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["step", "other"]);
+    assert_eq!(m.events[0].actions.len(), 1);
+    assert!(
+        rossi::pretty::PrettyPrinter::new()
+            .print_component(&component)
+            .contains("x ≔ 1"),
+        "the first node's body is the one kept"
+    );
+}
