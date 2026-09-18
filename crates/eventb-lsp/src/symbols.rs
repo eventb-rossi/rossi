@@ -565,7 +565,7 @@ fn parameter_declaration_span(component: &Component, event_name: &str, name: &st
 
 /// The name-token span of an event named `name` declared in `component`, or the
 /// `INITIALISATION` keyword span for the implicit initialisation event.
-fn event_declaration_span(component: &Component, name: &str) -> Option<Span> {
+pub(crate) fn event_declaration_span(component: &Component, name: &str) -> Option<Span> {
     let Component::Machine(machine) = component else {
         return None;
     };

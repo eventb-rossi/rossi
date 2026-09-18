@@ -1321,6 +1321,110 @@ mod type_hierarchy {
         let top: Value = ask!(5, "typeHierarchy/supertypes", json!({ "item": base }));
         assert!(names(&top).is_empty(), "base refines nothing; got {top}");
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn implementation_jumps_from_an_abstract_event_to_the_ones_refining_it() {
+        let workspace = TempWorkspace::new("type-hierarchy-implementation");
+        let abstract_path = workspace.as_ref().join("base.eventb");
+        std::fs::write(&abstract_path, ABSTRACT).unwrap();
+        std::fs::write(workspace.as_ref().join("refined.eventb"), CONCRETE).unwrap();
+        let root_uri = Url::from_file_path(workspace.as_ref()).unwrap();
+        let abstract_uri = Url::from_file_path(&abstract_path).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification("initialized", json!({})))
+            .await
+            .unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": abstract_uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": ABSTRACT,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let implementation = |id: i64, line: u32, character: u32| {
+            Request::build("textDocument/implementation")
+                .id(id)
+                .params(json!({
+                    "textDocument": { "uri": abstract_uri },
+                    "position": { "line": line, "character": character },
+                }))
+                .finish()
+        };
+
+        // Line 6 is `    EVENT INITIALISATION`; the name starts at column 10.
+        // `refined` declares no REFINES on its INITIALISATION, so it refines
+        // the same-named abstract event implicitly, the way Rodin reads it.
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(implementation(2, 6, 12))
+            .await
+            .unwrap()
+            .expect("implementation must respond");
+        let (_id, result) = response.into_parts();
+        let value: Value = result.expect("implementation must succeed");
+        let rows = value.as_array().expect("an array of locations");
+        assert_eq!(rows.len(), 1, "one refining event; got {value}");
+        assert!(
+            rows[0]["uri"].as_str().unwrap().ends_with("refined.eventb"),
+            "the jump lands in the refining machine; got {value}"
+        );
+        assert_eq!(
+            rows[0]["range"]["start"]["line"],
+            json!(8),
+            "and on its INITIALISATION event name; got {value}"
+        );
+
+        // From the machine header instead, the answer is the refining machine.
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(implementation(3, 0, 9))
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let value: Value = result.unwrap();
+        let rows = value.as_array().unwrap();
+        assert_eq!(rows.len(), 1, "one refining machine; got {value}");
+        assert!(
+            rows[0]["uri"].as_str().unwrap().ends_with("refined.eventb"),
+            "got {value}"
+        );
+        assert_eq!(
+            rows[0]["range"]["start"]["line"],
+            json!(0),
+            "on the MACHINE header line; got {value}"
+        );
+    }
 }
 
 mod pull_diagnostics {
