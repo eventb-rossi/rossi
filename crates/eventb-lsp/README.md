@@ -20,6 +20,7 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 - **Hover** - Documentation for Event-B keywords, operators, built-ins, and known identifiers
 - **Go-to-definition** - Local and cross-file navigation for declarations and `SEES` / `REFINES` / `EXTENDS`
 - **Find references** - Identifier and component references, including workspace references
+- **Document highlight** - Every occurrence of the symbol under the cursor in the current file, with assignment targets and declarations marked as writes
 - **Workspace symbols** - Search indexed contexts, machines, events, variables, constants, and sets
 - **Rename refactoring** - Rename identifiers and components across indexed documents
 - **Semantic highlighting** - LSP semantic tokens for Event-B constructs

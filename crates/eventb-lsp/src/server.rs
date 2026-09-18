@@ -1321,6 +1321,7 @@ impl LanguageServer for RossiLanguageServer {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
@@ -1891,6 +1892,39 @@ impl LanguageServer for RossiLanguageServer {
 
         debug!(
             "References returned: {} locations",
+            response.as_ref().map_or(0, |v| v.len())
+        );
+
+        Ok(response)
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        debug!(
+            "Document highlight request for: {} at {:?}",
+            uri, params.text_document_position_params.position
+        );
+
+        // Same blocking-pool treatment as `references`, which this delegates
+        // to: resolving the cursor can cold-load and parse sibling components.
+        let manager = Arc::clone(&self.document_manager);
+        let provider = Arc::clone(&self.reference_provider);
+        let parse_uri = uri.clone();
+        let response = run_blocking(move || {
+            let doc = manager.parse_result_for_request(&parse_uri)?;
+            crate::document_highlight::document_highlights(&provider, &params, &doc)
+        })
+        .await?;
+
+        debug!(
+            "Document highlight returned: {} ranges",
             response.as_ref().map_or(0, |v| v.len())
         );
 

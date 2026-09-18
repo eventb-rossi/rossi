@@ -23,6 +23,7 @@ pub mod cross_references;
 pub mod definition;
 pub mod diagnostics;
 pub mod document;
+pub mod document_highlight;
 pub mod document_links;
 pub mod folding;
 pub mod formatting;

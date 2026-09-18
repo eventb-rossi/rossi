@@ -1108,6 +1108,162 @@ mod operator_table {
     }
 }
 
+mod document_highlight {
+    //! Wire-level test for `textDocument/documentHighlight`: the capability is
+    //! advertised, every occurrence of the symbol under the cursor comes back
+    //! for the requested document, and assignment targets are distinguished
+    //! from reads.
+
+    use eventb_lsp::server::RossiLanguageServer;
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp::LspService;
+    use tower_lsp::jsonrpc::Request;
+
+    const SOURCE: &str = concat!(
+        "MACHINE m\n",
+        "VARIABLES\n",
+        "    x y\n",
+        "INVARIANTS\n",
+        "    @inv1 x \u{2208} \u{2115}\n",
+        "    @inv2 y \u{2208} \u{2115}\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} 0\n",
+        "        @act2 y \u{2254} 0\n",
+        "    END\n",
+        "\n",
+        "    EVENT bump\n",
+        "    WHERE\n",
+        "        @grd1 x \u{2208} \u{2115}\n",
+        "    THEN\n",
+        "        @act1 x \u{2254} x + 1\n",
+        "    END\n",
+        "END\n",
+    );
+
+    async fn highlights_at(line: u32, character: u32) -> Value {
+        let (mut service, _socket) = LspService::build(RossiLanguageServer::new).finish();
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(init)
+            .await
+            .unwrap()
+            .expect("initialize must respond");
+        let (_id, result) = response.into_parts();
+        let capabilities = result.unwrap();
+        assert_eq!(
+            capabilities["capabilities"]["documentHighlightProvider"],
+            json!(true),
+            "the server must advertise documentHighlightProvider"
+        );
+
+        let open = Request::build("textDocument/didOpen")
+            .params(json!({
+                "textDocument": {
+                    "uri": "file:///highlight.eventb",
+                    "languageId": "eventb",
+                    "version": 1,
+                    "text": SOURCE,
+                }
+            }))
+            .finish();
+        service.ready().await.unwrap().call(open).await.unwrap();
+
+        let request = Request::build("textDocument/documentHighlight")
+            .id(2)
+            .params(json!({
+                "textDocument": { "uri": "file:///highlight.eventb" },
+                "position": { "line": line, "character": character },
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("documentHighlight must respond");
+        let (_id, result) = response.into_parts();
+        result.expect("documentHighlight must succeed")
+    }
+
+    /// LSP DocumentHighlightKind: 2 is Read, 3 is Write.
+    const READ: i64 = 2;
+    const WRITE: i64 = 3;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn highlights_every_occurrence_of_the_symbol_under_the_cursor() {
+        // Cursor on `x` in the VARIABLES list (line 2).
+        let value = highlights_at(2, 4).await;
+        let rows = value.as_array().expect("highlights are a JSON array");
+
+        // Declaration, inv1, act1 of INITIALISATION, grd1, and both sides of
+        // `x := x + 1`: six in all, and none of them `y`.
+        assert_eq!(rows.len(), 6, "expected six occurrences of x; got {value}");
+
+        let lines: Vec<i64> = rows
+            .iter()
+            .map(|row| row["range"]["start"]["line"].as_i64().unwrap())
+            .collect();
+        for line in [2, 4, 9, 15, 17] {
+            assert!(
+                lines.contains(&line),
+                "line {line} must carry an occurrence of x; got {value}"
+            );
+        }
+        assert!(
+            !lines.contains(&5),
+            "inv2 mentions only y and must not be highlighted; got {value}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn assignment_targets_are_writes_and_uses_are_reads() {
+        let value = highlights_at(2, 4).await;
+        let rows = value.as_array().unwrap();
+
+        let kind_at = |line: i64, character: i64| -> i64 {
+            rows.iter()
+                .find(|row| {
+                    row["range"]["start"]["line"] == json!(line)
+                        && row["range"]["start"]["character"] == json!(character)
+                })
+                .unwrap_or_else(|| panic!("no highlight at {line}:{character} in {value}"))["kind"]
+                .as_i64()
+                .expect("every highlight carries a kind")
+        };
+
+        // `@act1 x \u{2254} x + 1` on line 17: the target writes, the operand reads.
+        assert_eq!(kind_at(17, 14), WRITE, "the assignment target is a write");
+        assert_eq!(kind_at(17, 18), READ, "the right-hand operand is a read");
+        // The VARIABLES entry is a write.
+        assert_eq!(kind_at(2, 4), WRITE, "the declaration is a write");
+        // `@grd1 x \u{2208} \u{2115}` on line 15 only reads.
+        assert_eq!(kind_at(15, 14), READ, "a guard mention is a read");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_cursor_on_no_identifier_highlights_nothing() {
+        // Line 0, character 0 is the `MACHINE` keyword, which no component
+        // declares as a name.
+        let value = highlights_at(0, 0).await;
+        assert!(
+            value.is_null() || value.as_array().is_some_and(|rows| rows.is_empty()),
+            "a keyword must not produce highlights; got {value}"
+        );
+    }
+}
+
 mod watched_files {
     //! Wire-level regressions for `workspace/didChangeWatchedFiles`: the server
     //! registers the `.eventb` watcher itself, and a change made on disk
