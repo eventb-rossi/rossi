@@ -18,6 +18,10 @@ grammar (see the Grammar note below); everything else is provided by
 - Rename, document/workspace symbols, document links
 - Formatting (Unicode or ASCII operators), code actions (quick fixes, refactors)
 - Folding ranges, selection ranges, signature help
+- Document highlight, type hierarchy (REFINES/EXTENDS), go-to-implementation,
+  go-to-type-definition, pull diagnostics, range formatting
+- The project static check (type errors over the dependency closure) and, as
+  hint diagnostics, each file's open proof obligations
 
 Zed can also overlay the server's **semantic tokens** on top of the tree-sitter
 highlighting for richer, meaning-aware colors — see Configuration.
@@ -27,6 +31,11 @@ highlighting for richer, meaning-aware colors — see Configuration.
 > so the lens (and with it the one-click Rodin launch) has no surface here. The
 > `rossi.rodin.*` settings below are still forwarded to the server, so the
 > feature lights up without reconfiguration once Zed gains CodeLens support.
+> The same applies to the `n/m proof obligations discharged` lens. The proof
+> obligation tree, gutter marks and sequent document exist only in the VS Code
+> extension; the `rossi/proofObligations` and `rossi/proofState` requests they
+> use are documented in the language server's README for another client to
+> adopt.
 
 ## Prerequisites
 
