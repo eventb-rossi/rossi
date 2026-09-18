@@ -200,6 +200,7 @@ fn category_of(error: &rossi::ParseError) -> &'static str {
         E::MissingLabel { .. } => "MissingLabel",
         E::RecoverableError { .. } => "RecoverableError",
         E::ArityMismatch { .. } => "ArityMismatch",
+        E::NotAPrefixOperator { .. } => "NotAPrefixOperator",
         E::MultipleErrors(errors) => errors.first().map_or("MultipleErrors", category_of),
     }
 }

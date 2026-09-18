@@ -58,6 +58,16 @@ impl Arity {
     }
 }
 
+/// The wording of an expected arity in a diagnostic: `2`, `at least 1`.
+impl std::fmt::Display for Arity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Arity::Fixed(n) => write!(f, "{n}"),
+            Arity::AtLeast(n) => write!(f, "at least {n}"),
+        }
+    }
+}
+
 /// The child shape of an operator: how many expression children,
 /// followed by how many predicate children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +95,12 @@ impl ExtensionKind {
     /// A nullary expression operator.
     pub const fn atomic_expression() -> ExtensionKind {
         Self::prefix_expression(0)
+    }
+
+    /// Whether the operator takes no children at all, so its symbol stands
+    /// bare like an atom.
+    pub fn is_nullary(&self) -> bool {
+        self.children.exprs == Arity::Fixed(0) && self.children.preds == Arity::Fixed(0)
     }
 
     /// A prefix expression operator over `n` expression children.

@@ -106,6 +106,58 @@ fn extended_factory() -> FormulaFactory {
         .expect("valid extension set")
 }
 
+/// `zero` — a nullary integer operator.
+struct Zero;
+
+impl FormulaExtension for Zero {
+    fn symbol(&self) -> &str {
+        "zero"
+    }
+    fn id(&self) -> &str {
+        "test.zero"
+    }
+    fn group_id(&self) -> &str {
+        "test.group"
+    }
+    fn kind(&self) -> ExtensionKind {
+        ExtensionKind::atomic_expression()
+    }
+    fn conjoin_children_wd(&self) -> bool {
+        true
+    }
+    fn wd_predicate(&self, _formula: ExtendedRef<'_>, wd: &WdMediator<'_>) -> Predicate {
+        wd.true_wd()
+    }
+}
+
+impl ExpressionExtension for Zero {
+    fn synthesize_type(&self, _exprs: &[Expression], _preds: &[Predicate]) -> Option<Type> {
+        Some(Type::Int)
+    }
+    fn verify_type(&self, ty: &Type, _exprs: &[Expression], _preds: &[Predicate]) -> bool {
+        *ty == Type::Int
+    }
+    fn type_check(&self, mediator: &mut TypeCheckMediator<'_, '_>, _exprs: &[TcType]) -> TcType {
+        mediator.from_type(&Type::Int)
+    }
+}
+
+fn zero_ext() -> Arc<dyn ExpressionExtension> {
+    static ZERO: std::sync::LazyLock<Arc<dyn ExpressionExtension>> =
+        std::sync::LazyLock::new(|| Arc::new(Zero));
+    ZERO.clone()
+}
+
+/// The factory the parsing tests build against: `dist`, `even` and `zero`.
+fn parse_factory() -> FormulaFactory {
+    FormulaFactory::with_extensions([
+        Extension::Expr(dist_ext()),
+        Extension::Pred(even_ext()),
+        Extension::Expr(zero_ext()),
+    ])
+    .expect("valid extension set")
+}
+
 // --- registration ---
 
 #[test]
@@ -488,4 +540,188 @@ fn factory_identity_is_hashable() {
         2,
         "interned factories hash and compare by identity"
     );
+}
+
+// --- resolving prefix and nullary operators while parsing ---
+
+fn extended_tag(expr: &Expression) -> (tag::Tag, usize) {
+    match expr.kind() {
+        ExpressionKind::Extended { tag, exprs, preds } => {
+            assert!(preds.is_empty());
+            (*tag, exprs.len())
+        }
+        other => panic!("expected an extended expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn prefix_operator_call_parses_to_extended_expression() {
+    let ff = parse_factory();
+    let (dist_tag, _) = ff.extension_by_symbol("dist").expect("registered");
+    let expr = rossi::parse_expression_str_with("dist(a, b)", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (dist_tag, 2));
+    assert_eq!(
+        expr.span(),
+        Some(rossi::formula::Span { start: 0, end: 10 })
+    );
+
+    // Nested and as an operand.
+    let expr = rossi::parse_expression_str_with("dist(dist(a, b), c) + 1", &ff).expect("parses");
+    let ExpressionKind::Associative { children, .. } = expr.kind() else {
+        panic!("expected a sum, got {expr:?}");
+    };
+    let (_, arity) = extended_tag(&children[0]);
+    assert_eq!(arity, 2);
+
+    // The same text under the default factory is not an operator call.
+    let error = rossi::parse_expression_str("dist(a, b)").expect_err("no such operator");
+    assert!(
+        matches!(&error, rossi::ParseError::NotAPrefixOperator { name, line: 1, column: 1, .. } if name == "dist"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn nullary_operator_parses_bare() {
+    let ff = parse_factory();
+    let (zero_tag, _) = ff.extension_by_symbol("zero").expect("registered");
+    let expr = rossi::parse_expression_str_with("zero", &ff).expect("parses");
+    assert_eq!(extended_tag(&expr), (zero_tag, 0));
+    let expr = rossi::parse_expression_str_with("zero + x", &ff).expect("parses");
+    let ExpressionKind::Associative { children, .. } = expr.kind() else {
+        panic!("expected a sum, got {expr:?}");
+    };
+    assert_eq!(extended_tag(&children[0]), (zero_tag, 0));
+    assert!(matches!(children[1].kind(), ExpressionKind::FreeIdentifier(name) if name == "x"));
+
+    // Under the default factory `zero` is an ordinary identifier.
+    let expr = rossi::parse_expression_str("zero").expect("parses");
+    assert!(matches!(expr.kind(), ExpressionKind::FreeIdentifier(name) if name == "zero"));
+}
+
+#[test]
+fn predicate_operator_call_parses_to_extended_predicate() {
+    let ff = parse_factory();
+    let (even_tag, _) = ff.extension_by_symbol("even").expect("registered");
+    let pred = rossi::parse_predicate_str_with("even(x) ∧ x > 0", &ff).expect("parses");
+    let rossi::PredicateKind::Associative { children, .. } = pred.kind() else {
+        panic!("expected a conjunction, got {pred:?}");
+    };
+    match children[0].kind() {
+        rossi::PredicateKind::Extended { tag, exprs, preds } => {
+            assert_eq!(*tag, even_tag);
+            assert_eq!(exprs.len(), 1);
+            assert!(preds.is_empty());
+        }
+        other => panic!("expected an extended predicate, got {other:?}"),
+    }
+
+    // Under the default factory the application stays unresolved.
+    let pred = rossi::parse_predicate_str("even(x)").expect("parses");
+    assert!(
+        matches!(pred.kind(), rossi::PredicateKind::Application { .. }),
+        "{pred:?}"
+    );
+}
+
+/// An expression operator applied in predicate position is a reserved word,
+/// like `dom(x)` is — never an unresolved user predicate application, which
+/// would smuggle the operator symbol back in as a free identifier.
+#[test]
+fn expression_operator_in_predicate_position_is_rejected() {
+    let ff = parse_factory();
+    for text in ["dist(1, 2)", "plus(1, 2)", "zero(1)"] {
+        let error = rossi::parse_predicate_str_with(text, &ff).expect_err(text);
+        assert!(
+            matches!(&error, rossi::ParseError::ReservedWord { .. }),
+            "{text}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn two_argument_call_without_operator_is_rejected() {
+    let ff = parse_factory();
+    for (text, head) in [
+        ("f(a, b)", "f"),
+        ("f(x)(a, b)", "f(x)"),
+        ("(g)(a, b, c)", "(g)"),
+    ] {
+        for factory in [&ff, &FormulaFactory::default_factory()] {
+            let error = rossi::parse_expression_str_with(text, factory).expect_err(text);
+            match error {
+                rossi::ParseError::NotAPrefixOperator {
+                    name,
+                    line,
+                    column,
+                    span,
+                } => {
+                    assert_eq!(name, head, "{text}");
+                    assert_eq!((line, column), (1, 1), "{text}");
+                    assert_eq!(
+                        span,
+                        Some(rossi::formula::Span {
+                            start: 0,
+                            end: head.len()
+                        })
+                    );
+                }
+                other => panic!("{text}: expected a not-a-prefix-operator error, got {other:?}"),
+            }
+        }
+    }
+    // A single argument is still core function application, whatever the head.
+    let expr = rossi::parse_expression_str_with("f(a ↦ b)", &ff).expect("parses");
+    assert!(matches!(
+        expr.kind(),
+        ExpressionKind::Binary {
+            op: BinaryExprOp::FunImage,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn arity_mismatch_is_reported() {
+    let ff = parse_factory();
+    for (text, name, expected, actual) in [
+        ("dist(a)", "dist", "2", 1),
+        ("dist(a, b, c)", "dist", "2", 3),
+        ("dist", "dist", "2", 0),
+        ("dist + 1", "dist", "2", 0),
+    ] {
+        let error = rossi::parse_expression_str_with(text, &ff).expect_err(text);
+        assert!(
+            matches!(&error, rossi::ParseError::ArityMismatch { name: n, expected: e, actual: a }
+                if n == name && e == expected && *a == actual),
+            "{text}: {error:?}"
+        );
+    }
+    let error = rossi::parse_predicate_str_with("even(x, y)", &ff).expect_err("arity");
+    assert!(
+        matches!(&error, rossi::ParseError::ArityMismatch { name, expected, actual: 2 }
+            if name == "even" && expected == "1"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn operator_symbols_cannot_name_identifiers() {
+    let ff = parse_factory();
+    // Binders, declarations and a predicate symbol in expression position
+    // are all the reserved-word error, as for the builtin words.
+    for text in ["∀dist·dist = 1", "∃zero·zero > 0"] {
+        let error = rossi::parse_predicate_str_with(text, &ff).expect_err(text);
+        assert!(
+            matches!(&error, rossi::ParseError::ReservedWord { .. }),
+            "{text}: {error:?}"
+        );
+    }
+    let error = rossi::parse_expression_str_with("even", &ff).expect_err("predicate symbol");
+    assert!(matches!(&error, rossi::ParseError::ReservedWord { word, .. } if word == "even"));
+    let error = rossi::parse_components_with("MACHINE M\nVARIABLES\n    dist\nEND\n", &ff)
+        .expect_err("declaration");
+    assert!(matches!(&error, rossi::ParseError::ReservedWord { word, .. } if word == "dist"));
+    // The same names are free under the default factory.
+    rossi::parse_predicate_str("∀dist·dist = 1").expect("ordinary identifier");
 }

@@ -296,6 +296,19 @@ pub enum ParseError {
         actual: usize,
     },
 
+    /// A comma-separated argument list was applied to a head that is not a
+    /// prefix operator of the factory in use. Core function application
+    /// takes exactly one argument (a pair is written `f(x ↦ y)`); only a
+    /// prefix extension operator admits `sym(a, b)`. `line` and `column` are
+    /// 1-indexed; `span` is the byte range of the head.
+    #[error("`{name}` is not a prefix operator at line {line}, column {column}")]
+    NotAPrefixOperator {
+        name: String,
+        line: usize,
+        column: usize,
+        span: Option<Span>,
+    },
+
     #[error("Multiple parse errors ({} total): {}", .0.len(), .0.first().map(|e| e.to_string()).unwrap_or_default())]
     MultipleErrors(Vec<ParseError>),
 }
@@ -383,7 +396,8 @@ impl ParseError {
             | ParseError::AssignmentInPredicate { line, span, .. }
             | ParseError::ExpressionNotBinding { line, span, .. }
             | ParseError::InvalidTypeExpression { line, span, .. }
-            | ParseError::AssignmentArityMismatch { line, span, .. } => {
+            | ParseError::AssignmentArityMismatch { line, span, .. }
+            | ParseError::NotAPrefixOperator { line, span, .. } => {
                 *line += line_delta;
                 shift_span(span, byte_delta);
             }
@@ -440,6 +454,7 @@ impl ParseError {
             | ParseError::ExpressionNotBinding { line, column, .. }
             | ParseError::InvalidTypeExpression { line, column, .. }
             | ParseError::AssignmentArityMismatch { line, column, .. }
+            | ParseError::NotAPrefixOperator { line, column, .. }
             | ParseError::ClauseError { line, column, .. }
             | ParseError::RecoverableError { line, column, .. } => Some((*line, *column)),
             ParseError::FileContext { source, .. } => source.position(),
@@ -469,6 +484,7 @@ impl ParseError {
             | ParseError::ExpressionNotBinding { span, .. }
             | ParseError::InvalidTypeExpression { span, .. }
             | ParseError::AssignmentArityMismatch { span, .. }
+            | ParseError::NotAPrefixOperator { span, .. }
             | ParseError::RecoverableError { span, .. } => *span,
             ParseError::FileContext { source, .. } => source.span(),
             ParseError::MultipleErrors(errors) => errors.first().and_then(ParseError::span),
