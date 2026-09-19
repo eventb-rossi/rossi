@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.2.3](https://github.com/eventb-rossi/rossi/compare/v0.2.2...v0.2.3) - 2026-09-19
+
+### Added
+- *(parse)* Parse infix extension operators as one operator group
+- *(parse)* Resolve prefix and nullary extension operators
+- *(build)* Check runtime suitability of nondeterministic actions
+- *(lint)* Warn on a section written out of order
+- *(formula)* Spell parametric types as type-constructor expressions
+- *(pretty)* Print extended operators by their notation
+- *(formula)* Index a factory's extensions by symbol
+- *(parse)* Accept Rodin's identifier character classes
+- *(build)* Check finiteness in the runtime suitability pass
+- *(lsp)* Serve proof obligations with their proof status
+- *(build)* Check actions, guards and refinement in the runtime pass
+- *(build)* Check what the contexts leave open in the runtime pass
+- *(build)* Register the section-order rule
+- *(lsp)* Let the client cancel the Rodin and animate flows
+- *(lsp)* Tag dead variables as unnecessary
+- *(lsp)* Move the server onto tower-lsp-server
+- *(lsp)* Link duplicate component findings to the other declarations
+- *(lsp)* Go to the carrier sets of a symbol's type
+- *(lsp)* Rename a component when its file is renamed
+- *(lsp)* Format a selected range
+- *(lsp)* Serve semantic tokens for a range
+- *(lsp)* Serve an obligation's sequent as rossi/proofState
+- *(lsp)* Publish the project static check as diagnostics
+- *(lsp)* Go to the events and machines that refine the cursor
+- *(lsp)* Expose the refinement graph as a type hierarchy
+- *(lsp)* Serve pull diagnostics for documents and the workspace
+- *(lsp)* Highlight occurrences of the symbol under the cursor
+- *(lsp)* Offer to move a section written out of order
+
+### Changed
+- *(parse)* Thread a formula factory through the AST builder
+- *(parse)* Derive the context and machine section order from the keyword table
+- *(lsp)* Spell URIs through as_str rather than Display
+
+### Fixed
+- *(build)* Type axioms, invariants and guards in source order
+- *(parse)* Take one identifier in the basic set comprehension form
+- *(parse)* Require parentheses on the power-set operators
+- *(parse)* Refuse a bare quantifier under negation
+- *(xml)* Keep the first event node when a file repeats an internal name
+- *(parse)* Read integer literals of any size
+- *(parse)* Accept partition with a single argument
+- *(parse)* Restore the parser scopes when a parse unwinds
+- *(lsp)* Publish once on open and push proof status off the handler
+- *(lsp)* Index every workspace folder, and follow folder changes
+
+### Documentation
+- *(lsp)* Correct the crate README's feature and diagnostics claims
+
 ## [0.2.2](https://github.com/eventb-rossi/rossi/compare/v0.2.1...v0.2.2) - 2026-09-11
 
 ### Added
