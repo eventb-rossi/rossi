@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper below."
+title: "Rossi"
+authors:
+  - family-names: "Efremov"
+    given-names: "Denis"
+  - family-names: "Shchepetkov"
+    given-names: "Ilya"
+type: software
+repository-code: "https://github.com/eventb-rossi/rossi"
+preferred-citation:
+  type: conference-paper
+  title: "Rust Toolchain for Event-B with Language Server Support"
+  authors:
+    - family-names: "Efremov"
+      given-names: "Denis"
+    - family-names: "Shchepetkov"
+      given-names: "Ilya"
+  conference:
+    name: "13th Rodin User and Developer Workshop"
+    date-start: "2026-05-18"
+    date-end: "2026-05-18"
+    city: "Tokyo"
+    country: "JP"
+  year: 2026
+  start: 1
+  end: 3
+  url: "https://wiki.event-b.org/images/202602.pdf"
