@@ -352,6 +352,8 @@ impl Analyzer {
         // invariant does not leave its marker behind.
         diags.extend(crate::proof::diagnostics(
             &self.proof_report_for(uri, doc).obligations,
+            self.config_manager.get().proof_obligations.diagnostics,
+            doc.text(),
         ));
         if !doc.parse().errors.is_empty() {
             return diags;

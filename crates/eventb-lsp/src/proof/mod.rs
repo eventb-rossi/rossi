@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::component_loader::ComponentLoader;
+use crate::config::ProofDiagnostics;
+use crate::diagnostics::token_end_byte;
 use crate::document::ParsedDocument;
 use crate::lsp_types::*;
 use crate::position::{PositionIndex, span_to_range};
@@ -339,7 +341,20 @@ fn judge_proof(project: &PoProject, component: &str, entry: &ProofEntry) -> Proo
 /// the problems list, because on a fresh model every obligation is open and
 /// that is the normal state of affairs, not a problem. Closed obligations
 /// produce nothing; the lens and the client's own view carry the count.
-pub(crate) fn diagnostics(obligations: &[Obligation]) -> Vec<Diagnostic> {
+///
+/// `mode` picks what each diagnostic underlines in `text`: nothing at all,
+/// the element's label token (its `@label`, or the event or component name
+/// an obligation falls back to), or the whole element. Grouping is by the
+/// element either way, since the token is a function of the element's
+/// start.
+pub(crate) fn diagnostics(
+    obligations: &[Obligation],
+    mode: ProofDiagnostics,
+    text: &str,
+) -> Vec<Diagnostic> {
+    if mode == ProofDiagnostics::Off {
+        return Vec::new();
+    }
     // Keyed by position so the output is ordered; `Range` itself is not `Ord`.
     type Grouped<'a> = BTreeMap<(u32, u32, u32, u32), (Range, Vec<&'a str>)>;
     let mut broken: Grouped = BTreeMap::new();
@@ -363,11 +378,23 @@ pub(crate) fn diagnostics(obligations: &[Obligation]) -> Vec<Diagnostic> {
             .1
             .push(&obligation.name);
     }
+    if broken.is_empty() && open.is_empty() {
+        return Vec::new();
+    }
+
+    // One index for the whole document rather than a scan from byte zero per
+    // element, and none at all for a document with nothing to underline,
+    // which is every document whose obligations are closed.
+    let index = (mode == ProofDiagnostics::Labels).then(|| PositionIndex::new(text));
+    let narrow = |range: Range| match &index {
+        Some(index) => label_range(range, text, index),
+        None => range,
+    };
 
     let mut diagnostics = Vec::new();
     for (range, names) in broken.values() {
         diagnostics.push(crate::diagnostics::lsp_diagnostic(
-            *range,
+            narrow(*range),
             DiagnosticSeverity::WARNING,
             None,
             format!("stored proof no longer applies to {}", names.join(", ")),
@@ -380,13 +407,48 @@ pub(crate) fn diagnostics(obligations: &[Obligation]) -> Vec<Diagnostic> {
             "open proof obligations"
         };
         diagnostics.push(crate::diagnostics::lsp_diagnostic(
-            *range,
+            narrow(*range),
             DiagnosticSeverity::HINT,
             None,
             format!("{} {noun}: {}", names.len(), names.join(", ")),
         ));
     }
     diagnostics
+}
+
+/// The label token of the element `range` covers, for underlining it
+/// instead of the whole element. A start the text no longer has (a stale
+/// range past its end) keeps the element range.
+fn label_range(range: Range, text: &str, index: &PositionIndex) -> Range {
+    let Some(start) = index.offset(range.start) else {
+        return range;
+    };
+    let start = label_start(text, start);
+    Range::new(
+        index.position(start),
+        index.position(token_end_byte(text, start)),
+    )
+}
+
+/// The offset of the element's label token: the `@label` it starts with, or
+/// the one behind a leading flag, since a theorem prints as
+/// `theorem @thm1 P`. The rule is the label's `@` rather than the flag's
+/// spelling, so it needs no keyword table and leaves an anchor that is not
+/// a label at all (the event or component name an obligation falls back to)
+/// on its own first token.
+fn label_start(text: &str, start: usize) -> usize {
+    if text[start..].starts_with('@') {
+        return start;
+    }
+    let after = token_end_byte(text, start);
+    let rest = &text[after..];
+    let blanks = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    let label = after + blanks;
+    if blanks > 0 && text[label..].starts_with('@') {
+        label
+    } else {
+        start
+    }
 }
 
 /// One lens per component that has obligations, on its name, summarizing
@@ -542,11 +604,15 @@ mod tests {
 
     #[test]
     fn open_obligations_group_per_element_as_hints() {
-        let diags = diagnostics(&[
-            obligation("e1/inv1/INV", 3, ProofStatus::Unattempted),
-            obligation("e2/inv1/INV", 3, ProofStatus::Pending),
-            obligation("inv1/WD", 3, ProofStatus::Discharged),
-        ]);
+        let diags = diagnostics(
+            &[
+                obligation("e1/inv1/INV", 3, ProofStatus::Unattempted),
+                obligation("e2/inv1/INV", 3, ProofStatus::Pending),
+                obligation("inv1/WD", 3, ProofStatus::Discharged),
+            ],
+            ProofDiagnostics::Elements,
+            "",
+        );
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::HINT));
         assert_eq!(
@@ -557,13 +623,80 @@ mod tests {
 
     #[test]
     fn a_broken_proof_is_a_warning_and_closed_ones_are_silent() {
-        let diags = diagnostics(&[
-            obligation("inv1/WD", 3, ProofStatus::Broken),
-            obligation("inv2/WD", 4, ProofStatus::Reviewed),
-        ]);
+        let diags = diagnostics(
+            &[
+                obligation("inv1/WD", 3, ProofStatus::Broken),
+                obligation("inv2/WD", 4, ProofStatus::Reviewed),
+            ],
+            ProofDiagnostics::Elements,
+            "",
+        );
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
         assert_eq!(diags[0].range.start.line, 3);
+    }
+
+    #[test]
+    fn labels_narrow_the_range_to_the_label_token() {
+        let text = "INVARIANTS\n    @inv1 x \u{2208} \u{2115}\n";
+        let element = Obligation {
+            range: Range::new(Position::new(1, 4), Position::new(1, 15)),
+            ..obligation("inv1/WD", 1, ProofStatus::Unattempted)
+        };
+        let diags = diagnostics(
+            std::slice::from_ref(&element),
+            ProofDiagnostics::Labels,
+            text,
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].range,
+            Range::new(Position::new(1, 4), Position::new(1, 9)),
+            "the @label only"
+        );
+        // A range the text does not reach keeps the element.
+        let stale = Obligation {
+            range: Range::new(Position::new(7, 4), Position::new(7, 15)),
+            ..element
+        };
+        let diags = diagnostics(std::slice::from_ref(&stale), ProofDiagnostics::Labels, text);
+        assert_eq!(diags[0].range, stale.range);
+    }
+
+    #[test]
+    fn labels_step_over_an_inline_theorem_flag() {
+        // Both orderings the grammar takes. `rossi fmt` prints the first,
+        // where the element's own first token is the flag and the label the
+        // user reads follows it.
+        for (text, character) in [
+            ("INVARIANTS\n    theorem @thm1 x \u{2208} \u{2115}\n", 12),
+            ("INVARIANTS\n    @thm1 theorem x \u{2208} \u{2115}\n", 4),
+        ] {
+            let element = Obligation {
+                range: Range::new(Position::new(1, 4), Position::new(1, 23)),
+                ..obligation("thm1/THM", 1, ProofStatus::Unattempted)
+            };
+            let diags = diagnostics(
+                std::slice::from_ref(&element),
+                ProofDiagnostics::Labels,
+                text,
+            );
+            assert_eq!(
+                diags[0].range,
+                Range::new(Position::new(1, character), Position::new(1, character + 5)),
+                "the @thm1 only, in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn off_emits_nothing() {
+        let diags = diagnostics(
+            &[obligation("inv1/WD", 3, ProofStatus::Broken)],
+            ProofDiagnostics::Off,
+            "",
+        );
+        assert!(diags.is_empty());
     }
 
     #[test]

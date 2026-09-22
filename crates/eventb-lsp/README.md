@@ -463,8 +463,10 @@ next to the sources, judged against the regenerated sequent exactly as
 stored proof is `unattempted`, and nothing here discharges one. Open
 obligations are published as hint diagnostics grouped per source element (a
 hint stays out of the problems list; on a fresh model every obligation is
-open), and a broken proof as a warning. `rossi.proofObligations.enabled`
-turns the whole surface off.
+open), and a broken proof as a warning. By default a diagnostic underlines
+only the element's `@label`; `rossi.proofObligations.diagnostics` widens it
+to the whole element (`elements`) or drops the diagnostics (`off`).
+`rossi.proofObligations.enabled` turns the whole surface off.
 
 The Rodin and animate flows report through `$/progress` and honour
 `window/workDoneProgress/cancel`: cancelling the progress stops the flow at
@@ -686,6 +688,8 @@ interface RossiConfig {
   };
   proofObligations: {
     enabled: boolean;                      // generate and judge; default: true
+    diagnostics: "off" | "labels" | "elements"; // what a diagnostic
+                                           // underlines; default: "labels"
   };
 }
 ```

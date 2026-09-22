@@ -456,18 +456,50 @@ pub struct ProofObligationsConfig {
     /// diagnostics, lenses and `rossi/proofObligations`
     #[serde(default = "default_proof_obligations_enabled")]
     pub enabled: bool,
+    /// How open and broken obligations are published as diagnostics:
+    /// `off`, `labels` (the `@label` token, the default) or `elements`
+    /// (the whole element)
+    #[serde(default, deserialize_with = "tolerant_proof_diagnostics")]
+    pub diagnostics: ProofDiagnostics,
 }
 
 impl Default for ProofObligationsConfig {
     fn default() -> Self {
         Self {
             enabled: default_proof_obligations_enabled(),
+            diagnostics: ProofDiagnostics::default(),
         }
     }
 }
 
 fn default_proof_obligations_enabled() -> bool {
     true
+}
+
+/// The range an open or broken obligation's diagnostic underlines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProofDiagnostics {
+    /// No proof diagnostics at all.
+    Off,
+    /// The `@label` token of the element.
+    #[default]
+    Labels,
+    /// The whole element.
+    Elements,
+}
+
+/// Tolerant deserializer for `proofObligations.diagnostics`: an unknown
+/// value falls back to the default instead of discarding the whole
+/// configuration.
+fn tolerant_proof_diagnostics<'de, D>(deserializer: D) -> Result<ProofDiagnostics, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    // Through the derive, so the accepted spellings stay defined by the enum
+    // alone; anything else is the default rather than a discarded config.
+    Ok(ProofDiagnostics::deserialize(value).unwrap_or_default())
 }
 
 /// Inlay hints configuration
@@ -576,6 +608,39 @@ mod tests {
         assert!(config.inlay_hints.enabled);
         assert!(config.inlay_hints.well_definedness);
         assert_eq!(config.inlay_hints.max_length, 32);
+
+        assert!(config.proof_obligations.enabled);
+        assert_eq!(
+            config.proof_obligations.diagnostics,
+            ProofDiagnostics::Labels
+        );
+    }
+
+    #[test]
+    fn test_proof_diagnostics_parse_and_survive_a_typo() {
+        let settings = serde_json::json!({
+            "rossi": { "proofObligations": { "diagnostics": "elements" } }
+        });
+        let config = RossiConfig::from_client_settings(&settings).unwrap();
+        assert_eq!(
+            config.proof_obligations.diagnostics,
+            ProofDiagnostics::Elements
+        );
+
+        // Same all-or-nothing rationale as `maxLength`: a mistyped value
+        // falls back to the default and the sibling settings survive.
+        for bad in [serde_json::json!("lables"), serde_json::json!(3)] {
+            let settings = serde_json::json!({
+                "rossi": { "proofObligations": { "diagnostics": bad, "enabled": false } }
+            });
+            let config = RossiConfig::from_client_settings(&settings)
+                .unwrap_or_else(|e| panic!("config discarded for {bad}: {e}"));
+            assert_eq!(
+                config.proof_obligations.diagnostics,
+                ProofDiagnostics::Labels
+            );
+            assert!(!config.proof_obligations.enabled);
+        }
     }
 
     #[test]

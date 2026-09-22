@@ -130,7 +130,7 @@ pub(crate) fn proof_status_diagnostics(
 /// range when pest reports only a point: the end of the contiguous non-whitespace
 /// run starting at `start`, bounded by the line. Zero-width at EOL/EOF, one char
 /// when `start` lands on whitespace.
-fn token_end_byte(text: &str, start: usize) -> usize {
+pub(crate) fn token_end_byte(text: &str, start: usize) -> usize {
     let rest = &text[start..];
     match rest.chars().next() {
         None | Some('\n') => start, // EOF / EOL: zero-width

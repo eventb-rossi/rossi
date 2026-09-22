@@ -143,6 +143,16 @@ impl<'a> PositionIndex<'a> {
         }
     }
 
+    /// Byte offset of an LSP [`Position`], the inverse of [`Self::position`]
+    /// and the indexed counterpart of [`position_to_offset`]. `None` when the
+    /// line or the column is past the end of the document.
+    pub(crate) fn offset(&self, position: Position) -> Option<usize> {
+        let start = *self.line_offsets.get(position.line as usize)?;
+        let rest = &self.text[start..];
+        let line = rest.split_once('\n').map_or(rest, |(head, _)| head);
+        utf16_to_byte(line, position.character as usize).map(|byte| start + byte)
+    }
+
     pub(crate) fn position(&self, byte_offset: usize) -> Position {
         let mut offset = byte_offset.min(self.text.len());
         while !self.text.is_char_boundary(offset) {

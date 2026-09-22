@@ -1866,7 +1866,10 @@ mod proof_obligations {
         "bump/inv1/INV",
     ];
 
-    async fn open_service() -> (
+    /// A server initialised with `options` and `SOURCE` open.
+    async fn open_service(
+        options: Value,
+    ) -> (
         LspService<RossiLanguageServer>,
         tower_lsp_server::ClientSocket,
     ) {
@@ -1878,7 +1881,7 @@ mod proof_obligations {
             .finish();
         let init = Request::build("initialize")
             .id(1)
-            .params(json!({ "capabilities": {} }))
+            .params(json!({ "capabilities": {}, "initializationOptions": options }))
             .finish();
         service.ready().await.unwrap().call(init).await.unwrap();
         service
@@ -1935,7 +1938,7 @@ mod proof_obligations {
 
     #[tokio::test(flavor = "current_thread")]
     async fn opening_pushes_the_obligation_list() {
-        let (_service, mut messages) = open_service().await;
+        let (_service, mut messages) = open_service(json!({})).await;
         let params = next_message(
             &mut messages,
             eventb_lsp::proof::NOTIFICATION_STATUS,
@@ -1958,7 +1961,7 @@ mod proof_obligations {
 
     #[tokio::test(flavor = "current_thread")]
     async fn the_request_lists_obligations_anchored_on_their_elements() {
-        let (mut service, mut messages) = open_service().await;
+        let (mut service, mut messages) = open_service(json!({})).await;
         // Let the open-time refresh land first so the request is served
         // from the overlay rather than recomputing.
         next_message(
@@ -2006,7 +2009,7 @@ mod proof_obligations {
 
     #[tokio::test(flavor = "current_thread")]
     async fn open_obligations_are_hints_grouped_per_element_and_counted_by_a_lens() {
-        let (mut service, mut messages) = open_service().await;
+        let (mut service, mut messages) = open_service(json!({})).await;
 
         // One publish per open, hints included; the list itself is pushed
         // after it.
@@ -2032,12 +2035,17 @@ mod proof_obligations {
         .await
         .expect("the open-time push");
         assert_eq!(hints.len(), 2, "one hint per invariant; got {hints:?}");
-        assert_eq!(hints[0]["range"]["start"]["line"], json!(4));
+        // By default a hint underlines the `@inv1` token, not the element.
+        assert_eq!(
+            hints[0]["range"],
+            json!({ "start": { "line": 4, "character": 4 }, "end": { "line": 4, "character": 9 } })
+        );
         assert_eq!(
             hints[0]["message"],
             json!("2 open proof obligations: INITIALISATION/inv1/INV, bump/inv1/INV")
         );
         assert_eq!(hints[1]["range"]["start"]["line"], json!(5));
+        assert_eq!(hints[1]["range"]["end"]["character"], json!(9));
         assert_eq!(
             hints[1]["message"],
             json!("1 open proof obligation: INITIALISATION/inv2/INV")
@@ -2063,6 +2071,51 @@ mod proof_obligations {
             }),
             "the lens must count the obligations; got {lenses}"
         );
+    }
+
+    /// The severity-4 rows of the open-time publish, after letting the
+    /// push through so the socket is not left holding it.
+    async fn open_hints(options: Value) -> Vec<Value> {
+        let (_service, mut messages) = open_service(options).await;
+        let params = next_message(
+            &mut messages,
+            "textDocument/publishDiagnostics",
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("opening publishes diagnostics");
+        next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("the open-time push");
+        params["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["severity"] == json!(4))
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn element_diagnostics_underline_the_whole_element() {
+        let hints = open_hints(json!({ "proofObligations": { "diagnostics": "elements" } })).await;
+        assert_eq!(hints.len(), 2, "got {hints:?}");
+        // The element's own span, which the parser runs up to the next
+        // element's indentation.
+        assert_eq!(
+            hints[0]["range"],
+            json!({ "start": { "line": 4, "character": 4 }, "end": { "line": 5, "character": 4 } })
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn proof_diagnostics_can_be_turned_off() {
+        let hints = open_hints(json!({ "proofObligations": { "diagnostics": "off" } })).await;
+        assert!(hints.is_empty(), "got {hints:?}");
     }
 }
 
