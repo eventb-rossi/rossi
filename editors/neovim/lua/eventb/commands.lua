@@ -7,6 +7,9 @@
 -- The `rossi` binary is configurable via `vim.g.rossi_tool_path` (default
 -- "rossi"); set it before this module is loaded, e.g.
 --   vim.g.rossi_tool_path = vim.fn.expand("~/.cargo/bin/rossi")
+--
+-- Set `vim.g.rossi_validate_runtime = true` to pass `--runtime` to
+-- `rossi validate`, adding the EB1xx runtime-translation checks.
 
 local M = {}
 
@@ -211,6 +214,11 @@ end
 -- the diagnostics. Mirrors runValidate() in rossiCommands.ts.
 local function run_validate(inputs, cwd, stdin)
   local args = { "validate", "--format", "json", "--continue-on-error" }
+  -- Vimscript spells false as 0, which Lua would take for true.
+  local runtime = vim.g.rossi_validate_runtime
+  if runtime and runtime ~= 0 then
+    table.insert(args, "--runtime")
+  end
   vim.list_extend(args, inputs)
 
   run_rossi(args, {

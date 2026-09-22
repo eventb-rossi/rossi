@@ -59,6 +59,13 @@ Either a bare command name resolved on `exec-path' or an absolute path."
   :type 'string
   :group 'eventb-commands)
 
+(defcustom eventb-validate-runtime nil
+  "Non-nil means `rossi validate' also runs the runtime checks.
+Passes `--runtime', adding the EB1xx runtime-translation suitability
+checks over the leaf machines and the contexts they see."
+  :type 'boolean
+  :group 'eventb-commands)
+
 ;;; Helpers
 
 (defun eventb--tool-path ()
@@ -194,7 +201,10 @@ jumps to the offending file."
                      (apply #'call-process rossi-tool-path nil
                             (list :file outfile) nil
                             "validate" "--format" "json"
-                            "--continue-on-error" inputs)
+                            "--continue-on-error"
+                            (append (and eventb-validate-runtime
+                                         '("--runtime"))
+                                    inputs))
                    nil))
          (stdout (with-temp-buffer
                    (ignore-errors (insert-file-contents outfile))

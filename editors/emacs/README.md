@@ -431,7 +431,8 @@ Rossi CLI:
 
 The conversion, validation, import, export, and build commands shell out to the
 `rossi` CLI; ensure it is on your `PATH` or set `rossi-tool-path` to its
-location.
+location. Set `eventb-validate-runtime` to pass `--runtime` to both validate
+commands, adding the EB1xx runtime-translation suitability checks.
 
 ```elisp
 (setq rossi-tool-path "~/.cargo/bin/rossi")  ; defaults to "rossi" on exec-path

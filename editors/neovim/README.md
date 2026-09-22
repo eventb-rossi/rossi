@@ -435,6 +435,10 @@ The plugin exposes these `:Rossi*` user commands:
 - `:RossiExport` — export Event-B text to a Rodin ZIP
 - `:RossiBuild` — build a checked Rodin ZIP
 
+Set `vim.g.rossi_validate_runtime = true` to have both validate commands pass
+`--runtime`, adding the EB1xx runtime-translation suitability checks over the
+leaf machines and the contexts they see.
+
 Suggested keymaps (set them in your `on_attach` or an `eventb` FileType
 autocommand):
 
