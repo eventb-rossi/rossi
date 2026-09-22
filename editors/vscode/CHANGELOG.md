@@ -23,8 +23,24 @@
   fall-back to a different release), and removes previously downloaded versions
   from global storage on update instead of leaving them behind. (#146)
 
+### Changed
+
+- Open and broken proof obligations underline only the element's `@label`
+  instead of the whole element, so a machine with many open invariants is no
+  longer wavy end to end.
+
 ### Added
 
+- Proof status is drawn in the gutter the way the Dafny and Lean extensions
+  draw verification status: a rail beside every event and clause, one green
+  check on a block whose obligations are all closed, and per-label icons with
+  a gray (open) or amber (broken) rail otherwise. The rail is lighter than the
+  icon beside it and each theme has its own tones, since a gutter icon cannot
+  take a theme colour. `rossi.proofObligations.gutter` switches back to plain
+  per-line icons or turns the gutter off.
+- A `rossi.proofObligations.diagnostics` setting choosing what an open or
+  broken obligation's diagnostic underlines: the element's `@label` (the
+  default), the whole element, or nothing.
 - A `source.fixAll.rossi` code action that rewrites every operator spelling to
   the `rossi.format.useUnicode` convention and changes nothing else, so
   `"[eventb]": { "editor.codeActionsOnSave": { "source.fixAll.rossi": "explicit" } }`

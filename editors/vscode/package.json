@@ -438,7 +438,37 @@
         "rossi.proofObligations.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Generate each open file's proof obligations on open and on save, judge them against the stored proofs (next to the sources or in the shared Rodin workspace), and show them in the Proof Obligations view, the gutter, the status bar and as hint diagnostics. rossi does not discharge obligations itself."
+          "description": "Generate each open file's proof obligations on open and on save, judge them against the stored proofs (next to the sources or in the shared Rodin workspace), and show them in the Proof Obligations view, the gutter, the status bar and as diagnostics. rossi does not discharge obligations itself."
+        },
+        "rossi.proofObligations.diagnostics": {
+          "type": "string",
+          "enum": [
+            "off",
+            "labels",
+            "elements"
+          ],
+          "enumDescriptions": [
+            "No proof diagnostics.",
+            "Underline the @label of each element with open (hint) or broken (warning) obligations.",
+            "Underline the whole element."
+          ],
+          "default": "labels",
+          "description": "How open and broken proof obligations are shown as diagnostics: hints for open obligations stay out of the Problems panel, a broken proof is a warning."
+        },
+        "rossi.proofObligations.gutter": {
+          "type": "string",
+          "enum": [
+            "off",
+            "icons",
+            "bars"
+          ],
+          "enumDescriptions": [
+            "No gutter marks.",
+            "One status icon on every line that has obligations.",
+            "A bar beside each event or clause: one green check on the header when everything inside is closed, otherwise an icon per line with obligations and a gray or amber bar on the rest."
+          ],
+          "default": "bars",
+          "description": "How proof obligation status is drawn in the editor gutter."
         },
         "rossi.inlayHints.enabled": {
           "type": "boolean",

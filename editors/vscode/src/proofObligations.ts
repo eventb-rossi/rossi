@@ -1,14 +1,15 @@
 /**
  * The proof obligation surface: a tree view of the active file's
- * obligations, gutter marks on the elements they are about, a status bar
- * count, and a read-only sequent document for the obligation the user
- * picks.
+ * obligations, gutter marks and bars on the elements and blocks they are
+ * about, a status bar count, and a read-only sequent document for the
+ * obligation the user picks.
  *
  * Everything shown comes from the server: `rossi/proofObligations` lists a
- * file's obligations, `$/rossi/proofStatus` pushes the list again whenever
- * the server recomputes it (on open and on save), and `rossi/proofState`
- * returns one obligation's sequent. The extension keeps no model of its
- * own beyond the last list per file.
+ * file's obligations and the blocks (events, clauses) they sit in,
+ * `$/rossi/proofStatus` pushes the report again whenever the server
+ * recomputes it (on open and on save), and `rossi/proofState` returns one
+ * obligation's sequent. The extension keeps no model of its own beyond the
+ * last report per file.
  *
  * The sequent is a virtual `.eventb` document rather than a webview: it is
  * plain Event-B text, so a text document gets the language's grammar, the
@@ -47,13 +48,17 @@ import { LanguageClient } from 'vscode-languageclient/node';
 import {
     ComponentGroup,
     EventGroup,
-    LineMark,
+    GUTTER_GLYPHS,
+    GutterGlyph,
+    GutterMode,
     Obligation,
+    ProofReport,
     ProofState,
     ProofStatus,
     ProofStatusParams,
     groupObligations,
-    markFor,
+    gutterCells,
+    lineMarks,
     summarize,
 } from './proofObligationModel';
 
@@ -142,7 +147,7 @@ class ObligationTree implements TreeDataProvider<Node> {
                 return [];
             }
             const uri = this.activeUri;
-            return groupObligations(this.store.get(uri)).map((group) => ({
+            return groupObligations(this.store.get(uri).obligations).map((group) => ({
                 kind: 'component',
                 uri,
                 group,
@@ -184,20 +189,20 @@ function statusIcon(status: ProofStatus): ThemeIcon {
     }
 }
 
-/** The last list the server sent for each file. */
+/** The last report the server sent for each file. */
 class ObligationStore {
-    private readonly lists = new Map<string, Obligation[]>();
+    private readonly lists = new Map<string, ProofReport>();
 
-    get(uri: string): Obligation[] {
-        return this.lists.get(uri) ?? [];
+    get(uri: string): ProofReport {
+        return this.lists.get(uri) ?? { obligations: [], blocks: [] };
     }
 
     has(uri: string): boolean {
         return this.lists.has(uri);
     }
 
-    set(uri: string, obligations: Obligation[]): void {
-        this.lists.set(uri, obligations);
+    set(uri: string, report: ProofReport): void {
+        this.lists.set(uri, report);
     }
 
     delete(uri: string): void {
@@ -253,36 +258,59 @@ class ProofStateProvider implements TextDocumentContentProvider {
     }
 }
 
-/** Gutter marks per line of the active editor. */
+/**
+ * Gutter decorations of the active editor: one icon per line with
+ * obligations in `icons` mode, or the icon-and-bar cells of `bars` mode.
+ * The bar cells are drawn with `cover` so the bar always fills the cell's
+ * height and consecutive lines join into one line, the way Lean's progress
+ * bar and Dafny's verification gutter are drawn.
+ */
 class GutterMarks implements Disposable {
-    private readonly types: Record<LineMark, TextEditorDecorationType>;
+    private readonly types: Record<GutterGlyph, TextEditorDecorationType>;
 
     constructor(context: ExtensionContext) {
-        const type = (mark: LineMark) =>
+        const file = (theme: 'light' | 'dark', glyph: GutterGlyph) =>
+            Uri.joinPath(context.extensionUri, 'icons', 'gutter', theme, `${glyph}.svg`);
+        const entries = GUTTER_GLYPHS.map((glyph): [GutterGlyph, TextEditorDecorationType] => [
+            glyph,
             window.createTextEditorDecorationType({
-                gutterIconPath: Uri.joinPath(context.extensionUri, 'icons', `po-${mark}.svg`),
-                gutterIconSize: 'contain',
-            });
-        this.types = { closed: type('closed'), open: type('open'), broken: type('broken') };
+                // A glyph is drawn at fixed colours, so each theme gets its
+                // own: the muted tones that read on the dark chrome turn
+                // muddy on white, and a gutter icon cannot take a theme
+                // colour the way a ThemeIcon does.
+                light: { gutterIconPath: file('light', glyph) },
+                dark: { gutterIconPath: file('dark', glyph) },
+                // Stretched to fill the cell, so the bars of consecutive
+                // lines join into one rail.
+                gutterIconSize: 'cover',
+            }),
+        ]);
+        this.types = Object.fromEntries(entries) as Record<GutterGlyph, TextEditorDecorationType>;
     }
 
-    apply(editor: TextEditor, obligations: Obligation[]): void {
-        const byLine = new Map<number, ProofStatus[]>();
-        for (const obligation of obligations) {
-            const line = obligation.range.start.line;
-            const statuses = byLine.get(line);
-            if (statuses) {
-                statuses.push(obligation.status);
+    apply(editor: TextEditor, report: ProofReport, mode: GutterMode): void {
+        const ranges = new Map<GutterGlyph, Range[]>();
+        const draw = (glyph: GutterGlyph, line: number) => {
+            const drawn = ranges.get(glyph);
+            const range = new Range(line, 0, line, 0);
+            if (drawn) {
+                drawn.push(range);
             } else {
-                byLine.set(line, [obligation.status]);
+                ranges.set(glyph, [range]);
+            }
+        };
+        if (mode === 'icons') {
+            for (const [line, mark] of lineMarks(report.obligations)) {
+                draw(mark, line);
+            }
+        } else if (mode === 'bars') {
+            for (const [line, cell] of gutterCells(report)) {
+                draw(cell, line);
             }
         }
-        const ranges: Record<LineMark, Range[]> = { closed: [], open: [], broken: [] };
-        for (const [line, statuses] of byLine) {
-            ranges[markFor(statuses)].push(new Range(line, 0, line, 0));
-        }
-        for (const mark of ['closed', 'open', 'broken'] as const) {
-            editor.setDecorations(this.types[mark], ranges[mark]);
+        // Every glyph is set, so switching modes clears the ones it drops.
+        for (const glyph of GUTTER_GLYPHS) {
+            editor.setDecorations(this.types[glyph], ranges.get(glyph) ?? []);
         }
     }
 
@@ -314,6 +342,8 @@ export function registerProofObligations(
 
     const enabled = () =>
         workspace.getConfiguration('rossi').get<boolean>('proofObligations.enabled', true);
+    const gutter = () =>
+        workspace.getConfiguration('rossi').get<GutterMode>('proofObligations.gutter', 'bars');
 
     const isEventB = (editor: TextEditor | undefined): editor is TextEditor =>
         !!editor && editor.document.languageId === 'eventb' && editor.document.uri.scheme === 'file';
@@ -328,10 +358,10 @@ export function registerProofObligations(
             return;
         }
         const uri = editor.document.uri.toString();
-        const obligations = store.get(uri);
+        const report = store.get(uri);
         tree.setActive(uri);
-        marks.apply(editor, obligations);
-        const summary = summarize(obligations);
+        marks.apply(editor, report, gutter());
+        const summary = summarize(report.obligations);
         statusBar.text = `$(law) ${summary.closed}/${summary.total} POs`;
         statusBar.tooltip = 'Proof obligations discharged in this file (click to open the view)';
         statusBar.show();
@@ -350,10 +380,10 @@ export function registerProofObligations(
         }
         try {
             await ready;
-            const obligations = await client.sendRequest<Obligation[]>('rossi/proofObligations', {
+            const report = await client.sendRequest<ProofReport>('rossi/proofObligations', {
                 textDocument: { uri },
             });
-            store.set(uri, obligations);
+            store.set(uri, report);
             if (window.activeTextEditor?.document.uri.toString() === uri) {
                 render(window.activeTextEditor);
             }
@@ -407,7 +437,7 @@ export function registerProofObligations(
             }
             const uri = editor.document.uri.toString();
             await fetch(editor);
-            const obligations = store.get(uri);
+            const { obligations } = store.get(uri);
             if (obligations.length === 0) {
                 void window.showInformationMessage('This file has no proof obligations.');
                 return;
@@ -452,7 +482,7 @@ export function registerProofObligations(
     void ready.then(() => {
         context.subscriptions.push(
             client.onNotification('$/rossi/proofStatus', (params: ProofStatusParams) => {
-                store.set(params.uri, params.obligations);
+                store.set(params.uri, params);
                 if (window.activeTextEditor?.document.uri.toString() === params.uri) {
                     render(window.activeTextEditor);
                 }

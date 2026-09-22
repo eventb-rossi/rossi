@@ -51,6 +51,7 @@ interface RossiConfiguration {
     };
     proofObligations: {
         enabled: boolean;
+        diagnostics: string;
     };
 }
 
@@ -95,6 +96,7 @@ function getRossiConfiguration(): RossiConfiguration {
         },
         proofObligations: {
             enabled: config.get<boolean>('proofObligations.enabled', true),
+            diagnostics: config.get<string>('proofObligations.diagnostics', 'labels'),
         },
     };
 }

@@ -92,7 +92,7 @@ Type a prefix and press Tab:
 
 ### 🧾 Proof Obligations
 - A **Proof Obligations** view (Event-B activity bar) listing the active file's obligations by component and event, with each one's status
-- Gutter marks on invariants, guards, actions and axioms: closed, open or broken
+- Gutter bars beside every event and clause, the way Dafny and Lean draw verification status: one green check on a fully proven block, per-label icons with a gray or amber bar otherwise (`rossi.proofObligations.gutter` picks bars, plain icons or nothing)
 - A status bar count, and a read-only sequent document for any obligation
 - Generated on open and on save by the language server and judged against the stored proofs; rossi does not discharge them itself
 
@@ -163,7 +163,9 @@ workspace, but only in a trusted one.
 - `rossi.format.declLists`: Declaration-list layout override — `"inline"` or `"one-per-line"`; empty follows the style preset (default: `""`)
 - `rossi.format.blankBetweenClauses`: Blank line before each top-level clause keyword; unset follows the style preset (default: `null`)
 - `rossi.format.maxLineWidth`: Maximum line width when formatting, in characters; long formulas wrap onto operator-leading continuation lines, `0` disables wrapping (default: `120`)
-- `rossi.proofObligations.enabled`: Generate each open file's proof obligations on open and on save, judge them against the stored proofs (next to the sources or in the shared Rodin workspace), and show them in the Proof Obligations view, the gutter, the status bar and as hint diagnostics (default: `true`)
+- `rossi.proofObligations.enabled`: Generate each open file's proof obligations on open and on save, judge them against the stored proofs (next to the sources or in the shared Rodin workspace), and show them in the Proof Obligations view, the gutter, the status bar and as diagnostics (default: `true`)
+- `rossi.proofObligations.diagnostics`: What an open (hint) or broken (warning) obligation's diagnostic underlines — `"labels"` for the element's `@label`, `"elements"` for the whole element, `"off"` for no proof diagnostics (default: `"labels"`)
+- `rossi.proofObligations.gutter`: How proof status is drawn in the gutter — `"bars"` for a bar beside each event or clause with one check when everything inside is closed, `"icons"` for one status icon per line with obligations, `"off"` for nothing (default: `"bars"`)
 - `rossi.inlayHints.enabled`: Show inferred declaration types as inlay hints after machine variables, event parameters, and context constants; rendering also honours VS Code's `editor.inlayHints.enabled` master switch (default: `true`)
 - `rossi.inlayHints.wellDefinedness`: Mark formulas carrying a non-trivial well-definedness condition with a `WD` inlay hint whose tooltip shows the condition (default: `true`)
 - `rossi.inlayHints.maxLength`: Maximum rendered length of a type hint in characters; longer types are truncated with `…` and shown in full in the hint tooltip, `0` disables truncation (default: `32`)
@@ -387,11 +389,25 @@ action or axiom it is about and opens its sequent beside the editor: a
 read-only Event-B document with the typed identifiers and hypotheses in
 comments, one hypothesis per line, a `⊢` line, then the goal, printed in your
 configured operator style. `Rossi: Show Proof Obligation Sequent` offers the
-same as a quick pick, obligations on the cursor's line first. Gutter marks on
-the elements and a `n/m POs` status bar item summarize the file; open
-obligations are also hint diagnostics, which stay out of the Problems panel
-because on a fresh model every obligation is open. `rossi.proofObligations.enabled`
-turns the whole surface off.
+same as a quick pick, obligations on the cursor's line first.
+
+The gutter shows the status beside the source, the way the Dafny and Lean
+extensions draw verification status. Every event and every invariants,
+theorems, variant or axioms clause is a block: when everything in it is
+closed, one green check sits on the event name or the clause keyword and a
+green bar runs down the rest; otherwise each line with obligations carries
+its own icon (green check, gray circle or amber `!`) and the block's other
+lines a gray bar, amber if a proof in it is broken. Obligations outside any
+block, anchored on a component name, keep an icon of their own.
+`rossi.proofObligations.gutter` switches to plain per-line icons or to
+nothing. A `n/m POs` status bar item summarizes the file.
+
+Open obligations are also hint diagnostics, which stay out of the Problems
+panel because on a fresh model every obligation is open, and a broken proof
+is a warning. Both underline only the element's `@label`;
+`rossi.proofObligations.diagnostics` widens that to the whole element or
+turns the diagnostics off. `rossi.proofObligations.enabled` turns the whole
+surface off.
 
 ## Contributing
 

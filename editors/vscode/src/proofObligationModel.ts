@@ -35,10 +35,28 @@ export interface Obligation {
     accurate: boolean;
 }
 
-/** `$/rossi/proofStatus` parameters. */
-export interface ProofStatusParams {
-    uri: string;
+/**
+ * A region the server folds obligations into: an event (INITIALISATION
+ * included) or an invariants, theorems, variant or axioms clause. `header`
+ * is the event name or the clause keyword, `range` the whole region.
+ * Blocks never overlap; an obligation belongs to the block whose range
+ * holds its start line.
+ */
+export interface Block {
+    name: string;
+    header: LspRange;
+    range: LspRange;
+}
+
+/** `rossi/proofObligations` result. */
+export interface ProofReport {
     obligations: Obligation[];
+    blocks: Block[];
+}
+
+/** `$/rossi/proofStatus` parameters. */
+export interface ProofStatusParams extends ProofReport {
+    uri: string;
 }
 
 /** `rossi/proofState` result. */
@@ -65,10 +83,115 @@ export type LineMark = 'closed' | 'open' | 'broken';
  * the user had was lost), then open, and closed only when every one is.
  */
 export function markFor(statuses: ProofStatus[]): LineMark {
-    if (statuses.some((status) => status === 'broken')) {
+    return joinMarks(statuses.map(markOf));
+}
+
+function markOf(status: ProofStatus): LineMark {
+    if (status === 'broken') {
         return 'broken';
     }
-    return statuses.every(isClosed) ? 'closed' : 'open';
+    return isClosed(status) ? 'closed' : 'open';
+}
+
+/**
+ * The same precedence over marks that are already folded, so a block's mark
+ * is the join of its lines' rather than a second fold of the statuses.
+ */
+function joinMarks(marks: Iterable<LineMark>): LineMark {
+    let joined: LineMark = 'closed';
+    for (const mark of marks) {
+        if (mark === 'broken') {
+            return 'broken';
+        }
+        if (mark === 'open') {
+            joined = 'open';
+        }
+    }
+    return joined;
+}
+
+/** The mark of every line that anchors an obligation. */
+export function lineMarks(obligations: Obligation[]): Map<number, LineMark> {
+    const byLine = new Map<number, ProofStatus[]>();
+    for (const obligation of obligations) {
+        const line = obligation.range.start.line;
+        const statuses = byLine.get(line);
+        if (statuses) {
+            statuses.push(obligation.status);
+        } else {
+            byLine.set(line, [obligation.status]);
+        }
+    }
+    const marks = new Map<number, LineMark>();
+    for (const [line, statuses] of byLine) {
+        marks.set(line, markFor(statuses));
+    }
+    return marks;
+}
+
+/** How the gutter shows proof status: `rossi.proofObligations.gutter`. */
+export type GutterMode = 'off' | 'icons' | 'bars';
+
+/**
+ * One glyph-margin cell in `bars` mode: a status icon with a bar of the
+ * same colour beside it, or the bar alone.
+ */
+export type GutterCell = `mark-${LineMark}` | `bar-${LineMark}`;
+
+/** Anything the gutter can draw, each of it an `icons/po-<glyph>.svg`. */
+export type GutterGlyph = LineMark | GutterCell;
+
+const LINE_MARKS: readonly LineMark[] = ['closed', 'open', 'broken'];
+
+export const GUTTER_GLYPHS: readonly GutterGlyph[] = [
+    ...LINE_MARKS,
+    ...LINE_MARKS.map((mark): GutterCell => `mark-${mark}`),
+    ...LINE_MARKS.map((mark): GutterCell => `bar-${mark}`),
+];
+
+/**
+ * The cell of every line drawn in `bars` mode. A block whose obligations
+ * are all closed collapses to one check on its header line and a plain
+ * bar down the rest; otherwise each line with obligations keeps its own
+ * mark and the block's other lines carry a bar in the block's aggregate
+ * colour (broken if any proof is broken, open otherwise). Obligations
+ * outside every block keep a mark of their own; a block without
+ * obligations draws nothing.
+ */
+export function gutterCells(report: ProofReport): Map<number, GutterCell> {
+    const marks = lineMarks(report.obligations);
+    const cells = new Map<number, GutterCell>();
+    for (const block of report.blocks) {
+        const first = block.range.start.line;
+        const last = block.range.end.line;
+        // Read off the marks already folded per line, rather than sweeping
+        // the whole obligation list once per block.
+        const inside: LineMark[] = [];
+        for (let line = first; line <= last; line += 1) {
+            const mark = marks.get(line);
+            if (mark) {
+                inside.push(mark);
+            }
+        }
+        if (inside.length === 0) {
+            continue;
+        }
+        const blockMark = joinMarks(inside);
+        for (let line = first; line <= last; line += 1) {
+            if (blockMark === 'closed') {
+                cells.set(line, line === block.header.start.line ? 'mark-closed' : 'bar-closed');
+            } else {
+                const mark = marks.get(line);
+                cells.set(line, mark ? `mark-${mark}` : `bar-${blockMark}`);
+            }
+        }
+    }
+    for (const [line, mark] of marks) {
+        if (!cells.has(line)) {
+            cells.set(line, `mark-${mark}`);
+        }
+    }
+    return cells;
 }
 
 export interface Summary {
