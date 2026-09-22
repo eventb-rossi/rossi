@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "eventb-fuzz"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "rossi",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "eventb-lsp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "rossi"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "indoc",
  "num-bigint 0.5.1",
@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "rossi-build"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "jsonschema",
  "num-bigint 0.5.1",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "rossi-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "rossi-prove"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "indoc",
  "num-bigint 0.5.1",
@@ -2027,7 +2027,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "xtask"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "rossi",
