@@ -89,6 +89,28 @@ pub struct Obligation {
     pub accurate: bool,
 }
 
+/// A region a client folds obligations into: an event (INITIALISATION
+/// included) or a clause holding labeled elements (invariants, theorems,
+/// variant, axioms). `header` is the event name or the clause keyword,
+/// `range` the whole region. Blocks never nest: EVENTS is not a block, so
+/// an event and a clause never share a line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Block {
+    pub name: String,
+    pub header: Range,
+    pub range: Range,
+}
+
+/// What `rossi/proofObligations` returns and `$/rossi/proofStatus` carries:
+/// a document's obligations and the blocks they sit in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofReport {
+    pub obligations: Vec<Obligation>,
+    pub blocks: Vec<Block>,
+}
+
 /// `rossi/proofObligations` parameters.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,13 +118,14 @@ pub struct ProofObligationsParams {
     pub text_document: TextDocumentIdentifier,
 }
 
-/// `$/rossi/proofStatus` parameters: the full obligation list for one
-/// document, replacing whatever the client held for it.
+/// `$/rossi/proofStatus` parameters: the full report for one document,
+/// replacing whatever the client held for it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProofStatusParams {
     pub uri: Uri,
-    pub obligations: Vec<Obligation>,
+    #[serde(flatten)]
+    pub report: ProofReport,
 }
 
 /// The `$/rossi/proofStatus` notification type, for `Client::send_notification`.
@@ -113,23 +136,27 @@ impl notification::Notification for ProofStatusNotification {
     const METHOD: &'static str = NOTIFICATION_STATUS;
 }
 
-/// The obligations of every document that has been computed, read by the
+/// The report of every document that has been computed, read by the
 /// diagnostics, the lenses and the custom request.
 #[derive(Default)]
 pub struct ProofOverlay {
-    by_uri: HashMap<Uri, Vec<Obligation>>,
+    by_uri: HashMap<Uri, ProofReport>,
 }
 
 impl ProofOverlay {
-    /// Replace one document's list. Returns whether anything visible changed,
-    /// so a caller republishes and pushes only then. A document not seen
-    /// before counts as having had no obligations: opening a component that
-    /// generates none must not announce an empty list, which is the same
-    /// nothing the client already shows.
-    pub(crate) fn apply(&mut self, uri: Uri, obligations: Vec<Obligation>) -> bool {
-        let previous = self.by_uri.get(&uri).map_or(&[][..], Vec::as_slice);
-        let changed = previous != obligations.as_slice();
-        self.by_uri.insert(uri, obligations);
+    /// Replace one document's report. Returns whether anything visible
+    /// changed, so a caller republishes and pushes only then. A document not
+    /// seen before counts as having held the empty report, so a component
+    /// with nothing to draw does not announce the same nothing the client
+    /// already shows. The blocks take part in the comparison: an edit that
+    /// moves an event's END without moving any obligation still changes what
+    /// the client draws, and a component that generates no obligations but
+    /// has blocks is a first-sight change.
+    pub(crate) fn apply(&mut self, uri: Uri, report: ProofReport) -> bool {
+        let empty = ProofReport::default();
+        let previous = self.by_uri.get(&uri).unwrap_or(&empty);
+        let changed = *previous != report;
+        self.by_uri.insert(uri, report);
         changed
     }
 
@@ -137,23 +164,26 @@ impl ProofOverlay {
         self.by_uri.remove(uri).is_some()
     }
 
-    pub(crate) fn get(&self, uri: &Uri) -> Option<&[Obligation]> {
-        self.by_uri.get(uri).map(Vec::as_slice)
+    pub(crate) fn get(&self, uri: &Uri) -> Option<&ProofReport> {
+        self.by_uri.get(uri)
     }
 }
 
-/// `obligations` with every range recomputed against the current parse of
-/// `doc`, for serving a list computed before later edits moved the text.
-/// An obligation whose component the current parse no longer recovers
-/// keeps the range it had: stale is better than the file start.
-pub(crate) fn re_anchor(doc: &ParsedDocument, obligations: &[Obligation]) -> Vec<Obligation> {
+/// `stored` with every range recomputed against the current parse of `doc`,
+/// for serving a report computed before later edits moved the text. An
+/// obligation whose component the current parse no longer recovers keeps
+/// the range it had: stale is better than the file start. The blocks are
+/// read off the current parse outright, since they carry nothing the stored
+/// ones would keep.
+pub(crate) fn report(doc: &ParsedDocument, stored: &ProofReport) -> ProofReport {
     let index = PositionIndex::new(doc.text());
     let components: HashMap<&str, &Component> = doc
         .components()
         .iter()
         .map(|component| (component.name(), component))
         .collect();
-    obligations
+    let obligations = stored
+        .obligations
         .iter()
         .map(|obligation| Obligation {
             range: components
@@ -163,6 +193,18 @@ pub(crate) fn re_anchor(doc: &ParsedDocument, obligations: &[Obligation]) -> Vec
                 }),
             ..obligation.clone()
         })
+        .collect();
+    ProofReport {
+        obligations,
+        blocks: blocks(doc.components(), &index),
+    }
+}
+
+/// The blocks of every component, in source order.
+fn blocks(components: &[Component], index: &PositionIndex) -> Vec<Block> {
+    components
+        .iter()
+        .flat_map(|component| anchor::blocks_for(component, index))
         .collect()
 }
 
@@ -176,7 +218,7 @@ pub(crate) fn compute(
     doc: &ParsedDocument,
     loader: &ComponentLoader,
     sources: &[PathBuf],
-) -> Option<Vec<Obligation>> {
+) -> Option<ProofReport> {
     if !doc.parse().errors.is_empty() {
         return None;
     }
@@ -231,7 +273,10 @@ pub(crate) fn compute(
             });
         }
     }
-    Some(obligations)
+    Some(ProofReport {
+        obligations,
+        blocks: blocks(doc.components(), &index),
+    })
 }
 
 /// The stored proofs of `component`, keyed by obligation name, from the
@@ -412,26 +457,86 @@ mod tests {
         }
     }
 
+    fn report_of(obligations: Vec<Obligation>) -> ProofReport {
+        ProofReport {
+            obligations,
+            blocks: Vec::new(),
+        }
+    }
+
     #[test]
     fn an_obligation_free_document_is_not_a_change_on_first_sight() {
         let mut overlay = ProofOverlay::default();
         let uri: Uri = "file:///c.eventb".parse().unwrap();
-        assert!(!overlay.apply(uri.clone(), Vec::new()));
+        assert!(!overlay.apply(uri.clone(), ProofReport::default()));
         assert!(
             overlay.get(&uri).is_some(),
             "the empty list is still stored"
         );
         assert!(overlay.apply(
             uri.clone(),
-            vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)]
+            report_of(vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)])
         ));
         assert!(!overlay.apply(
             uri.clone(),
-            vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)]
+            report_of(vec![obligation("inv1/WD", 1, ProofStatus::Unattempted)])
         ));
         assert!(
-            overlay.apply(uri, Vec::new()),
+            overlay.apply(uri, ProofReport::default()),
             "losing the obligations is a change"
+        );
+    }
+
+    #[test]
+    fn a_moved_block_is_a_change_even_when_no_obligation_moved() {
+        let mut overlay = ProofOverlay::default();
+        let uri: Uri = "file:///c.eventb".parse().unwrap();
+        let block = |end: u32| Block {
+            name: "INITIALISATION".to_string(),
+            header: Range::new(Position::new(6, 10), Position::new(6, 24)),
+            range: Range::new(Position::new(6, 4), Position::new(end, 7)),
+        };
+        let with_end = |end| ProofReport {
+            obligations: vec![obligation(
+                "INITIALISATION/inv1/INV",
+                4,
+                ProofStatus::Unattempted,
+            )],
+            blocks: vec![block(end)],
+        };
+        assert!(overlay.apply(uri.clone(), with_end(9)));
+        assert!(overlay.apply(uri, with_end(10)));
+    }
+
+    #[test]
+    fn blocks_cover_clauses_and_events() {
+        let text = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x \u{2208} \u{2115}\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x \u{2254} 0\n    END\nEND\n";
+        let components = crate::component_util::parse_all(text);
+        let index = PositionIndex::new(text);
+        let blocks = blocks(&components, &index);
+        let summary: Vec<(&str, u32, u32, u32)> = blocks
+            .iter()
+            .map(|b| {
+                (
+                    b.name.as_str(),
+                    b.header.start.line,
+                    b.range.start.line,
+                    b.range.end.line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [("INVARIANTS", 3, 3, 4), ("INITIALISATION", 6, 6, 9)],
+            "got {blocks:?}"
+        );
+        assert_eq!(
+            blocks[0].header,
+            Range::new(Position::new(3, 0), Position::new(3, 10))
+        );
+        assert_eq!(
+            blocks[1].header,
+            Range::new(Position::new(6, 10), Position::new(6, 24))
         );
     }
 

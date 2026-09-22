@@ -351,7 +351,7 @@ impl Analyzer {
         // saves their ranges follow the current parse, so an edit above an
         // invariant does not leave its marker behind.
         diags.extend(crate::proof::diagnostics(
-            &self.proof_obligations_for(uri, doc),
+            &self.proof_report_for(uri, doc).obligations,
         ));
         if !doc.parse().errors.is_empty() {
             return diags;
@@ -529,20 +529,20 @@ impl Analyzer {
         self.republish_all_diagnostics().await;
     }
 
-    /// A document's stored proof obligations re-anchored against its
-    /// current parse; empty when none were computed or the feature is off.
-    pub(crate) fn proof_obligations_for(
+    /// A document's stored proof report re-anchored against its current
+    /// parse; empty when none was computed or the feature is off.
+    pub(crate) fn proof_report_for(
         &self,
         uri: &Uri,
         doc: &ParsedDocument,
-    ) -> Vec<crate::proof::Obligation> {
+    ) -> crate::proof::ProofReport {
         if !self.config_manager.get().proof_obligations.enabled {
-            return Vec::new();
+            return crate::proof::ProofReport::default();
         }
         self.proof_obligations
             .read()
             .get(uri)
-            .map(|obligations| crate::proof::re_anchor(doc, obligations))
+            .map(|stored| crate::proof::report(doc, stored))
             .unwrap_or_default()
     }
 
@@ -567,10 +567,7 @@ impl Analyzer {
         })
         .await;
         match computed {
-            Ok(Some(obligations)) => self
-                .proof_obligations
-                .write()
-                .apply(uri.clone(), obligations),
+            Ok(Some(report)) => self.proof_obligations.write().apply(uri.clone(), report),
             _ => false,
         }
     }
@@ -580,13 +577,13 @@ impl Analyzer {
     /// diagnostics disagree with. Spawned rather than awaited: the caller is
     /// a notification handler the client may be waiting on.
     fn push_proof_status(&self, uri: &Uri, doc: &ParsedDocument) {
-        let obligations = self.proof_obligations_for(uri, doc);
+        let report = self.proof_report_for(uri, doc);
         let client = self.client.clone();
         let uri = uri.clone();
         tokio::spawn(async move {
             client
                 .send_notification::<crate::proof::ProofStatusNotification>(
-                    crate::proof::ProofStatusParams { uri, obligations },
+                    crate::proof::ProofStatusParams { uri, report },
                 )
                 .await;
         });
@@ -2895,7 +2892,7 @@ impl LanguageServer for RossiLanguageServer {
         lenses.extend(crate::proof::code_lenses(
             doc.components(),
             doc.text(),
-            &self.analyzer.proof_obligations_for(&uri, &doc),
+            &self.analyzer.proof_report_for(&uri, &doc).obligations,
         ));
         Ok(Some(lenses))
     }
@@ -3001,7 +2998,8 @@ impl RossiLanguageServer {
         ))
     }
 
-    /// `rossi/proofObligations`: the obligations of one open document.
+    /// `rossi/proofObligations`: the obligations of one open document and
+    /// the blocks (events, clauses) they sit in.
     ///
     /// Served from the list computed at the last open or save when there
     /// is one, re-anchored to the current text; computed on the spot
@@ -3012,13 +3010,13 @@ impl RossiLanguageServer {
     pub async fn proof_obligations(
         &self,
         params: crate::proof::ProofObligationsParams,
-    ) -> Result<Vec<crate::proof::Obligation>> {
+    ) -> Result<crate::proof::ProofReport> {
         let uri = params.text_document.uri;
         if !self.config_manager.get().proof_obligations.enabled {
-            return Ok(Vec::new());
+            return Ok(crate::proof::ProofReport::default());
         }
         let Some(doc) = self.document_manager.parse_result(&uri) else {
-            return Ok(Vec::new());
+            return Ok(crate::proof::ProofReport::default());
         };
         if !self.analyzer.has_proof_obligations(&uri)
             && let Some(sources) = self.proof_sources(&uri)
@@ -3027,7 +3025,7 @@ impl RossiLanguageServer {
                 .refresh_proof_obligations(uri.clone(), sources)
                 .await;
         }
-        Ok(self.analyzer.proof_obligations_for(&uri, &doc))
+        Ok(self.analyzer.proof_report_for(&uri, &doc))
     }
 
     /// `window/workDoneProgress/cancel`: the client asked to stop the flow

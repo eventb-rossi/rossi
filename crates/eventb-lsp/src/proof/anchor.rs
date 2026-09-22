@@ -20,7 +20,9 @@
 
 use rossi::Component;
 use rossi::ast::{LabeledAction, LabeledPredicate, Span};
+use rossi::keywords::{KeywordId, spell};
 
+use super::Block;
 use crate::lsp_types::Range;
 use crate::position::PositionIndex;
 use crate::symbols::{INITIALISATION_EVENT_NAME, event_declaration_span};
@@ -31,6 +33,62 @@ pub(crate) fn range_for(component: &Component, name: &str, index: &PositionIndex
     let span = span_for(component, name).or_else(|| component.name_span());
     span.map(|span| Range::new(index.position(span.start), index.position(span.end)))
         .unwrap_or_else(crate::analysis::default_range)
+}
+
+/// The blocks of `component`, in source order: the clauses that hold
+/// labeled elements (invariants, theorems, variant, axioms), then the
+/// initialisation and the events. EVENTS itself is not a block, so no two
+/// blocks overlap. A component without spans (an XML import, a recovered
+/// parse) contributes none.
+pub(crate) fn blocks_for(component: &Component, index: &PositionIndex) -> Vec<Block> {
+    let mut blocks: Vec<Block> = component
+        .clauses()
+        .iter()
+        .filter(|clause| {
+            matches!(
+                clause.keyword,
+                KeywordId::Invariants
+                    | KeywordId::Theorems
+                    | KeywordId::Variant
+                    | KeywordId::Axioms
+            )
+        })
+        .map(|clause| {
+            let keyword = spell(clause.keyword);
+            let header = Span {
+                start: clause.span.start,
+                end: clause.span.start + keyword.len(),
+            };
+            Block {
+                name: keyword.to_string(),
+                header: index.range(&header),
+                range: index.range(&clause.span),
+            }
+        })
+        .collect();
+    if let Component::Machine(machine) = component {
+        let events = machine
+            .initialisation
+            .iter()
+            .map(|init| (INITIALISATION_EVENT_NAME, init.span, init.name_span))
+            .chain(
+                machine
+                    .events
+                    .iter()
+                    .map(|event| (event.name.as_str(), event.span, event.name_span)),
+            );
+        for (name, span, name_span) in events {
+            let (Some(span), Some(name_span)) = (span, name_span) else {
+                continue;
+            };
+            blocks.push(Block {
+                name: name.to_string(),
+                header: index.range(&name_span),
+                range: index.range(&span),
+            });
+        }
+    }
+    blocks
 }
 
 fn span_for(component: &Component, name: &str) -> Option<Span> {

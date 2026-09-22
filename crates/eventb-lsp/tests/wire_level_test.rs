@@ -1823,9 +1823,9 @@ mod pull_diagnostics {
 mod proof_obligations {
     //! Wire-level tests for the proof obligation surface: opening a document
     //! pushes `$/rossi/proofStatus`, `rossi/proofObligations` lists the
-    //! generated obligations anchored on their source elements, open
-    //! obligations show as hints grouped per element, and the lens counts
-    //! them.
+    //! generated obligations anchored on their source elements together
+    //! with the blocks (clauses and events) they sit in, open obligations
+    //! show as hints grouped per element, and the lens counts them.
 
     use super::{next_message, notification};
     use eventb_lsp::server::RossiLanguageServer;
@@ -1901,13 +1901,36 @@ mod proof_obligations {
         (service, socket)
     }
 
-    fn names(obligations: &Value) -> Vec<&str> {
-        obligations
-            .as_array()
-            .expect("an array of obligations")
+    fn names(rows: &Value) -> Vec<&str> {
+        rows.as_array()
+            .expect("an array of named rows")
             .iter()
             .map(|o| o["name"].as_str().unwrap())
             .collect()
+    }
+
+    /// The blocks of `SOURCE`: the invariants clause, then the events, as
+    /// `(name, header line, first line, last line)`.
+    const BLOCKS: [(&str, u64, u64, u64); 3] = [
+        ("INVARIANTS", 3, 3, 5),
+        ("INITIALISATION", 7, 7, 11),
+        ("bump", 13, 13, 18),
+    ];
+
+    fn assert_blocks(blocks: &Value) {
+        let rows = blocks.as_array().expect("an array of blocks");
+        let summary: Vec<(&str, u64, u64, u64)> = rows
+            .iter()
+            .map(|b| {
+                (
+                    b["name"].as_str().unwrap(),
+                    b["header"]["start"]["line"].as_u64().unwrap(),
+                    b["range"]["start"]["line"].as_u64().unwrap(),
+                    b["range"]["end"]["line"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(summary, BLOCKS, "got {blocks}");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1930,6 +1953,7 @@ mod proof_obligations {
                 .all(|o| o["status"] == json!("unattempted")),
             "nothing is proved without a stored proof; got {params}"
         );
+        assert_blocks(&params["blocks"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1959,9 +1983,17 @@ mod proof_obligations {
             .expect("rossi/proofObligations must respond");
         let (_id, result) = response.into_parts();
         let value: Value = result.expect("rossi/proofObligations must succeed");
-        assert_eq!(names(&value), EXPECTED, "got {value}");
+        assert_eq!(names(&value["obligations"]), EXPECTED, "got {value}");
+        assert_blocks(&value["blocks"]);
+        // The header is the event name or the clause keyword, not the line.
+        assert_eq!(
+            value["blocks"][1]["header"],
+            json!({ "start": { "line": 7, "character": 10 }, "end": { "line": 7, "character": 24 } }),
+            "got {value}"
+        );
+        assert_eq!(value["blocks"][0]["header"]["end"]["character"], json!(10));
 
-        let rows = value.as_array().unwrap();
+        let rows = value["obligations"].as_array().unwrap();
         // `evt/inv1/INV` anchors on the machine's `@inv1` line (4), not on
         // the event: it is the invariant that must be preserved.
         assert_eq!(rows[0]["range"]["start"]["line"], json!(4), "got {value}");
