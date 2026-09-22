@@ -501,6 +501,11 @@
           "default": true,
           "description": "When an .eventb file is saved, run `rossi validate` over its project directory, surfacing the full static checks (type errors, undeclared identifiers, dead-variable lints) that the live language server does not compute. Disable to validate only on demand."
         },
+        "rossi.validate.runtime": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass `--runtime` to `rossi validate`, on save and from the Validate commands, adding the EB1xx runtime-translation suitability checks over the leaf machines and the contexts they see."
+        },
         "rossi.completion.enabled": {
           "type": "boolean",
           "default": true,

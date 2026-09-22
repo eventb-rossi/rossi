@@ -75,6 +75,13 @@ type InputKind =
 // input is reported.
 const VALIDATE_JSON_ARGS = ['validate', '--format', 'json', '--continue-on-error'];
 
+// `VALIDATE_JSON_ARGS` plus the checks `rossi.validate.runtime` opts into. Read
+// on every run, so a changed setting applies to the next validation.
+function validateArgs(): string[] {
+    const runtime = workspace.getConfiguration('rossi').get<boolean>('validate.runtime', false);
+    return runtime ? [...VALIDATE_JSON_ARGS, '--runtime'] : VALIDATE_JSON_ARGS;
+}
+
 // Quiet window after a save before the on-save validation fires, so a burst of
 // saves coalesces into one project re-check instead of one CLI run per file.
 const ON_SAVE_DEBOUNCE_MS = 300;
@@ -321,7 +328,7 @@ export class RossiCommandController {
         let result: RossiRunResult;
         try {
             result = await this.runRossi(
-                [...VALIDATE_JSON_ARGS, ...inputs],
+                [...validateArgs(), ...inputs],
                 {
                     title: 'Validating Event-B model',
                     cwd,
@@ -372,7 +379,7 @@ export class RossiCommandController {
 
         try {
             const toolPath = this.resolveToolPath();
-            const args = [...VALIDATE_JSON_ARGS, projectDir];
+            const args = [...validateArgs(), projectDir];
             this.output.appendLine(`> ${formatCommand(toolPath, args)}`);
             const result = await this.spawnCommand(toolPath, args, projectDir, true, source.token);
             if (source.token.isCancellationRequested) {

@@ -31,6 +31,9 @@
 
 ### Added
 
+- A `rossi.validate.runtime` setting (off by default) that passes `--runtime`
+  to `rossi validate`, on save and from the Validate commands, so the EB1xx
+  runtime-translation suitability checks show up in Problems.
 - Proof status is drawn in the gutter the way the Dafny and Lean extensions
   draw verification status: a rail beside every event and clause, one green
   check on a block whose obligations are all closed, and per-label icons with
