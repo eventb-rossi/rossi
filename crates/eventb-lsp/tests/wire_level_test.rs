@@ -2104,11 +2104,11 @@ mod proof_obligations {
     async fn element_diagnostics_underline_the_whole_element() {
         let hints = open_hints(json!({ "proofObligations": { "diagnostics": "elements" } })).await;
         assert_eq!(hints.len(), 2, "got {hints:?}");
-        // The element's own span, which the parser runs up to the next
-        // element's indentation.
+        // The element's own span, which stops at its last character rather
+        // than running into the next line's indentation.
         assert_eq!(
             hints[0]["range"],
-            json!({ "start": { "line": 4, "character": 4 }, "end": { "line": 5, "character": 4 } })
+            json!({ "start": { "line": 4, "character": 4 }, "end": { "line": 4, "character": 15 } })
         );
     }
 

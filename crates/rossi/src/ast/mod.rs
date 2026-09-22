@@ -327,9 +327,15 @@ pub struct Span {
 impl Span {
     /// Create a span from a pest::Span
     pub fn from_pest(span: pest::Span) -> Self {
+        // A rule runs on to whatever follows it, so the matched text carries
+        // the whitespace the parser then skipped: a one-line invariant's raw
+        // span reaches the next line's indentation. A span is the thing's own
+        // text, which is what anything drawing it (an editor underlining an
+        // element) and anything nesting it (a formula node inside its
+        // element) both rely on.
         Self {
             start: span.start(),
-            end: span.end(),
+            end: span.start() + span.as_str().trim_end().len(),
         }
     }
 

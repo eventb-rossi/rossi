@@ -76,11 +76,11 @@
           "span": {
             "file": "refinement_abstract.bum",
             "start": 72,
-            "end": 101,
+            "end": 100,
             "line": 5,
             "col": 5,
-            "end_line": 6,
-            "end_col": 1
+            "end_line": 5,
+            "end_col": 29
           },
           "text": "abstract_state∈ℕ",
           "predicate": {
@@ -88,11 +88,11 @@
             "op": "IN",
             "span": {
               "start": 78,
-              "end": 101,
+              "end": 100,
               "line": 5,
               "col": 11,
-              "end_line": 6,
-              "end_col": 1
+              "end_line": 5,
+              "end_col": 29
             },
             "children": [
               {
@@ -154,11 +154,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 150,
-                "end": 180,
+                "end": 175,
                 "line": 9,
                 "col": 9,
-                "end_line": 10,
-                "end_col": 5
+                "end_line": 9,
+                "end_col": 34
               },
               "text": "abstract_state ≔ 0",
               "assignment": {
@@ -166,11 +166,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 156,
-                  "end": 180,
+                  "end": 175,
                   "line": 9,
                   "col": 15,
-                  "end_line": 10,
-                  "end_col": 5
+                  "end_line": 9,
+                  "end_col": 34
                 },
                 "idents": [
                   {
@@ -274,11 +274,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 244,
-                "end": 273,
+                "end": 264,
                 "line": 16,
                 "col": 9,
-                "end_line": 17,
-                "end_col": 9
+                "end_line": 16,
+                "end_col": 25
               },
               "text": "delta∈ℕ1",
               "predicate": {
@@ -286,11 +286,11 @@
                 "op": "IN",
                 "span": {
                   "start": 250,
-                  "end": 273,
+                  "end": 264,
                   "line": 16,
                   "col": 15,
-                  "end_line": 17,
-                  "end_col": 9
+                  "end_line": 16,
+                  "end_col": 25
                 },
                 "children": [
                   {
@@ -330,11 +330,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 273,
-                "end": 314,
+                "end": 309,
                 "line": 17,
                 "col": 9,
-                "end_line": 18,
-                "end_col": 5
+                "end_line": 17,
+                "end_col": 43
               },
               "text": "abstract_state+delta≤100",
               "predicate": {
@@ -342,11 +342,11 @@
                 "op": "LE",
                 "span": {
                   "start": 279,
-                  "end": 314,
+                  "end": 309,
                   "line": 17,
                   "col": 15,
-                  "end_line": 18,
-                  "end_col": 5
+                  "end_line": 17,
+                  "end_col": 43
                 },
                 "children": [
                   {
@@ -418,11 +418,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 327,
-                "end": 378,
+                "end": 373,
                 "line": 19,
                 "col": 9,
-                "end_line": 20,
-                "end_col": 5
+                "end_line": 19,
+                "end_col": 55
               },
               "text": "abstract_state ≔ abstract_state+delta",
               "assignment": {
@@ -430,11 +430,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 333,
-                  "end": 378,
+                  "end": 373,
                   "line": 19,
                   "col": 15,
-                  "end_line": 20,
-                  "end_col": 5
+                  "end_line": 19,
+                  "end_col": 55
                 },
                 "idents": [
                   {
@@ -581,11 +581,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 420,
-                "end": 449,
+                "end": 444,
                 "line": 24,
                 "col": 9,
-                "end_line": 25,
-                "end_col": 5
+                "end_line": 24,
+                "end_col": 33
               },
               "text": "abstract_state>0",
               "predicate": {
@@ -593,11 +593,11 @@
                 "op": "GT",
                 "span": {
                   "start": 426,
-                  "end": 449,
+                  "end": 444,
                   "line": 24,
                   "col": 15,
-                  "end_line": 25,
-                  "end_col": 5
+                  "end_line": 24,
+                  "end_col": 33
                 },
                 "children": [
                   {
@@ -640,11 +640,11 @@
               "span": {
                 "file": "refinement_abstract.bum",
                 "start": 462,
-                "end": 551,
+                "end": 546,
                 "line": 26,
                 "col": 9,
-                "end_line": 27,
-                "end_col": 5
+                "end_line": 26,
+                "end_col": 87
               },
               "text": "abstract_state :∣ abstract_state'<abstract_state∧abstract_state'∈ℕ",
               "assignment": {
@@ -652,11 +652,11 @@
                 "op": "BECOMES_SUCH_THAT",
                 "span": {
                   "start": 468,
-                  "end": 551,
+                  "end": 546,
                   "line": 26,
                   "col": 15,
-                  "end_line": 27,
-                  "end_col": 5
+                  "end_line": 26,
+                  "end_col": 87
                 },
                 "idents": [
                   {
@@ -695,11 +695,11 @@
                   "op": "LAND",
                   "span": {
                     "start": 486,
-                    "end": 551,
+                    "end": 546,
                     "line": 26,
                     "col": 33,
-                    "end_line": 27,
-                    "end_col": 5
+                    "end_line": 26,
+                    "end_col": 87
                   },
                   "children": [
                     {
@@ -707,11 +707,11 @@
                       "op": "LT",
                       "span": {
                         "start": 486,
-                        "end": 519,
+                        "end": 518,
                         "line": 26,
                         "col": 33,
                         "end_line": 26,
-                        "end_col": 66
+                        "end_col": 65
                       },
                       "children": [
                         {
@@ -750,11 +750,11 @@
                       "op": "IN",
                       "span": {
                         "start": 523,
-                        "end": 551,
+                        "end": 546,
                         "line": 26,
                         "col": 68,
-                        "end_line": 27,
-                        "end_col": 5
+                        "end_line": 26,
+                        "end_col": 87
                       },
                       "children": [
                         {
@@ -795,11 +795,11 @@
                 "op": "LAND",
                 "span": {
                   "start": 486,
-                  "end": 551,
+                  "end": 546,
                   "line": 26,
                   "col": 33,
-                  "end_line": 27,
-                  "end_col": 5
+                  "end_line": 26,
+                  "end_col": 87
                 },
                 "children": [
                   {
@@ -807,11 +807,11 @@
                     "op": "LT",
                     "span": {
                       "start": 486,
-                      "end": 519,
+                      "end": 518,
                       "line": 26,
                       "col": 33,
                       "end_line": 26,
-                      "end_col": 66
+                      "end_col": 65
                     },
                     "children": [
                       {
@@ -841,11 +841,11 @@
                     "op": "IN",
                     "span": {
                       "start": 523,
-                      "end": 551,
+                      "end": 546,
                       "line": 26,
                       "col": 68,
-                      "end_line": 27,
-                      "end_col": 5
+                      "end_line": 26,
+                      "end_col": 87
                     },
                     "children": [
                       {
@@ -944,11 +944,11 @@
           "span": {
             "file": "refinement_abstract.bum",
             "start": 72,
-            "end": 101,
+            "end": 100,
             "line": 5,
             "col": 5,
-            "end_line": 6,
-            "end_col": 1
+            "end_line": 5,
+            "end_col": 29
           },
           "inherited_from": "refinement_abstract",
           "text": "abstract_state∈ℕ",
@@ -958,11 +958,11 @@
             "span": {
               "file": "refinement_abstract.bum",
               "start": 78,
-              "end": 101,
+              "end": 100,
               "line": 5,
               "col": 11,
-              "end_line": 6,
-              "end_col": 1
+              "end_line": 5,
+              "end_col": 29
             },
             "children": [
               {
@@ -1004,11 +1004,11 @@
           "span": {
             "file": "refinement_concrete.bum",
             "start": 114,
-            "end": 147,
+            "end": 142,
             "line": 7,
             "col": 5,
-            "end_line": 8,
-            "end_col": 5
+            "end_line": 7,
+            "end_col": 29
           },
           "text": "concrete_state∈ℕ",
           "predicate": {
@@ -1016,11 +1016,11 @@
             "op": "IN",
             "span": {
               "start": 120,
-              "end": 147,
+              "end": 142,
               "line": 7,
               "col": 11,
-              "end_line": 8,
-              "end_col": 5
+              "end_line": 7,
+              "end_col": 29
             },
             "children": [
               {
@@ -1060,11 +1060,11 @@
           "span": {
             "file": "refinement_concrete.bum",
             "start": 147,
-            "end": 176,
+            "end": 171,
             "line": 8,
             "col": 5,
-            "end_line": 9,
-            "end_col": 5
+            "end_line": 8,
+            "end_col": 25
           },
           "text": "step_size∈ℕ1",
           "predicate": {
@@ -1072,11 +1072,11 @@
             "op": "IN",
             "span": {
               "start": 153,
-              "end": 176,
+              "end": 171,
               "line": 8,
               "col": 11,
-              "end_line": 9,
-              "end_col": 5
+              "end_line": 8,
+              "end_col": 25
             },
             "children": [
               {
@@ -1116,11 +1116,11 @@
           "span": {
             "file": "refinement_concrete.bum",
             "start": 176,
-            "end": 218,
+            "end": 213,
             "line": 9,
             "col": 5,
-            "end_line": 10,
-            "end_col": 5
+            "end_line": 9,
+            "end_col": 42
           },
           "text": "abstract_state=concrete_state",
           "predicate": {
@@ -1128,11 +1128,11 @@
             "op": "EQUAL",
             "span": {
               "start": 182,
-              "end": 218,
+              "end": 213,
               "line": 9,
               "col": 11,
-              "end_line": 10,
-              "end_col": 5
+              "end_line": 9,
+              "end_col": 42
             },
             "children": [
               {
@@ -1173,11 +1173,11 @@
           "span": {
             "file": "refinement_concrete.bum",
             "start": 218,
-            "end": 241,
+            "end": 240,
             "line": 10,
             "col": 5,
-            "end_line": 11,
-            "end_col": 1
+            "end_line": 10,
+            "end_col": 25
           },
           "text": "step_size≤10",
           "predicate": {
@@ -1185,11 +1185,11 @@
             "op": "LE",
             "span": {
               "start": 224,
-              "end": 241,
+              "end": 240,
               "line": 10,
               "col": 11,
-              "end_line": 11,
-              "end_col": 1
+              "end_line": 10,
+              "end_col": 25
             },
             "children": [
               {
@@ -1254,11 +1254,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 290,
-                "end": 324,
+                "end": 315,
                 "line": 14,
                 "col": 9,
-                "end_line": 15,
-                "end_col": 9
+                "end_line": 14,
+                "end_col": 34
               },
               "text": "concrete_state ≔ 0",
               "assignment": {
@@ -1266,11 +1266,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 296,
-                  "end": 324,
+                  "end": 315,
                   "line": 14,
                   "col": 15,
-                  "end_line": 15,
-                  "end_col": 9
+                  "end_line": 14,
+                  "end_col": 34
                 },
                 "idents": [
                   {
@@ -1338,11 +1338,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 324,
-                "end": 349,
+                "end": 344,
                 "line": 15,
                 "col": 9,
-                "end_line": 16,
-                "end_col": 5
+                "end_line": 15,
+                "end_col": 29
               },
               "text": "step_size ≔ 1",
               "assignment": {
@@ -1350,11 +1350,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 330,
-                  "end": 349,
+                  "end": 344,
                   "line": 15,
                   "col": 15,
-                  "end_line": 16,
-                  "end_col": 5
+                  "end_line": 15,
+                  "end_col": 29
                 },
                 "idents": [
                   {
@@ -1460,11 +1460,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 434,
-                "end": 463,
+                "end": 454,
                 "line": 23,
                 "col": 9,
-                "end_line": 24,
-                "end_col": 9
+                "end_line": 23,
+                "end_col": 25
               },
               "text": "steps∈ℕ1",
               "predicate": {
@@ -1472,11 +1472,11 @@
                 "op": "IN",
                 "span": {
                   "start": 440,
-                  "end": 463,
+                  "end": 454,
                   "line": 23,
                   "col": 15,
-                  "end_line": 24,
-                  "end_col": 9
+                  "end_line": 23,
+                  "end_col": 25
                 },
                 "children": [
                   {
@@ -1516,11 +1516,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 463,
-                "end": 518,
+                "end": 513,
                 "line": 24,
                 "col": 9,
-                "end_line": 25,
-                "end_col": 5
+                "end_line": 24,
+                "end_col": 55
               },
               "text": "concrete_state+steps∗step_size≤100",
               "predicate": {
@@ -1528,11 +1528,11 @@
                 "op": "LE",
                 "span": {
                   "start": 469,
-                  "end": 518,
+                  "end": 513,
                   "line": 24,
                   "col": 15,
-                  "end_line": 25,
-                  "end_col": 5
+                  "end_line": 24,
+                  "end_col": 55
                 },
                 "children": [
                   {
@@ -1632,11 +1632,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 531,
-                "end": 570,
+                "end": 565,
                 "line": 26,
                 "col": 9,
-                "end_line": 27,
-                "end_col": 5
+                "end_line": 26,
+                "end_col": 41
               },
               "text": "delta=steps∗step_size",
               "predicate": {
@@ -1644,11 +1644,11 @@
                 "op": "EQUAL",
                 "span": {
                   "start": 538,
-                  "end": 570,
+                  "end": 565,
                   "line": 26,
                   "col": 16,
-                  "end_line": 27,
-                  "end_col": 5
+                  "end_line": 26,
+                  "end_col": 41
                 },
                 "children": [
                   {
@@ -1719,11 +1719,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 583,
-                "end": 648,
+                "end": 643,
                 "line": 28,
                 "col": 9,
-                "end_line": 29,
-                "end_col": 5
+                "end_line": 28,
+                "end_col": 67
               },
               "text": "concrete_state ≔ concrete_state+steps∗step_size",
               "assignment": {
@@ -1731,11 +1731,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 589,
-                  "end": 648,
+                  "end": 643,
                   "line": 28,
                   "col": 15,
-                  "end_line": 29,
-                  "end_col": 5
+                  "end_line": 28,
+                  "end_col": 67
                 },
                 "idents": [
                   {
@@ -1942,11 +1942,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 710,
-                "end": 749,
+                "end": 744,
                 "line": 34,
                 "col": 9,
-                "end_line": 35,
-                "end_col": 5
+                "end_line": 34,
+                "end_col": 41
               },
               "text": "concrete_state≥step_size",
               "predicate": {
@@ -1954,11 +1954,11 @@
                 "op": "GE",
                 "span": {
                   "start": 716,
-                  "end": 749,
+                  "end": 744,
                   "line": 34,
                   "col": 15,
-                  "end_line": 35,
-                  "end_col": 5
+                  "end_line": 34,
+                  "end_col": 41
                 },
                 "children": [
                   {
@@ -2000,11 +2000,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 762,
-                "end": 830,
+                "end": 825,
                 "line": 36,
                 "col": 9,
-                "end_line": 37,
-                "end_col": 5
+                "end_line": 36,
+                "end_col": 70
               },
               "text": "abstract_state'=concrete_state − step_size",
               "predicate": {
@@ -2012,11 +2012,11 @@
                 "op": "EQUAL",
                 "span": {
                   "start": 779,
-                  "end": 830,
+                  "end": 825,
                   "line": 36,
                   "col": 26,
-                  "end_line": 37,
-                  "end_col": 5
+                  "end_line": 36,
+                  "end_col": 70
                 },
                 "children": [
                   {
@@ -2087,11 +2087,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 843,
-                "end": 900,
+                "end": 895,
                 "line": 38,
                 "col": 9,
-                "end_line": 39,
-                "end_col": 5
+                "end_line": 38,
+                "end_col": 59
               },
               "text": "concrete_state ≔ concrete_state − step_size",
               "assignment": {
@@ -2099,11 +2099,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 849,
-                  "end": 900,
+                  "end": 895,
                   "line": 38,
                   "col": 15,
-                  "end_line": 39,
-                  "end_col": 5
+                  "end_line": 38,
+                  "end_col": 59
                 },
                 "idents": [
                   {
@@ -2265,11 +2265,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 975,
-                "end": 1007,
+                "end": 998,
                 "line": 45,
                 "col": 9,
-                "end_line": 46,
-                "end_col": 9
+                "end_line": 45,
+                "end_col": 28
               },
               "text": "new_size∈ℕ1",
               "predicate": {
@@ -2277,11 +2277,11 @@
                 "op": "IN",
                 "span": {
                   "start": 981,
-                  "end": 1007,
+                  "end": 998,
                   "line": 45,
                   "col": 15,
-                  "end_line": 46,
-                  "end_col": 9
+                  "end_line": 45,
+                  "end_col": 28
                 },
                 "children": [
                   {
@@ -2321,11 +2321,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 1007,
-                "end": 1033,
+                "end": 1028,
                 "line": 46,
                 "col": 9,
-                "end_line": 47,
-                "end_col": 5
+                "end_line": 46,
+                "end_col": 28
               },
               "text": "new_size≤10",
               "predicate": {
@@ -2333,11 +2333,11 @@
                 "op": "LE",
                 "span": {
                   "start": 1013,
-                  "end": 1033,
+                  "end": 1028,
                   "line": 46,
                   "col": 15,
-                  "end_line": 47,
-                  "end_col": 5
+                  "end_line": 46,
+                  "end_col": 28
                 },
                 "children": [
                   {
@@ -2380,11 +2380,11 @@
               "span": {
                 "file": "refinement_concrete.bum",
                 "start": 1046,
-                "end": 1078,
+                "end": 1073,
                 "line": 48,
                 "col": 9,
-                "end_line": 49,
-                "end_col": 5
+                "end_line": 48,
+                "end_col": 36
               },
               "text": "step_size ≔ new_size",
               "assignment": {
@@ -2392,11 +2392,11 @@
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 1052,
-                  "end": 1078,
+                  "end": 1073,
                   "line": 48,
                   "col": 15,
-                  "end_line": 49,
-                  "end_col": 5
+                  "end_line": 48,
+                  "end_col": 36
                 },
                 "idents": [
                   {

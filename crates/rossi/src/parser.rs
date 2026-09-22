@@ -120,11 +120,14 @@ impl Fx {
         }
     }
 
-    /// A pest span lifted into the enclosing document's coordinates.
+    /// A pest span lifted into the enclosing document's coordinates,
+    /// trimmed by the one rule that decides where a span ends so a formula
+    /// node stays inside the element that holds it.
     fn at(&self, span: pest::Span<'_>) -> Option<Span> {
+        let span = Span::from_pest(span);
         Some(Span {
-            start: span.start() + self.base,
-            end: span.end() + self.base,
+            start: span.start + self.base,
+            end: span.end + self.base,
         })
     }
 
@@ -6110,6 +6113,33 @@ mod tests {
         ] {
             assert_eq!(friendly_rule_name(rule), Some(spell(id)), "{rule:?}");
         }
+    }
+
+    /// A labeled element's span is its own text, stopping at its last
+    /// character. The parser's rule runs on to whatever follows, so the raw
+    /// pest span swallows the newline and the next element's indentation,
+    /// and anything that draws the span (an editor underlining the element)
+    /// would mark two lines for a one-line invariant. Clause regions and
+    /// variants already trim; guards, actions, invariants and axioms are the
+    /// same kind of thing.
+    #[test]
+    fn a_labeled_element_span_stops_at_its_last_character() {
+        let source = "MACHINE m\nINVARIANTS\n    @inv1 x \u{2208} \u{2115}\n    @inv2 y \u{2208} \u{2115}\nEVENTS\n    EVENT evt\n    WHERE\n        @grd1 x \u{2208} \u{2115}\n    THEN\n        @act1 x \u{2254} 0\n    END\nEND";
+        let Component::Machine(machine) = parse(source).expect("parses") else {
+            panic!("expected a machine");
+        };
+        let text = |span: Option<Span>| &source[span.expect("a span").start..span.unwrap().end];
+        assert_eq!(
+            text(machine.invariants[0].span),
+            "@inv1 x \u{2208} \u{2115}"
+        );
+        assert_eq!(
+            text(machine.invariants[1].span),
+            "@inv2 y \u{2208} \u{2115}"
+        );
+        let event = &machine.events[0];
+        assert_eq!(text(event.guards[0].span), "@grd1 x \u{2208} \u{2115}");
+        assert_eq!(text(event.actions[0].span), "@act1 x \u{2254} 0");
     }
 
     /// The INITIALISATION event has no identifier of its own — its name is the
