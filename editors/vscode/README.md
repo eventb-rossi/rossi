@@ -42,6 +42,7 @@ setup, verification, and troubleshooting.
 - Instant feedback on syntax errors as you type
 - Error recovery continues parsing after errors
 - Clear error messages with precise locations
+- `Model-check` and `Disprove POs` results stay on the machine until the lens runs again or a file of the machine's model is saved
 
 ### 🗂️ Document Symbols & Navigation
 - Hierarchical outline view in sidebar

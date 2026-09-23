@@ -6,7 +6,9 @@
 //! them against the current parse — an anchor that no longer resolves falls
 //! back to the machine header rather than disappearing. A new run of the
 //! same `(machine, mode)` replaces its slot wholesale; a clean verdict
-//! replaces it with nothing, which retracts the stale diagnostics.
+//! replaces it with nothing, which retracts the stale diagnostics. Saving a
+//! file of the machine's model drops both of its slots, since they describe
+//! the model as it was before.
 
 use std::collections::HashMap;
 
@@ -87,6 +89,14 @@ impl FindingsOverlay {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.findings.is_empty()
+    }
+
+    /// Keep only the slots of machines `keep` accepts, in both modes.
+    /// Returns whether any slot was removed.
+    pub(crate) fn retain_machines(&mut self, keep: impl Fn(&str) -> bool) -> bool {
+        let before = self.findings.len();
+        self.findings.retain(|(machine, _), _| keep(machine));
+        self.findings.len() != before
     }
 }
 
@@ -956,6 +966,29 @@ mod tests {
         assert!(overlay.apply("m".to_string(), AnimateMode::Check, Vec::new()));
         assert!(!overlay.apply("m".to_string(), AnimateMode::Check, Vec::new()));
         assert!(!overlay.is_empty(), "the po slot is still stored");
+    }
+
+    #[test]
+    fn retain_drops_every_mode_of_a_rejected_machine() {
+        let mut overlay = FindingsOverlay::default();
+        let finding = |machine: &str| Finding {
+            uri: ("file:///m.eventb").parse::<Uri>().unwrap(),
+            component: machine.to_string(),
+            anchor: Anchor::MachineHeader,
+            code: "animate-error",
+            message: "eventb-animate failed".to_string(),
+        };
+        overlay.apply("m".to_string(), AnimateMode::Check, vec![finding("m")]);
+        overlay.apply("m".to_string(), AnimateMode::Po, vec![finding("m")]);
+        overlay.apply("n".to_string(), AnimateMode::Check, vec![finding("n")]);
+        assert!(
+            !overlay.retain_machines(|_| true),
+            "keeping every machine changes nothing"
+        );
+        assert!(overlay.retain_machines(|machine| machine != "m"));
+        assert!(!overlay.is_empty(), "n's slot is kept");
+        assert!(overlay.retain_machines(|machine| machine != "n"));
+        assert!(overlay.is_empty(), "both of m's slots went with it");
     }
 
     #[test]

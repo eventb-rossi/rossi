@@ -1047,6 +1047,161 @@ mod animate_lens {
             error.message
         );
     }
+
+    /// The next diagnostics published for `uri`.
+    async fn next_diagnostics_for(
+        messages: &mut (impl StreamExt<Item = Request> + Unpin),
+        uri: &Value,
+    ) -> Vec<Value> {
+        loop {
+            let params = super::next_message(
+                messages,
+                "textDocument/publishDiagnostics",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("diagnostics must be published");
+            if params["uri"] == *uri {
+                return params["diagnostics"].as_array().unwrap().clone();
+            }
+        }
+    }
+
+    fn from_animate(diagnostics: &[Value]) -> bool {
+        diagnostics
+            .iter()
+            .any(|d| d["source"] == json!("eventb-animate"))
+    }
+
+    async fn send(
+        service: &mut LspService<RossiLanguageServer>,
+        method: &'static str,
+        params: Value,
+    ) {
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(method, params))
+            .await
+            .unwrap();
+    }
+
+    /// A model-check error describes the model it ran on: saving a file of
+    /// that model drops it, saving any other file keeps it.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn saving_a_file_of_the_model_drops_its_model_check_error() {
+        use super::TempWorkspace;
+        use eventb_lsp::lsp_types::Uri;
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = TempWorkspace::new("animate-save");
+        let root = workspace.as_ref();
+        // What eventb-animate reports when ProB finds no values for the
+        // constants.
+        let tool = root.join("eventb-animate");
+        std::fs::write(
+            &tool,
+            concat!(
+                "#!/bin/sh\n",
+                "echo '{\"formatVersion\": 4, \"tool\": \"eventb-animate\", ",
+                "\"command\": \"check\", \"status\": \"error\", ",
+                "\"message\": \"No feasible constant setup exists.\"}'\n",
+                "exit 70\n",
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let files = [
+            (
+                "C.eventb",
+                "CONTEXT C\nCONSTANTS\n    c\nAXIOMS\n    @axm1 c \u{2208} \u{2115}\nEND\n",
+            ),
+            ("M.eventb", "MACHINE M\nSEES C\nEND\n"),
+            ("U.eventb", "CONTEXT U\nEND\n"),
+        ];
+        for (name, text) in files {
+            std::fs::write(root.join(name), text).unwrap();
+        }
+        let uri = |name: &str| json!(Uri::from_file_path(root.join(name)).unwrap());
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        let (sender, mut messages) = futures::channel::mpsc::unbounded();
+        tokio::spawn(async move {
+            while let Some(request) = socket.next().await {
+                let _ = sender.unbounded_send(request);
+            }
+        });
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": Uri::from_file_path(root).unwrap(), "name": "test" }],
+                "initializationOptions": { "animate": { "path": tool } }
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        send(&mut service, "initialized", json!({})).await;
+        for (name, text) in files {
+            send(
+                &mut service,
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri(name),
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": text,
+                    }
+                }),
+            )
+            .await;
+        }
+
+        let execute = Request::build("workspace/executeCommand")
+            .id(2)
+            .params(json!({
+                "command": "rossi.animate.check",
+                "arguments": [uri("M.eventb"), "M"]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(execute).await.unwrap();
+        while !from_animate(&next_diagnostics_for(&mut messages, &uri("M.eventb")).await) {}
+
+        // Saving a file the machine does not depend on keeps the error.
+        send(
+            &mut service,
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri("U.eventb") } }),
+        )
+        .await;
+        send(
+            &mut service,
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri("M.eventb"), "version": 2 },
+                "contentChanges": [{ "text": files[1].1 }]
+            }),
+        )
+        .await;
+        assert!(
+            from_animate(&next_diagnostics_for(&mut messages, &uri("M.eventb")).await),
+            "saving an unrelated file must keep the model-check error"
+        );
+
+        // Saving the seen context, where the constants are fixed, drops it.
+        send(
+            &mut service,
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri("C.eventb") } }),
+        )
+        .await;
+        assert!(
+            !from_animate(&next_diagnostics_for(&mut messages, &uri("M.eventb")).await),
+            "saving a file of the model must drop the model-check error"
+        );
+    }
 }
 
 mod progress_cancel {

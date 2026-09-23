@@ -558,6 +558,29 @@ impl Analyzer {
         self.republish_all_diagnostics().await;
     }
 
+    /// Drop the animate findings of every machine whose model includes one
+    /// of the `saved` components: the machine itself, a machine it refines
+    /// or a context it sees. They describe the model as it was before the
+    /// save, and only a new run can say whether they still hold.
+    pub(crate) async fn drop_animate_findings_of(&self, saved: &[String]) {
+        let xrefs = &self.cross_reference_manager;
+        let in_model = |machine: &str| {
+            saved.iter().any(|name| name == machine)
+                || xrefs
+                    .refinement_chain(machine)
+                    .iter()
+                    .chain(&xrefs.ordered_visible_contexts(machine))
+                    .any(|component| saved.contains(component))
+        };
+        if self
+            .animate_findings
+            .write()
+            .retain_machines(|machine| !in_model(machine))
+        {
+            self.republish_all_diagnostics().await;
+        }
+    }
+
     /// A document's stored proof report re-anchored against its current
     /// parse; empty when none was computed or the feature is off.
     pub(crate) fn proof_report_for(
@@ -2147,6 +2170,14 @@ impl LanguageServer for RossiLanguageServer {
         if self.document_manager.version(&uri).is_some() {
             let sources = self.analyzer.proof_sources(&uri);
             self.analyzer.analyze(uri.clone(), sources).await;
+            if let Some(doc) = self.document_manager.parse_result(&uri) {
+                let saved: Vec<String> = doc
+                    .components()
+                    .iter()
+                    .map(|component| component.name().to_string())
+                    .collect();
+                self.analyzer.drop_animate_findings_of(&saved).await;
+            }
             // Both saved layers, not just the symbol one: a client without
             // dynamic registration sends no watched-file event, and this is
             // then the only moment either index learns the file changed.

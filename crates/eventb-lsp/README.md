@@ -292,7 +292,10 @@ Inlay hints show the inferred type of every declaration and mark predicates
 that carry a well-definedness condition; both are computed by `rossi-build`
 over the file's dependency closure. Selection ranges expand the selection along
 enclosing AST nodes. Code lenses drive the Rodin and eventb-animate
-integrations through `workspace/executeCommand`.
+integrations through `workspace/executeCommand`. A `Model-check` or
+`Disprove POs` run leaves its findings on the machine until the lens runs
+again or a file of the machine's model is saved: the machine, a machine it
+refines, or a context it sees.
 
 ### Code Actions
 
