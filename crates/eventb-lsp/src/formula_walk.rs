@@ -328,10 +328,13 @@ pub(crate) fn resolve_bound_from_hits(
     component: &Component,
     offset: usize,
 ) -> Option<BoundResolution> {
-    // Copy the cursor occurrence out (role / span / scope are all `Copy`).
+    // Copy the cursor occurrence out (role / span / scope are all `Copy`). A
+    // caret just past the occurrence, where a double click or the end of
+    // typing leaves it, names it too.
     let (role, cursor_span, scope) = hits
         .iter()
         .find(|h| h.span.contains(offset))
+        .or_else(|| hits.iter().find(|h| h.span.end == offset))
         .map(|h| (h.role, h.span, h.scope))?;
 
     // The binder this cursor is scoped to.
@@ -655,6 +658,19 @@ mod tests {
         let component = parse(SHADOWED).expect("parses");
         // Cursor on the bound use `x` after the `·`.
         let offset = SHADOWED.find("· x").unwrap() + "· ".len();
+        let res = resolve_bound_at_offset(&component, "x", offset).expect("bound");
+
+        assert_eq!(res.spans.len(), 2, "binder declaration + the one bound use");
+        let i2 = SHADOWED.find("@i2").unwrap();
+        assert!(res.spans.iter().all(|s| s.start >= i2));
+    }
+
+    #[test]
+    fn cursor_right_after_a_bound_use_resolves_to_its_binder() {
+        let component = parse(SHADOWED).expect("parses");
+        // The caret a double click or the end of typing leaves: just past the
+        // bound use, before the space.
+        let offset = SHADOWED.find("· x").unwrap() + "· x".len();
         let res = resolve_bound_at_offset(&component, "x", offset).expect("bound");
 
         assert_eq!(res.spans.len(), 2, "binder declaration + the one bound use");

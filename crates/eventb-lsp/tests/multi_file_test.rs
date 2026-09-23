@@ -7,6 +7,7 @@ use eventb_lsp::cross_references::CrossReferenceManager;
 use eventb_lsp::document::DocumentManager;
 use eventb_lsp::lsp_types::*;
 use eventb_lsp::references::ReferenceProvider;
+use eventb_lsp::rename::RenameProvider;
 use std::sync::Arc;
 
 /// Helper to create a URI from a simple filename
@@ -31,7 +32,6 @@ fn make_reference_params(uri: Uri, line: u32, character: u32) -> ReferenceParams
 }
 
 /// Helper to create RenameParams
-#[allow(dead_code)]
 fn make_rename_params(uri: Uri, line: u32, character: u32, new_name: &str) -> RenameParams {
     RenameParams {
         text_document_position: TextDocumentPositionParams {
@@ -43,7 +43,8 @@ fn make_rename_params(uri: Uri, line: u32, character: u32, new_name: &str) -> Re
     }
 }
 
-fn make_reference_provider(documents: &[(Uri, &str)]) -> ReferenceProvider {
+/// The workspace indexes over `documents`, each open in the editor.
+fn open_workspace(documents: &[(Uri, &str)]) -> (Arc<CrossReferenceManager>, Arc<DocumentManager>) {
     let cross_ref_manager = Arc::new(CrossReferenceManager::new());
     let document_manager = Arc::new(DocumentManager::new());
 
@@ -51,11 +52,45 @@ fn make_reference_provider(documents: &[(Uri, &str)]) -> ReferenceProvider {
         cross_ref_manager.update_component(uri.as_str().to_owned(), source);
         document_manager.open(uri.clone(), 1, (*source).to_string());
     }
+    (cross_ref_manager, document_manager)
+}
 
+fn make_reference_provider(documents: &[(Uri, &str)]) -> ReferenceProvider {
+    let (cross_ref_manager, document_manager) = open_workspace(documents);
     let mut reference_provider = ReferenceProvider::new();
     reference_provider.set_cross_reference_manager(cross_ref_manager);
     reference_provider.set_document_manager(document_manager);
     reference_provider
+}
+
+fn make_rename_provider(documents: &[(Uri, &str)]) -> RenameProvider {
+    let (cross_ref_manager, document_manager) = open_workspace(documents);
+    let mut rename_provider = RenameProvider::new();
+    rename_provider.set_cross_reference_manager(cross_ref_manager);
+    rename_provider.set_document_manager(document_manager);
+    rename_provider
+}
+
+/// The edits of a rename, per file, as `(line, start, end)` ranges on one line.
+fn edited_ranges(edit: WorkspaceEdit) -> Vec<(String, u32, u32, u32)> {
+    let mut ranges: Vec<(String, u32, u32, u32)> = edit
+        .changes
+        .expect("a rename edits by URI")
+        .into_iter()
+        .flat_map(|(uri, edits)| {
+            edits.into_iter().map(move |edit| {
+                assert_eq!(edit.range.start.line, edit.range.end.line);
+                (
+                    uri.as_str().to_owned(),
+                    edit.range.start.line,
+                    edit.range.start.character,
+                    edit.range.end.character,
+                )
+            })
+        })
+        .collect();
+    ranges.sort();
+    ranges
 }
 
 #[test]
@@ -178,6 +213,53 @@ END
         refs.iter().all(|location| location.range.start.line < 10),
         "references for first.x must not include second.x"
     );
+}
+
+#[test]
+fn test_event_parameter_rename_is_event_scoped() {
+    let mch_uri = make_uri("M1.eventb");
+
+    let mch_source = "\
+MACHINE M1
+EVENTS
+    EVENT first
+    ANY
+        x
+    WHERE
+        @grd1 x ∈ ℕ
+    THEN
+        skip
+    END
+
+    EVENT second
+    ANY
+        x
+    WHERE
+        @grd1 x ∈ ℕ
+    THEN
+        skip
+    END
+END
+";
+
+    let rename_provider = make_rename_provider(&[(mch_uri.clone(), mch_source)]);
+    let first_x = vec![
+        (mch_uri.as_str().to_owned(), 4, 8, 9),
+        (mch_uri.as_str().to_owned(), 6, 14, 15),
+    ];
+
+    // From the ANY declaration, and from right after the guard's use.
+    for (line, character) in [(4, 8), (6, 15)] {
+        let params = make_rename_params(mch_uri.clone(), line, character, "y");
+        let edit = rename_provider
+            .rename(&params, mch_source)
+            .expect("the parameter renames");
+        assert_eq!(
+            edited_ranges(edit),
+            first_x,
+            "renaming first.x from {line}:{character} must leave second.x alone"
+        );
+    }
 }
 
 #[test]

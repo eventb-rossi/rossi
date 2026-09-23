@@ -17,11 +17,14 @@ use crate::component_util::{
     component_at_offset, declared_name_at_offset, parse_all, resolve_component_at_position,
 };
 use crate::cross_references::CrossReferenceManager;
-use crate::document::DocumentManager;
+use crate::document::{DocumentManager, ParsedDocument};
 use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
+use crate::references::{SymbolOccurrences, symbol_occurrences};
+use crate::resolved_environment::ResolvedEnvironments;
+use crate::symbols::{Resolution, SymbolKind, resolve_cursor};
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -157,6 +160,15 @@ impl RenameProvider {
             // Rename across all workspace files
             debug!("Renaming component '{}' across workspace", identifier);
             self.rename_across_workspace(&identifier, new_name, &mut changes);
+        } else if let Some(symbol_changes) = self.rename_symbol(
+            text,
+            &masked,
+            position,
+            &identifier,
+            cursor.as_deref(),
+            new_name,
+        ) {
+            changes = symbol_changes;
         } else {
             // Rename only in the current document. A hyphenated symbol (an
             // event name) gets the component boundary; a math symbol the math one.
@@ -223,6 +235,70 @@ impl RenameProvider {
             edits.dedup_by(|a, b| a.range == b.range);
         }
     }
+
+    /// The edits renaming the symbol the shared resolver places at the
+    /// cursor, in every file that refers to it, or `None` when it resolves
+    /// to a kind this path does not rename (the caller keeps its
+    /// document-local rename for those).
+    fn rename_symbol(
+        &self,
+        text: &str,
+        masked: &str,
+        position: Position,
+        identifier: &str,
+        cursor: Option<&ParsedDocument>,
+        new_name: &str,
+    ) -> Option<HashMap<Uri, Vec<TextEdit>>> {
+        let manager = self.cross_ref_manager.as_ref()?;
+        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+        let Resolution::Symbol(symbol) =
+            resolve_cursor(text, masked, position, identifier, &loader, cursor)?
+        else {
+            return None;
+        };
+        if symbol.kind != SymbolKind::Parameter {
+            return None;
+        }
+        let mut environments = ResolvedEnvironments::new();
+        Some(occurrence_edits(
+            symbol_occurrences(&symbol, &loader, &mut environments),
+            &symbol.name,
+            new_name,
+        ))
+    }
+}
+
+/// The edits rewriting every span of `occurrences` to `new_name`, grouped by
+/// file, each `x'` renamed at its base. Empty when a span does not slice to
+/// `name` in its text: a rename that would rewrite unrelated text is refused
+/// whole.
+fn occurrence_edits(
+    occurrences: Vec<SymbolOccurrences>,
+    name: &str,
+    new_name: &str,
+) -> HashMap<Uri, Vec<TextEdit>> {
+    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+    for SymbolOccurrences { loaded, spans } in occurrences {
+        let text = loaded.text();
+        if !spans
+            .iter()
+            .all(|span| formula_walk::span_matches(text, *span, name))
+        {
+            return HashMap::new();
+        }
+        changes
+            .entry(loaded.uri().clone())
+            .or_default()
+            .extend(spans.into_iter().map(|span| TextEdit {
+                range: span_to_range(&base_span(text, span), text),
+                new_text: new_name.to_string(),
+            }));
+    }
+    for edits in changes.values_mut() {
+        sort_edits_reverse(edits);
+        edits.dedup_by(|a, b| a.range == b.range);
+    }
+    changes
 }
 
 /// Get the identifier and its range at the given position
@@ -1204,6 +1280,16 @@ END
         let byte = source.find("∀ x").unwrap() + "∀ ".len();
         let out = rename_at(source, byte, "y");
         // Only the binder and its bound body use are renamed.
+        assert!(out.contains("∀ y · y ∈ ℕ"), "{out}");
+        assert!(out.contains("@i1 x ∈ ℕ"), "global x untouched: {out}");
+    }
+
+    #[test]
+    fn rename_bound_use_at_its_trailing_edge_keeps_the_global() {
+        let source = "MACHINE m\nVARIABLES\nx\nINVARIANTS\n@i1 x ∈ ℕ\n@i2 ∀ x · x ∈ ℕ\nEND\n";
+        // The caret right after the bound use still names the binder.
+        let byte = source.find("· x").unwrap() + "· x".len();
+        let out = rename_at(source, byte, "y");
         assert!(out.contains("∀ y · y ∈ ℕ"), "{out}");
         assert!(out.contains("@i1 x ∈ ℕ"), "global x untouched: {out}");
     }
