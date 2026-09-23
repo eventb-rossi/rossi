@@ -184,11 +184,11 @@ visiting every file. Pull is offered only to a client that declares
 `workspace.diagnostics.refreshSupport` (VS Code and Zed do, Neovim 0.11 and
 lsp-mode do not), since a client that stores both kinds in one place, as
 lsp-mode does, would let an empty pull erase what was pushed.
-A report's `resultId` is a hash of the findings it carries, so echoing it back
-as `previousResultId` answers `unchanged` for exactly as long as the report
-says the same thing — including when a proof-status, animate or workspace-graph
-change moved the findings without touching the buffer. A file read from disk
-gets one the same way.
+A sweep report's `resultId` is a hash of the findings it carries, so echoing
+it back as `previousResultId` answers `unchanged` for exactly as long as the
+report says the same thing, including when a proof-status, animate or
+workspace-graph change moved the findings without touching the file. A closed
+file is rechecked only when one of those inputs, or the file itself, changed.
 
 ### Document Symbols
 
