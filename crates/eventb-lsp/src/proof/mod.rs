@@ -118,6 +118,10 @@ pub struct ProofReport {
 #[serde(rename_all = "camelCase")]
 pub struct ProofObligationsParams {
     pub text_document: TextDocumentIdentifier,
+    /// Compute the list again, reading the stored proofs from disk, even
+    /// when one is already stored.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// `$/rossi/proofStatus` parameters: the full report for one document,

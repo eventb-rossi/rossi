@@ -443,7 +443,7 @@ or clause keyword and `range` the whole region. Blocks never overlap, and an
 obligation belongs to the block whose range holds its start line. The list is
 computed on open, on save, and when a proof file in the shared Rodin workspace
 changes on disk; a request before the first computation finishes computes it
-on the spot. Unlike `rossi/operatorTable`, the `params` object is
+on the spot, and so does one with `refresh: true`. Unlike `rossi/operatorTable`, the `params` object is
 required.
 
 `rossi/proofState` takes `{ textDocument: { uri }, name }` and returns the

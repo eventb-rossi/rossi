@@ -2383,6 +2383,96 @@ mod proof_obligations {
             "the lens must count the proof; got {lenses}"
         );
     }
+
+    /// The status of the first obligation a `rossi/proofObligations`
+    /// request with `params` reports.
+    async fn first_status(
+        service: &mut LspService<RossiLanguageServer>,
+        id: i64,
+        params: Value,
+    ) -> Value {
+        let request = Request::build(eventb_lsp::proof::REQUEST_OBLIGATIONS)
+            .id(id)
+            .params(params)
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("rossi/proofObligations must respond");
+        let (_id, result) = response.into_parts();
+        let report: Value = result.expect("rossi/proofObligations must succeed");
+        report["obligations"][0]["status"].clone()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refresh_request_rereads_the_stored_proofs() {
+        use super::TempWorkspace;
+        use eventb_lsp::lsp_types::Uri;
+
+        let workspace = TempWorkspace::new("proof-refresh-request");
+        let source = workspace.as_ref().join("m.eventb");
+        std::fs::write(&source, SOURCE).unwrap();
+        let uri = Uri::from_file_path(&source).unwrap();
+
+        let (mut service, mut messages) = LspService::build(RossiLanguageServer::new)
+            .custom_method(
+                eventb_lsp::proof::REQUEST_OBLIGATIONS,
+                RossiLanguageServer::proof_obligations,
+            )
+            .finish();
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": SOURCE,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("the open-time push");
+
+        // A proof lands next to the source, with nothing watching it.
+        std::fs::write(workspace.as_ref().join("m.bpr"), PROOF).unwrap();
+
+        assert_eq!(
+            first_status(&mut service, 2, json!({ "textDocument": { "uri": uri } })).await,
+            json!("unattempted"),
+            "a plain request is served from the stored list"
+        );
+        assert_eq!(
+            first_status(
+                &mut service,
+                3,
+                json!({ "textDocument": { "uri": uri }, "refresh": true })
+            )
+            .await,
+            json!("discharged"),
+            "a refresh request judges the proofs on disk again"
+        );
+    }
 }
 
 mod document_highlight {
