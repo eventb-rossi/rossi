@@ -8,7 +8,7 @@ use crate::lsp_types::*;
 use rossi::Component;
 use rossi::ast::Span;
 
-use crate::component_loader::ComponentLoader;
+use crate::component_loader::{ComponentLoader, LoadedComponent};
 use crate::component_util::component_reference_clause;
 use crate::formula_walk;
 use crate::position::span_to_range;
@@ -199,70 +199,108 @@ impl ReferenceProvider {
         let mut locations = Vec::new();
         let mut seen = HashSet::new();
 
-        if symbol.kind == SymbolKind::Parameter {
-            let Some(event_name) = symbol.event.as_deref() else {
-                return locations;
-            };
-
-            let Some(loaded) = loader.load(&symbol.owner) else {
-                return locations;
-            };
-
-            push_unique_locations(
-                &mut locations,
-                &mut seen,
-                ast_parameter_references(
+        // Event names are not formula identifiers, so they stay on the text
+        // scan; every other symbol resolves from the AST.
+        if symbol.kind == SymbolKind::Event {
+            for component_name in symbol_candidates(symbol, loader) {
+                let Some(loaded) = loader.load(&component_name) else {
+                    continue;
+                };
+                if resolve_symbol_identity_in_component_with_environments(
                     loaded.component(),
-                    loaded.text(),
-                    loaded.uri(),
-                    event_name,
                     &symbol.name,
-                ),
-            );
-
+                    loader,
+                    environments,
+                ) == Some(symbol.clone())
+                {
+                    push_unique_locations(
+                        &mut locations,
+                        &mut seen,
+                        self.find_symbol_references_in_text_range(
+                            loaded.text(),
+                            loaded.uri(),
+                            &symbol.name,
+                            None,
+                        ),
+                    );
+                }
+            }
             return locations;
         }
 
-        let mut candidates = candidate_components_for_symbol(symbol, loader.manager());
-        candidates.extend(loader.open_component_names().map(str::to_owned));
-        candidates.sort();
-        candidates.dedup();
-
-        for component_name in candidates {
-            let Some(loaded) = loader.load(&component_name) else {
-                continue;
-            };
-
-            if resolve_symbol_identity_in_component_with_environments(
-                loaded.component(),
-                &symbol.name,
-                loader,
-                environments,
-            ) == Some(symbol.clone())
-            {
-                // Event names are not formula identifiers, so they stay on the
-                // text scan; variables / constants / sets resolve from the AST.
-                let refs = if symbol.kind == SymbolKind::Event {
-                    self.find_symbol_references_in_text_range(
-                        loaded.text(),
-                        loaded.uri(),
-                        &symbol.name,
-                        None,
-                    )
-                } else {
-                    ast_symbol_references(
-                        loaded.component(),
-                        loaded.text(),
-                        loaded.uri(),
-                        &symbol.name,
-                    )
-                };
-                push_unique_locations(&mut locations, &mut seen, refs);
-            }
+        for occurrences in symbol_occurrences(symbol, loader, environments) {
+            push_unique_locations(
+                &mut locations,
+                &mut seen,
+                spans_to_locations(
+                    occurrences.spans,
+                    occurrences.loaded.text(),
+                    occurrences.loaded.uri(),
+                    &symbol.name,
+                ),
+            );
         }
-
         locations
     }
+}
+
+/// One component's part of a symbol's occurrences: the spans of its
+/// declaration and uses there, indexing into the loaded file's text.
+pub(crate) struct SymbolOccurrences {
+    pub(crate) loaded: LoadedComponent,
+    pub(crate) spans: Vec<Span>,
+}
+
+/// Every occurrence of `symbol`, a set, constant, variable or parameter,
+/// grouped by the component it sits in: the declaration, and the uses in
+/// every component where the name resolves to `symbol`. The one reference set
+/// find-references reports and rename rewrites.
+pub(crate) fn symbol_occurrences(
+    symbol: &SymbolIdentity,
+    loader: &ComponentLoader,
+    environments: &mut ResolvedEnvironments,
+) -> Vec<SymbolOccurrences> {
+    if symbol.kind == SymbolKind::Parameter {
+        let Some(event_name) = symbol.event.as_deref() else {
+            return Vec::new();
+        };
+        return loader
+            .load(&symbol.owner)
+            .map(|loaded| {
+                let spans = parameter_spans(loaded.component(), event_name, &symbol.name);
+                SymbolOccurrences { loaded, spans }
+            })
+            .into_iter()
+            .collect();
+    }
+
+    let mut occurrences = Vec::new();
+    for component_name in symbol_candidates(symbol, loader) {
+        let Some(loaded) = loader.load(&component_name) else {
+            continue;
+        };
+        if resolve_symbol_identity_in_component_with_environments(
+            loaded.component(),
+            &symbol.name,
+            loader,
+            environments,
+        ) == Some(symbol.clone())
+        {
+            let spans = symbol_spans(loaded.component(), &symbol.name);
+            occurrences.push(SymbolOccurrences { loaded, spans });
+        }
+    }
+    occurrences
+}
+
+/// The components that could refer to `symbol`: the index's candidates plus
+/// every open document, whose graph entry may lag behind its buffer.
+fn symbol_candidates(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<String> {
+    let mut candidates = candidate_components_for_symbol(symbol, loader.manager());
+    candidates.extend(loader.open_component_names().map(str::to_owned));
+    candidates.sort();
+    candidates.dedup();
+    candidates
 }
 
 fn push_unique_locations(
@@ -284,33 +322,22 @@ fn push_unique_locations(
     }
 }
 
-/// References to a global symbol (variable / constant / set) in one component:
-/// its declaration site plus every free formula occurrence (reads and write
+/// A global symbol's (variable / constant / set) spans in one component: its
+/// declaration site plus every free formula occurrence (reads and write
 /// targets), resolved from the AST so binder-shadowed names of the same spelling
 /// are excluded and matches never land in comments or string literals.
-fn ast_symbol_references(
-    component: &Component,
-    text: &str,
-    uri: &Uri,
-    name: &str,
-) -> Vec<Location> {
+fn symbol_spans(component: &Component, name: &str) -> Vec<Span> {
     let mut spans: Vec<Span> = Vec::new();
     if let Some(decl) = formula_walk::declaration_span(component, name) {
         spans.push(decl);
     }
     spans.extend(formula_walk::free_occurrence_spans(component, name));
-    spans_to_locations(spans, text, uri, name)
+    spans
 }
 
-/// References to an event parameter: its declaration plus every free occurrence
+/// An event parameter's spans: its declaration plus every free occurrence
 /// within that event's guards, witnesses, `with` predicates, and actions.
-fn ast_parameter_references(
-    component: &Component,
-    text: &str,
-    uri: &Uri,
-    event_name: &str,
-    name: &str,
-) -> Vec<Location> {
+fn parameter_spans(component: &Component, event_name: &str, name: &str) -> Vec<Span> {
     let Component::Machine(machine) = component else {
         return Vec::new();
     };
@@ -322,7 +349,7 @@ fn ast_parameter_references(
         spans.push(s);
     }
     spans.extend(formula_walk::parameter_occurrence_spans(event, name));
-    spans_to_locations(spans, text, uri, name)
+    spans
 }
 
 /// Convert spans to locations, dropping any span that does not slice to `name`
