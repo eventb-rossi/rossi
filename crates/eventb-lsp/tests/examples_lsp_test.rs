@@ -737,27 +737,60 @@ fn cars_rename_component_cross_file() {
     }
 }
 
-#[test]
-fn cars_rename_constant_is_single_file() {
-    // Pins current behavior: only component names rename across files;
-    // constants/variables rename within the requesting document only.
-    let ws = Workspace::open(CARS);
-    let provider = rename_provider(&ws);
-    let m0 = ws.text("M0");
-
-    let position = nth_occurrence(m0, "cars_limit", 0);
+/// Rename, to `new_name`, what the `nth` whole-word `word` in `component`
+/// names, and check that every file of the model comes out as if each
+/// whole-word `word` in it had been replaced, and still parses.
+fn assert_rename_replaces_every_occurrence(
+    ws: &Workspace,
+    component: &str,
+    word: &str,
+    nth: usize,
+    new_name: &str,
+) {
+    let provider = rename_provider(ws);
+    let text = ws.text(component);
+    let position = nth_occurrence(text, word, nth);
     let edit = provider
-        .rename(&rename_params(ws.uri("M0"), position, "limit"), m0)
-        .expect("rename cars_limit");
+        .rename(&rename_params(ws.uri(component), position, new_name), text)
+        .unwrap_or_else(|| panic!("rename {word} in {component}"));
     let changes = edit.changes.expect("rename returns changes");
 
-    let touched: Vec<Uri> = changes.keys().cloned().collect();
-    assert_eq!(
-        touched,
-        vec![ws.uri("M0")],
-        "constant rename is single-file today; if this fails, cross-file \
-         symbol rename has been implemented — update this test"
-    );
+    for file in &ws.files {
+        let renamed = apply_edits(
+            &file.text,
+            changes.get(&file.uri).map_or(&[][..], Vec::as_slice),
+        );
+        let replaced: Vec<TextEdit> = find_whole_word_locations(
+            &file.text,
+            word,
+            &file.uri,
+            None,
+            WordBoundary::MathIdentifier,
+        )
+        .into_iter()
+        .map(|location| TextEdit::new(location.range, new_name.to_string()))
+        .collect();
+        assert_eq!(
+            renamed,
+            apply_edits(&file.text, &replaced),
+            "{}: renaming {word} from {component}",
+            file.uri.as_str()
+        );
+        rossi::parse(&renamed).unwrap_or_else(|e| {
+            panic!(
+                "{}: text no longer parses after rename: {e}",
+                file.uri.as_str()
+            )
+        });
+    }
+}
+
+#[test]
+fn cars_rename_constant_follows_the_context_chain() {
+    // `cars_limit` is declared in C0 and visible in every machine, through a
+    // context in C0's extends chain: renaming it from M0 reaches them all.
+    let ws = Workspace::open(CARS);
+    assert_rename_replaces_every_occurrence(&ws, "M0", "cars_limit", 0, "limit");
 }
 
 #[test]
