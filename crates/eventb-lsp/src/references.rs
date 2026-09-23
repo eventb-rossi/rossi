@@ -20,8 +20,8 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{
-    Resolution, SymbolIdentity, SymbolKind, abstract_event_identity,
-    candidate_components_for_symbol, resolve_cursor_with_environments,
+    Resolution, SymbolIdentity, SymbolKind, abstract_event_identity, abstract_parameter_identities,
+    candidate_components_for_symbol, in_witness, label_span, resolve_cursor_with_environments,
     resolve_symbol_identity_in_component_with_environments,
 };
 #[cfg(test)]
@@ -219,17 +219,7 @@ pub(crate) fn symbol_occurrences(
         return event_occurrences(symbol, loader);
     }
     if symbol.kind == SymbolKind::Parameter {
-        let Some(event_name) = symbol.event.as_deref() else {
-            return Vec::new();
-        };
-        return loader
-            .load(&symbol.owner)
-            .map(|loaded| {
-                let spans = parameter_spans(loaded.component(), event_name, &symbol.name);
-                SymbolOccurrences { loaded, spans }
-            })
-            .into_iter()
-            .collect();
+        return parameter_occurrences(symbol, loader);
     }
 
     let mut occurrences = Vec::new();
@@ -254,6 +244,59 @@ pub(crate) fn symbol_occurrences(
                     &format!("{}'", symbol.name),
                 ));
             }
+            occurrences.push(SymbolOccurrences { loaded, spans });
+        }
+    }
+    occurrences
+}
+
+/// A parameter's occurrences: its declaration and uses in its own event, and
+/// in the refining events that do not declare it again: every use in one
+/// that extends the event and inherits it, the witness in one that drops it.
+fn parameter_occurrences(
+    symbol: &SymbolIdentity,
+    loader: &ComponentLoader,
+) -> Vec<SymbolOccurrences> {
+    let Some(event_name) = symbol.event.as_deref() else {
+        return Vec::new();
+    };
+    let mut occurrences = Vec::new();
+    for component_name in symbol_candidates(symbol, loader) {
+        let Some(loaded) = loader.load(&component_name) else {
+            continue;
+        };
+        let Component::Machine(machine) = loaded.component() else {
+            continue;
+        };
+        let mut spans = Vec::new();
+        if machine.name == symbol.owner {
+            spans.extend(parameter_spans(
+                loaded.component(),
+                event_name,
+                &symbol.name,
+            ));
+        }
+        for event in &machine.events {
+            if event.parameters.iter().any(|p| p.name == symbol.name)
+                || !abstract_parameter_identities(loaded.component(), event, &symbol.name, loader)
+                    .contains(symbol)
+            {
+                continue;
+            }
+            spans.extend(
+                formula_walk::parameter_occurrence_spans(event, &symbol.name)
+                    .into_iter()
+                    .filter(|span| event.extended || in_witness(event, span.start)),
+            );
+            spans.extend(
+                event
+                    .with
+                    .iter()
+                    .chain(&event.witnesses)
+                    .filter_map(|witness| label_span(loaded.text(), witness, &symbol.name)),
+            );
+        }
+        if !spans.is_empty() {
             occurrences.push(SymbolOccurrences { loaded, spans });
         }
     }
@@ -308,7 +351,7 @@ fn witness_label_spans(component: &Component, text: &str, label: &str) -> Vec<Sp
     events
         .chain(initialisation)
         .flat_map(|(with, witnesses)| with.iter().chain(witnesses))
-        .filter_map(|witness| crate::symbols::label_span(text, witness, label))
+        .filter_map(|witness| label_span(text, witness, label))
         .collect()
 }
 
