@@ -154,8 +154,9 @@ fn report_result_id(diagnostics: &[Diagnostic]) -> Option<String> {
 /// A closed file's `workspace/diagnostic` report and what it was computed
 /// from, so a sweep can reuse it (see [`Analyzer::pull_report`]).
 struct SweepReport {
-    /// [`Analyzer::diagnostic_inputs`] when the computation started.
-    inputs: u64,
+    /// [`Analyzer::diagnostic_inputs`] and the index generation when the
+    /// computation started.
+    inputs: (u64, u64),
     /// The file's modification time and length.
     file: (Option<std::time::SystemTime>, u64),
     report: (Option<String>, Vec<Diagnostic>),
@@ -223,9 +224,10 @@ pub(crate) struct Analyzer {
     /// by URI and refreshed on open and on save. Ranges are recomputed
     /// against the current parse whenever the list is served.
     proof_obligations: Arc<parking_lot::RwLock<crate::proof::ProofOverlay>>,
-    /// Bumped whenever something a closed file's diagnostics read changes,
-    /// other than the file itself: an index commit, an overlay, the
-    /// configuration, a dependency moving between buffer and disk.
+    /// Bumped whenever an input of a closed file's diagnostics changes
+    /// outside the indexes: an overlay, the configuration, the workspace
+    /// folders. Index and buffer changes count through
+    /// [`CrossReferenceManager::generation`].
     diagnostic_inputs: Arc<std::sync::atomic::AtomicU64>,
     /// The last sweep report of each closed file, reused while its inputs
     /// stay the same.
@@ -234,12 +236,6 @@ pub(crate) struct Analyzer {
 }
 
 impl Analyzer {
-    /// Mark every cached sweep report stale.
-    fn diagnostic_inputs_changed(&self) {
-        self.diagnostic_inputs
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
-    }
-
     /// Refresh the cross-reference and workspace-symbol indexes from `uri`'s
     /// stored parse, then publish its diagnostics. Reads the single source of
     /// truth once and fans it out to every eager index (none of which
@@ -273,7 +269,6 @@ impl Analyzer {
                         .index_components(key.clone(), components);
                     self.workspace_symbol_provider
                         .index_components(key, components, doc.text());
-                    self.diagnostic_inputs_changed();
                     version
                 });
 
@@ -392,14 +387,11 @@ impl Analyzer {
         // primed-name passes, so a finding the lints above already carry is
         // dropped; the same rules raised across components, such as a label
         // clashing with an inherited one, are kept.
-        let project = crate::diagnostics::project_diagnostics(
+        let mut project = crate::diagnostics::project_diagnostics(
             doc,
             &crate::component_loader::ComponentLoader::new(xrefs, Some(&self.document_manager)),
         );
-        let project: Vec<Diagnostic> = project
-            .into_iter()
-            .filter(|diagnostic| !diags.contains(diagnostic))
-            .collect();
+        project.retain(|diagnostic| !diags.contains(diagnostic));
         diags.extend(project);
         // Circular EXTENDS/REFINES need no workspace gating: a detected cycle is
         // always real (a self-loop is length-1).
@@ -655,7 +647,8 @@ impl Analyzer {
     /// graph. The buffers themselves are untouched, so this is the cheap
     /// half of [`Self::analyze`] per document rather than a re-analysis.
     pub(crate) async fn republish_all_diagnostics(&self) {
-        self.diagnostic_inputs_changed();
+        self.diagnostic_inputs
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         for uri in self.document_manager.all_uris() {
             self.republish_diagnostics(uri).await;
         }
@@ -672,30 +665,27 @@ impl Analyzer {
     /// [`RossiLanguageServer::diagnostic`]).
     ///
     /// The result id is a hash of the report itself, so `unchanged` means
-    /// exactly that. The buffer's revision would be cheaper but wrong: a
-    /// document's diagnostics also move with the proof-obligation and animate
-    /// overlays, the Rodin proof status, the workspace graph and the
-    /// configuration, none of which touch the revision — a client that
-    /// echoed a revision-based id would never see the warning a save's
-    /// broken proof produced. Hashing the report also gives a file read from
-    /// disk an id, which a revision cannot.
+    /// exactly that; a file read from disk has no revision to use instead.
     ///
     /// VS Code asks for the sweep again two seconds after each answer, so a
     /// report is reused until one of its inputs changes rather than rechecked
     /// every time. The file's own modification time and length catch a write
-    /// to it; everything else counts through [`Self::diagnostic_inputs`]:
-    /// an edited buffer once its analysis commits, and a dependency changed
-    /// on disk once the watched-files notification arrives, which both
-    /// clients offered pull diagnostics register.
+    /// to it. Everything else counts through the index generation, which an
+    /// edited buffer moves once its analysis commits and a dependency changed
+    /// on disk once the watched-files notification arrives (both clients
+    /// offered pull diagnostics register that watcher), and through
+    /// [`Self::diagnostic_inputs`] for the overlays and the configuration.
     pub(crate) fn pull_report(&self, uri: &Uri) -> Option<(Option<String>, Vec<Diagnostic>)> {
         if self.document_manager.version(uri).is_some() {
             return Some((report_result_id(&[]), Vec::new()));
         }
         // Read before computing, so a change that lands meanwhile leaves the
         // report tagged stale rather than current.
-        let inputs = self
-            .diagnostic_inputs
-            .load(std::sync::atomic::Ordering::Acquire);
+        let inputs = (
+            self.diagnostic_inputs
+                .load(std::sync::atomic::Ordering::Acquire),
+            self.cross_reference_manager.generation(),
+        );
         let metadata = std::fs::metadata(uri.to_file_path()?).ok()?;
         let file = (metadata.modified().ok(), metadata.len());
         if let Some(cached) = self.sweep_reports.lock().get(uri)
@@ -2106,8 +2096,6 @@ impl LanguageServer for RossiLanguageServer {
         // read: each index already holds its disk layer.
         self.cross_reference_manager.remove_document(uri.as_ref());
         self.workspace_symbol_provider.remove_document(uri.as_ref());
-        // Its dependents now read it from disk.
-        self.analyzer.diagnostic_inputs_changed();
 
         // Clear diagnostics
         self.analyzer.clear_diagnostics(uri).await;
@@ -2584,30 +2572,8 @@ impl LanguageServer for RossiLanguageServer {
         // so answering here too would list every finding twice. The report is
         // empty whether or not the server holds the buffer yet: this request
         // can be handled before the didOpen it follows.
-        let previous = params.previous_result_id;
-        let result_id = report_result_id(&[]);
-
-        if let (Some(current), Some(previous)) = (result_id.as_deref(), previous.as_deref())
-            && current == previous
-        {
-            return Ok(DocumentDiagnosticReportResult::Report(
-                DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
-                    related_documents: None,
-                    unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
-                        result_id: current.to_string(),
-                    },
-                }),
-            ));
-        }
-
         Ok(DocumentDiagnosticReportResult::Report(
-            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                related_documents: None,
-                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                    result_id,
-                    items: Vec::new(),
-                },
-            }),
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport::default()),
         ))
     }
 
@@ -2787,7 +2753,6 @@ impl LanguageServer for RossiLanguageServer {
         {
             info!("Failed to refresh renamed files: {error}");
         }
-        self.analyzer.diagnostic_inputs_changed();
     }
 
     async fn prepare_rename(

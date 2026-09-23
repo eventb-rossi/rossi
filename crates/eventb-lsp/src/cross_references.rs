@@ -15,7 +15,7 @@ use rossi::deps::{DependencyGraph, kind_and_name};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{debug, warn};
 
 use crate::lsp_types::Uri;
@@ -170,6 +170,11 @@ pub struct CrossReferenceManager {
     /// which becomes true at `initialize` — before the scan runs — so gating on
     /// it would let cross-reference checks fire against an empty graph.
     scanned: AtomicBool,
+
+    /// Bumped after every write to a document's layers, whether or not its
+    /// declarations moved: a dependent's diagnostics read the full text of
+    /// its dependencies, not just what they declare.
+    generation: AtomicU64,
 }
 
 /// The distinct component names a document declares.
@@ -200,7 +205,14 @@ impl CrossReferenceManager {
             document_uris,
             workspace_root: RwLock::new(None),
             scanned: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// How many writes the index has taken, for caches whose inputs span
+    /// several files.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// The identity table this index keys by, for sharing with another index.
@@ -321,6 +333,7 @@ impl CrossReferenceManager {
                 drop(entry);
                 self.uri_to_component
                     .remove_if(&uri, |_, document| document.is_empty());
+                self.generation.fetch_add(1, Ordering::Release);
                 return;
             }
             let after = declared_names(document.effective());
@@ -339,6 +352,7 @@ impl CrossReferenceManager {
             self.forget_declaration(name, &uri);
         }
         self.rebuild_names(before.union(&after).map(String::as_str));
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Drop `uri` from the set of files declaring `name`, discarding the name

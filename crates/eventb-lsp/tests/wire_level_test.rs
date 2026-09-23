@@ -1660,15 +1660,16 @@ mod pull_diagnostics {
     //! Wire-level tests for `textDocument/diagnostic` and
     //! `workspace/diagnostic`: the capability is offered only to a client
     //! that declares diagnostic refresh support, an open buffer is left to
-    //! the push path so no finding reaches the client twice, echoing a result
-    //! id answers `unchanged`, and the workspace sweep reaches a file that was
-    //! never opened.
+    //! the push path so no finding reaches the client twice, the workspace
+    //! sweep reaches a file that was never opened, and a closed file's report
+    //! is reused until one of its inputs changes.
 
-    use super::{TempWorkspace, notification};
+    use super::{TempWorkspace, next_message, notification};
     use eventb_lsp::lsp_types::Uri;
     use eventb_lsp::server::RossiLanguageServer;
     use futures::StreamExt;
     use serde_json::{Value, json};
+    use std::path::Path;
     use tower::{Service, ServiceExt};
     use tower_lsp_server::LspService;
     use tower_lsp_server::jsonrpc::Request;
@@ -1720,27 +1721,27 @@ mod pull_diagnostics {
         assert_eq!(provider["workspaceDiagnostics"], json!(true));
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn an_open_document_is_left_to_push() {
-        let workspace = TempWorkspace::new("pull-diagnostics-doc");
-        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
-        let file_uri = Uri::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
-
+    /// A server initialized on `root` for a client that declares diagnostic
+    /// refresh support. Its one-message socket is pumped into an unbounded
+    /// receiver, so a later notification never blocks the server.
+    async fn initialized_service(
+        root: &Path,
+    ) -> (
+        LspService<RossiLanguageServer>,
+        futures::channel::mpsc::UnboundedReceiver<Request>,
+    ) {
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
-        let (sender, mut pushed) = futures::channel::mpsc::unbounded();
+        let (sender, messages) = futures::channel::mpsc::unbounded();
         tokio::spawn(async move {
             while let Some(request) = socket.next().await {
-                if request.method() == "textDocument/publishDiagnostics" {
-                    let _ = sender.unbounded_send(request.params().cloned().unwrap());
-                }
+                let _ = sender.unbounded_send(request);
             }
         });
-
         let init = Request::build("initialize")
             .id(1)
             .params(json!({
                 "capabilities": refreshing_client(),
-                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+                "workspaceFolders": [{ "uri": Uri::from_file_path(root).unwrap(), "name": "test" }]
             }))
             .finish();
         service.ready().await.unwrap().call(init).await.unwrap();
@@ -1751,176 +1752,7 @@ mod pull_diagnostics {
             .call(notification("initialized", json!({})))
             .await
             .unwrap();
-        service
-            .ready()
-            .await
-            .unwrap()
-            .call(notification(
-                "textDocument/didOpen",
-                json!({
-                    "textDocument": {
-                        "uri": file_uri,
-                        "languageId": "eventb",
-                        "version": 1,
-                        "text": BROKEN,
-                    }
-                }),
-            ))
-            .await
-            .unwrap();
-
-        // The push carries the finding.
-        let published = pushed.next().await.expect("opening must publish");
-        assert_eq!(published["uri"], json!(file_uri));
-        assert!(
-            !published["diagnostics"].as_array().unwrap().is_empty(),
-            "the CONSTANS typo must be pushed; got {published}"
-        );
-
-        let pull = |id: i64, previous: Option<String>| {
-            let mut params = json!({ "textDocument": { "uri": file_uri } });
-            if let Some(previous) = previous {
-                params["previousResultId"] = json!(previous);
-            }
-            Request::build("textDocument/diagnostic")
-                .id(id)
-                .params(params)
-                .finish()
-        };
-
-        // The pull does not repeat it: a client showing both would list every
-        // finding twice.
-        let response = service
-            .ready()
-            .await
-            .unwrap()
-            .call(pull(2, None))
-            .await
-            .unwrap()
-            .expect("textDocument/diagnostic must respond");
-        let (_id, result) = response.into_parts();
-        let first: Value = result.expect("textDocument/diagnostic must succeed");
-        assert_eq!(first["kind"], json!("full"));
-        assert_eq!(
-            first["items"].as_array().expect("items is an array").len(),
-            0,
-            "an open document's findings are pushed, not pulled; got {first}"
-        );
-        let result_id = first["resultId"]
-            .as_str()
-            .expect("the report carries a result id")
-            .to_string();
-
-        // Echoing the result id answers `unchanged` rather than resending.
-        let response = service
-            .ready()
-            .await
-            .unwrap()
-            .call(pull(3, Some(result_id.clone())))
-            .await
-            .unwrap()
-            .unwrap();
-        let (_id, result) = response.into_parts();
-        let second: Value = result.unwrap();
-        assert_eq!(second["kind"], json!("unchanged"), "got {second}");
-        assert_eq!(second["resultId"], json!(result_id));
-
-        // The workspace sweep lists the open document empty too, so a client
-        // drops whatever it pulled while the file was closed.
-        let request = Request::build("workspace/diagnostic")
-            .id(4)
-            .params(json!({ "previousResultIds": [] }))
-            .finish();
-        let response = service
-            .ready()
-            .await
-            .unwrap()
-            .call(request)
-            .await
-            .unwrap()
-            .expect("workspace/diagnostic must respond");
-        let (_id, result) = response.into_parts();
-        let report: Value = result.expect("workspace/diagnostic must succeed");
-        let open_report = report["items"]
-            .as_array()
-            .expect("items is an array")
-            .iter()
-            .find(|item| item["uri"] == json!(file_uri))
-            .unwrap_or_else(|| panic!("the open document must be swept; got {report}"));
-        assert_eq!(
-            open_report["items"].as_array().unwrap().len(),
-            0,
-            "an open document's findings are pushed, not pulled; got {report}"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn the_workspace_sweep_reaches_a_file_that_was_never_opened() {
-        let workspace = TempWorkspace::new("pull-diagnostics-workspace");
-        let broken = workspace.as_ref().join("broken.eventb");
-        std::fs::write(&broken, BROKEN).unwrap();
-        std::fs::write(workspace.as_ref().join("clean.eventb"), CLEAN).unwrap();
-        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
-        let broken_uri = Uri::from_file_path(&broken).unwrap();
-
-        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
-        tokio::spawn(async move { while socket.next().await.is_some() {} });
-
-        let init = Request::build("initialize")
-            .id(1)
-            .params(json!({
-                "capabilities": refreshing_client(),
-                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
-            }))
-            .finish();
-        service.ready().await.unwrap().call(init).await.unwrap();
-        service
-            .ready()
-            .await
-            .unwrap()
-            .call(notification("initialized", json!({})))
-            .await
-            .unwrap();
-
-        let request = Request::build("workspace/diagnostic")
-            .id(2)
-            .params(json!({ "previousResultIds": [] }))
-            .finish();
-        let response = service
-            .ready()
-            .await
-            .unwrap()
-            .call(request)
-            .await
-            .unwrap()
-            .expect("workspace/diagnostic must respond");
-        let (_id, result) = response.into_parts();
-        let report: Value = result.expect("workspace/diagnostic must succeed");
-
-        let items = report["items"].as_array().expect("items is an array");
-        let broken_report = items
-            .iter()
-            .find(|item| item["uri"] == json!(broken_uri))
-            .unwrap_or_else(|| panic!("broken.eventb must be swept; got {report}"));
-        assert!(
-            !broken_report["items"].as_array().unwrap().is_empty(),
-            "a file nobody opened must still report its parse error; got {report}"
-        );
-
-        // The clean sibling is swept too, and reports nothing.
-        let clean_report = items
-            .iter()
-            .find(|item| {
-                item["uri"]
-                    .as_str()
-                    .is_some_and(|u| u.ends_with("clean.eventb"))
-            })
-            .unwrap_or_else(|| panic!("clean.eventb must be swept; got {report}"));
-        assert_eq!(
-            clean_report["items"].as_array().unwrap().len(),
-            0,
-            "the clean sibling reports nothing; got {report}"
-        );
+        (service, messages)
     }
 
     /// The findings a full `workspace/diagnostic` sweep reports for `uri`.
@@ -1949,6 +1781,95 @@ mod pull_diagnostics {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn an_open_document_is_left_to_push() {
+        let workspace = TempWorkspace::new("pull-diagnostics-doc");
+        let file_uri = Uri::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
+        let (mut service, mut messages) = initialized_service(workspace.as_ref()).await;
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": file_uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": BROKEN,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        // The push carries the finding.
+        let published = next_message(
+            &mut messages,
+            "textDocument/publishDiagnostics",
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("opening must publish");
+        assert_eq!(published["uri"], json!(file_uri));
+        assert!(
+            !published["diagnostics"].as_array().unwrap().is_empty(),
+            "the CONSTANS typo must be pushed; got {published}"
+        );
+
+        // The pull does not repeat it: a client showing both would list every
+        // finding twice.
+        let request = Request::build("textDocument/diagnostic")
+            .id(2)
+            .params(json!({ "textDocument": { "uri": file_uri } }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("textDocument/diagnostic must respond");
+        let (_id, result) = response.into_parts();
+        let pulled: Value = result.expect("textDocument/diagnostic must succeed");
+        assert_eq!(pulled["kind"], json!("full"));
+        assert_eq!(
+            pulled["items"],
+            json!([]),
+            "an open document's findings are pushed, not pulled"
+        );
+
+        // The workspace sweep lists the open document empty too, so a client
+        // drops whatever it pulled while the file was closed.
+        assert_eq!(
+            swept(&mut service, 3, &file_uri).await,
+            json!([]),
+            "an open document's findings are pushed, not pulled"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_workspace_sweep_reaches_a_file_that_was_never_opened() {
+        let workspace = TempWorkspace::new("pull-diagnostics-workspace");
+        let broken = workspace.as_ref().join("broken.eventb");
+        let clean = workspace.as_ref().join("clean.eventb");
+        std::fs::write(&broken, BROKEN).unwrap();
+        std::fs::write(&clean, CLEAN).unwrap();
+        let (mut service, _messages) = initialized_service(workspace.as_ref()).await;
+
+        let broken_items = swept(&mut service, 2, &Uri::from_file_path(&broken).unwrap()).await;
+        assert!(
+            !broken_items.as_array().unwrap().is_empty(),
+            "a file nobody opened must still report its parse error; got {broken_items}"
+        );
+
+        // The clean sibling is swept too, and reports nothing.
+        let clean_items = swept(&mut service, 3, &Uri::from_file_path(&clean).unwrap()).await;
+        assert_eq!(clean_items, json!([]), "the clean sibling reports nothing");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_closed_files_report_is_reused_until_one_of_its_inputs_changes() {
         const CONTEXT: &str =
             "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k \u{2208} \u{2115}\nEND\n";
@@ -1971,27 +1892,9 @@ mod pull_diagnostics {
         let machine = workspace.as_ref().join("M.eventb");
         std::fs::write(&context, CONTEXT).unwrap();
         std::fs::write(&machine, MACHINE).unwrap();
-        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
         let context_uri = Uri::from_file_path(&context).unwrap();
         let machine_uri = Uri::from_file_path(&machine).unwrap();
-
-        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
-        tokio::spawn(async move { while socket.next().await.is_some() {} });
-        let init = Request::build("initialize")
-            .id(1)
-            .params(json!({
-                "capabilities": refreshing_client(),
-                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
-            }))
-            .finish();
-        service.ready().await.unwrap().call(init).await.unwrap();
-        service
-            .ready()
-            .await
-            .unwrap()
-            .call(notification("initialized", json!({})))
-            .await
-            .unwrap();
+        let (mut service, _messages) = initialized_service(workspace.as_ref()).await;
 
         let first = swept(&mut service, 2, &machine_uri).await;
         assert_eq!(first, json!([]), "M is well formed while C declares k");
