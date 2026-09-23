@@ -290,6 +290,7 @@ Press `<leader>rn` or `:LspRename` to rename:
 - Variables, constants, carrier sets, events, parameters, machines and contexts
 - Updates every file that uses the name, closed ones included, and follows the refinement chain: a variable or parameter declared again in a refinement, and an event refining one of its own name, rename together
 - Refuses a position that names nothing renameable, such as a label or a comment
+- Refuses a new name already taken where the symbol is visible, saying which declaration it clashes with
 
 ### Code Actions
 

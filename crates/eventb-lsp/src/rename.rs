@@ -19,9 +19,9 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::covers;
+use crate::component_util::{component_at_offset, covers};
 use crate::cross_references::CrossReferenceManager;
-use crate::document::DocumentManager;
+use crate::document::{DocumentManager, ParsedDocument};
 use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
@@ -30,7 +30,8 @@ use crate::references::{SymbolOccurrences, symbol_candidates, symbol_occurrences
 use crate::resolved_environment::ResolvedEnvironments;
 use crate::symbols::{
     INITIALISATION_EVENT_NAME, Resolution, SymbolIdentity, SymbolKind, abstract_event_identity,
-    abstract_parameter_identities, resolve_cursor,
+    abstract_parameter_identities, event_at_offset, resolve_cursor,
+    resolve_symbol_identity_in_component_with_environments,
 };
 
 /// Provider for renaming symbols
@@ -56,12 +57,15 @@ enum Target {
     /// cursor document, whose text they index.
     Binder {
         name: String,
-        text: String,
+        doc: Arc<ParsedDocument>,
+        declaration: Option<Span>,
         spans: Vec<Span>,
     },
-    /// A symbol, with the declarations renamed along with it.
+    /// A symbol, with the declarations renamed along with it and their
+    /// occurrences.
     Symbol {
         symbol: SymbolIdentity,
+        class: Vec<SymbolIdentity>,
         occurrences: Vec<SymbolOccurrences>,
     },
 }
@@ -122,6 +126,16 @@ impl RenameProvider {
 
     /// Perform the rename operation
     pub fn rename(&self, params: &RenameParams, text: &str) -> Option<WorkspaceEdit> {
+        self.rename_checked(params, text).ok().flatten()
+    }
+
+    /// [`Self::rename`], saying why when the new name is refused because it
+    /// would change what a name means, so the editor can show the reason.
+    pub fn rename_checked(
+        &self,
+        params: &RenameParams,
+        text: &str,
+    ) -> Result<Option<WorkspaceEdit>, String> {
         let position = params.text_document_position.position;
         let uri = &params.text_document_position.text_document.uri;
         let new_name = &params.new_name;
@@ -129,13 +143,19 @@ impl RenameProvider {
         // Check if new name is a keyword
         if is_keyword(new_name) {
             debug!("Cannot rename to keyword: '{}'", new_name);
-            return None;
+            return Ok(None);
         }
 
-        let (_, target) = self.target_at(uri, position, text)?;
+        let Some((_, target)) = self.target_at(uri, position, text) else {
+            return Ok(None);
+        };
         if !is_valid_new_name(new_name, target.is_structural()) {
             debug!("Invalid new name: '{}'", new_name);
-            return None;
+            return Ok(None);
+        }
+        if let Some(reason) = self.clash(&target, new_name) {
+            debug!("Rename to '{}' refused: {}", new_name, reason);
+            return Err(reason);
         }
 
         let changes = match &target {
@@ -145,12 +165,13 @@ impl RenameProvider {
                 self.rename_across_workspace(name, new_name, &mut changes);
                 changes
             }
-            Target::Binder { name, text, spans } => {
-                occurrence_edits([(uri, text.as_str(), spans.as_slice())], name, new_name)
-            }
+            Target::Binder {
+                name, doc, spans, ..
+            } => occurrence_edits([(uri, doc.text(), spans.as_slice())], name, new_name),
             Target::Symbol {
                 symbol,
                 occurrences,
+                ..
             } => occurrence_edits(
                 occurrences.iter().map(|occurrence| {
                     (
@@ -164,7 +185,7 @@ impl RenameProvider {
             ),
         };
         if changes.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let total_edits: usize = changes.values().map(|v| v.len()).sum();
@@ -174,11 +195,11 @@ impl RenameProvider {
             changes.len()
         );
 
-        Some(WorkspaceEdit {
+        Ok(Some(WorkspaceEdit {
             changes: Some(changes),
             document_changes: None,
             change_annotations: None,
-        })
+        }))
     }
 
     /// The name at `position` and what renaming it rewrites, or `None` when
@@ -212,7 +233,10 @@ impl RenameProvider {
             Resolution::Component(_) => Target::Component(identifier),
             Resolution::Bound(bound) => Target::Binder {
                 name: identifier,
-                text: text.to_string(),
+                doc: cursor
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(ParsedDocument::from_text(text.to_string()))),
+                declaration: bound.declaration,
                 spans: bound.spans,
             },
             Resolution::Symbol(symbol) => {
@@ -221,17 +245,50 @@ impl RenameProvider {
                     return None;
                 }
                 let mut environments = ResolvedEnvironments::new();
-                let occurrences = rename_class(&symbol, &loader)
+                let class = rename_class(&symbol, &loader);
+                let occurrences = class
                     .iter()
                     .flat_map(|member| symbol_occurrences(member, &loader, &mut environments))
                     .collect();
                 Target::Symbol {
                     symbol,
+                    class,
                     occurrences,
                 }
             }
         };
         target.is_at(uri, offset).then_some((range, target))
+    }
+
+    /// Why renaming `target` to `new_name` would change what some name
+    /// means, or `None` when it would not.
+    fn clash(&self, target: &Target, new_name: &str) -> Option<String> {
+        let manager = self.cross_ref_manager.as_ref()?;
+        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+        match target {
+            Target::Component(name) => (name != new_name && loader.load(new_name).is_some())
+                .then(|| format!("a component named `{new_name}` already exists")),
+            Target::Binder {
+                name,
+                doc,
+                declaration,
+                ..
+            } => {
+                let declaration = (*declaration)?;
+                let component = component_at_offset(doc.components(), declaration.start)?;
+                (name != new_name
+                    && formula_walk::binder_scope_mentions(component, declaration, new_name))
+                .then(|| format!("`{new_name}` is already used where `{name}` is bound"))
+            }
+            Target::Symbol {
+                symbol,
+                class,
+                occurrences,
+            } if symbol.name != new_name => {
+                symbol_clash(symbol.kind, class, occurrences, new_name, &loader)
+            }
+            Target::Symbol { .. } => None,
+        }
     }
 
     /// Rename a component across all workspace files
@@ -258,6 +315,96 @@ impl RenameProvider {
             sort_edits_reverse(edits);
             edits.dedup_by(|a, b| a.range == b.range);
         }
+    }
+}
+
+/// Why renaming a symbol of `kind`, whose rename class is `class` and whose
+/// occurrences are `occurrences`, to `new_name` would change what a name
+/// means: a symbol of that name is declared, inherited or seen where the
+/// renamed one is visible, a parameter of that name shares an event with it,
+/// or a binder of that name encloses one of its uses. Events only meet other
+/// events, their names being a namespace of their own.
+fn symbol_clash(
+    kind: SymbolKind,
+    class: &[SymbolIdentity],
+    occurrences: &[SymbolOccurrences],
+    new_name: &str,
+    loader: &ComponentLoader,
+) -> Option<String> {
+    if kind == SymbolKind::Event {
+        return class.iter().find_map(|member| {
+            let loaded = loader.load(&member.owner)?;
+            let Component::Machine(machine) = loaded.component() else {
+                return None;
+            };
+            machine
+                .events
+                .iter()
+                .any(|event| event.name == new_name)
+                .then(|| format!("`{new_name}` is already an event of {}", machine.name))
+        });
+    }
+    let mut environments = ResolvedEnvironments::new();
+    for SymbolOccurrences { loaded, spans } in occurrences {
+        let component = loaded.component();
+        if let Some(existing) = resolve_symbol_identity_in_component_with_environments(
+            component,
+            new_name,
+            loader,
+            &mut environments,
+        )
+        .filter(|existing| existing.kind != SymbolKind::Event)
+        {
+            return Some(format!(
+                "`{new_name}` is already {} of {}",
+                kind_with_article(existing.kind),
+                existing.owner
+            ));
+        }
+        if spans.iter().any(|span| {
+            formula_walk::binders_in_scope_at_offset(component, span.start)
+                .iter()
+                .any(|binder| binder == new_name)
+        }) {
+            return Some(format!(
+                "`{new_name}` is already bound around a use in {}",
+                component.name()
+            ));
+        }
+        let Component::Machine(machine) = component else {
+            continue;
+        };
+        // A parameter meets the parameters of the events it is used in; a
+        // variable, constant or set those of every event that sees it.
+        let events: Vec<&rossi::Event> = if kind == SymbolKind::Parameter {
+            spans
+                .iter()
+                .filter_map(|span| event_at_offset(machine, span.start))
+                .collect()
+        } else {
+            machine.events.iter().collect()
+        };
+        if let Some(event) = events.into_iter().find(|event| {
+            event.parameters.iter().any(|p| p.name == new_name)
+                || !abstract_parameter_identities(component, event, new_name, loader).is_empty()
+        }) {
+            return Some(format!(
+                "`{new_name}` is already a parameter of event {} in {}",
+                event.name, machine.name
+            ));
+        }
+    }
+    None
+}
+
+/// How a clash message names a symbol's kind.
+fn kind_with_article(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Set => "a carrier set",
+        SymbolKind::Constant => "a constant",
+        SymbolKind::Variable => "a variable",
+        SymbolKind::Event => "an event",
+        SymbolKind::Parameter => "a parameter",
     }
 }
 
@@ -1463,6 +1610,123 @@ END
         assert_refused(source, Position::new(4, 5), "a label");
         // Nor is a word in a comment, even one spelled like a variable.
         assert_refused(source, Position::new(2, 9), "a word in a comment");
+    }
+
+    /// Why renaming, to `new_name`, what the first `needle` in `file` names
+    /// is refused; `None` when the rename goes through.
+    fn refusal(
+        sources: &[(&str, &str)],
+        file: &str,
+        needle: &str,
+        new_name: &str,
+    ) -> Option<String> {
+        let provider = workspace_provider(sources);
+        let text = sources.iter().find(|(name, _)| *name == file).unwrap().1;
+        let pos = pos_at(text, text.find(needle).expect("the needle is in the file"));
+        let params = make_rename_params(pos.line, pos.character, file_uri(file), new_name.into());
+        match provider.rename_checked(&params, text) {
+            Ok(edit) => {
+                assert!(edit.is_some(), "the rename goes through");
+                None
+            }
+            Err(reason) => Some(reason),
+        }
+    }
+
+    const CLASH_CONTEXT: (&str, &str) = (
+        "C.eventb",
+        "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k ∈ ℕ\nEND\n",
+    );
+    const CLASH_MACHINE: (&str, &str) = (
+        "M.eventb",
+        "MACHINE M\nSEES C\nVARIABLES\n    x y\nINVARIANTS\n    @inv1 x ≤ k\n    @inv2 y ∈ ℕ\n    @inv3 ∀ z · z ∈ ℕ ⇒ x ≤ z\nEVENTS\n    EVENT set\n    ANY\n        p q\n    WHERE\n        @grd1 p ∈ ℕ\n        @grd2 q ∈ ℕ\n    THEN\n        @act1 x ≔ p\n    END\n\n    EVENT reset\n    THEN\n        @act1 x ≔ 0\n    END\nEND\n",
+    );
+
+    #[test]
+    fn rename_refuses_a_name_declared_where_the_symbol_is_visible() {
+        let sources = [CLASH_CONTEXT, CLASH_MACHINE];
+        let refused = |file, needle, new_name| refusal(&sources, file, needle, new_name);
+        assert_eq!(
+            refused("M.eventb", "x ≤ k", "y").as_deref(),
+            Some("`y` is already a variable of M")
+        );
+        // Renamed in its context, the constant meets a variable of a machine
+        // that sees it.
+        assert_eq!(
+            refused("C.eventb", "k\n", "x").as_deref(),
+            Some("`x` is already a variable of M")
+        );
+        assert_eq!(
+            refused("M.eventb", "x ≤ k", "p").as_deref(),
+            Some("`p` is already a parameter of event set in M")
+        );
+        assert_eq!(
+            refused("M.eventb", "p q", "q").as_deref(),
+            Some("`q` is already a parameter of event set in M")
+        );
+        // An unused name goes through.
+        assert_eq!(refused("M.eventb", "x ≤ k", "w"), None);
+    }
+
+    #[test]
+    fn rename_refuses_a_name_bound_around_a_use() {
+        // `x` is used inside `∀ z`: renamed to `z`, the quantifier would
+        // capture it.
+        assert_eq!(
+            refusal(&[CLASH_CONTEXT, CLASH_MACHINE], "M.eventb", "x ≤ k", "z").as_deref(),
+            Some("`z` is already bound around a use in M")
+        );
+    }
+
+    #[test]
+    fn binder_rename_refuses_a_name_used_in_its_scope() {
+        let sources = [CLASH_CONTEXT, CLASH_MACHINE];
+        assert_eq!(
+            refusal(&sources, "M.eventb", "z ·", "x").as_deref(),
+            Some("`x` is already used where `z` is bound")
+        );
+        // A name the quantifier does not mention may shadow a global.
+        assert_eq!(refusal(&sources, "M.eventb", "z ·", "y"), None);
+    }
+
+    #[test]
+    fn rename_refuses_a_name_the_refinement_chain_declares() {
+        // `level` disappears in M1, glued to `height`: renaming `height` to
+        // `level` would retain the abstract variable instead.
+        let sources = [
+            (
+                "M0.eventb",
+                "MACHINE M0\nVARIABLES\n    level\nINVARIANTS\n    @inv1 level ∈ ℕ\nEND\n",
+            ),
+            (
+                "M1.eventb",
+                "MACHINE M1\nREFINES M0\nVARIABLES\n    height\nINVARIANTS\n    @inv1 height = level\nEND\n",
+            ),
+        ];
+        assert_eq!(
+            refusal(&sources, "M1.eventb", "height", "level").as_deref(),
+            Some("`level` is already a variable of M0")
+        );
+    }
+
+    #[test]
+    fn event_rename_refuses_another_event_name_only() {
+        let sources = [CLASH_CONTEXT, CLASH_MACHINE];
+        assert_eq!(
+            refusal(&sources, "M.eventb", "set\n", "reset").as_deref(),
+            Some("`reset` is already an event of M")
+        );
+        // Events and variables are separate namespaces.
+        assert_eq!(refusal(&sources, "M.eventb", "set\n", "y"), None);
+    }
+
+    #[test]
+    fn component_rename_refuses_an_existing_component() {
+        let sources = [CLASH_CONTEXT, CLASH_MACHINE];
+        assert_eq!(
+            refusal(&sources, "C.eventb", "C\n", "M").as_deref(),
+            Some("a component named `M` already exists")
+        );
     }
 
     const REFINEMENT_ABSTRACT: &str =

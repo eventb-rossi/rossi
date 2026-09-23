@@ -318,10 +318,7 @@ fn resolve_symbol_identity_at_position(
         }
         // An abstract event's parameters are in scope throughout an event
         // that extends it, and in the witnesses of one that drops them.
-        if let Some(event) = machine
-            .events
-            .iter()
-            .find(|event| event.span.is_some_and(|span| covers(span, offset)))
+        if let Some(event) = event_at_offset(machine, offset)
             && (event.extended || in_witness(event, offset))
             && let Some(parameter) =
                 abstract_parameter_identities(component, event, identifier, loader)
@@ -391,6 +388,14 @@ pub(crate) fn abstract_parameter_identities(
     let mut found = Vec::new();
     search(component, event, name, loader, &mut Vec::new(), &mut found);
     found
+}
+
+/// The event of `machine` whose span covers `offset`.
+pub(crate) fn event_at_offset(machine: &rossi::Machine, offset: usize) -> Option<&rossi::Event> {
+    machine
+        .events
+        .iter()
+        .find(|event| event.span.is_some_and(|span| covers(span, offset)))
 }
 
 /// Whether `offset` falls in one of `event`'s witnesses, label included.

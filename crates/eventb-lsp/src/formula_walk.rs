@@ -501,6 +501,49 @@ pub fn binders_in_scope_at_offset(component: &Component, offset: usize) -> Vec<S
     c.names
 }
 
+/// Finds the frame a binder declaration belongs to, and the body it covers.
+struct BinderScope {
+    declaration: Span,
+    found: Option<(Vec<String>, Option<Span>)>,
+}
+
+impl occurrences::OccurrenceVisitor for BinderScope {
+    fn visit(&mut self, _occ: Occurrence<'_>) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn enter_scope(&mut self, frame: &[DeclRef], scope_span: Option<Span>) -> ControlFlow<()> {
+        if frame.iter().any(|d| d.span == Some(self.declaration)) {
+            let names = frame.iter().map(|d| d.name.clone()).collect();
+            self.found = Some((names, scope_span));
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl WalkVisitor for BinderScope {}
+
+/// Whether renaming the formula binder declared at `declaration` to `name`
+/// would capture something: `name` is another binder of the same frame, or
+/// occurs anywhere in the body the binder scopes.
+pub(crate) fn binder_scope_mentions(component: &Component, declaration: Span, name: &str) -> bool {
+    let mut scope = BinderScope {
+        declaration,
+        found: None,
+    };
+    drive(component, &mut scope);
+    let Some((frame, body)) = scope.found else {
+        return false;
+    };
+    frame.iter().any(|binder| binder == name)
+        || body.is_some_and(|body| {
+            collect_in_component(component, name)
+                .iter()
+                .any(|hit| body.start <= hit.span.start && hit.span.end <= body.end)
+        })
+}
+
 /// Declaration span of a set / constant / variable named `name`, if this
 /// component declares it. (Event parameters are declared per event; see the
 /// rename / references parameter paths.)
