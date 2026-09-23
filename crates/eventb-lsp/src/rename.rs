@@ -22,9 +22,9 @@ use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
-use crate::references::{SymbolOccurrences, symbol_occurrences};
+use crate::references::{SymbolOccurrences, symbol_candidates, symbol_occurrences};
 use crate::resolved_environment::ResolvedEnvironments;
-use crate::symbols::{Resolution, SymbolKind, resolve_cursor};
+use crate::symbols::{Resolution, SymbolIdentity, SymbolKind, resolve_cursor};
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -258,16 +258,81 @@ impl RenameProvider {
         };
         if !matches!(
             symbol.kind,
-            SymbolKind::Parameter | SymbolKind::Set | SymbolKind::Constant
+            SymbolKind::Parameter | SymbolKind::Set | SymbolKind::Constant | SymbolKind::Variable
         ) {
             return None;
         }
         let mut environments = ResolvedEnvironments::new();
-        Some(occurrence_edits(
-            symbol_occurrences(&symbol, &loader, &mut environments),
-            &symbol.name,
-            new_name,
-        ))
+        let occurrences = rename_class(&symbol, &loader)
+            .iter()
+            .flat_map(|member| symbol_occurrences(member, &loader, &mut environments))
+            .collect();
+        Some(occurrence_edits(occurrences, &symbol.name, new_name))
+    }
+}
+
+/// The symbols a rename of `start` changes together with it: the
+/// declarations the refinement chain links to it as one entity, up and down.
+/// A variable a refinement declares again is the variable it retains, so
+/// renaming either renames both.
+fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
+    let mut class = vec![start.clone()];
+    let mut next = 0;
+    while let Some(member) = class.get(next).cloned() {
+        next += 1;
+        let mut linked = retained_parents(&member, loader);
+        for name in symbol_candidates(&member, loader) {
+            if let Some(loaded) = loader.load(&name) {
+                linked.extend(
+                    local_declarations(loaded.component(), &member)
+                        .into_iter()
+                        .filter(|declared| retained_parents(declared, loader).contains(&member)),
+                );
+            }
+        }
+        for symbol in linked {
+            if !class.contains(&symbol) {
+                class.push(symbol);
+            }
+        }
+    }
+    class
+}
+
+/// The declarations in the abstract machine that `symbol` retains: the
+/// variable of the same name a refinement declares again.
+fn retained_parents(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
+    if symbol.kind != SymbolKind::Variable {
+        return Vec::new();
+    }
+    let Some(loaded) = loader.load(&symbol.owner) else {
+        return Vec::new();
+    };
+    let Component::Machine(machine) = loaded.component() else {
+        return Vec::new();
+    };
+    machine
+        .refines
+        .as_deref()
+        .and_then(|parent| loader.load(parent))
+        .map(|parent| local_declarations(parent.component(), symbol))
+        .unwrap_or_default()
+}
+
+/// What `component` itself declares under `like`'s name and kind.
+fn local_declarations(component: &Component, like: &SymbolIdentity) -> Vec<SymbolIdentity> {
+    match (component, like.kind) {
+        (Component::Machine(machine), SymbolKind::Variable)
+            if machine.variables.iter().any(|v| v.name == like.name) =>
+        {
+            vec![SymbolIdentity {
+                name: like.name.clone(),
+                kind: SymbolKind::Variable,
+                owner: machine.name.clone(),
+                event: None,
+            }]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -1477,6 +1542,57 @@ END
         let renamed = renamed_workspace(&sources, "C1.eventb", "x\n", "y").unwrap();
         assert_eq!(renamed[0], replaced(&sources[..1], "x", "y")[0]);
         assert_eq!(renamed[1], sources[1].1, "the machine keeps its variable");
+    }
+
+    const REFINEMENT_ABSTRACT: &str =
+        include_str!("../../rossi/examples/refinement_abstract.eventb");
+    const REFINEMENT_CONCRETE: &str =
+        include_str!("../../rossi/examples/refinement_concrete.eventb");
+
+    #[test]
+    fn variable_rename_reaches_the_gluing_invariant_and_the_witness() {
+        // The concrete machine drops `abstract_state`: it glues it in @inv3
+        // and witnesses its after-state in `decrease`.
+        let sources = [
+            ("abstract.eventb", REFINEMENT_ABSTRACT),
+            ("concrete.eventb", REFINEMENT_CONCRETE),
+        ];
+        let expected = replaced(&sources, "abstract_state", "level");
+        for (file, needle) in [
+            ("abstract.eventb", "abstract_state"),
+            ("concrete.eventb", "abstract_state'"),
+            ("concrete.eventb", "abstract_state ="),
+        ] {
+            assert_eq!(
+                renamed_workspace(&sources, file, needle, "level"),
+                Some(expected.clone()),
+                "renamed from `{needle}` in {file}"
+            );
+        }
+    }
+
+    #[test]
+    fn variable_rename_follows_a_retained_variable_both_ways() {
+        let sources = [
+            (
+                "M0.eventb",
+                "MACHINE M0\nVARIABLES\n    state\nINVARIANTS\n    @inv1 state ∈ ℕ\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 state ≔ 0\n    END\nEND\n",
+            ),
+            (
+                "M1.eventb",
+                "MACHINE M1\nREFINES M0\nVARIABLES\n    state\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 state ≔ 0\n    END\nEND\n",
+            ),
+            (
+                "M2.eventb",
+                "MACHINE M2\nREFINES M1\nVARIABLES\n    state\nINVARIANTS\n    @inv1 state ≤ 10\nEND\n",
+            ),
+        ];
+        // Declared again in each refinement, `state` is one variable: renamed
+        // from the middle, it changes above and below.
+        assert_eq!(
+            renamed_workspace(&sources, "M1.eventb", "state", "level"),
+            Some(replaced(&sources, "state", "level"))
+        );
     }
 
     #[test]
