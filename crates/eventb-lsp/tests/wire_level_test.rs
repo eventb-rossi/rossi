@@ -1234,6 +1234,74 @@ mod project_diagnostics {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn a_duplicate_or_primed_name_is_reported_once() {
+        // The per-component lint and the project check both run the
+        // duplicate and primed-name passes; the editor shows each finding
+        // once.
+        for (code, text) in [
+            ("EB021", "CONTEXT dup\nSETS\n    S\nCONSTANTS\n    S\nEND\n"),
+            (
+                "EB022",
+                "CONTEXT dup\nCONSTANTS\n    c\nAXIOMS\n    @axm1 c \u{2208} \u{2115}\n    @axm1 c \u{2265} 0\nEND\n",
+            ),
+            (
+                "EB033",
+                "CONTEXT dup\nCONSTANTS\n    c'\nAXIOMS\n    @axm1 c' \u{2208} \u{2115}\nEND\n",
+            ),
+        ] {
+            let diagnostics = diagnostics_for(text).await;
+            let reported = diagnostics
+                .iter()
+                .filter(|d| d["code"] == json!(code))
+                .count();
+            assert_eq!(reported, 1, "{code} once; got {diagnostics:?}");
+        }
+    }
+
+    /// `evt` in `M1` extends `evt` in `M0` and reuses its guard label.
+    const INHERITED_LABEL: &str = concat!(
+        "MACHINE M0\n",
+        "VARIABLES\n",
+        "    x\n",
+        "INVARIANTS\n",
+        "    @inv1 x \u{2208} \u{2124}\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION\n",
+        "    THEN\n",
+        "        @init1 x \u{2254} 0\n",
+        "    END\n",
+        "    EVENT evt\n",
+        "    WHERE\n",
+        "        @grd1 x \u{2265} 0\n",
+        "    END\n",
+        "END\n",
+        "MACHINE M1\n",
+        "REFINES M0\n",
+        "VARIABLES\n",
+        "    x\n",
+        "EVENTS\n",
+        "    EVENT INITIALISATION EXTENDS INITIALISATION\n",
+        "    END\n",
+        "    EVENT evt EXTENDS evt\n",
+        "    WHERE\n",
+        "        @grd1 x \u{2265} 1\n",
+        "    END\n",
+        "END\n",
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_label_clashing_with_an_inherited_one_is_reported() {
+        // Only the project check sees the abstract event, so its EB022 is
+        // the one copy the editor gets.
+        let diagnostics = diagnostics_for(INHERITED_LABEL).await;
+        let reported = diagnostics
+            .iter()
+            .filter(|d| d["code"] == json!("EB022"))
+            .count();
+        assert_eq!(reported, 1, "EB022 once; got {diagnostics:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_well_typed_model_reports_nothing() {
         let diagnostics = diagnostics_for(GOOD_TYPE).await;
         assert!(
