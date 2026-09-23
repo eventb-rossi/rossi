@@ -1590,9 +1590,10 @@ mod type_hierarchy {
 
 mod pull_diagnostics {
     //! Wire-level tests for `textDocument/diagnostic` and
-    //! `workspace/diagnostic`: the capability is advertised, an open buffer's
-    //! report matches what the push path would publish, echoing a result id
-    //! answers `unchanged`, and the workspace sweep reaches a file that was
+    //! `workspace/diagnostic`: the capability is offered only to a client
+    //! that declares diagnostic refresh support, an open buffer is left to
+    //! the push path so no finding reaches the client twice, echoing a result
+    //! id answers `unchanged`, and the workspace sweep reaches a file that was
     //! never opened.
 
     use super::{TempWorkspace, notification};
@@ -1609,21 +1610,19 @@ mod pull_diagnostics {
     const CLEAN: &str =
         "CONTEXT clean\nCONSTANTS\n    c\nAXIOMS\n    @axm1 c \u{2208} \u{2115}\nEND\n";
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_document_pull_reports_and_then_answers_unchanged() {
-        let workspace = TempWorkspace::new("pull-diagnostics-doc");
-        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
-        let file_uri = Uri::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
+    /// The client capabilities pull diagnostics are offered to.
+    fn refreshing_client() -> Value {
+        json!({ "workspace": { "diagnostics": { "refreshSupport": true } } })
+    }
 
+    /// The `diagnosticProvider` the server advertises to a client declaring
+    /// `capabilities`, `null` when it advertises none.
+    async fn advertised(capabilities: Value) -> Value {
         let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
         tokio::spawn(async move { while socket.next().await.is_some() {} });
-
         let init = Request::build("initialize")
             .id(1)
-            .params(json!({
-                "capabilities": {},
-                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
-            }))
+            .params(json!({ "capabilities": capabilities }))
             .finish();
         let response = service
             .ready()
@@ -1634,7 +1633,16 @@ mod pull_diagnostics {
             .unwrap()
             .unwrap();
         let (_id, result) = response.into_parts();
-        let provider = &result.unwrap()["capabilities"]["diagnosticProvider"];
+        result.unwrap()["capabilities"]["diagnosticProvider"].clone()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pull_is_offered_only_to_clients_that_declare_refresh_support() {
+        // Neovim 0.11 and lsp-mode declare none; lsp-mode keeps pulled and
+        // pushed findings in one slot, where an empty pull would erase them.
+        assert_eq!(advertised(json!({})).await, Value::Null);
+
+        let provider = advertised(refreshing_client()).await;
         assert_eq!(provider["identifier"], json!("rossi"));
         assert_eq!(
             provider["interFileDependencies"],
@@ -1642,7 +1650,32 @@ mod pull_diagnostics {
             "a SEES / REFINES / EXTENDS edit changes what dependents report"
         );
         assert_eq!(provider["workspaceDiagnostics"], json!(true));
+    }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_open_document_is_left_to_push() {
+        let workspace = TempWorkspace::new("pull-diagnostics-doc");
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let file_uri = Uri::from_file_path(workspace.as_ref().join("broken.eventb")).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        let (sender, mut pushed) = futures::channel::mpsc::unbounded();
+        tokio::spawn(async move {
+            while let Some(request) = socket.next().await {
+                if request.method() == "textDocument/publishDiagnostics" {
+                    let _ = sender.unbounded_send(request.params().cloned().unwrap());
+                }
+            }
+        });
+
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": refreshing_client(),
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
         service
             .ready()
             .await
@@ -1668,6 +1701,14 @@ mod pull_diagnostics {
             .await
             .unwrap();
 
+        // The push carries the finding.
+        let published = pushed.next().await.expect("opening must publish");
+        assert_eq!(published["uri"], json!(file_uri));
+        assert!(
+            !published["diagnostics"].as_array().unwrap().is_empty(),
+            "the CONSTANS typo must be pushed; got {published}"
+        );
+
         let pull = |id: i64, previous: Option<String>| {
             let mut params = json!({ "textDocument": { "uri": file_uri } });
             if let Some(previous) = previous {
@@ -1679,6 +1720,8 @@ mod pull_diagnostics {
                 .finish()
         };
 
+        // The pull does not repeat it: a client showing both would list every
+        // finding twice.
         let response = service
             .ready()
             .await
@@ -1689,20 +1732,18 @@ mod pull_diagnostics {
             .expect("textDocument/diagnostic must respond");
         let (_id, result) = response.into_parts();
         let first: Value = result.expect("textDocument/diagnostic must succeed");
-
         assert_eq!(first["kind"], json!("full"));
-        let items = first["items"].as_array().expect("items is an array");
-        assert!(
-            !items.is_empty(),
-            "the CONSTANS typo must be reported; got {first}"
+        assert_eq!(
+            first["items"].as_array().expect("items is an array").len(),
+            0,
+            "an open document's findings are pushed, not pulled; got {first}"
         );
         let result_id = first["resultId"]
             .as_str()
-            .expect("an open document carries a result id")
+            .expect("the report carries a result id")
             .to_string();
 
-        // Echoing the result id for an untouched document answers `unchanged`
-        // rather than resending every item.
+        // Echoing the result id answers `unchanged` rather than resending.
         let response = service
             .ready()
             .await
@@ -1716,37 +1757,32 @@ mod pull_diagnostics {
         assert_eq!(second["kind"], json!("unchanged"), "got {second}");
         assert_eq!(second["resultId"], json!(result_id));
 
-        // An edit moves the revision, so the same previous id now reports in
-        // full again.
-        service
-            .ready()
-            .await
-            .unwrap()
-            .call(notification(
-                "textDocument/didChange",
-                json!({
-                    "textDocument": { "uri": file_uri, "version": 2 },
-                    "contentChanges": [{ "text": CLEAN }],
-                }),
-            ))
-            .await
-            .unwrap();
-
+        // The workspace sweep lists the open document empty too, so a client
+        // drops whatever it pulled while the file was closed.
+        let request = Request::build("workspace/diagnostic")
+            .id(4)
+            .params(json!({ "previousResultIds": [] }))
+            .finish();
         let response = service
             .ready()
             .await
             .unwrap()
-            .call(pull(4, Some(result_id)))
+            .call(request)
             .await
             .unwrap()
-            .unwrap();
+            .expect("workspace/diagnostic must respond");
         let (_id, result) = response.into_parts();
-        let third: Value = result.unwrap();
-        assert_eq!(third["kind"], json!("full"), "got {third}");
+        let report: Value = result.expect("workspace/diagnostic must succeed");
+        let open_report = report["items"]
+            .as_array()
+            .expect("items is an array")
+            .iter()
+            .find(|item| item["uri"] == json!(file_uri))
+            .unwrap_or_else(|| panic!("the open document must be swept; got {report}"));
         assert_eq!(
-            third["items"].as_array().unwrap().len(),
+            open_report["items"].as_array().unwrap().len(),
             0,
-            "the repaired document is clean; got {third}"
+            "an open document's findings are pushed, not pulled; got {report}"
         );
     }
 
@@ -1765,7 +1801,7 @@ mod pull_diagnostics {
         let init = Request::build("initialize")
             .id(1)
             .params(json!({
-                "capabilities": {},
+                "capabilities": refreshing_client(),
                 "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
             }))
             .finish();
