@@ -286,16 +286,42 @@ pub(crate) fn symbol_occurrences(
             environments,
         ) == Some(symbol.clone())
         {
-            let spans = symbol_spans(loaded.component(), &symbol.name);
+            let mut spans = symbol_spans(loaded.component(), &symbol.name);
+            // A refinement the variable disappears from witnesses its
+            // after-state by name: `@x' x' = …`.
+            if symbol.kind == SymbolKind::Variable && component_name != symbol.owner {
+                spans.extend(witness_label_spans(
+                    loaded.component(),
+                    loaded.text(),
+                    &format!("{}'", symbol.name),
+                ));
+            }
             occurrences.push(SymbolOccurrences { loaded, spans });
         }
     }
     occurrences
 }
 
+/// The spans of every witness labelled `label` in `component`'s events.
+fn witness_label_spans(component: &Component, text: &str, label: &str) -> Vec<Span> {
+    let Component::Machine(machine) = component else {
+        return Vec::new();
+    };
+    let events = machine.events.iter().map(|e| (&e.with, &e.witnesses));
+    let initialisation = machine
+        .initialisation
+        .iter()
+        .map(|i| (&i.with, &i.witnesses));
+    events
+        .chain(initialisation)
+        .flat_map(|(with, witnesses)| with.iter().chain(witnesses))
+        .filter_map(|witness| crate::symbols::label_span(text, witness, label))
+        .collect()
+}
+
 /// The components that could refer to `symbol`: the index's candidates plus
 /// every open document, whose graph entry may lag behind its buffer.
-fn symbol_candidates(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<String> {
+pub(crate) fn symbol_candidates(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<String> {
     let mut candidates = candidate_components_for_symbol(symbol, loader.manager());
     candidates.extend(loader.open_component_names().map(str::to_owned));
     candidates.sort();

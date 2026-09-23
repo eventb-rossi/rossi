@@ -551,6 +551,24 @@ pub(crate) fn event_parameter_span(event: &rossi::Event, name: &str) -> Option<S
         .and_then(|parameter| parameter.span)
 }
 
+/// The span of `predicate`'s label when that label is `label`: the name after
+/// the `@`, which the predicate's own span starts with.
+pub(crate) fn label_span(
+    text: &str,
+    predicate: &rossi::LabeledPredicate,
+    label: &str,
+) -> Option<Span> {
+    if predicate.label.as_deref() != Some(label) {
+        return None;
+    }
+    let span = predicate.span?;
+    let start = span.start + text.get(span.start..span.end)?.find('@')? + 1;
+    text.get(start..)?.starts_with(label).then_some(Span {
+        start,
+        end: start + label.len(),
+    })
+}
+
 /// The name span of parameter `name` declared in `event_name`'s `ANY` clause.
 fn parameter_declaration_span(component: &Component, event_name: &str, name: &str) -> Option<Span> {
     let Component::Machine(machine) = component else {
