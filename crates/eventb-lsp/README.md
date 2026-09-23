@@ -174,11 +174,16 @@ can see. These are the findings `rossi build` reports, not the smaller set
 subcommand passes. Only findings about the open file's own components are
 published; a dependency reports its own when its file is analyzed.
 
-Diagnostics are available both ways. The server pushes
-`textDocument/publishDiagnostics` for open buffers, and it answers the pull
-requests `textDocument/diagnostic` and `workspace/diagnostic` with the same
-findings. The workspace sweep also reports files nobody has opened, read from
-disk, so a project-wide problem list does not depend on visiting every file.
+Open buffers are reported by push alone: the server publishes
+`textDocument/publishDiagnostics` for them and answers a
+`textDocument/diagnostic` pull with an empty report, because clients keep
+pushed and pulled findings side by side and would otherwise show each one
+twice. Pull serves the files nobody has opened: the `workspace/diagnostic`
+sweep reads them from disk, so a project-wide problem list does not depend on
+visiting every file. Pull is offered only to a client that declares
+`workspace.diagnostics.refreshSupport` (VS Code and Zed do, Neovim 0.11 and
+lsp-mode do not), since a client that stores both kinds in one place, as
+lsp-mode does, would let an empty pull erase what was pushed.
 A report's `resultId` is a hash of the findings it carries, so echoing it back
 as `previousResultId` answers `unchanged` for exactly as long as the report
 says the same thing — including when a proof-status, animate or workspace-graph

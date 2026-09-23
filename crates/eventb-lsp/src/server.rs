@@ -628,14 +628,15 @@ impl Analyzer {
         }
     }
 
-    /// One document's diagnostics for a *pull* request, with the result id a
-    /// client echoes back as `previousResultId` to ask "has this changed?".
+    /// One file's diagnostics for the `workspace/diagnostic` sweep, with the
+    /// result id a client echoes back as `previousResultId` to ask "has this
+    /// changed?".
     ///
-    /// Two sources, in order: an open buffer's stored parse (the same one the
-    /// push path publishes, so pull and push can never disagree), or, for a
-    /// workspace file nobody has opened, the bytes on disk. The disk case is
-    /// what makes `workspace/diagnostic` worth having — it is the only way a
-    /// user sees an error in a file they have not visited.
+    /// A file nobody has opened is read from disk, which is what makes the
+    /// sweep worth having: it is the only way a user sees an error in a file
+    /// they have not visited. An open buffer reports empty, since the push
+    /// path reports it and a client would show both (see
+    /// [`RossiLanguageServer::diagnostic`]).
     ///
     /// The result id is a hash of the report itself, so `unchanged` means
     /// exactly that. The buffer's revision would be cheaper but wrong: a
@@ -646,8 +647,10 @@ impl Analyzer {
     /// broken proof produced. Hashing the report also gives a file read from
     /// disk an id, which a revision cannot.
     pub(crate) fn pull_report(&self, uri: &Uri) -> Option<(Option<String>, Vec<Diagnostic>)> {
-        // The buffer if it is open, the file otherwise, through the loader
-        // every other cross-file path reads with.
+        if self.document_manager.version(uri).is_some() {
+            return Some((report_result_id(&[]), Vec::new()));
+        }
+        // The file, through the loader every other cross-file path reads with.
         let doc = crate::component_loader::ComponentLoader::new(
             &self.cross_reference_manager,
             Some(&self.document_manager),
@@ -1631,6 +1634,21 @@ impl LanguageServer for RossiLanguageServer {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // Pull diagnostics answer empty for open buffers, which the push
+        // path reports (see `diagnostic`). That is safe only for a client
+        // that keeps pulled findings apart from pushed ones, and LSP does not
+        // say how a client combines the two, so refresh support stands in:
+        // VS Code and Zed declare it and keep them apart, while Neovim 0.11
+        // and lsp-mode declare none, and lsp-mode writes both into one slot,
+        // where an empty pull would erase what was pushed.
+        let offers_pull_diagnostics = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.diagnostics.as_ref())
+            .and_then(|diagnostics| diagnostics.refresh_support)
+            .unwrap_or(false);
+
         if let Some(settings) = params.initialization_options.as_ref() {
             match RossiConfig::from_client_settings(settings) {
                 Ok(config) => {
@@ -1689,20 +1707,19 @@ impl LanguageServer for RossiLanguageServer {
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 // From a symbol to the carrier sets its inferred type mentions.
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
-                // Pull diagnostics alongside the push ones: a client that
-                // supports pull uses it and ignores the pushes, and one that
-                // does not keeps working unchanged. `interFileDependencies`
-                // is true because a SEES/REFINES/EXTENDS edit changes what a
+                // Pull diagnostics for the files nobody has open, next to the
+                // push that reports open buffers. `interFileDependencies` is
+                // true because a SEES/REFINES/EXTENDS edit changes what a
                 // *dependent* file reports, so the client must be willing to
                 // re-pull siblings rather than trust a per-file cache.
-                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
-                    DiagnosticOptions {
+                diagnostic_provider: offers_pull_diagnostics.then(|| {
+                    DiagnosticServerCapabilities::Options(DiagnosticOptions {
                         identifier: Some("rossi".to_string()),
                         inter_file_dependencies: true,
                         workspace_diagnostics: true,
                         work_done_progress_options: WorkDoneProgressOptions::default(),
-                    },
-                )),
+                    })
+                }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
@@ -2494,19 +2511,13 @@ impl LanguageServer for RossiLanguageServer {
         let uri = params.text_document.uri;
         debug!("Pull diagnostic request for: {}", uri.as_str());
 
-        let analyzer = self.analyzer.clone();
+        // A client pulls the documents it has open, and the push path already
+        // reports those. Clients show pushed and pulled findings side by side,
+        // so answering here too would list every finding twice. The report is
+        // empty whether or not the server holds the buffer yet: this request
+        // can be handled before the didOpen it follows.
         let previous = params.previous_result_id;
-        let report = run_blocking(move || analyzer.pull_report(&uri)).await?;
-
-        // A file the server cannot read at all (deleted between the client's
-        // request and this read) reports as clean rather than as an error: the
-        // client is about to drop it anyway, and a request failure would make
-        // it retry.
-        let Some((result_id, items)) = report else {
-            return Ok(DocumentDiagnosticReportResult::Report(
-                DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport::default()),
-            ));
-        };
+        let result_id = report_result_id(&[]);
 
         if let (Some(current), Some(previous)) = (result_id.as_deref(), previous.as_deref())
             && current == previous
@@ -2524,7 +2535,10 @@ impl LanguageServer for RossiLanguageServer {
         Ok(DocumentDiagnosticReportResult::Report(
             DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
                 related_documents: None,
-                full_document_diagnostic_report: FullDocumentDiagnosticReport { result_id, items },
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id,
+                    items: Vec::new(),
+                },
             }),
         ))
     }

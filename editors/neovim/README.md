@@ -47,8 +47,9 @@ This directory contains Neovim configuration for Event-B formal modeling, provid
   every occurrence of the symbol under the cursor; REFINES/EXTENDS as a
   hierarchy; the events and machines that refine the one under the cursor;
   the carrier sets a symbol's type is built from
-- **Pull Diagnostics**: `textDocument/diagnostic` and `workspace/diagnostic`,
-  so a workspace-wide problem list covers files nobody has opened
+- **Pull Diagnostics**: `workspace/diagnostic` lists files nobody has opened,
+  for clients declaring `workspace.diagnostics.refreshSupport` (Neovim 0.11 does
+  not); open buffers are always pushed
 - **Range Formatting and Range Semantic Tokens**: format only the selected
   components; highlight only the visible lines
 - **Project Static Check**: type errors and Rodin-style drops over the file's
