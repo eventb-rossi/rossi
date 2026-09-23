@@ -2879,7 +2879,9 @@ impl LanguageServer for RossiLanguageServer {
         // A rename reads closed workspace files, so keep the complete
         // operation off the async handler threads.
         let provider = Arc::clone(&self.rename_provider);
-        let response = run_blocking(move || provider.rename(&params, &text)).await?;
+        let response = run_blocking(move || provider.rename_checked(&params, &text))
+            .await?
+            .map_err(Error::invalid_params)?;
 
         debug!(
             "Rename returned: {}",

@@ -284,9 +284,12 @@ refinement declares again, and an event refining one of its own name, are the
 same entity and rename together, with the gluing invariants, witnesses and
 `refines` / `extends` targets that name them. A formula binder renames within
 its own scope. A position that names nothing renameable, such as a label, a
-comment or an undeclared name, is refused. Renaming an event or a witnessed
-name changes the names of its proof obligations, so the stored proofs of the
-old names no longer apply.
+comment or an undeclared name, is refused. So is a new name that would change
+what a name means: a symbol already declared, inherited or seen where the
+renamed one is visible, a parameter of an event it is used in, a binder around
+one of its uses, or an existing component or event; the error says which.
+Renaming an event or a witnessed name changes the names of its proof
+obligations, so the stored proofs of the old names no longer apply.
 
 ### Display Features
 
