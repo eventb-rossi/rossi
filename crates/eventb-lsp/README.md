@@ -22,7 +22,7 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 - **Find references** - Identifier and component references, including workspace references
 - **Document highlight** - Every occurrence of the symbol under the cursor in the current file, with assignment targets and declarations marked as writes
 - **Workspace symbols** - Search indexed contexts, machines, events, variables, constants, and sets
-- **Rename refactoring** - Rename identifiers and components across indexed documents
+- **Rename refactoring** - Rename identifiers and components in every file that uses them, following the refinement chain
 - **Semantic highlighting** - LSP semantic tokens for Event-B constructs
 - **Document links** - Clickable links for `SEES`, `REFINES`, and `EXTENDS` targets
 - **Code actions** - ASCII/Unicode operator conversion, missing-clause fixes, missing `END`, sorting, and rename hints
@@ -276,8 +276,17 @@ The server supports go-to-definition, find-references, workspace symbols, and
 rename. Navigation resolves local declarations and cross-file references through
 `SEES`, `REFINES`, and `EXTENDS` chains.
 
-Rename works for identifiers and indexed components. It updates all references
-that the workspace index can resolve.
+Rename rewrites every occurrence find-references reports, closed files
+included: a constant or carrier set in every context extending its own and
+every machine seeing it, a component wherever a declaration or dependency
+clause names it. Along the refinement chain, a variable or parameter a
+refinement declares again, and an event refining one of its own name, are the
+same entity and rename together, with the gluing invariants, witnesses and
+`refines` / `extends` targets that name them. A formula binder renames within
+its own scope. A position that names nothing renameable, such as a label, a
+comment or an undeclared name, is refused. Renaming an event or a witnessed
+name changes the names of its proof obligations, so the stored proofs of the
+old names no longer apply.
 
 ### Display Features
 
@@ -518,7 +527,7 @@ discharging open ones.
 ## Known Limitations
 
 - Diagnostics cover parse errors, the component-local checks above and the project-level static check over the open file's dependency closure. A component whose closure is incomplete (an unresolvable `SEES` / `REFINES` / `EXTENDS` target) reports no project-level findings at all, since every inherited name would otherwise read as unknown.
-- Find-references and rename for variables, constants, sets, and parameters resolve from AST identifier spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
+- Find-references and rename for variables, constants, sets, events and parameters resolve from AST spans and are scope-aware: a quantifier / lambda / comprehension / parameter binder of the same name is not confused with the symbol, and the after-state form `x'` is handled at its base. Component-name references and rename remain structural (whole-word) lookups, and the semantic-token recovery path still scans text for declarations in regions the parser could not recover.
 - Semantic tokens are AST-driven: declarations, keywords, labels, comments, and identifier *usages* inside formula bodies (variables / constants / sets keep their declared kind; quantifier, lambda, and comprehension binders and event parameters are coloured as parameters).
 - Workspace indexing is eager/basic; there is no LRU eviction or parallel indexing yet. Requests honour `$/cancelRequest` at the protocol level, but a request's blocking work runs to completion once started.
 

@@ -2841,8 +2841,11 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Check if the symbol can be renamed
-        let range = self.rename_provider.prepare_rename(&params, &text);
+        // Checking that the rename would rewrite the name at the cursor
+        // resolves it across the workspace, reading closed files, so keep it
+        // off the async handler threads.
+        let provider = Arc::clone(&self.rename_provider);
+        let range = run_blocking(move || provider.prepare_rename(&params, &text)).await?;
 
         if let Some(range) = range {
             debug!("Symbol at {:?} can be renamed", position);
@@ -2873,8 +2876,8 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // A component rename reads every closed workspace file, so keep the
-        // complete operation off the async handler threads.
+        // A rename reads closed workspace files, so keep the complete
+        // operation off the async handler threads.
         let provider = Arc::clone(&self.rename_provider);
         let response = run_blocking(move || provider.rename(&params, &text)).await?;
 

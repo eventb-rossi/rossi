@@ -1,8 +1,14 @@
-//! Symbol rename functionality
+//! Symbol rename.
 //!
-//! This module provides the ability to rename Event-B symbols (variables, constants,
-//! sets, events) safely by updating all references throughout the document and
-//! across the workspace.
+//! A rename rewrites what the cursor names wherever it is named. The resolver
+//! go-to-definition and find-references use places the cursor, and the
+//! occurrences find-references reports are rewritten, closed files included.
+//! Along the refinement chain, a variable or parameter a refinement declares
+//! again, and an event refining one of its own name, are the same entity and
+//! rename together. A formula binder renames within its own scope, a
+//! component wherever a declaration or dependency clause names it. A
+//! position the resolver cannot place, such as a label, a comment or a name
+//! nothing declares, is refused rather than guessed at.
 
 use crate::lsp_types::*;
 use std::collections::HashMap;
@@ -13,11 +19,9 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
-use crate::component_util::{
-    component_at_offset, declared_name_at_offset, parse_all, resolve_component_at_position,
-};
+use crate::component_util::covers;
 use crate::cross_references::CrossReferenceManager;
-use crate::document::{DocumentManager, ParsedDocument};
+use crate::document::DocumentManager;
 use crate::formula_walk;
 use crate::identifier_utils;
 use crate::identifier_utils::position_to_offset;
@@ -43,6 +47,53 @@ impl Default for RenameProvider {
     }
 }
 
+/// What a rename at the cursor rewrites.
+enum Target {
+    /// A component name, renamed wherever a declaration or dependency clause
+    /// names it.
+    Component(String),
+    /// A formula binder: its declaration and the uses it binds, all in the
+    /// cursor document, whose text they index.
+    Binder {
+        name: String,
+        text: String,
+        spans: Vec<Span>,
+    },
+    /// A symbol, with the declarations renamed along with it.
+    Symbol {
+        symbol: SymbolIdentity,
+        occurrences: Vec<SymbolOccurrences>,
+    },
+}
+
+impl Target {
+    /// Whether the new name may be hyphenated: a structural name (a
+    /// component or an event, as Rodin labels and file names) may be, a
+    /// mathematical identifier may not (kernel_lang §2.2).
+    fn is_structural(&self) -> bool {
+        match self {
+            Target::Component(_) => true,
+            Target::Binder { .. } => false,
+            Target::Symbol { symbol, .. } => symbol.kind == SymbolKind::Event,
+        }
+    }
+
+    /// Whether an occurrence this rewrites sits at `offset` in the cursor
+    /// document `uri`, so the cursor is on a name rather than on a label or
+    /// comment spelled like it.
+    fn is_at(&self, uri: &Uri, offset: usize) -> bool {
+        match self {
+            // Resolved from the cursor's own dependency clause or header.
+            Target::Component(_) => true,
+            Target::Binder { spans, .. } => spans.iter().any(|span| covers(*span, offset)),
+            Target::Symbol { occurrences, .. } => occurrences
+                .iter()
+                .filter(|occurrence| occurrence.loaded.uri() == uri)
+                .any(|occurrence| occurrence.spans.iter().any(|span| covers(*span, offset))),
+        }
+    }
+}
+
 impl RenameProvider {
     /// Create a new rename provider
     pub fn new() -> Self {
@@ -62,52 +113,10 @@ impl RenameProvider {
         self.document_manager = Some(manager);
     }
 
-    /// Prepare for rename: validate the position and return the range of the symbol
+    /// Prepare for rename: the range of the name at the cursor, when a rename
+    /// there would rewrite it.
     pub fn prepare_rename(&self, params: &TextDocumentPositionParams, text: &str) -> Option<Range> {
-        let position = params.position;
-        let uri = &params.text_document.uri;
-
-        // Read the same snapshot [`Self::rename`] does, so the range offered
-        // here and the edits performed there index one consistent text.
-        let cursor = self
-            .document_manager
-            .as_ref()
-            .and_then(|dm| dm.parse_result(uri));
-        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
-
-        // Get the identifier at the cursor position
-        let (identifier, range) = get_identifier_and_range_at_position(text, position)?;
-
-        debug!(
-            "Prepare rename for identifier '{}' at {:?}",
-            identifier, position
-        );
-
-        // A declared name may spell a language keyword: Rodin's object model
-        // allows it, so imported models contain them and EB028 asks the user
-        // to rename them. Only a real keyword token has no name to rename, so
-        // decide on the cursor's offset rather than the word's spelling.
-        if is_keyword(&identifier) {
-            let masked = rossi::comments::mask_comments_chars(text);
-            let is_component =
-                resolve_component_at_position(text, &masked, position, &identifier).is_some();
-            if !is_component {
-                let owned;
-                let components: &[Component] = match cursor.as_deref() {
-                    Some(parsed) => parsed.components(),
-                    None => {
-                        owned = parse_all(text);
-                        &owned
-                    }
-                };
-                let offset = position_to_offset(text, position)?;
-                if !declared_name_at_offset(components, offset, &identifier) {
-                    debug!("Cannot rename keyword '{}'", identifier);
-                    return None;
-                }
-            }
-        }
-
+        let (range, _) = self.target_at(&params.text_document.uri, params.position, text)?;
         Some(range)
     }
 
@@ -117,89 +126,43 @@ impl RenameProvider {
         let uri = &params.text_document_position.text_document.uri;
         let new_name = &params.new_name;
 
-        // Prefer the open document's stored parse: the served text, the cursor
-        // offset, and the AST then index one consistent snapshot, and the cursor
-        // file is not re-parsed for the rename. Fall back to the handler text
-        // when the document is not open (closed docs, unit tests).
-        let cursor = self
-            .document_manager
-            .as_ref()
-            .and_then(|dm| dm.parse_result(uri));
-        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
-
-        // Get the identifier at the cursor position
-        let (identifier, _) = get_identifier_and_range_at_position(text, position)?;
-
-        debug!(
-            "Renaming identifier '{}' to '{}' at {:?}",
-            identifier, new_name, position
-        );
-
-        let masked = rossi::comments::mask_comments_chars(text);
-        let is_component = self.cross_ref_manager.is_some()
-            && resolve_component_at_position(text, &masked, position, &identifier).is_some();
-
         // Check if new name is a keyword
         if is_keyword(new_name) {
             debug!("Cannot rename to keyword: '{}'", new_name);
             return None;
         }
 
-        // A structural name may be hyphenated (Rodin labels/file names);
-        // mathematical symbols may not (kernel_lang §2.2). Each path below
-        // checks the new name against what it renames.
-        let mut changes = HashMap::new();
-
-        if is_component {
-            if !is_valid_new_name(new_name, true) {
-                debug!("Invalid new name: '{}'", new_name);
-                return None;
-            }
-            // Rename across all workspace files
-            debug!("Renaming component '{}' across workspace", identifier);
-            self.rename_across_workspace(&identifier, new_name, &mut changes);
-        } else if let Some(symbol_changes) = self.rename_symbol(
-            text,
-            &masked,
-            position,
-            &identifier,
-            cursor.as_deref(),
-            new_name,
-        ) {
-            changes = symbol_changes;
-        } else {
-            // An old name that is itself hyphenated can only be a structural
-            // name (e.g. an event named `do-step`), so allow the new name to
-            // be hyphenated too.
-            if !is_valid_new_name(
-                new_name,
-                !rossi::names::is_valid_math_identifier(&identifier),
-            ) {
-                debug!("Invalid new name: '{}'", new_name);
-                return None;
-            }
-            // Rename only in the current document. A hyphenated symbol (an
-            // event name) gets the component boundary; a math symbol the math one.
-            debug!("Renaming symbol '{}' in current document", identifier);
-            // Resolve the rename from the AST: a binder of the same name keeps
-            // its own scope, and the after-state form `x'` is renamed at its
-            // base. Fall back to a whole-word scan when the document doesn't
-            // parse far enough to resolve the cursor.
-            //
-            let owned;
-            let components: &[Component] = match cursor.as_deref() {
-                Some(parsed) => parsed.components(),
-                None => {
-                    owned = parse_all(text);
-                    &owned
-                }
-            };
-            let edits = ast_rename_edits(text, components, position, &identifier, new_name)
-                .or_else(|| text_rename_edits(text, &identifier, uri, new_name))?;
-
-            changes.insert(uri.clone(), edits);
+        let (_, target) = self.target_at(uri, position, text)?;
+        if !is_valid_new_name(new_name, target.is_structural()) {
+            debug!("Invalid new name: '{}'", new_name);
+            return None;
         }
 
+        let changes = match &target {
+            Target::Component(name) => {
+                debug!("Renaming component '{}' across workspace", name);
+                let mut changes = HashMap::new();
+                self.rename_across_workspace(name, new_name, &mut changes);
+                changes
+            }
+            Target::Binder { name, text, spans } => {
+                occurrence_edits([(uri, text.as_str(), spans.as_slice())], name, new_name)
+            }
+            Target::Symbol {
+                symbol,
+                occurrences,
+            } => occurrence_edits(
+                occurrences.iter().map(|occurrence| {
+                    (
+                        occurrence.loaded.uri(),
+                        occurrence.loaded.text(),
+                        occurrence.spans.as_slice(),
+                    )
+                }),
+                &symbol.name,
+                new_name,
+            ),
+        };
         if changes.is_empty() {
             return None;
         }
@@ -216,6 +179,59 @@ impl RenameProvider {
             document_changes: None,
             change_annotations: None,
         })
+    }
+
+    /// The name at `position` and what renaming it rewrites, or `None` when
+    /// the resolver places nothing renameable there: a keyword, a label, a
+    /// comment, a name nothing declares, or INITIALISATION.
+    fn target_at(&self, uri: &Uri, position: Position, text: &str) -> Option<(Range, Target)> {
+        let manager = self.cross_ref_manager.as_ref()?;
+        // Prefer the open document's stored parse: the served text, the cursor
+        // offset, and the AST then index one consistent snapshot, and the cursor
+        // file is not re-parsed for the rename. Fall back to the handler text
+        // when the document is not open.
+        let cursor = self
+            .document_manager
+            .as_ref()
+            .and_then(|dm| dm.parse_result(uri));
+        let text = cursor.as_deref().map_or(text, |parsed| parsed.text());
+        let masked = rossi::comments::mask_comments_chars(text);
+        let (identifier, range) = identifier_utils::identifier_at_position(&masked, position)?;
+        let offset = position_to_offset(text, position)?;
+        debug!("Resolving '{}' at {:?} for rename", identifier, position);
+
+        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
+        let target = match resolve_cursor(
+            text,
+            &masked,
+            position,
+            &identifier,
+            &loader,
+            cursor.as_deref(),
+        )? {
+            Resolution::Component(_) => Target::Component(identifier),
+            Resolution::Bound(bound) => Target::Binder {
+                name: identifier,
+                text: text.to_string(),
+                spans: bound.spans,
+            },
+            Resolution::Symbol(symbol) => {
+                if symbol.kind == SymbolKind::Event && symbol.name == INITIALISATION_EVENT_NAME {
+                    debug!("Cannot rename INITIALISATION");
+                    return None;
+                }
+                let mut environments = ResolvedEnvironments::new();
+                let occurrences = rename_class(&symbol, &loader)
+                    .iter()
+                    .flat_map(|member| symbol_occurrences(member, &loader, &mut environments))
+                    .collect();
+                Target::Symbol {
+                    symbol,
+                    occurrences,
+                }
+            }
+        };
+        target.is_at(uri, offset).then_some((range, target))
     }
 
     /// Rename a component across all workspace files
@@ -242,42 +258,6 @@ impl RenameProvider {
             sort_edits_reverse(edits);
             edits.dedup_by(|a, b| a.range == b.range);
         }
-    }
-
-    /// The edits renaming the symbol the shared resolver places at the
-    /// cursor, in every file that refers to it, or `None` when it resolves
-    /// to a kind this path does not rename (the caller keeps its
-    /// document-local rename for those).
-    fn rename_symbol(
-        &self,
-        text: &str,
-        masked: &str,
-        position: Position,
-        identifier: &str,
-        cursor: Option<&ParsedDocument>,
-        new_name: &str,
-    ) -> Option<HashMap<Uri, Vec<TextEdit>>> {
-        let manager = self.cross_ref_manager.as_ref()?;
-        let loader = ComponentLoader::new(manager, self.document_manager.as_deref());
-        let Resolution::Symbol(symbol) =
-            resolve_cursor(text, masked, position, identifier, &loader, cursor)?
-        else {
-            return None;
-        };
-        if symbol.kind == SymbolKind::Event && symbol.name == INITIALISATION_EVENT_NAME {
-            debug!("Cannot rename INITIALISATION");
-            return Some(HashMap::new());
-        }
-        if !is_valid_new_name(new_name, symbol.kind == SymbolKind::Event) {
-            debug!("Invalid new name: '{}'", new_name);
-            return Some(HashMap::new());
-        }
-        let mut environments = ResolvedEnvironments::new();
-        let occurrences = rename_class(&symbol, &loader)
-            .iter()
-            .flat_map(|member| symbol_occurrences(member, &loader, &mut environments))
-            .collect();
-        Some(occurrence_edits(occurrences, &symbol.name, new_name))
     }
 }
 
@@ -393,18 +373,16 @@ fn local_declarations(component: &Component, like: &SymbolIdentity) -> Vec<Symbo
     }
 }
 
-/// The edits rewriting every span of `occurrences` to `new_name`, grouped by
-/// file, each `x'` renamed at its base. Empty when a span does not slice to
-/// `name` in its text: a rename that would rewrite unrelated text is refused
-/// whole.
-fn occurrence_edits(
-    occurrences: Vec<SymbolOccurrences>,
+/// The edits rewriting every span of `files` to `new_name`, grouped by file,
+/// each `x'` renamed at its base. Empty when a span does not slice to `name`
+/// in its text: a rename that would rewrite unrelated text is refused whole.
+fn occurrence_edits<'a>(
+    files: impl IntoIterator<Item = (&'a Uri, &'a str, &'a [Span])>,
     name: &str,
     new_name: &str,
 ) -> HashMap<Uri, Vec<TextEdit>> {
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-    for SymbolOccurrences { loaded, spans } in occurrences {
-        let text = loaded.text();
+    for (uri, text, spans) in files {
         if !spans
             .iter()
             .all(|span| formula_walk::span_matches(text, *span, name))
@@ -412,10 +390,10 @@ fn occurrence_edits(
             return HashMap::new();
         }
         changes
-            .entry(loaded.uri().clone())
+            .entry(uri.clone())
             .or_default()
-            .extend(spans.into_iter().map(|span| TextEdit {
-                range: span_to_range(&base_span(text, span), text),
+            .extend(spans.iter().map(|span| TextEdit {
+                range: span_to_range(&base_span(text, *span), text),
                 new_text: new_name.to_string(),
             }));
     }
@@ -424,11 +402,6 @@ fn occurrence_edits(
         edits.dedup_by(|a, b| a.range == b.range);
     }
     changes
-}
-
-/// Get the identifier and its range at the given position
-fn get_identifier_and_range_at_position(text: &str, position: Position) -> Option<(String, Range)> {
-    identifier_utils::identifier_at_position(text, position)
 }
 
 /// Check if a string can be the new name of a renamed symbol. Components
@@ -451,127 +424,6 @@ fn is_valid_new_name(s: &str, is_component: bool) -> bool {
 /// accepts and rename must not refuse.
 fn is_keyword(s: &str) -> bool {
     rossi::keywords::is_keyword(s) || rossi::builtins::is_reserved_name(s)
-}
-
-/// Find all references to an identifier in the text, skipping comments.
-///
-/// Returns `None` when there are no matches.
-fn find_all_references(
-    text: &str,
-    identifier: &str,
-    uri: &Uri,
-    boundary: identifier_utils::WordBoundary,
-) -> Option<Vec<Location>> {
-    let locations =
-        identifier_utils::find_whole_word_locations(text, identifier, uri, None, boundary);
-    if locations.is_empty() {
-        None
-    } else {
-        Some(locations)
-    }
-}
-
-/// Fallback rename edits via a whole-word text scan, for documents the parser
-/// cannot resolve a symbol in.
-fn text_rename_edits(
-    text: &str,
-    identifier: &str,
-    uri: &Uri,
-    new_name: &str,
-) -> Option<Vec<TextEdit>> {
-    let locations = find_all_references(
-        text,
-        identifier,
-        uri,
-        identifier_utils::WordBoundary::for_name(identifier),
-    )?;
-    let mut edits: Vec<TextEdit> = locations
-        .into_iter()
-        .map(|loc| TextEdit {
-            range: loc.range,
-            new_text: new_name.to_string(),
-        })
-        .collect();
-    sort_edits_reverse(&mut edits);
-    Some(edits)
-}
-
-/// AST-driven rename of the symbol at `position` within the current document.
-///
-/// The cursor occurrence is resolved through the shared walker: if it is (or is
-/// bound by) a quantifier / lambda / comprehension binder or an event
-/// parameter, only that binder's declaration and its in-scope uses are renamed;
-/// otherwise the component-level symbol's declaration and free uses are renamed.
-/// A binder of the same name in another scope, and same-named globals, are left
-/// untouched. The after-state form `x'` is renamed at its base, preserving `'`.
-///
-/// `components` are the document's already-parsed components (the open
-/// document's stored parse, or a recovery parse of `text` when it is not open),
-/// so the rename never re-parses the cursor file. `text` must be the source
-/// those component spans index into.
-fn ast_rename_edits(
-    text: &str,
-    components: &[Component],
-    position: Position,
-    identifier: &str,
-    new_name: &str,
-) -> Option<Vec<TextEdit>> {
-    let offset = position_to_offset(text, position)?;
-    let component = component_at_offset(components, offset)?;
-
-    let spans = rename_spans(component, identifier, offset);
-    if spans.is_empty() {
-        return None;
-    }
-
-    // Every span must slice to the identifier (or its `x'` form) in the served
-    // text. If any does not — e.g. a span left relative by a deeper recovery
-    // bug — abandon the AST rename rather than corrupt unrelated source or panic
-    // on a non-char-boundary slice; the caller falls back to the text scan.
-    if !spans
-        .iter()
-        .all(|s| formula_walk::span_matches(text, *s, identifier))
-    {
-        return None;
-    }
-
-    let mut edits: Vec<TextEdit> = spans
-        .into_iter()
-        .map(|span| TextEdit {
-            range: span_to_range(&base_span(text, span), text),
-            new_text: new_name.to_string(),
-        })
-        .collect();
-    // A binder declaration and a use can coincide in degenerate inputs; dedup by
-    // range after sorting so an edit is never applied twice.
-    sort_edits_reverse(&mut edits);
-    edits.dedup_by(|a, b| a.range == b.range);
-    Some(edits)
-}
-
-/// The byte spans to rewrite when renaming the identifier at `offset`.
-///
-/// A cursor on (or bound by) a binder — a quantifier / lambda / comprehension
-/// binder, or an event `ANY` parameter — renames only that binder's own scope,
-/// resolved through the shared [`formula_walk::resolve_bound_at_offset`] that
-/// go-to-definition and find-references also use, so the features cannot drift.
-/// Otherwise the cursor names a component-level symbol and its declaration plus
-/// every free use is renamed.
-fn rename_spans(component: &Component, identifier: &str, offset: usize) -> Vec<Span> {
-    // One walk of the component serves both the cursor lookup and the global
-    // occurrence set: collect the hits once, then reuse them for the free-use
-    // set when the cursor is not on a binder.
-    let hits = formula_walk::collect_in_component(component, identifier);
-    if let Some(bound) = formula_walk::resolve_bound_from_hits(&hits, component, offset) {
-        return bound.spans;
-    }
-
-    // Global symbol: its declaration plus every free use.
-    let mut spans = formula_walk::free_spans(hits);
-    if let Some(decl) = formula_walk::declaration_span(component, identifier) {
-        spans.push(decl);
-    }
-    spans
 }
 
 /// Trim a trailing apostrophe so renaming `x'` rewrites only the base `x`.
@@ -619,6 +471,12 @@ mod tests {
             new_name,
             work_done_progress_params: WorkDoneProgressParams::default(),
         }
+    }
+
+    /// A provider over a workspace holding `source` alone, open as
+    /// [`make_uri`].
+    fn provider_for(source: &str) -> RenameProvider {
+        workspace_provider(&[("test.eventb", source)])
     }
 
     #[test]
@@ -725,7 +583,6 @@ mod tests {
 
     #[test]
     fn test_prepare_rename_valid() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -736,6 +593,7 @@ INVARIANTS
     @inv1 count ∈ ℕ
 END
 "#;
+        let provider = provider_for(source);
 
         // Prepare rename on 'count' variable
         let params = make_position_params(3, 4, uri);
@@ -750,7 +608,6 @@ END
 
     #[test]
     fn test_prepare_rename_keyword() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -759,6 +616,7 @@ VARIABLES
     count
 END
 "#;
+        let provider = provider_for(source);
 
         // Try to rename 'VARIABLES' keyword - should fail
         let params = make_position_params(2, 0, uri);
@@ -769,7 +627,6 @@ END
 
     #[test]
     fn test_rename_variable() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -792,6 +649,7 @@ EVENTS
     END
 END
 "#;
+        let provider = provider_for(source);
 
         // Rename 'count' to 'counter_value'
         let params = make_rename_params(3, 4, uri.clone(), "counter_value".to_string());
@@ -814,7 +672,6 @@ END
 
     #[test]
     fn test_rename_constant() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -826,6 +683,7 @@ AXIOMS
     @axm2 max_val > 0
 END
 "#;
+        let provider = provider_for(source);
 
         // Rename 'max_val' to 'MAX_VALUE'
         let params = make_rename_params(3, 4, uri.clone(), "MAX_VALUE".to_string());
@@ -851,7 +709,7 @@ END
         // EB028 tells the user to rename a declared name that spells a
         // keyword; prepare_rename must let them start. The carrier set `end`
         // is on line 2, columns 4..7.
-        let provider = RenameProvider::new();
+        let provider = provider_for(KEYWORD_CONTEXT);
         let params = make_position_params(2, 4, make_uri());
         assert_eq!(
             provider.prepare_rename(&params, KEYWORD_CONTEXT),
@@ -877,7 +735,7 @@ END
     fn prepare_rename_allows_a_keyword_spelled_reference() {
         // The rename may be started from a use, not just the declaration:
         // `end` inside the axiom on line 4, columns 10..13.
-        let provider = RenameProvider::new();
+        let provider = provider_for(KEYWORD_CONTEXT);
         let params = make_position_params(4, 10, make_uri());
         assert_eq!(
             provider.prepare_rename(&params, KEYWORD_CONTEXT),
@@ -891,7 +749,7 @@ END
         // rossi; both are refused by the spelling-based `is_keyword`, so the
         // offset check is what admits them.
         let source = "MACHINE m\nVARIABLES\n    status\nINVARIANTS\n    @inv1 status ∈ ℕ\nEVENTS\n    EVENT then\n    ANY\n        with\n    WHERE\n        @grd1 with ∈ ℕ\n    THEN\n        @act1 status ≔ with\n    END\nEND\n";
-        let provider = RenameProvider::new();
+        let provider = provider_for(source);
         for (line, character, len) in [(2, 4, 6), (6, 10, 4), (8, 8, 4)] {
             let params = make_position_params(line, character, make_uri());
             assert_eq!(
@@ -910,7 +768,7 @@ END
         // The offset decides, not the spelling: in the very file that
         // declares a set named `end`, the SETS header and the closing END
         // token are keyword tokens with no name behind them.
-        let provider = RenameProvider::new();
+        let provider = provider_for(KEYWORD_CONTEXT);
         for (line, character) in [(1, 0), (5, 0)] {
             let params = make_position_params(line, character, make_uri());
             assert_eq!(
@@ -923,7 +781,6 @@ END
 
     #[test]
     fn test_rename_to_keyword_fails() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -932,6 +789,7 @@ VARIABLES
     count
 END
 "#;
+        let provider = provider_for(source);
 
         // Try to rename 'count' to 'VARIABLES' - should fail
         let params = make_rename_params(3, 4, uri, "VARIABLES".to_string());
@@ -942,10 +800,8 @@ END
 
     #[test]
     fn test_rename_hyphenated_event_to_hyphenated_name() {
-        // A hyphenated old name can only be a structural name (here an event,
-        // which the cross-ref manager does not track), so a hyphenated new
-        // name must be allowed (issue #28).
-        let provider = RenameProvider::new();
+        // An event is a structural name, so a hyphenated new name must be
+        // allowed (issue #28).
         let uri = make_uri();
         let source = "\
 MACHINE m1
@@ -956,6 +812,7 @@ THEN
 END
 END
 ";
+        let provider = provider_for(source);
         let params = make_rename_params(2, 6, uri.clone(), "do-step2".to_string());
         let edit = provider.rename(&params, source);
         assert!(edit.is_some(), "hyphenated event rename should succeed");
@@ -965,7 +822,6 @@ END
 
     #[test]
     fn test_rename_to_invalid_name_fails() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -974,6 +830,7 @@ VARIABLES
     count
 END
 "#;
+        let provider = provider_for(source);
 
         // Try to rename to invalid identifier
         let params = make_rename_params(3, 4, uri.clone(), "123invalid".to_string());
@@ -988,7 +845,6 @@ END
 
     #[test]
     fn test_rename_preserves_other_identifiers() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -998,6 +854,7 @@ VARIABLES
     counter
 END
 "#;
+        let provider = provider_for(source);
 
         // Rename 'count' to 'value'
         let params = make_rename_params(3, 4, uri.clone(), "value".to_string());
@@ -1014,22 +871,7 @@ END
     }
 
     #[test]
-    fn test_get_identifier_and_range_at_position() {
-        let text = "VARIABLES count";
-        let position = Position::new(0, 10); // On 'count'
-
-        let result = get_identifier_and_range_at_position(text, position);
-        assert!(result.is_some());
-
-        let (identifier, range) = result.unwrap();
-        assert_eq!(identifier, "count");
-        assert_eq!(range.start.character, 10);
-        assert_eq!(range.end.character, 15);
-    }
-
-    #[test]
     fn test_rename_edits_sorted() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -1041,6 +883,7 @@ INVARIANTS
     @inv2 x > 0
 END
 "#;
+        let provider = provider_for(source);
 
         let params = make_rename_params(3, 4, uri.clone(), "y".to_string());
         let edit = provider.rename(&params, source);
@@ -1068,23 +911,14 @@ END
 
     #[test]
     fn test_rename_skips_comments() {
-        let provider = RenameProvider::new();
-        let uri = make_uri();
-
-        let source = "count := 0 // count reset\ncount := count + 1";
-
-        // Rename 'count' to 'val'
-        let params = make_rename_params(0, 0, uri.clone(), "val".to_string());
-        let edit = provider.rename(&params, source);
-
-        assert!(edit.is_some());
-        let edit = edit.unwrap();
-        let changes = edit.changes.unwrap();
-        let text_edits = changes.get(&uri).unwrap();
-
-        // Should have 3 edits: line 0 col 0, line 1 col 0, line 1 col 9
-        // Should NOT include the 'count' inside the comment
-        assert_eq!(text_edits.len(), 3);
+        let source = "MACHINE m\nVARIABLES\n    count // count is reset\nINVARIANTS\n    @inv1 count ∈ ℕ\nEND\n";
+        let out = rename_at(source, source.find("count").unwrap(), "val");
+        // The declaration and the invariant's use, not the `count` in the
+        // comment.
+        assert_eq!(
+            out,
+            "MACHINE m\nVARIABLES\n    val // count is reset\nINVARIANTS\n    @inv1 val ∈ ℕ\nEND\n"
+        );
     }
 
     fn collision_provider(context: &str, machine: &str) -> (RenameProvider, Uri, Uri) {
@@ -1333,7 +1167,6 @@ END
 
     #[test]
     fn test_rename_to_builtin_keyword_fails() {
-        let provider = RenameProvider::new();
         let uri = make_uri();
 
         let source = r#"
@@ -1342,6 +1175,7 @@ VARIABLES
     count
 END
 "#;
+        let provider = provider_for(source);
 
         // Renaming to built-in keywords should fail
         let params = make_rename_params(3, 4, uri.clone(), "dom".to_string());
@@ -1376,7 +1210,7 @@ END
     }
 
     fn rename_at(source: &str, byte: usize, new_name: &str) -> String {
-        let provider = RenameProvider::new();
+        let provider = provider_for(source);
         let uri = make_uri();
         let pos = pos_at(source, byte);
         let params = make_rename_params(pos.line, pos.character, uri.clone(), new_name.to_string());
@@ -1599,6 +1433,36 @@ END
         let renamed = renamed_workspace(&sources, "C1.eventb", "x\n", "y").unwrap();
         assert_eq!(renamed[0], replaced(&sources[..1], "x", "y")[0]);
         assert_eq!(renamed[1], sources[1].1, "the machine keeps its variable");
+    }
+
+    /// Neither prepare nor rename accepts `position` in `source`.
+    fn assert_refused(source: &str, position: Position, what: &str) {
+        let provider = workspace_provider(&[("m.eventb", source)]);
+        let prepare = make_position_params(position.line, position.character, file_uri("m.eventb"));
+        assert_eq!(
+            provider.prepare_rename(&prepare, source),
+            None,
+            "prepare {what}"
+        );
+        let params = make_rename_params(
+            position.line,
+            position.character,
+            file_uri("m.eventb"),
+            "renamed".to_string(),
+        );
+        assert!(provider.rename(&params, source).is_none(), "rename {what}");
+    }
+
+    #[test]
+    fn rename_refuses_what_the_resolver_cannot_place() {
+        let source = "MACHINE m\nVARIABLES\n    x // x counts\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 w ∈ ℕ\nEND\n";
+        // A name nothing declares: renaming every `w` in the file would be a
+        // guess.
+        assert_refused(source, Position::new(5, 10), "an undeclared name");
+        // A label is not a symbol.
+        assert_refused(source, Position::new(4, 5), "a label");
+        // Nor is a word in a comment, even one spelled like a variable.
+        assert_refused(source, Position::new(2, 9), "a word in a comment");
     }
 
     const REFINEMENT_ABSTRACT: &str =
@@ -1884,10 +1748,13 @@ END
         let uri = make_uri();
         let stored = "MACHINE m\nVARIABLES\ncount\nINVARIANTS\n@i1 count > 0\nEND\n";
 
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.update_component(uri.as_str().to_owned(), stored);
         let documents = Arc::new(DocumentManager::new());
         documents.open(uri.clone(), 1, stored.to_string());
 
         let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
         provider.set_document_manager(Arc::clone(&documents));
 
         // Cursor on the use of `count` in @i1 (offset into the stored text).
