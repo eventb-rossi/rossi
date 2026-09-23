@@ -2226,6 +2226,163 @@ mod proof_obligations {
         let hints = open_hints(json!({ "proofObligations": { "diagnostics": "off" } })).await;
         assert!(hints.is_empty(), "got {hints:?}");
     }
+
+    /// Rodin's proof of `INITIALISATION/inv1/INV` in `SOURCE`, whose goal is
+    /// `0 ∈ ℕ`: simplification rewrites, then ⊤ goal.
+    const PROOF: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<org.eventb.core.prFile version="1">
+<org.eventb.core.prProof name="INITIALISATION/inv1/INV" org.eventb.core.confidence="1000" org.eventb.core.prFresh="" org.eventb.core.prGoal="p0" org.eventb.core.prHyps="">
+<org.eventb.core.prRule name="r0" org.eventb.core.confidence="1000" org.eventb.core.prDisplay="simplification rewrites" org.eventb.core.prGoal="p0" org.eventb.core.prHyps="">
+<org.eventb.core.prAnte name="'" org.eventb.core.prGoal="p1">
+<org.eventb.core.prRule name="r1" org.eventb.core.confidence="1000" org.eventb.core.prDisplay="⊤ goal" org.eventb.core.prGoal="p1" org.eventb.core.prHyps=""/>
+</org.eventb.core.prAnte>
+</org.eventb.core.prRule>
+<org.eventb.core.prPred name="p0" org.eventb.core.predicate="0∈ℕ"/>
+<org.eventb.core.prPred name="p1" org.eventb.core.predicate="⊤"/>
+<org.eventb.core.prReas name="r0" org.eventb.core.prRID="org.eventb.core.seqprover.autoRewritesL3:2"/>
+<org.eventb.core.prReas name="r1" org.eventb.core.prRID="org.eventb.core.seqprover.trueGoal"/>
+</org.eventb.core.prProof>
+</org.eventb.core.prFile>
+"#;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_proof_saved_by_rodin_updates_the_count() {
+        use super::TempWorkspace;
+        use eventb_lsp::lsp_types::Uri;
+        use futures::StreamExt;
+
+        let workspace = TempWorkspace::new("proof-saved-by-rodin");
+        let root = workspace.as_ref();
+        let source = root.join("m.eventb");
+        std::fs::write(&source, SOURCE).unwrap();
+        // The Rodin workspace exists before the server starts, so its
+        // watcher starts with it.
+        let project_dir = rossi_build::workspace::default_workspace_dir(root)
+            .join(rossi_build::workspace::project_name_for(root, Some(root)));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let uri = Uri::from_file_path(&source).unwrap();
+
+        // The socket holds one message, so it is drained into an unbounded
+        // channel: `initialized` and the watcher send while the test is not
+        // reading.
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        let (sender, mut messages) = futures::channel::mpsc::unbounded();
+        tokio::spawn(async move {
+            while let Some(request) = socket.next().await {
+                let _ = sender.unbounded_send(request);
+            }
+        });
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": { "workspace": { "codeLens": { "refreshSupport": true } } },
+                "workspaceFolders": [{ "uri": Uri::from_file_path(root).unwrap(), "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        for (method, params) in [
+            ("initialized", json!({})),
+            (
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": SOURCE,
+                    }
+                }),
+            ),
+        ] {
+            service
+                .ready()
+                .await
+                .unwrap()
+                .call(notification(method, params))
+                .await
+                .unwrap();
+        }
+        let opened = next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("the open-time push");
+        assert!(
+            opened["obligations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o["status"] == json!("unattempted")),
+            "nothing is proved before Rodin saves; got {opened}"
+        );
+
+        // Rodin saves the proof. The watcher starts on its own thread with
+        // no signal when it is up, so the save is repeated until one is seen.
+        let mut pushed = None;
+        for _ in 0..10 {
+            std::fs::write(project_dir.join("m.bpr"), PROOF).unwrap();
+            pushed = next_message(
+                &mut messages,
+                eventb_lsp::proof::NOTIFICATION_STATUS,
+                std::time::Duration::from_secs(2),
+            )
+            .await;
+            if pushed.is_some() {
+                break;
+            }
+        }
+        let pushed = pushed.expect("a proof Rodin saves must be pushed");
+        let statuses: Vec<(&str, &str)> = pushed["obligations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| (o["name"].as_str().unwrap(), o["status"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                ("INITIALISATION/inv1/INV", "discharged"),
+                ("INITIALISATION/inv2/INV", "unattempted"),
+                ("bump/inv1/INV", "unattempted"),
+            ],
+            "got {pushed}"
+        );
+
+        // The editor is asked to fetch its lenses again, and the count they
+        // show now includes the proof.
+        let refresh = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(request) = messages.next().await {
+                if request.method() == "workspace/codeLens/refresh" {
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+        assert_eq!(refresh, Ok(true), "the lenses must be refreshed");
+        let request = Request::build("textDocument/codeLens")
+            .id(2)
+            .params(json!({ "textDocument": { "uri": uri } }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_id, result) = response.into_parts();
+        let lenses: Value = result.unwrap();
+        assert!(
+            lenses.as_array().unwrap().iter().any(|lens| {
+                lens["command"]["title"] == json!("1/3 proof obligations discharged")
+            }),
+            "the lens must count the proof; got {lenses}"
+        );
+    }
 }
 
 mod document_highlight {

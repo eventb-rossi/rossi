@@ -3,9 +3,10 @@
 //! Rodin writes proof evidence (`.bpr` proofs, `.bps` statuses) into the
 //! project directories rossi builds under `<root>/.rossi/rodin`. This
 //! watcher notices those writes and refreshes the per-component proof-status
-//! overlay the analyzer publishes as informational diagnostics — so a proof
-//! discharged in Rodin shows up in the editor moments later, without any
-//! manual sync step.
+//! overlay the analyzer publishes as informational diagnostics, and the open
+//! documents' proof obligations behind the count lens and the proof view,
+//! so a proof discharged in Rodin shows up in the editor moments later,
+//! without any manual sync step.
 //!
 //! Echo-loop prevention: every file the server itself writes into the
 //! workspace is recorded (path → content hash) in the shared written-file
@@ -184,6 +185,9 @@ impl RodinSyncManager {
                         }
                         if !changes.proof_projects.is_empty() {
                             refresh(&task_workspace, &analyzer, Some(changes.proof_projects)).await;
+                            // The obligations behind the lens and the proof
+                            // view read the same proof files.
+                            analyzer.refresh_open_proof_obligations().await;
                         }
                     }
                 }

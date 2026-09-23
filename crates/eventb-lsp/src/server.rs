@@ -232,6 +232,9 @@ pub(crate) struct Analyzer {
     /// The last sweep report of each closed file, reused while its inputs
     /// stay the same.
     sweep_reports: Arc<parking_lot::Mutex<std::collections::HashMap<Uri, SweepReport>>>,
+    /// Whether the client accepts `workspace/codeLens/refresh`, recorded at
+    /// `initialize`.
+    supports_code_lens_refresh: Arc<std::sync::atomic::AtomicBool>,
     client: Client,
 }
 
@@ -600,24 +603,32 @@ impl Analyzer {
 
     /// Push the document's list to the client through the same accessor the
     /// request and the diagnostics use, so a client never holds ranges the
-    /// diagnostics disagree with. Spawned rather than awaited: the caller is
+    /// diagnostics disagree with, and ask it to fetch the lenses again, whose
+    /// count reads the same list. Spawned rather than awaited: the caller is
     /// a notification handler the client may be waiting on.
     fn push_proof_status(&self, uri: &Uri, doc: &ParsedDocument) {
         let report = self.proof_report_for(uri, doc);
         let client = self.client.clone();
         let uri = uri.clone();
+        let refresh_lenses = self
+            .supports_code_lens_refresh
+            .load(std::sync::atomic::Ordering::Relaxed);
         tokio::spawn(async move {
             client
                 .send_notification::<crate::proof::ProofStatusNotification>(
                     crate::proof::ProofStatusParams { uri, report },
                 )
                 .await;
+            if refresh_lenses && let Err(error) = client.code_lens_refresh().await {
+                debug!("workspace/codeLens/refresh failed: {error}");
+            }
         });
     }
 
     /// Recompute a document's obligations outside the open/save analysis (a
-    /// request that arrived before the first refresh finished), republishing
-    /// its diagnostics when the list changed.
+    /// request that arrived before the first refresh finished, a proof saved
+    /// outside the editor), republishing its diagnostics when the list
+    /// changed.
     pub(crate) async fn refresh_proof_obligations(&self, uri: Uri, sources: Vec<PathBuf>) {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return;
@@ -628,6 +639,82 @@ impl Analyzer {
             // from, so the pushed ranges match the diagnostics just sent.
             if let Some(doc) = self.document_manager.parse_result(&uri) {
                 self.push_proof_status(&uri, &doc);
+            }
+        }
+    }
+
+    /// The shared Rodin workspace directory for the current configuration,
+    /// or `None` when no root is known and no override is set. A relative
+    /// `rossi.rodin.workspace` setting is anchored at the workspace root —
+    /// never at the server process's working directory, which is an
+    /// arbitrary location under most editors.
+    fn resolved_rodin_workspace(&self, fallback_root: Option<&std::path::Path>) -> Option<PathBuf> {
+        let root = || {
+            self.cross_reference_manager
+                .workspace_root()
+                .or_else(|| fallback_root.map(std::path::Path::to_path_buf))
+        };
+        let configured = self.config_manager.get().rodin.workspace.trim().to_string();
+        if !configured.is_empty() {
+            let configured = PathBuf::from(configured);
+            if configured.is_absolute() {
+                return Some(configured);
+            }
+            return match root() {
+                Some(root) => Some(root.join(configured)),
+                None => Some(configured),
+            };
+        }
+        root().map(|root| rossi_build::workspace::default_workspace_dir(&root))
+    }
+
+    /// The Rodin workspace project the file at `uri` maps to — the one
+    /// resolution (source dir → workspace → project name) every consumer of
+    /// an existing project must agree on with the Open in Rodin flow, so
+    /// rebuild-on-save and the animate po lens read exactly the directory
+    /// Rodin records into. `None` for non-file URIs, files without a usable
+    /// parent, and when no workspace resolves.
+    fn rodin_project_target(&self, uri: &Uri) -> Option<RodinProjectTarget> {
+        let source_dir = uri
+            .to_file_path()?
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .filter(|dir| !dir.as_os_str().is_empty())?;
+        let workspace_dir = self.resolved_rodin_workspace(Some(&source_dir))?;
+        let project_name = rossi_build::workspace::project_name_for(
+            &source_dir,
+            self.cross_reference_manager.workspace_root().as_deref(),
+        );
+        let project_dir = workspace_dir.join(&project_name);
+        Some(RodinProjectTarget {
+            source_dir,
+            workspace_dir,
+            project_name,
+            project_dir,
+        })
+    }
+
+    /// Where the stored proofs of the document at `uri` are looked for, or
+    /// `None` when proof obligations are turned off: the Rodin workspace
+    /// project first, then the source directory.
+    fn proof_sources(&self, uri: &Uri) -> Option<Vec<PathBuf>> {
+        if !self.config_manager.get().proof_obligations.enabled {
+            return None;
+        }
+        Some(crate::proof::sources_for(
+            uri,
+            self.rodin_project_target(uri)
+                .map(|target| target.project_dir),
+        ))
+    }
+
+    /// Recompute the obligations of every open document after a proof
+    /// changed on disk outside the editor, such as Rodin saving one, and
+    /// republish and push the documents whose list changed.
+    pub(crate) async fn refresh_open_proof_obligations(&self) {
+        for uri in self.document_manager.all_uris() {
+            if let Some(sources) = self.proof_sources(&uri) {
+                self.refresh_proof_obligations(uri, sources).await;
             }
         }
     }
@@ -924,7 +1011,7 @@ impl Drop for InFlightReset {
 }
 
 /// The Rodin workspace project a source file maps to — see
-/// [`RossiLanguageServer::rodin_project_target`].
+/// [`Analyzer::rodin_project_target`].
 struct RodinProjectTarget {
     source_dir: PathBuf,
     workspace_dir: PathBuf,
@@ -1025,6 +1112,7 @@ impl RossiLanguageServer {
             )),
             diagnostic_inputs: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sweep_reports: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            supports_code_lens_refresh: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             client: client.clone(),
         };
 
@@ -1078,72 +1166,6 @@ impl RossiLanguageServer {
         }
     }
 
-    /// The shared Rodin workspace directory for the current configuration,
-    /// or `None` when no root is known and no override is set. A relative
-    /// `rossi.rodin.workspace` setting is anchored at the workspace root —
-    /// never at the server process's working directory, which is an
-    /// arbitrary location under most editors.
-    fn resolved_rodin_workspace(&self, fallback_root: Option<&std::path::Path>) -> Option<PathBuf> {
-        let root = || {
-            self.cross_reference_manager
-                .workspace_root()
-                .or_else(|| fallback_root.map(std::path::Path::to_path_buf))
-        };
-        let configured = self.config_manager.get().rodin.workspace.trim().to_string();
-        if !configured.is_empty() {
-            let configured = PathBuf::from(configured);
-            if configured.is_absolute() {
-                return Some(configured);
-            }
-            return match root() {
-                Some(root) => Some(root.join(configured)),
-                None => Some(configured),
-            };
-        }
-        root().map(|root| rossi_build::workspace::default_workspace_dir(&root))
-    }
-
-    /// The Rodin workspace project the file at `uri` maps to — the one
-    /// resolution (source dir → workspace → project name) every consumer of
-    /// an existing project must agree on with the Open in Rodin flow, so
-    /// rebuild-on-save and the animate po lens read exactly the directory
-    /// Rodin records into. `None` for non-file URIs, files without a usable
-    /// parent, and when no workspace resolves.
-    fn rodin_project_target(&self, uri: &Uri) -> Option<RodinProjectTarget> {
-        let source_dir = uri
-            .to_file_path()?
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .filter(|dir| !dir.as_os_str().is_empty())?;
-        let workspace_dir = self.resolved_rodin_workspace(Some(&source_dir))?;
-        let project_name = rossi_build::workspace::project_name_for(
-            &source_dir,
-            self.cross_reference_manager.workspace_root().as_deref(),
-        );
-        let project_dir = workspace_dir.join(&project_name);
-        Some(RodinProjectTarget {
-            source_dir,
-            workspace_dir,
-            project_name,
-            project_dir,
-        })
-    }
-
-    /// Where the stored proofs of the document at `uri` are looked for, or
-    /// `None` when proof obligations are turned off. Resolved here because the
-    /// Rodin workspace project depends on server-level configuration; the
-    /// analyzer only consumes the list.
-    fn proof_sources(&self, uri: &Uri) -> Option<Vec<PathBuf>> {
-        if !self.config_manager.get().proof_obligations.enabled {
-            return None;
-        }
-        Some(crate::proof::sources_for(
-            uri,
-            self.rodin_project_target(uri)
-                .map(|target| target.project_dir),
-        ))
-    }
-
     /// The "Open in Rodin" command: resolve the request up front, refuse a
     /// concurrent run, and spawn the flow.
     async fn execute_rodin_open(
@@ -1171,6 +1193,7 @@ impl RossiLanguageServer {
 
         let config = self.config_manager.get();
         let workspace_dir = self
+            .analyzer
             .resolved_rodin_workspace(Some(&source_dir))
             .expect("a source dir fallback always yields a workspace dir");
         // Start the sync watcher before the build so even the first build's
@@ -1244,7 +1267,7 @@ impl RossiLanguageServer {
         // directory, when one exists — only Po mode reads recorded proof
         // state, so Check clicks skip the resolution entirely.
         let rodin_project_dir = matches!(mode, crate::animate::AnimateMode::Po)
-            .then(|| self.rodin_project_target(&uri))
+            .then(|| self.analyzer.rodin_project_target(&uri))
             .flatten()
             .map(|target| target.project_dir)
             .filter(|dir| dir.is_dir());
@@ -1310,7 +1333,7 @@ impl RossiLanguageServer {
             });
             return;
         }
-        if let Some(rodin_workspace) = self.resolved_rodin_workspace(None)
+        if let Some(rodin_workspace) = self.analyzer.resolved_rodin_workspace(None)
             && rodin_workspace.is_dir()
         {
             self.ensure_rodin_sync(&rodin_workspace);
@@ -1376,7 +1399,7 @@ impl RossiLanguageServer {
         if !self.config_manager.get().rodin.sync {
             return;
         }
-        let Some(target) = self.rodin_project_target(uri) else {
+        let Some(target) = self.analyzer.rodin_project_target(uri) else {
             return;
         };
         if !target.project_dir.is_dir() {
@@ -1653,6 +1676,17 @@ impl LanguageServer for RossiLanguageServer {
                 .window
                 .as_ref()
                 .and_then(|window| window.work_done_progress)
+                .unwrap_or(false),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        self.analyzer.supports_code_lens_refresh.store(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.code_lens.as_ref())
+                .and_then(|code_lens| code_lens.refresh_support)
                 .unwrap_or(false),
             std::sync::atomic::Ordering::Relaxed,
         );
@@ -2039,7 +2073,7 @@ impl LanguageServer for RossiLanguageServer {
 
         // Opening analyzes promptly (not debounced): refresh the eager indexes
         // and publish diagnostics from the document's stored parse.
-        let sources = self.proof_sources(&uri);
+        let sources = self.analyzer.proof_sources(&uri);
         self.analyzer.analyze(uri, sources).await;
     }
 
@@ -2111,7 +2145,7 @@ impl LanguageServer for RossiLanguageServer {
         // same version then finds nothing newer and re-runs an identical (cheap,
         // memoised-parse) analysis.
         if self.document_manager.version(&uri).is_some() {
-            let sources = self.proof_sources(&uri);
+            let sources = self.analyzer.proof_sources(&uri);
             self.analyzer.analyze(uri.clone(), sources).await;
             // Both saved layers, not just the symbol one: a client without
             // dynamic registration sends no watched-file event, and this is
@@ -3074,7 +3108,7 @@ impl RossiLanguageServer {
             return Ok(crate::proof::ProofReport::default());
         };
         if !self.analyzer.has_proof_obligations(&uri)
-            && let Some(sources) = self.proof_sources(&uri)
+            && let Some(sources) = self.analyzer.proof_sources(&uri)
         {
             self.analyzer
                 .refresh_proof_obligations(uri.clone(), sources)

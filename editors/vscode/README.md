@@ -94,7 +94,7 @@ Type a prefix and press Tab:
 - A **Proof Obligations** view (Event-B activity bar) listing the active file's obligations by component and event, with each one's status
 - Gutter bars beside every event and clause, the way Dafny and Lean draw verification status: one green check on a fully proven block, per-label icons with a gray or amber bar otherwise (`rossi.proofObligations.gutter` picks bars, plain icons or nothing)
 - A status bar count, and a read-only sequent document for any obligation
-- Generated on open and on save by the language server and judged against the stored proofs; rossi does not discharge them itself
+- Generated on open, on save and when Rodin saves a proof, by the language server, and judged against the stored proofs; rossi does not discharge them itself
 
 ### 🔁 Rodin Interoperability
 - Import Rodin `.zip`, `.buc`, `.bum`, or XML project folders into `.eventb` files
@@ -382,7 +382,9 @@ proof for it, looked for in the shared Rodin workspace project first and next
 to the sources second, the way `rossi prove` judges it: a proof whose
 obligation has since changed reports **broken** rather than the discharged it
 once was, and an obligation with no stored proof is **unattempted**. rossi has
-no automatic prover; nothing here discharges an obligation.
+no automatic prover; nothing here discharges an obligation. A proof finished
+in Rodin updates the list as soon as Rodin saves it, while `rossi.rodin.sync`
+is on (the default).
 
 The **Proof Obligations** view in the Event-B activity bar lists the active
 file's obligations by component and event, each with a status icon and a
