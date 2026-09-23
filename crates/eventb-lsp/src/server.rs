@@ -364,11 +364,19 @@ impl Analyzer {
         // `debounceMs` window, so it runs once per settled edit rather than
         // per keystroke. It is the same `check_with_model` over the same
         // closure that inlay hints already run, so the cost profile is one the
-        // server was paying.
-        diags.extend(crate::diagnostics::project_diagnostics(
+        // server was paying. It reruns the per-component duplicate and
+        // primed-name passes, so a finding the lints above already carry is
+        // dropped; the same rules raised across components, such as a label
+        // clashing with an inherited one, are kept.
+        let project = crate::diagnostics::project_diagnostics(
             doc,
             &crate::component_loader::ComponentLoader::new(xrefs, Some(&self.document_manager)),
-        ));
+        );
+        let project: Vec<Diagnostic> = project
+            .into_iter()
+            .filter(|diagnostic| !diags.contains(diagnostic))
+            .collect();
+        diags.extend(project);
         // Circular EXTENDS/REFINES need no workspace gating: a detected cycle is
         // always real (a self-loop is length-1).
         diags.extend(crate::diagnostics::cycle_diagnostics(
