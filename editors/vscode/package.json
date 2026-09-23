@@ -499,7 +499,7 @@
         "rossi.validate.onSave": {
           "type": "boolean",
           "default": true,
-          "description": "When an .eventb file is saved, run `rossi validate` over its project directory, surfacing the full static checks (type errors, undeclared identifiers, dead-variable lints) that the live language server does not compute. Disable to validate only on demand."
+          "description": "When an .eventb file is saved, run `rossi validate` over its project directory, adding what the live language server does not report: the project lints (dead or unmodified variables, incomplete initialisation), every component's proof status and, with `rossi.validate.runtime`, the runtime checks. Findings the language server already shows are not repeated. Disable to validate only on demand."
         },
         "rossi.validate.runtime": {
           "type": "boolean",

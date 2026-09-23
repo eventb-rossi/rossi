@@ -357,16 +357,18 @@ export class RossiCommandController {
     // an automatic pass never interrupts editing.
     //
     // The saved file's *directory* is handed to `rossi validate` as a single
-    // argument so the CLI loads it as one project and runs the full static
-    // checker across the components — that is what adds the type/dead-code
-    // diagnostics (EB006/EB018/EB011-014) the live language server does not
-    // compute. (A bare file argument, or a list of files, only gets the
-    // component-local lints the server already provides.) Scoping to the file's
-    // directory keeps unrelated projects from cross-contaminating the result and
-    // avoids re-checking the whole tree on every save. This assumes a project's
-    // components are colocated in one directory (as `rossi import`/New Project
-    // produce); a component split into a sibling subdirectory would not see its
-    // cross-referenced siblings here.
+    // argument so the CLI loads it as one project and runs the static checker
+    // and the project lints across the components. The language server runs the
+    // same static check, so what this adds is the project lints
+    // (EB011/EB012/EB014/EB024), every component's proof status and, when
+    // enabled, the runtime checks; `applyValidationDiagnostics` skips what the
+    // server already shows. (A bare file argument, or a list of files, only
+    // gets the component-local lints the server already provides.) Scoping to
+    // the file's directory keeps unrelated projects from cross-contaminating
+    // the result and avoids re-checking the whole tree on every save. This
+    // assumes a project's components are colocated in one directory (as
+    // `rossi import`/New Project produce); a component split into a sibling
+    // subdirectory would not see its cross-referenced siblings here.
     async validateWorkspaceOnSave(document: TextDocument): Promise<void> {
         if (document.uri.scheme !== 'file' || !isEventBTextFile(document.uri.fsPath)) {
             return;
@@ -948,8 +950,8 @@ An Event-B project edited with the Event-B (Rossi) extension.
    context it sees) — one component per file, as in Rodin. Type \`context\`,
    \`machine\`, \`event\`, … and accept the snippet to scaffold a block.
 2. Errors are reported live as you type by the Rossi language server, and on
-   every save the whole project is validated for the type and dead-code checks
-   the live server does not compute (turn off with \`rossi.validate.onSave\`).
+   every save the whole project is validated for the project lints and proof
+   status the live server does not report (turn off with \`rossi.validate.onSave\`).
 3. Run **Rossi: Validate Current File** to validate on demand at any time.
 4. Switch operator style with **Rossi: Convert Current File to Unicode** /
    **… to ASCII**.

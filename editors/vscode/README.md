@@ -171,7 +171,7 @@ workspace, but only in a trusted one.
 - `rossi.inlayHints.maxLength`: Maximum rendered length of a type hint in characters; longer types are truncated with `…` and shown in full in the hint tooltip, `0` disables truncation (default: `32`)
 - `rossi.diagnostics.enabled`: Enable real-time diagnostics for syntax errors (default: `true`)
 - `rossi.diagnostics.debounceMs`: Reserved for future diagnostic debouncing; diagnostics currently run immediately after typing (default: `500`)
-- `rossi.validate.onSave`: Run `rossi validate` over a saved `.eventb` file's project directory, surfacing the full static checks the live language server does not compute (default: `true`)
+- `rossi.validate.onSave`: Run `rossi validate` over a saved `.eventb` file's project directory, adding the project lints and proof status the live language server does not report, without repeating findings it already shows (default: `true`)
 - `rossi.validate.runtime`: Pass `--runtime` to `rossi validate`, on save and from the Validate commands, adding the EB1xx runtime-translation suitability checks over the leaf machines and the contexts they see (default: `false`)
 - `rossi.completion.enabled`: Enable Event-B code completion (default: `true`)
 - `rossi.input.enabled`: Convert ASCII to Unicode math symbols as you type — eager combos and the `\name` leader (default: `true`)
