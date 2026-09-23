@@ -16,6 +16,7 @@ import {
     window,
     workspace,
     commands as vscodeCommands,
+    languages,
 } from 'vscode';
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
@@ -28,7 +29,7 @@ import {
     MATH_FONT_FILE,
 } from './mathFont';
 import { formatStyleFlags } from './styleFlags';
-import { regionToZeroIndexed, ValidationRegion } from './validationRegion';
+import { regionToZeroIndexed, ShownDiagnostic, shownByServer, ValidationRegion } from './validationRegion';
 
 interface RossiRunResult {
     stdout: string;
@@ -471,6 +472,47 @@ export class RossiCommandController {
             return;
         }
 
+        const scopeDir = opts?.scopeDir;
+        if (scopeDir) {
+            // Scoped refresh: drop only this project's previous diagnostics so a
+            // save in one project never erases another project's results.
+            const stale: Uri[] = [];
+            this.diagnostics.forEach((uri) => {
+                if (isPathInside(uri.fsPath, scopeDir)) {
+                    stale.push(uri);
+                }
+            });
+            for (const uri of stale) {
+                this.diagnostics.delete(uri);
+            }
+        } else {
+            this.diagnostics.clear();
+        }
+
+        // What the language server already shows, per file. Read once the old
+        // results are gone, so only other collections remain. A server finding
+        // that arrives after this run is not matched until the next one, but
+        // the server reports a save well before a project validate finishes.
+        const shownByFile = new Map<string, ShownDiagnostic[]>();
+        const shownIn = (uri: Uri): ShownDiagnostic[] => {
+            let shown = shownByFile.get(uri.toString());
+            if (!shown) {
+                shown = languages
+                    .getDiagnostics(uri)
+                    .filter((diagnostic) => diagnostic.source === 'rossi')
+                    .map((diagnostic) => ({
+                        line: diagnostic.range.start.line,
+                        code:
+                            typeof diagnostic.code === 'object'
+                                ? String(diagnostic.code.value)
+                                : diagnostic.code?.toString(),
+                        isError: diagnostic.severity === DiagnosticSeverity.Error,
+                    }));
+                shownByFile.set(uri.toString(), shown);
+            }
+            return shown;
+        };
+
         const byUri = new Map<string, Diagnostic[]>();
         for (const row of rows) {
             if (!row.error && !row.severity) {
@@ -479,6 +521,9 @@ export class RossiCommandController {
 
             const target = validationDiagnosticPath(row, cwd);
             const uri = Uri.file(target);
+            if (shownByServer(row.rule_id, row.region, shownIn(uri))) {
+                continue;
+            }
             const message = validationMessage(row);
             const r = regionToZeroIndexed(row.region);
             const diagnostic = new Diagnostic(
@@ -500,22 +545,6 @@ export class RossiCommandController {
             byUri.set(key, existing);
         }
 
-        const scopeDir = opts?.scopeDir;
-        if (scopeDir) {
-            // Scoped refresh: drop only this project's previous diagnostics so a
-            // save in one project never erases another project's results.
-            const stale: Uri[] = [];
-            this.diagnostics.forEach((uri) => {
-                if (isPathInside(uri.fsPath, scopeDir)) {
-                    stale.push(uri);
-                }
-            });
-            for (const uri of stale) {
-                this.diagnostics.delete(uri);
-            }
-        } else {
-            this.diagnostics.clear();
-        }
         for (const [uri, diagnostics] of byUri.entries()) {
             this.diagnostics.set(Uri.parse(uri), diagnostics);
         }
