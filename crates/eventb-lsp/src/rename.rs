@@ -26,7 +26,7 @@ use crate::references::{SymbolOccurrences, symbol_candidates, symbol_occurrences
 use crate::resolved_environment::ResolvedEnvironments;
 use crate::symbols::{
     INITIALISATION_EVENT_NAME, Resolution, SymbolIdentity, SymbolKind, abstract_event_identity,
-    resolve_cursor,
+    abstract_parameter_identities, resolve_cursor,
 };
 
 /// Provider for renaming symbols
@@ -283,9 +283,10 @@ impl RenameProvider {
 
 /// The symbols a rename of `start` changes together with it: the
 /// declarations the refinement chain links to it as one entity, up and down.
-/// A variable a refinement declares again is the variable it retains, and an
-/// event refining one of its own name is that event, so renaming either
-/// renames both.
+/// A variable or parameter a refinement declares again is the one it
+/// retains, and an event refining one of its own name is that event, so
+/// renaming either renames both. The abstract events one event merges share
+/// their parameters, so those rename together too.
 fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
     let mut class = vec![start.clone()];
     let mut next = 0;
@@ -293,12 +294,28 @@ fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolI
         next += 1;
         let mut linked = retained_parents(&member, loader);
         for name in symbol_candidates(&member, loader) {
-            if let Some(loaded) = loader.load(&name) {
-                linked.extend(
-                    local_declarations(loaded.component(), &member)
-                        .into_iter()
-                        .filter(|declared| retained_parents(declared, loader).contains(&member)),
-                );
+            let Some(loaded) = loader.load(&name) else {
+                continue;
+            };
+            linked.extend(
+                local_declarations(loaded.component(), &member)
+                    .into_iter()
+                    .filter(|declared| retained_parents(declared, loader).contains(&member)),
+            );
+            if let (SymbolKind::Parameter, Component::Machine(machine)) =
+                (member.kind, loaded.component())
+            {
+                for event in &machine.events {
+                    let merged = abstract_parameter_identities(
+                        loaded.component(),
+                        event,
+                        &member.name,
+                        loader,
+                    );
+                    if merged.contains(&member) {
+                        linked.extend(merged);
+                    }
+                }
             }
         }
         for symbol in linked {
@@ -312,7 +329,8 @@ fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolI
 
 /// The declarations up the refinement chain that `symbol` retains: the
 /// abstract machine's variable of the same name a refinement declares again,
-/// or the abstract event of the same name an event refines.
+/// the abstract event of the same name an event refines, or the abstract
+/// event's parameter an event declares again.
 fn retained_parents(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
     let Some(loaded) = loader.load(&symbol.owner) else {
         return Vec::new();
@@ -334,6 +352,14 @@ fn retained_parents(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<Sy
             .flat_map(|event| &event.refines)
             .filter(|target| target.name == symbol.name)
             .filter_map(|target| abstract_event_identity(loaded.component(), &target.name, loader))
+            .collect(),
+        SymbolKind::Parameter => machine
+            .events
+            .iter()
+            .filter(|event| symbol.event.as_deref() == Some(event.name.as_str()))
+            .flat_map(|event| {
+                abstract_parameter_identities(loaded.component(), event, &symbol.name, loader)
+            })
             .collect(),
         _ => Vec::new(),
     }
@@ -357,6 +383,12 @@ fn local_declarations(component: &Component, like: &SymbolIdentity) -> Vec<Symbo
         {
             vec![SymbolIdentity::event(&like.name, &machine.name)]
         }
+        (Component::Machine(machine), SymbolKind::Parameter) => machine
+            .events
+            .iter()
+            .filter(|event| event.parameters.iter().any(|p| p.name == like.name))
+            .map(|event| SymbolIdentity::parameter(&like.name, &machine.name, &event.name))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1618,6 +1650,82 @@ END
             renamed_workspace(&sources, "M1.eventb", "state", "level"),
             Some(replaced(&sources, "state", "level"))
         );
+    }
+
+    #[test]
+    fn parameter_rename_reaches_the_witness_of_a_refinement() {
+        // The concrete `increase` drops `delta` and witnesses it.
+        let sources = [
+            ("abstract.eventb", REFINEMENT_ABSTRACT),
+            ("concrete.eventb", REFINEMENT_CONCRETE),
+        ];
+        let expected = replaced(&sources, "delta", "amount");
+        for (file, needle) in [
+            ("abstract.eventb", "delta"),
+            ("concrete.eventb", "delta delta"),
+            ("concrete.eventb", "delta ="),
+        ] {
+            assert_eq!(
+                renamed_workspace(&sources, file, needle, "amount"),
+                Some(expected.clone()),
+                "renamed from `{needle}` in {file}"
+            );
+        }
+    }
+
+    /// A machine with a variable `x` and an event `set` taking `amount`.
+    const SET_ABSTRACT: &str = "MACHINE M0\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x ≔ 0\n    END\n\n    EVENT set\n    ANY\n        amount\n    WHERE\n        @grd1 amount ∈ ℕ\n    THEN\n        @act1 x ≔ amount\n    END\nEND\n";
+
+    #[test]
+    fn parameter_rename_follows_a_retained_parameter() {
+        let sources = [
+            ("M0.eventb", SET_ABSTRACT),
+            (
+                "M1.eventb",
+                "MACHINE M1\nREFINES M0\nVARIABLES\n    x\nEVENTS\n    EVENT set\n    REFINES set\n    ANY\n        amount\n    WHERE\n        @grd1 amount ≤ 10\n    THEN\n        @act1 x ≔ amount\n    END\nEND\n",
+            ),
+        ];
+        assert_eq!(
+            renamed_workspace(&sources, "M1.eventb", "amount", "value"),
+            Some(replaced(&sources, "amount", "value"))
+        );
+    }
+
+    #[test]
+    fn parameter_rename_follows_an_extending_event() {
+        let sources = [
+            ("M0.eventb", SET_ABSTRACT),
+            (
+                "M1.eventb",
+                "MACHINE M1\nREFINES M0\nVARIABLES\n    x\nEVENTS\n    EVENT set extends set\n    WHERE\n        @grd2 amount < 10\n    END\nEND\n",
+            ),
+        ];
+        assert_eq!(
+            renamed_workspace(&sources, "M1.eventb", "amount", "value"),
+            Some(replaced(&sources, "amount", "value"))
+        );
+    }
+
+    #[test]
+    fn parameter_rename_in_a_later_machine_of_a_merged_file() {
+        // Both machines have an event `set`; the second machine's parameter
+        // is found in its own event, not in the first machine's.
+        let refinement = "MACHINE M1\nREFINES M0\nVARIABLES\n    x\nEVENTS\n    EVENT set\n    REFINES set\n    ANY\n        amount\n    WHERE\n        @grd1 amount ≤ 10\n    THEN\n        @act1 x ≔ amount\n    END\n\n";
+        let other = "    EVENT other\n    ANY\n        amount\n    WHERE\n        @grd1 amount ∈ ℕ\n    THEN\n        @act1 x ≔ amount\n    END\nEND\n";
+        let merged = format!("{SET_ABSTRACT}\n{refinement}{other}");
+        let sources = [("merged.eventb", merged.as_str())];
+        let renamed = renamed_workspace(
+            &sources,
+            "merged.eventb",
+            "amount\n    WHERE\n        @grd1 amount ≤",
+            "value",
+        );
+        let expected = format!(
+            "{}\n{}{other}",
+            SET_ABSTRACT.replace("amount", "value"),
+            refinement.replace("amount", "value")
+        );
+        assert_eq!(renamed, Some(vec![expected]));
     }
 
     const STEP_CHAIN: [(&str, &str); 3] = [

@@ -180,6 +180,16 @@ pub(crate) fn event_line_range_in(masked: &str, event_name: &str) -> Option<(usi
 /// [`event_parameter_at_position`], so the two cannot disagree on what counts as
 /// "inside this event".
 fn event_contains_line(masked: &str, event: &rossi::Event, line_idx: usize) -> bool {
+    // The parsed span places the event itself, where the scan for its
+    // `EVENT name` line below finds the first event of that name in the
+    // document: another machine's, in a file holding a refinement chain.
+    if let Some(span) = event.span {
+        let line_of = |offset: usize| masked.get(..offset).map(|text| text.matches('\n').count());
+        return match (line_of(span.start), line_of(line_tight_end(masked, span))) {
+            (Some(start), Some(end)) => (start..=end).contains(&line_idx),
+            _ => false,
+        };
+    }
     // `masked` is masked once by the caller; scanning it per event avoids
     // re-masking the whole document each time.
     event_line_range_in(masked, &event.name)

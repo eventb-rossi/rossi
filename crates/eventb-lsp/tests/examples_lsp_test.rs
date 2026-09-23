@@ -805,6 +805,13 @@ fn traffic_light_event_rename_follows_the_refinement_chain() {
 }
 
 #[test]
+fn traffic_light_parameter_rename_reaches_the_witness() {
+    let ws = Workspace::open(TRAFFIC_LIGHT);
+    // M1's `set_cars_colours` drops M0's `new_value` and witnesses it.
+    assert_rename_replaces_every_occurrence(&ws, "M0", "new_value", 0, "cars_next");
+}
+
+#[test]
 fn cars_rename_constant_follows_the_context_chain() {
     // `cars_limit` is declared in C0 and visible in every machine, through a
     // context in C0's extends chain: renaming it from M0 reaches them all.

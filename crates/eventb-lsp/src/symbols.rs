@@ -289,6 +289,7 @@ fn resolve_cursor_impl(
         component,
         masked,
         position,
+        offset,
         identifier,
         loader,
         environments,
@@ -298,23 +299,107 @@ fn resolve_cursor_impl(
 
 /// Resolve `identifier` within the component the cursor sits in. An event `ANY`
 /// parameter (scoped to its event and shadowing a same-named global) is tried
-/// first, positionally, before the component-wide symbols.
+/// first, positionally, then a parameter of the abstract event the cursor's
+/// event inherits or witnesses, before the component-wide symbols.
 fn resolve_symbol_identity_at_position(
     component: &Component,
     masked: &str,
     position: Position,
+    offset: usize,
     identifier: &str,
     loader: &ComponentLoader,
     environments: Option<&mut ResolvedEnvironments>,
 ) -> Option<SymbolIdentity> {
-    if let Component::Machine(machine) = component
-        && let Some(parameter) =
+    if let Component::Machine(machine) = component {
+        if let Some(parameter) =
             local_parameter_symbol_identity_at_position(machine, masked, position, identifier)
-    {
-        return Some(parameter);
+        {
+            return Some(parameter);
+        }
+        // An abstract event's parameters are in scope throughout an event
+        // that extends it, and in the witnesses of one that drops them.
+        if let Some(event) = machine
+            .events
+            .iter()
+            .find(|event| event.span.is_some_and(|span| covers(span, offset)))
+            && (event.extended || in_witness(event, offset))
+            && let Some(parameter) =
+                abstract_parameter_identities(component, event, identifier, loader)
+                    .into_iter()
+                    .next()
+        {
+            return Some(parameter);
+        }
     }
 
     resolve_symbol_identity_in_component_impl(component, identifier, loader, environments)
+}
+
+/// The parameters named `name` of the abstract events `event` refines, the
+/// ones it inherits when it extends them and witnesses when it drops them.
+/// An abstract event that declares no such parameter but extends its own
+/// abstract event passes the search on up, as the static checker's parameter
+/// chains do. Every match is returned: merged abstract events share their
+/// parameters.
+pub(crate) fn abstract_parameter_identities(
+    component: &Component,
+    event: &rossi::Event,
+    name: &str,
+    loader: &ComponentLoader,
+) -> Vec<SymbolIdentity> {
+    fn search(
+        component: &Component,
+        event: &rossi::Event,
+        name: &str,
+        loader: &ComponentLoader,
+        visited: &mut Vec<SymbolIdentity>,
+        found: &mut Vec<SymbolIdentity>,
+    ) {
+        for target in &event.refines {
+            let Some(abstract_event) = abstract_event_identity(component, &target.name, loader)
+            else {
+                continue;
+            };
+            if visited.contains(&abstract_event) {
+                continue;
+            }
+            visited.push(abstract_event.clone());
+            let Some(parent) = loader.load(&abstract_event.owner) else {
+                continue;
+            };
+            let Component::Machine(machine) = parent.component() else {
+                continue;
+            };
+            let Some(declared) = machine
+                .events
+                .iter()
+                .find(|e| e.name == abstract_event.name)
+            else {
+                continue;
+            };
+            if declared.parameters.iter().any(|p| p.name == name) {
+                found.push(SymbolIdentity::parameter(
+                    name,
+                    &machine.name,
+                    &declared.name,
+                ));
+            } else if declared.extended {
+                search(parent.component(), declared, name, loader, visited, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    search(component, event, name, loader, &mut Vec::new(), &mut found);
+    found
+}
+
+/// Whether `offset` falls in one of `event`'s witnesses, label included.
+pub(crate) fn in_witness(event: &rossi::Event, offset: usize) -> bool {
+    event
+        .with
+        .iter()
+        .chain(&event.witnesses)
+        .any(|witness| witness.span.is_some_and(|span| covers(span, offset)))
 }
 
 /// Resolve a cursor on an event's `refines`/`extends` TARGET name to the abstract
@@ -463,15 +548,11 @@ fn resolve_symbol_identity_in_environment(
 
 /// Every component that could hold a reference to `symbol`: its owner plus the
 /// components that inherit it (contexts/machines extending or seeing the owner,
-/// machines refining it). A parameter is event-local, so only its owner.
+/// machines refining it, whose events can inherit or witness a parameter).
 pub(crate) fn candidate_components_for_symbol(
     symbol: &SymbolIdentity,
     manager: &CrossReferenceManager,
 ) -> Vec<String> {
-    if symbol.kind == SymbolKind::Parameter {
-        return vec![symbol.owner.clone()];
-    }
-
     let mut candidates = Vec::new();
     let mut component_names = manager.all_component_names();
     component_names.sort();
@@ -501,10 +582,12 @@ pub(crate) fn candidate_components_for_symbol(
             {
                 candidates.push(component_name);
             }
-            (SymbolKind::Variable | SymbolKind::Event, ComponentKind::Machine)
-                if manager
-                    .refinement_chain(&component_name)
-                    .contains(&symbol.owner) =>
+            (
+                SymbolKind::Variable | SymbolKind::Event | SymbolKind::Parameter,
+                ComponentKind::Machine,
+            ) if manager
+                .refinement_chain(&component_name)
+                .contains(&symbol.owner) =>
             {
                 candidates.push(component_name);
             }
