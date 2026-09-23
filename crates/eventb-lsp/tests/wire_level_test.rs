@@ -1922,6 +1922,108 @@ mod pull_diagnostics {
             "the clean sibling reports nothing; got {report}"
         );
     }
+
+    /// The findings a full `workspace/diagnostic` sweep reports for `uri`.
+    async fn swept(service: &mut LspService<RossiLanguageServer>, id: i64, uri: &Uri) -> Value {
+        let request = Request::build("workspace/diagnostic")
+            .id(id)
+            .params(json!({ "previousResultIds": [] }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("workspace/diagnostic must respond");
+        let (_id, result) = response.into_parts();
+        let report: Value = result.expect("workspace/diagnostic must succeed");
+        report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["uri"] == json!(uri))
+            .unwrap_or_else(|| panic!("{} must be swept; got {report}", uri.as_str()))["items"]
+            .clone()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_closed_files_report_is_reused_until_one_of_its_inputs_changes() {
+        const CONTEXT: &str =
+            "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k \u{2208} \u{2115}\nEND\n";
+        const MACHINE: &str = concat!(
+            "MACHINE M\n",
+            "SEES C\n",
+            "VARIABLES\n",
+            "    x\n",
+            "INVARIANTS\n",
+            "    @inv1 x = k\n",
+            "EVENTS\n",
+            "    EVENT INITIALISATION\n",
+            "    THEN\n",
+            "        @act1 x \u{2254} k\n",
+            "    END\n",
+            "END\n",
+        );
+        let workspace = TempWorkspace::new("pull-diagnostics-reuse");
+        let context = workspace.as_ref().join("C.eventb");
+        let machine = workspace.as_ref().join("M.eventb");
+        std::fs::write(&context, CONTEXT).unwrap();
+        std::fs::write(&machine, MACHINE).unwrap();
+        let root_uri = Uri::from_file_path(workspace.as_ref()).unwrap();
+        let context_uri = Uri::from_file_path(&context).unwrap();
+        let machine_uri = Uri::from_file_path(&machine).unwrap();
+
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({
+                "capabilities": refreshing_client(),
+                "workspaceFolders": [{ "uri": root_uri, "name": "test" }]
+            }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification("initialized", json!({})))
+            .await
+            .unwrap();
+
+        let first = swept(&mut service, 2, &machine_uri).await;
+        assert_eq!(first, json!([]), "M is well formed while C declares k");
+
+        // C loses `k` on disk, and nothing tells the server: M's report is
+        // the one computed before, not a fresh check of every closed file.
+        std::fs::write(&context, CONTEXT.replace('k', "j")).unwrap();
+        let reused = swept(&mut service, 3, &machine_uri).await;
+        assert_eq!(reused, first, "an unchanged input set reuses the report");
+
+        // The watcher's notification is the change the server acts on.
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "workspace/didChangeWatchedFiles",
+                json!({ "changes": [{ "uri": context_uri, "type": 2 }] }),
+            ))
+            .await
+            .unwrap();
+        let rechecked = swept(&mut service, 4, &machine_uri).await;
+        assert_ne!(rechecked, json!([]), "M now uses an undeclared k");
+
+        // A write to the file itself shows through its metadata alone.
+        std::fs::write(&machine, MACHINE.replace("VARIABLES", "VARIABLE")).unwrap();
+        let rewritten = swept(&mut service, 5, &machine_uri).await;
+        assert_ne!(
+            rewritten, rechecked,
+            "M's own edit is picked up; got {rewritten}"
+        );
+    }
 }
 
 mod proof_obligations {
