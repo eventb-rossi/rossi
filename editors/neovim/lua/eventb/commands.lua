@@ -158,6 +158,29 @@ local function char_to_byte(bufnr, line0, char0)
   return char0
 end
 
+-- Whether the language server already shows the finding ROW reports on line
+-- LNUM of BUFNR, so adding it would list it twice. Mirrors shownByServer() in
+-- validationRegion.ts: a diagnostic with the same code on the same line, where
+-- EB004, the CLI's catch-all for a syntax error, matches the server's uncoded
+-- error. A row without a rule or a region is never matched.
+local function shown_by_server(bufnr, row, lnum)
+  if not row.rule_id or not row.region then
+    return false
+  end
+  for _, d in ipairs(vim.diagnostic.get(bufnr, { lnum = lnum })) do
+    if
+      d.source == "rossi"
+      and (
+        d.code == row.rule_id
+        or (row.rule_id == "EB004" and d.code == nil and d.severity == vim.diagnostic.severity.ERROR)
+      )
+    then
+      return true
+    end
+  end
+  return false
+end
+
 local function apply_validation(stdout, cwd)
   local ok, rows = pcall(vim.json.decode, stdout)
   if not ok or type(rows) ~= "table" then
@@ -191,17 +214,20 @@ local function apply_validation(stdout, cwd)
       local region = row.region
       local lnum = region and math.max(region.start_line - 1, 0) or 0
       local end_lnum = region and math.max(region.end_line - 1, 0) or nil
-      table.insert(by_buf[bufnr], {
-        lnum = lnum,
-        col = region and char_to_byte(bufnr, lnum, region.start_column - 1) or 0,
-        end_lnum = end_lnum,
-        -- end_lnum is already nil whenever there is no region, so it alone gates this.
-        end_col = end_lnum and char_to_byte(bufnr, end_lnum, region.end_column - 1) or nil,
-        message = validation_message(row),
-        severity = severity_of(row.severity),
-        source = "rossi",
-        code = row.rule_id,
-      })
+      -- Checked after the reset above, so only other namespaces answer.
+      if not shown_by_server(bufnr, row, lnum) then
+        table.insert(by_buf[bufnr], {
+          lnum = lnum,
+          col = region and char_to_byte(bufnr, lnum, region.start_column - 1) or 0,
+          end_lnum = end_lnum,
+          -- end_lnum is already nil whenever there is no region, so it alone gates this.
+          end_col = end_lnum and char_to_byte(bufnr, end_lnum, region.end_column - 1) or nil,
+          message = validation_message(row),
+          severity = severity_of(row.severity),
+          source = "rossi",
+          code = row.rule_id,
+        })
+      end
     end
   end
 
@@ -316,6 +342,9 @@ function M.setup()
     run_io("build", "Input to build: ", default, "Output checked Rodin ZIP: ")
   end, { desc = "Build a checked Rodin ZIP" })
 end
+
+-- Exposed for the headless spec (editors/neovim/test/validate_spec.lua).
+M._apply_validation = apply_validation
 
 -- Register commands on require so manual `luafile`/`require` both work.
 M.setup()
