@@ -376,13 +376,19 @@ fn refines_target_references_resolve_to_the_abstract_event() {
     let provider = make_reference_provider(&[(abs_uri.clone(), abs), (con_uri.clone(), con)]);
 
     // The `extends` target (second `step`, char 24) resolves to the abstract
-    // event's declaration, not the local event.
+    // event: its declaration, and the target naming it.
     let target = provider
         .find_references(&make_reference_params(con_uri.clone(), 5, 24), con)
         .expect("references resolve");
-    assert_eq!(target.len(), 1, "{target:?}");
-    assert_eq!(target[0].uri, abs_uri);
-    assert_eq!(target[0].range.start, Position::new(4, 10));
+    let sites: Vec<(&Uri, Position)> = target.iter().map(|r| (&r.uri, r.range.start)).collect();
+    assert_eq!(
+        sites,
+        [
+            (&abs_uri, Position::new(4, 10)),
+            (&con_uri, Position::new(5, 23))
+        ],
+        "{target:?}"
+    );
 
     // The event's own name (first `step`, char 11) stays on the local event.
     let own = provider

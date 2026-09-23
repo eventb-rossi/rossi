@@ -18,7 +18,7 @@ use rossi::ast::Span;
 
 use crate::component_loader::ComponentLoader;
 use crate::component_util::{
-    ComponentIdentity, component_at_offset, parse_all, resolve_component_at_position,
+    ComponentIdentity, component_at_offset, covers, parse_all, resolve_component_at_position,
 };
 use crate::cross_references::{ComponentKind, CrossReferenceManager};
 use crate::document::ParsedDocument;
@@ -267,6 +267,13 @@ fn resolve_cursor_impl(
         return Some(Resolution::Symbol(symbol));
     }
 
+    // A cursor on an event's own name resolves to that event, even where a
+    // variable or parameter shares its spelling: event names and formula
+    // identifiers are separate namespaces.
+    if let Some(symbol) = event_named_at_offset(component, offset) {
+        return Some(Resolution::Symbol(symbol));
+    }
+
     // A formula binder the cursor sits on or is bound by is the most local scope.
     // Event `ANY` parameters are seeded as binders too, but they keep their own
     // component/event symbol identity below (richer for hover, cross-checked for
@@ -334,10 +341,20 @@ fn resolve_event_refinement_target(
             event
                 .refines
                 .iter()
-                .find(|t| t.span.is_some_and(|span| span.contains(offset)))
+                .find(|t| t.span.is_some_and(|span| covers(span, offset)))
         })
         .map(|t| t.name.as_str())?;
+    abstract_event_identity(component, target, loader)
+}
 
+/// The abstract event a `refines`/`extends` target named `target` in
+/// `component` names: the event of that name in the nearest machine up the
+/// refinement chain, which excludes `component` itself.
+pub(crate) fn abstract_event_identity(
+    component: &Component,
+    target: &str,
+    loader: &ComponentLoader,
+) -> Option<SymbolIdentity> {
     let mut environments = ResolvedEnvironments::refinements();
     environments
         .resolve(component, loader)
@@ -345,6 +362,25 @@ fn resolve_event_refinement_target(
         .into_iter()
         .find(|ancestor| event_declaration_span(ancestor, target).is_some())
         .map(|ancestor| SymbolIdentity::event(target, ancestor.name()))
+}
+
+/// The event whose own name, `INITIALISATION` included, covers `offset`.
+fn event_named_at_offset(component: &Component, offset: usize) -> Option<SymbolIdentity> {
+    let Component::Machine(machine) = component else {
+        return None;
+    };
+    let initialisation = machine
+        .initialisation
+        .as_ref()
+        .and_then(|init| init.name_span)
+        .map(|span| (INITIALISATION_EVENT_NAME, span));
+    machine
+        .events
+        .iter()
+        .filter_map(|event| event.name_span.map(|span| (event.name.as_str(), span)))
+        .chain(initialisation)
+        .find(|(_, span)| covers(*span, offset))
+        .map(|(name, _)| SymbolIdentity::event(name, &machine.name))
 }
 
 /// Resolve `identifier` to a symbol visible from `component`: declared directly,
