@@ -3107,7 +3107,7 @@ impl RossiLanguageServer {
         let Some(doc) = self.document_manager.parse_result(&uri) else {
             return Ok(crate::proof::ProofReport::default());
         };
-        if !self.analyzer.has_proof_obligations(&uri)
+        if (params.refresh || !self.analyzer.has_proof_obligations(&uri))
             && let Some(sources) = self.analyzer.proof_sources(&uri)
         {
             self.analyzer

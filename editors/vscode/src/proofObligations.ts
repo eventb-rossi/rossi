@@ -369,7 +369,8 @@ export function registerProofObligations(
 
     // Ask for a file's list when nothing has been pushed for it yet: an
     // editor that was open before the server started, or a request racing
-    // the server's own open-time refresh.
+    // the server's own open-time refresh. `force`, from the refresh button,
+    // also has the server judge the stored proofs on disk again.
     const fetch = async (editor: TextEditor | undefined, force = false) => {
         if (!isEventB(editor) || !enabled()) {
             return;
@@ -382,6 +383,7 @@ export function registerProofObligations(
             await ready;
             const report = await client.sendRequest<ProofReport>('rossi/proofObligations', {
                 textDocument: { uri },
+                refresh: force,
             });
             store.set(uri, report);
             if (window.activeTextEditor?.document.uri.toString() === uri) {
