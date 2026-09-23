@@ -36,10 +36,11 @@ pub struct Event {
     /// Guards (WHERE/WHEN clause)
     pub guards: Vec<LabeledPredicate>,
 
-    /// WITH clause — labeled predicates witnessing abstract variables
+    /// WITH clause: witness predicates, each labelled with the abstract
+    /// variable (`x'`) or parameter it witnesses
     pub with: Vec<LabeledPredicate>,
 
-    /// WITNESS clause — labeled predicates witnessing abstract parameters
+    /// WITNESS clause: the same witnesses under the other keyword
     pub witnesses: Vec<LabeledPredicate>,
 
     /// Actions (THEN/BEGIN clause)
@@ -87,9 +88,10 @@ pub struct InitialisationEvent {
     pub comment: Option<String>,
     /// Whether this initialisation extends (inherits from) the refined machine's initialisation
     pub extended: bool,
-    /// WITH clause — labeled predicates witnessing abstract variables
+    /// WITH clause: witness predicates, each labelled with the abstract
+    /// variable (`x'`) or parameter it witnesses
     pub with: Vec<LabeledPredicate>,
-    /// WITNESS clause — labeled predicates witnessing abstract parameters
+    /// WITNESS clause: the same witnesses under the other keyword
     pub witnesses: Vec<LabeledPredicate>,
     /// Source location of the whole INITIALISATION event (textual parse only)
     pub span: Option<Span>,

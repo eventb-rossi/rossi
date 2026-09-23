@@ -287,9 +287,9 @@ Press `gr` or `:LspReferences` to find all usages of:
 ### Rename Symbol
 
 Press `<leader>rn` or `:LspRename` to rename:
-- Variables, constants, parameters
-- Updates all references across all files in workspace
-- Safe refactoring with validation
+- Variables, constants, carrier sets, events, parameters, machines and contexts
+- Updates every file that uses the name, closed ones included, and follows the refinement chain: a variable or parameter declared again in a refinement, and an event refining one of its own name, rename together
+- Refuses a position that names nothing renameable, such as a label or a comment
 
 ### Code Actions
 
