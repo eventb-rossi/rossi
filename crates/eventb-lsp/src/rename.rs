@@ -24,7 +24,10 @@ use crate::identifier_utils::position_to_offset;
 use crate::position::span_to_range;
 use crate::references::{SymbolOccurrences, symbol_candidates, symbol_occurrences};
 use crate::resolved_environment::ResolvedEnvironments;
-use crate::symbols::{Resolution, SymbolIdentity, SymbolKind, resolve_cursor};
+use crate::symbols::{
+    INITIALISATION_EVENT_NAME, Resolution, SymbolIdentity, SymbolKind, abstract_event_identity,
+    resolve_cursor,
+};
 
 /// Provider for renaming symbols
 pub struct RenameProvider {
@@ -136,27 +139,22 @@ impl RenameProvider {
         let is_component = self.cross_ref_manager.is_some()
             && resolve_component_at_position(text, &masked, position, &identifier).is_some();
 
-        // A structural name may be hyphenated (Rodin labels/file names);
-        // mathematical symbols may not (kernel_lang §2.2). Beyond tracked
-        // components, an old name that is itself hyphenated can only be a
-        // structural name (e.g. an event named `do-step`, which the cross-ref
-        // manager does not track), so allow the new name to be hyphenated too.
-        let allow_component_name =
-            is_component || !rossi::names::is_valid_math_identifier(&identifier);
-        if !is_valid_new_name(new_name, allow_component_name) {
-            debug!("Invalid new name: '{}'", new_name);
-            return None;
-        }
-
         // Check if new name is a keyword
         if is_keyword(new_name) {
             debug!("Cannot rename to keyword: '{}'", new_name);
             return None;
         }
 
+        // A structural name may be hyphenated (Rodin labels/file names);
+        // mathematical symbols may not (kernel_lang §2.2). Each path below
+        // checks the new name against what it renames.
         let mut changes = HashMap::new();
 
         if is_component {
+            if !is_valid_new_name(new_name, true) {
+                debug!("Invalid new name: '{}'", new_name);
+                return None;
+            }
             // Rename across all workspace files
             debug!("Renaming component '{}' across workspace", identifier);
             self.rename_across_workspace(&identifier, new_name, &mut changes);
@@ -170,6 +168,16 @@ impl RenameProvider {
         ) {
             changes = symbol_changes;
         } else {
+            // An old name that is itself hyphenated can only be a structural
+            // name (e.g. an event named `do-step`), so allow the new name to
+            // be hyphenated too.
+            if !is_valid_new_name(
+                new_name,
+                !rossi::names::is_valid_math_identifier(&identifier),
+            ) {
+                debug!("Invalid new name: '{}'", new_name);
+                return None;
+            }
             // Rename only in the current document. A hyphenated symbol (an
             // event name) gets the component boundary; a math symbol the math one.
             debug!("Renaming symbol '{}' in current document", identifier);
@@ -256,11 +264,13 @@ impl RenameProvider {
         else {
             return None;
         };
-        if !matches!(
-            symbol.kind,
-            SymbolKind::Parameter | SymbolKind::Set | SymbolKind::Constant | SymbolKind::Variable
-        ) {
-            return None;
+        if symbol.kind == SymbolKind::Event && symbol.name == INITIALISATION_EVENT_NAME {
+            debug!("Cannot rename INITIALISATION");
+            return Some(HashMap::new());
+        }
+        if !is_valid_new_name(new_name, symbol.kind == SymbolKind::Event) {
+            debug!("Invalid new name: '{}'", new_name);
+            return Some(HashMap::new());
         }
         let mut environments = ResolvedEnvironments::new();
         let occurrences = rename_class(&symbol, &loader)
@@ -273,8 +283,9 @@ impl RenameProvider {
 
 /// The symbols a rename of `start` changes together with it: the
 /// declarations the refinement chain links to it as one entity, up and down.
-/// A variable a refinement declares again is the variable it retains, so
-/// renaming either renames both.
+/// A variable a refinement declares again is the variable it retains, and an
+/// event refining one of its own name is that event, so renaming either
+/// renames both.
 fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
     let mut class = vec![start.clone()];
     let mut next = 0;
@@ -299,24 +310,33 @@ fn rename_class(start: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolI
     class
 }
 
-/// The declarations in the abstract machine that `symbol` retains: the
-/// variable of the same name a refinement declares again.
+/// The declarations up the refinement chain that `symbol` retains: the
+/// abstract machine's variable of the same name a refinement declares again,
+/// or the abstract event of the same name an event refines.
 fn retained_parents(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolIdentity> {
-    if symbol.kind != SymbolKind::Variable {
-        return Vec::new();
-    }
     let Some(loaded) = loader.load(&symbol.owner) else {
         return Vec::new();
     };
     let Component::Machine(machine) = loaded.component() else {
         return Vec::new();
     };
-    machine
-        .refines
-        .as_deref()
-        .and_then(|parent| loader.load(parent))
-        .map(|parent| local_declarations(parent.component(), symbol))
-        .unwrap_or_default()
+    match symbol.kind {
+        SymbolKind::Variable => machine
+            .refines
+            .as_deref()
+            .and_then(|parent| loader.load(parent))
+            .map(|parent| local_declarations(parent.component(), symbol))
+            .unwrap_or_default(),
+        SymbolKind::Event => machine
+            .events
+            .iter()
+            .filter(|event| event.name == symbol.name)
+            .flat_map(|event| &event.refines)
+            .filter(|target| target.name == symbol.name)
+            .filter_map(|target| abstract_event_identity(loaded.component(), &target.name, loader))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// What `component` itself declares under `like`'s name and kind.
@@ -331,6 +351,11 @@ fn local_declarations(component: &Component, like: &SymbolIdentity) -> Vec<Symbo
                 owner: machine.name.clone(),
                 event: None,
             }]
+        }
+        (Component::Machine(machine), SymbolKind::Event)
+            if machine.events.iter().any(|e| e.name == like.name) =>
+        {
+            vec![SymbolIdentity::event(&like.name, &machine.name)]
         }
         _ => Vec::new(),
     }
@@ -1592,6 +1617,106 @@ END
         assert_eq!(
             renamed_workspace(&sources, "M1.eventb", "state", "level"),
             Some(replaced(&sources, "state", "level"))
+        );
+    }
+
+    const STEP_CHAIN: [(&str, &str); 3] = [
+        (
+            "M0.eventb",
+            "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+        ),
+        (
+            "M1.eventb",
+            "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT step\n    REFINES step\n    THEN\n        skip\n    END\n\n    EVENT pause\n    REFINES step\n    THEN\n        skip\n    END\nEND\n",
+        ),
+        (
+            "M2.eventb",
+            "MACHINE M2\nREFINES M1\nEVENTS\n    EVENT step extends step\n    END\nEND\n",
+        ),
+    ];
+
+    #[test]
+    fn event_rename_follows_same_named_refining_events() {
+        // Each `step` refines the one above it and keeps its name, so all
+        // three are one event; `pause` refines it too but is another event,
+        // whose target follows the rename.
+        let expected = replaced(&STEP_CHAIN, "step", "advance");
+        for (file, needle) in [
+            ("M0.eventb", "step"),
+            ("M2.eventb", "step extends"),
+            ("M2.eventb", "step\n    END"),
+        ] {
+            assert_eq!(
+                renamed_workspace(&STEP_CHAIN, file, needle, "advance"),
+                Some(expected.clone()),
+                "renamed from `{needle}` in {file}"
+            );
+        }
+    }
+
+    #[test]
+    fn event_rename_accepts_a_hyphenated_name() {
+        let renamed = renamed_workspace(&STEP_CHAIN, "M0.eventb", "step", "do-step");
+        assert_eq!(renamed, Some(replaced(&STEP_CHAIN, "step", "do-step")));
+    }
+
+    #[test]
+    fn rename_of_an_event_named_like_a_variable_renames_the_event() {
+        let source = "MACHINE m\nVARIABLES\n    tick\nINVARIANTS\n    @inv1 tick ∈ ℕ\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 tick ≔ 0\n    END\n\n    EVENT tick\n    THEN\n        @act1 tick ≔ tick + 1\n    END\nEND\n";
+        let sources = [("m.eventb", source)];
+        assert_eq!(
+            renamed_workspace(&sources, "m.eventb", "tick\n    THEN", "step"),
+            Some(vec![source.replace("EVENT tick", "EVENT step")])
+        );
+    }
+
+    #[test]
+    fn event_rename_from_a_target_trailing_edge_past_a_same_named_event() {
+        // `pause` refines the abstract `step`; the concrete `step` is a new
+        // event. The caret just past the target still names the abstract one.
+        let sources = [
+            (
+                "M0.eventb",
+                "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+            ),
+            (
+                "M1.eventb",
+                "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT pause\n    REFINES step\n    THEN\n        skip\n    END\n\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+            ),
+        ];
+        let text = sources[1].1;
+        let pos = pos_at(
+            text,
+            text.find("REFINES step").unwrap() + "REFINES step".len(),
+        );
+        let provider = workspace_provider(&sources);
+        let params =
+            make_rename_params(pos.line, pos.character, file_uri("M1.eventb"), "go".into());
+        let mut changes = provider
+            .rename(&params, text)
+            .expect("rename from the target's trailing edge")
+            .changes
+            .unwrap();
+        assert_eq!(
+            apply(
+                sources[0].1,
+                &changes.remove(&file_uri("M0.eventb")).unwrap()
+            ),
+            sources[0].1.replace("step", "go")
+        );
+        assert_eq!(
+            apply(text, &changes.remove(&file_uri("M1.eventb")).unwrap()),
+            text.replace("REFINES step", "REFINES go")
+        );
+    }
+
+    #[test]
+    fn rename_refuses_initialisation() {
+        let source = "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x ≔ 0\n    END\nEND\n";
+        let sources = [("m.eventb", source)];
+        assert_eq!(
+            renamed_workspace(&sources, "m.eventb", "INITIALISATION", "START"),
+            None
         );
     }
 

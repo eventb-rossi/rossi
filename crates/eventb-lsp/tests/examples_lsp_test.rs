@@ -796,6 +796,15 @@ fn traffic_light_variable_rename_follows_the_refinement_chain() {
 }
 
 #[test]
+fn traffic_light_event_rename_follows_the_refinement_chain() {
+    let ws = Workspace::open(TRAFFIC_LIGHT);
+    // M1's `set_peds_green` refines M0's `set_peds_go` under another name.
+    assert_rename_replaces_every_occurrence(&ws, "M0", "set_peds_go", 0, "open_crossing");
+    // M2 extends it under the same name, so the two are one event.
+    assert_rename_replaces_every_occurrence(&ws, "M1", "set_peds_green", 0, "let_peds_cross");
+}
+
+#[test]
 fn cars_rename_constant_follows_the_context_chain() {
     // `cars_limit` is declared in C0 and visible in every machine, through a
     // context in C0's extends chain: renaming it from M0 reaches them all.

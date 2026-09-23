@@ -9,7 +9,6 @@ use rossi::Component;
 use rossi::ast::Span;
 
 use crate::component_loader::{ComponentLoader, LoadedComponent};
-use crate::component_util::component_reference_clause;
 use crate::formula_walk;
 use crate::position::span_to_range;
 use crate::resolved_environment::ResolvedEnvironments;
@@ -21,8 +20,9 @@ use crate::cross_references::CrossReferenceManager;
 use crate::document::{DocumentManager, ParsedDocument};
 use crate::identifier_utils;
 use crate::symbols::{
-    Resolution, SymbolIdentity, SymbolKind, candidate_components_for_symbol,
-    resolve_cursor_with_environments, resolve_symbol_identity_in_component_with_environments,
+    Resolution, SymbolIdentity, SymbolKind, abstract_event_identity,
+    candidate_components_for_symbol, resolve_cursor_with_environments,
+    resolve_symbol_identity_in_component_with_environments,
 };
 #[cfg(test)]
 use crate::text_utils;
@@ -126,21 +126,6 @@ impl ReferenceProvider {
         )
     }
 
-    fn find_symbol_references_in_text_range(
-        &self,
-        text: &str,
-        uri: &Uri,
-        identifier: &str,
-        line_range: Option<(usize, usize)>,
-    ) -> Vec<Location> {
-        // Mask once for the whole filter rather than re-masking per location.
-        let masked = rossi::comments::mask_comments_chars(text);
-        self.find_references_in_text_range(text, uri, identifier, line_range)
-            .into_iter()
-            .filter(|location| !is_component_reference_position(&masked, location.range.start))
-            .collect()
-    }
-
     fn find_references_for_identifier(
         &self,
         text: &str,
@@ -198,36 +183,6 @@ impl ReferenceProvider {
     ) -> Vec<Location> {
         let mut locations = Vec::new();
         let mut seen = HashSet::new();
-
-        // Event names are not formula identifiers, so they stay on the text
-        // scan; every other symbol resolves from the AST.
-        if symbol.kind == SymbolKind::Event {
-            for component_name in symbol_candidates(symbol, loader) {
-                let Some(loaded) = loader.load(&component_name) else {
-                    continue;
-                };
-                if resolve_symbol_identity_in_component_with_environments(
-                    loaded.component(),
-                    &symbol.name,
-                    loader,
-                    environments,
-                ) == Some(symbol.clone())
-                {
-                    push_unique_locations(
-                        &mut locations,
-                        &mut seen,
-                        self.find_symbol_references_in_text_range(
-                            loaded.text(),
-                            loaded.uri(),
-                            &symbol.name,
-                            None,
-                        ),
-                    );
-                }
-            }
-            return locations;
-        }
-
         for occurrences in symbol_occurrences(symbol, loader, environments) {
             push_unique_locations(
                 &mut locations,
@@ -251,15 +206,18 @@ pub(crate) struct SymbolOccurrences {
     pub(crate) spans: Vec<Span>,
 }
 
-/// Every occurrence of `symbol`, a set, constant, variable or parameter,
-/// grouped by the component it sits in: the declaration, and the uses in
-/// every component where the name resolves to `symbol`. The one reference set
-/// find-references reports and rename rewrites.
+/// Every occurrence of `symbol`, grouped by the component it sits in: the
+/// declaration, and the uses in every component where the name resolves to
+/// `symbol`. The one reference set find-references reports and rename
+/// rewrites.
 pub(crate) fn symbol_occurrences(
     symbol: &SymbolIdentity,
     loader: &ComponentLoader,
     environments: &mut ResolvedEnvironments,
 ) -> Vec<SymbolOccurrences> {
+    if symbol.kind == SymbolKind::Event {
+        return event_occurrences(symbol, loader);
+    }
     if symbol.kind == SymbolKind::Parameter {
         let Some(event_name) = symbol.event.as_deref() else {
             return Vec::new();
@@ -296,6 +254,41 @@ pub(crate) fn symbol_occurrences(
                     &format!("{}'", symbol.name),
                 ));
             }
+            occurrences.push(SymbolOccurrences { loaded, spans });
+        }
+    }
+    occurrences
+}
+
+/// An event's occurrences: its declaration, and the `refines`/`extends`
+/// targets naming it in the machines that refine its own. Event names are
+/// not formula identifiers, so a target is matched by the abstract event it
+/// resolves to, not by spelling.
+fn event_occurrences(symbol: &SymbolIdentity, loader: &ComponentLoader) -> Vec<SymbolOccurrences> {
+    let mut occurrences = Vec::new();
+    for component_name in symbol_candidates(symbol, loader) {
+        let Some(loaded) = loader.load(&component_name) else {
+            continue;
+        };
+        let Component::Machine(machine) = loaded.component() else {
+            continue;
+        };
+        let mut spans: Vec<Span> = Vec::new();
+        if machine.name == symbol.owner {
+            spans.extend(crate::symbols::event_declaration_span(
+                loaded.component(),
+                &symbol.name,
+            ));
+        }
+        for target in machine.events.iter().flat_map(|event| &event.refines) {
+            if target.name == symbol.name
+                && abstract_event_identity(loaded.component(), &target.name, loader).as_ref()
+                    == Some(symbol)
+            {
+                spans.extend(target.span);
+            }
+        }
+        if !spans.is_empty() {
             occurrences.push(SymbolOccurrences { loaded, spans });
         }
     }
@@ -414,11 +407,6 @@ fn event_line_range(text: &str, event_name: &str) -> Option<(usize, usize)> {
     // action whose label spells a keyword (`@end x := 0`) is not read as `END`.
     let masked = rossi::comments::mask_comments_chars(text);
     text_utils::event_line_range_in(&masked, event_name)
-}
-
-/// Whether `position` sits in a SEES/REFINES/EXTENDS clause.
-fn is_component_reference_position(masked: &str, position: Position) -> bool {
-    component_reference_clause(masked, position).is_some()
 }
 
 /// Get the identifier at `position` in already comment-masked text. A cursor
@@ -1154,10 +1142,10 @@ EVENTS
         @act1 x ≔ 1
     END
 END";
-        assert!(!is_component_reference_position(
-            source,
-            Position::new(2, 4)
-        ));
+        assert!(
+            crate::component_util::component_reference_clause(source, Position::new(2, 4))
+                .is_none()
+        );
     }
 
     #[test]
