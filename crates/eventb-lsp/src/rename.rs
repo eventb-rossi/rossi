@@ -256,7 +256,10 @@ impl RenameProvider {
         else {
             return None;
         };
-        if symbol.kind != SymbolKind::Parameter {
+        if !matches!(
+            symbol.kind,
+            SymbolKind::Parameter | SymbolKind::Set | SymbolKind::Constant
+        ) {
             return None;
         }
         let mut environments = ResolvedEnvironments::new();
@@ -1340,6 +1343,186 @@ END
         let out = rename_at(source, byte, "y");
         // The base of `x'` is renamed; the prime is preserved.
         assert!(out.contains("y :∣ y' = y + 1"), "{out}");
+    }
+
+    // ---- rename across files ------------------------------------------------
+
+    fn file_uri(name: &str) -> Uri {
+        format!("file:///{name}").parse::<Uri>().unwrap()
+    }
+
+    /// A provider over a workspace where every one of `sources`, given as
+    /// `(file name, text)`, is open.
+    fn workspace_provider(sources: &[(&str, &str)]) -> RenameProvider {
+        let crm = Arc::new(CrossReferenceManager::new());
+        let documents = Arc::new(DocumentManager::new());
+        for (name, text) in sources {
+            let uri = file_uri(name);
+            crm.update_component(uri.as_str().to_owned(), text);
+            documents.open(uri, 1, text.to_string());
+        }
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        provider
+    }
+
+    /// Every file of `sources` after renaming, to `new_name`, what the first
+    /// `needle` in `file` names; `None` when the rename is refused.
+    fn renamed_workspace(
+        sources: &[(&str, &str)],
+        file: &str,
+        needle: &str,
+        new_name: &str,
+    ) -> Option<Vec<String>> {
+        let provider = workspace_provider(sources);
+        let text = sources.iter().find(|(name, _)| *name == file).unwrap().1;
+        let pos = pos_at(text, text.find(needle).expect("the needle is in the file"));
+        let params = make_rename_params(pos.line, pos.character, file_uri(file), new_name.into());
+        let mut changes = provider.rename(&params, text)?.changes.unwrap();
+        let renamed = sources
+            .iter()
+            .map(|(name, text)| match changes.remove(&file_uri(name)) {
+                Some(edits) => apply(text, &edits),
+                None => text.to_string(),
+            })
+            .collect();
+        assert!(
+            changes.is_empty(),
+            "edits outside the workspace: {changes:?}"
+        );
+        Some(renamed)
+    }
+
+    /// `sources`' texts with every whole-word `old` replaced by `new`.
+    fn replaced(sources: &[(&str, &str)], old: &str, new: &str) -> Vec<String> {
+        sources
+            .iter()
+            .map(|(name, text)| {
+                let uri = file_uri(name);
+                let mut edits: Vec<TextEdit> = identifier_utils::find_whole_word_locations(
+                    text,
+                    old,
+                    &uri,
+                    None,
+                    identifier_utils::WordBoundary::for_name(old),
+                )
+                .into_iter()
+                .map(|location| TextEdit {
+                    range: location.range,
+                    new_text: new.to_string(),
+                })
+                .collect();
+                sort_edits_reverse(&mut edits);
+                apply(text, &edits)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn constant_rename_follows_extending_contexts_and_seeing_machines() {
+        let sources = [
+            (
+                "C0.eventb",
+                "CONTEXT C0\nCONSTANTS\n    max_value\nAXIOMS\n    @axm1 max_value ∈ ℕ\nEND\n",
+            ),
+            (
+                "C1.eventb",
+                "CONTEXT C1\nEXTENDS C0\nAXIOMS\n    @axm2 max_value > 0\nEND\n",
+            ),
+            (
+                "M1.eventb",
+                "MACHINE M1\nSEES C1\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ≤ max_value\nEND\n",
+            ),
+        ];
+        let expected = replaced(&sources, "max_value", "limit");
+        // From the declaration, and from a use two files away.
+        for file in ["C0.eventb", "M1.eventb"] {
+            assert_eq!(
+                renamed_workspace(&sources, file, "max_value", "limit"),
+                Some(expected.clone()),
+                "renamed from {file}"
+            );
+        }
+    }
+
+    #[test]
+    fn carrier_set_rename_reaches_a_seeing_machine() {
+        let sources = [
+            ("C0.eventb", "CONTEXT C0\nSETS\n    COLOURS\nEND\n"),
+            (
+                "M0.eventb",
+                "MACHINE M0\nSEES C0\nVARIABLES\n    v\nINVARIANTS\n    @inv1 v ∈ COLOURS\nEND\n",
+            ),
+        ];
+        assert_eq!(
+            renamed_workspace(&sources, "C0.eventb", "COLOURS", "PALETTE"),
+            Some(replaced(&sources, "COLOURS", "PALETTE"))
+        );
+    }
+
+    #[test]
+    fn constant_rename_leaves_a_same_named_variable_alone() {
+        // The machine's own `x` is another symbol, whatever it shadows.
+        let sources = [
+            (
+                "C1.eventb",
+                "CONTEXT C1\nCONSTANTS\n    x\nAXIOMS\n    @axm1 x ∈ ℕ\nEND\n",
+            ),
+            (
+                "M1.eventb",
+                "MACHINE M1\nSEES C1\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\nEND\n",
+            ),
+        ];
+        let renamed = renamed_workspace(&sources, "C1.eventb", "x\n", "y").unwrap();
+        assert_eq!(renamed[0], replaced(&sources[..1], "x", "y")[0]);
+        assert_eq!(renamed[1], sources[1].1, "the machine keeps its variable");
+    }
+
+    #[test]
+    fn constant_rename_edits_a_closed_seeing_machine() {
+        let root = std::env::temp_dir().join(format!(
+            "eventb-lsp-constant-rename-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let context_path = root.join("c.eventb");
+        let machine_path = root.join("m.eventb");
+        let context = "CONTEXT C\nCONSTANTS\n    k\nAXIOMS\n    @axm1 k ∈ ℕ\nEND\n";
+        let machine = "MACHINE M\nSEES C\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ≤ k\nEND\n";
+        std::fs::write(&context_path, context).unwrap();
+        std::fs::write(&machine_path, machine).unwrap();
+        let context_uri = Uri::from_file_path(&context_path).unwrap();
+        let machine_uri = Uri::from_file_path(&machine_path).unwrap();
+
+        // Only the context is open.
+        let crm = Arc::new(CrossReferenceManager::new());
+        crm.scan_workspace(&root).unwrap();
+        let documents = Arc::new(DocumentManager::new());
+        documents.open(context_uri.clone(), 1, context.to_string());
+        let mut provider = RenameProvider::new();
+        provider.set_cross_reference_manager(crm);
+        provider.set_document_manager(documents);
+        let params = make_rename_params(2, 4, context_uri.clone(), "bound".to_string());
+        let mut changes = provider
+            .rename(&params, context)
+            .expect("constant rename")
+            .changes
+            .unwrap();
+
+        assert_eq!(
+            apply(context, changes.remove(&context_uri).as_deref().unwrap()),
+            context.replace('k', "bound")
+        );
+        assert_eq!(
+            apply(machine, changes.remove(&machine_uri).as_deref().unwrap()),
+            machine.replace("≤ k", "≤ bound")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
