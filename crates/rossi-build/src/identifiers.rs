@@ -146,10 +146,10 @@ fn push_predicate(
     ));
 }
 
-/// The action counterpart, anchored on the whole action the way
-/// `sc::machine::events` does so the two paths underline the same text.
+/// The action counterpart, anchored on the primed read the way
+/// `sc::machine::events` anchors it, so the two paths underline the same text.
 fn push_action(diags: &mut Vec<Diagnostic>, raw: &LabeledAction, origin_prefix: &str) {
-    let Some(bad) = first_free_primed_in_action_rhs(&raw.action) else {
+    let Some((bad, span)) = first_free_primed_in_action_rhs(&raw.action) else {
         return;
     };
     let label = raw.label.as_deref().unwrap_or("act");
@@ -157,6 +157,6 @@ fn push_action(diags: &mut Vec<Diagnostic>, raw: &LabeledAction, origin_prefix: 
         &bad,
         "action",
         format!("{origin_prefix}.{label}"),
-        raw.span,
+        span.or(raw.span),
     ));
 }

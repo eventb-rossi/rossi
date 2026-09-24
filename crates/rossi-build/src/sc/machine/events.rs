@@ -1256,7 +1256,8 @@ fn build_event_buckets(
                 origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
                 message: format!("LHS variable '{bad}' is not declared"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
-                span: act.span,
+                span: crate::sc::identifier_walker::usage_span_in_action(&act.action, &bad)
+                    .or(act.span),
             });
             accurate = false;
             continue;
@@ -1306,7 +1307,8 @@ fn build_event_buckets(
                     bad,
                     "action",
                     clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
-                    act.span,
+                    crate::sc::identifier_walker::usage_span_in_action(&act.action, bad)
+                        .or(act.span),
                 ));
             accurate = false;
             continue;
