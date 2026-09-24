@@ -109,6 +109,21 @@ pub fn load_manifest(workspace_dir: &Path, project_name: &str) -> Option<BaseMan
     serde_json::from_slice(&bytes).ok()
 }
 
+/// The recorded builds whose source directory is gone: projects left behind
+/// by a model folder that was renamed, moved or deleted. A project is named
+/// after its source directory's path, so nothing builds into these again.
+pub fn orphaned_projects(workspace_dir: &Path) -> Vec<BaseManifest> {
+    let Ok(entries) = std::fs::read_dir(workspace_dir.join(".base")) else {
+        return Vec::new();
+    };
+    let mut orphans: Vec<BaseManifest> = entries
+        .filter_map(|entry| load_manifest(workspace_dir, entry.ok()?.file_name().to_str()?))
+        .filter(|manifest| !manifest.source_root.is_dir())
+        .collect();
+    orphans.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+    orphans
+}
+
 pub fn base_source_path(workspace_dir: &Path, project_name: &str, relative: &Path) -> PathBuf {
     base_dir(workspace_dir, project_name)
         .join("sources")
@@ -307,6 +322,21 @@ mod tests {
     // edit re-rendered over an untouched source differs only where the
     // model changed.
     const BASE: &str = "context base_ctx\n\nconstants lo\n\naxioms\n  @axm1 lo ∈ ℤ\nend\n";
+
+    #[test]
+    fn a_build_whose_source_folder_is_gone_is_orphaned() {
+        let ws = TempDir::new("model-sync-orphans");
+        let present = ws.path().join("rossi");
+        std::fs::create_dir_all(&present).unwrap();
+        write_base(ws.path(), "rossi", &present, &[]).unwrap();
+        write_base(ws.path(), "rodin", &ws.path().join("rodin"), &[]).unwrap();
+
+        let orphans: Vec<String> = orphaned_projects(ws.path())
+            .into_iter()
+            .map(|manifest| manifest.project_name)
+            .collect();
+        assert_eq!(orphans, ["rodin"]);
+    }
 
     /// A workspace with a recorded build of one source file (`model.eventb`
     /// holding `base_ctx`) and the matching project-dir XML.

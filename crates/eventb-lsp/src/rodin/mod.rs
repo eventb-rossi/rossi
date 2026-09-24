@@ -275,6 +275,35 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             .await;
     }
 
+    // Projects a renamed or moved model folder left behind: deleting one is
+    // the user's call.
+    let left_behind: Vec<String> = model_sync::orphaned_projects(&request.workspace_dir)
+        .into_iter()
+        .filter(|manifest| {
+            launch::project_registered(&request.workspace_dir, &manifest.project_name)
+        })
+        .map(|manifest| {
+            format!(
+                "project '{}' (built from {})",
+                manifest.project_name,
+                manifest.source_root.display()
+            )
+        })
+        .collect();
+    if !left_behind.is_empty() {
+        client
+            .show_message(
+                MessageType::WARNING,
+                format!(
+                    "Open in Rodin: the Rodin workspace still holds {}, whose folder no \
+                     longer exists. rossi no longer updates it or copies its proofs back; \
+                     delete it in Rodin once nothing in it is needed.",
+                    left_behind.join(", ")
+                ),
+            )
+            .await;
+    }
+
     let lock_state = lock::workspace_lock_state(&request.workspace_dir);
 
     // The bridge plug-in, if this Rodin has one, can do inside the running
