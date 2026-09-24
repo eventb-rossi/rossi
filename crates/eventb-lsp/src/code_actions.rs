@@ -486,21 +486,22 @@ impl CodeActionProvider {
     ) -> Vec<CodeActionOrCommand> {
         let mut actions = Vec::new();
 
-        // Offer "Add missing END" only for a diagnostic at end-of-input. A
+        // Offer "Add missing END" only for a syntax error at end-of-input. A
         // missing terminator is reported there (pest's EOF position); a syntax
-        // error inside the body sits on an earlier line. Keying off the
-        // position — not the old `message.contains("expected")`, which matched
-        // every syntax error — avoids suggesting an END for a typo deep inside
-        // a predicate, and (unlike a "no END anywhere" text scan) is not fooled
-        // by a nested END (`if … then … else … end`, an event END, or an `END`
-        // inside a label). The component check is done last, only once a
-        // candidate diagnostic exists.
-        let end_line = document_end_position(text).line;
+        // error inside the body sits earlier. Keying off the position, not the
+        // old `message.contains("expected")`, which matched every syntax
+        // error, avoids suggesting an END for a typo deep inside a predicate,
+        // and (unlike a "no END anywhere" text scan) is not fooled by a nested
+        // END (`if … then … else … end`, an event END, or an `END` inside a
+        // label). A diagnostic carrying a rule code is about the model, not
+        // its syntax, so it never qualifies. The component check is done
+        // last, only once a candidate diagnostic exists.
+        let end_of_input = crate::position::offset_to_position(text, text.len());
         if let Some(diagnostic) = params
             .context
             .diagnostics
             .iter()
-            .find(|d| d.range.start.line >= end_line)
+            .find(|d| d.code.is_none() && d.range.start >= end_of_input)
             && (has_keyword_line(text, KeywordId::Machine)
                 || has_keyword_line(text, KeywordId::Context))
             && let Some(action) =

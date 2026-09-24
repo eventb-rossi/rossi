@@ -312,11 +312,12 @@ fn test_diagnostic_based_action() {
     let provider = CodeActionProvider::new();
     let text = "MACHINE test\nVARIABLES x";
 
-    // Create a diagnostic for missing END
+    // Create a diagnostic for missing END, where pest reports it: just past
+    // the last character of the file.
     let diagnostic = Diagnostic {
         range: Range {
-            start: Position::new(1, 0),
-            end: Position::new(1, 10),
+            start: Position::new(1, 11),
+            end: Position::new(1, 11),
         },
         severity: Some(DiagnosticSeverity::ERROR),
         code: None,
@@ -598,6 +599,29 @@ fn ascii_operator_advisory_offers_nothing_for_a_stale_range() {
     assert!(
         action_titled(&actions, "Replace").is_none(),
         "no Replace quick fix for a range that is not one operator token, got {actions:?}"
+    );
+}
+
+#[test]
+fn test_add_missing_end_not_offered_for_a_rule_diagnostic_on_the_last_line() {
+    // A rule diagnostic is about what the model says, never about a missing
+    // terminator, even when it underlines the last line of the file: here an
+    // undeclared identifier in a model that is already closed by its END.
+    let provider = CodeActionProvider::new();
+    let text = "MACHINE m\nVARIABLES x\nINVARIANTS @inv1 y ∈ ℕ END";
+    let range = Range {
+        start: Position::new(2, 17),
+        end: Position::new(2, 18),
+    };
+    let params = diagnostic_params("file:///test.eventb", range, "EB018");
+
+    let actions = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+
+    assert!(
+        action_titled(&actions, "Add missing END").is_none(),
+        "Add-missing-END must not be offered for a rule diagnostic, got {actions:?}"
     );
 }
 
