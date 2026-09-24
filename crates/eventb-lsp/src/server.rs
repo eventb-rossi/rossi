@@ -1622,8 +1622,9 @@ impl RossiLanguageServer {
         }
     }
 
-    /// Ask the client to watch the workspace's Event-B sources, so writes made
-    /// outside the editor reach [`Self::did_change_watched_files`]. Registering
+    /// Ask the client to watch the workspace's Event-B sources and folders, so
+    /// writes made outside the editor reach [`Self::did_change_watched_files`].
+    /// Registering
     /// from the server rather than from each editor's client configuration
     /// gives every editor the same behaviour from one place, and ties the
     /// watcher's lifetime to a language server that actually started.
@@ -1635,14 +1636,20 @@ impl RossiLanguageServer {
         let registration = Registration {
             id: "rossi-eventb-source-watcher".to_string(),
             method: "workspace/didChangeWatchedFiles".to_string(),
-            // A `DidChangeWatchedFilesRegistrationOptions` holding one
-            // `FileSystemWatcher`, whose omitted `kind` means the default —
-            // create, change and delete — which is what the graph must follow.
+            // A `DidChangeWatchedFilesRegistrationOptions` holding two
+            // `FileSystemWatcher`s. The sources' omitted `kind` means the
+            // default — create, change and delete — which is what the graph
+            // must follow. Every other path is watched for creation and
+            // deletion (`kind` 5) only, since VS Code reports a folder moved or
+            // deleted as one event for the folder, not for the files in it.
             // An LSP glob cannot express a negation, so the dot-directories
             // the scan skips are filtered server-side instead; see
             // `did_change_watched_files`.
             register_options: Some(serde_json::json!({
-                "watchers": [{ "globPattern": format!("**/*.{SOURCE_EXTENSION}") }]
+                "watchers": [
+                    { "globPattern": format!("**/*.{SOURCE_EXTENSION}") },
+                    { "globPattern": "**/*", "kind": 5 },
+                ]
             })),
         };
         if let Err(error) = self.client.register_capability(vec![registration]).await {
@@ -2201,10 +2208,10 @@ impl LanguageServer for RossiLanguageServer {
 
     /// Refresh the disk-backed indexes when Event-B files change outside the
     /// editor: a `git checkout`, a `rossi import`, a Rodin write, a file
-    /// created in the explorer. The startup scan is otherwise the only moment
-    /// the workspace graph learns what is on disk, so every cross-file
-    /// diagnostic would be checked against a snapshot ageing from the first
-    /// external write onwards.
+    /// created in the explorer, a folder renamed or deleted. The startup scan
+    /// is otherwise the only moment the workspace graph learns what is on
+    /// disk, so every cross-file diagnostic would be checked against a
+    /// snapshot ageing from the first external write onwards.
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         // Single-file mode indexes no siblings and `is_scanned()` keeps the
         // cross-file diagnostics off, so there is nothing to keep current.
@@ -2221,22 +2228,31 @@ impl LanguageServer for RossiLanguageServer {
         // collected into a set: a client may report one path twice in a batch
         // (a create plus a change), and re-reading it would be pure waste
         // since the refresh below reads from disk anyway. Order does not
-        // matter for the same reason.
-        let changed: std::collections::HashSet<Uri> = params
-            .changes
-            .into_iter()
-            .map(|change| change.uri)
-            .filter(|uri| {
-                uri.to_file_path().is_some_and(|path| {
-                    rossi_build::walk::is_source_file(&path)
-                        && rossi_build::walk::is_within_source_walk(&root, &path)
-                })
-            })
-            .collect();
-        if changed.is_empty() {
+        // matter for the same reason. Any other path may be a folder, which
+        // the client reports as one event when it is created, moved or deleted.
+        let mut changed = std::collections::HashSet::new();
+        let mut others = std::collections::HashSet::new();
+        for uri in params.changes.into_iter().map(|change| change.uri) {
+            let Some(path) = uri.to_file_path().map(|path| path.into_owned()) else {
+                continue;
+            };
+            if !rossi_build::walk::is_within_source_walk(&root, &path) {
+                continue;
+            }
+            if rossi_build::walk::is_source_file(&path) {
+                changed.insert(uri);
+            } else {
+                others.insert(path);
+            }
+        }
+        if changed.is_empty() && others.is_empty() {
             return;
         }
-        debug!("Refreshing {} watched file(s)", changed.len());
+        debug!(
+            "Refreshing {} watched file(s) and {} other path(s)",
+            changed.len(),
+            others.len()
+        );
 
         // One blocking hop for the whole batch, and one read and parse per
         // file within it — a branch switch delivers hundreds of events, and
@@ -2244,16 +2260,49 @@ impl LanguageServer for RossiLanguageServer {
         // kept apart, so a file is refreshed the same way whether or not the
         // editor holds it open: an open buffer keeps answering for its file,
         // and a file deleted while open still loses what was saved for it.
+        // A folder's files are refreshed like files of their own: those
+        // indexed under it, gone if it went, and the sources the scan's walk
+        // finds in it now.
         let xrefs = Arc::clone(&self.cross_reference_manager);
         let symbols = Arc::clone(&self.workspace_symbol_provider);
         let refreshed = run_blocking(move || {
-            for uri in changed {
-                refresh_saved_layers(&xrefs, &symbols, &uri);
+            if !others.is_empty() {
+                for indexed in xrefs.all_component_uris() {
+                    if let Ok(uri) = indexed.parse::<Uri>()
+                        && uri
+                            .to_file_path()
+                            .is_some_and(|path| path.ancestors().any(|dir| others.contains(dir)))
+                    {
+                        changed.insert(uri);
+                    }
+                }
+                for folder in &others {
+                    // The walk of an enclosing folder covers this one.
+                    if folder.ancestors().skip(1).any(|dir| others.contains(dir)) {
+                        continue;
+                    }
+                    for entry in rossi_build::walk::source_walk(folder).flatten() {
+                        let path = entry.path();
+                        if entry.file_type().is_file()
+                            && rossi_build::walk::is_source_file(path)
+                            && rossi_build::walk::is_within_source_walk(&root, path)
+                            && let Some(uri) = Uri::from_file_path(path)
+                        {
+                            changed.insert(uri);
+                        }
+                    }
+                }
             }
+            for uri in &changed {
+                refresh_saved_layers(&xrefs, &symbols, uri);
+            }
+            !changed.is_empty()
         })
         .await;
-        if let Err(error) = refreshed {
-            info!("Failed to refresh watched files: {error}");
+        match refreshed {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => info!("Failed to refresh watched files: {error}"),
         }
 
         // The open buffers themselves did not change, only the workspace graph

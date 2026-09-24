@@ -2947,9 +2947,14 @@ mod watched_files {
                 let registration =
                     &params.expect("a registration must be sent")["registrations"][0];
                 assert_eq!(registration["method"], "workspace/didChangeWatchedFiles");
+                // Sources in full, and every path's creation and deletion,
+                // since a moved or deleted folder is reported as the folder.
                 assert_eq!(
-                    registration["registerOptions"]["watchers"][0]["globPattern"],
-                    "**/*.eventb"
+                    registration["registerOptions"]["watchers"],
+                    json!([
+                        { "globPattern": "**/*.eventb" },
+                        { "globPattern": "**/*", "kind": 5 },
+                    ])
                 );
                 socket
                     .send(Response::from_ok(
@@ -3044,6 +3049,13 @@ mod watched_files {
             watched_change(&generated_path, 1),
         )
         .await;
+        // Nor is the dot-directory itself scanned when it appears.
+        notify(
+            &mut service,
+            "workspace/didChangeWatchedFiles",
+            watched_change(&workspace.as_ref().join(".rossi"), 1),
+        )
+        .await;
 
         // An ignored event publishes nothing, so prove it landed nowhere by
         // following it with a real one: the batch it triggers must clear the
@@ -3053,6 +3065,71 @@ mod watched_files {
             &mut service,
             "workspace/didChangeWatchedFiles",
             watched_change(&context_path, 1),
+        )
+        .await;
+        assert!(next_diagnostic_codes(&mut messages).await.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_deleted_folder_takes_its_components_out_of_the_graph() {
+        let workspace = TempWorkspace::new("watched-files-folder-delete");
+        let folder = workspace.as_ref().join("lib");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("ctx.eventb"), CONTEXT).unwrap();
+
+        let (mut service, mut messages) = service_with_open_machine(workspace.as_ref()).await;
+        assert!(next_diagnostic_codes(&mut messages).await.is_empty());
+
+        // The client folds the deletion of a folder's files into one event
+        // for the folder, which names no source file.
+        std::fs::remove_dir_all(&folder).unwrap();
+        notify(
+            &mut service,
+            "workspace/didChangeWatchedFiles",
+            watched_change(&folder, 3),
+        )
+        .await;
+        assert_eq!(next_diagnostic_codes(&mut messages).await, ["EB009"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_moved_folder_moves_its_components_in_the_graph() {
+        let workspace = TempWorkspace::new("watched-files-folder-move");
+        let old_folder = workspace.as_ref().join("rodin");
+        let new_folder = workspace.as_ref().join("rossi");
+        std::fs::create_dir(&old_folder).unwrap();
+        std::fs::write(old_folder.join("mch.eventb"), MACHINE).unwrap();
+        std::fs::write(old_folder.join("ctx.eventb"), CONTEXT).unwrap();
+        let (mut service, mut messages) = initialized_service(workspace.as_ref()).await;
+
+        // Renaming the folder reports the old and the new folder only.
+        std::fs::rename(&old_folder, &new_folder).unwrap();
+        notify(
+            &mut service,
+            "workspace/didChangeWatchedFiles",
+            json!({
+                "changes": [
+                    { "uri": Uri::from_file_path(&old_folder).unwrap(), "type": 3 },
+                    { "uri": Uri::from_file_path(&new_folder).unwrap(), "type": 1 },
+                ]
+            }),
+        )
+        .await;
+
+        // Opened at its new path, the machine is the only `m` (no EB019 for
+        // the old copy) and sees the moved context (no EB009).
+        let machine_path = new_folder.join("mch.eventb");
+        notify(
+            &mut service,
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": Uri::from_file_path(&machine_path).unwrap(),
+                    "languageId": "eventb",
+                    "version": 1,
+                    "text": MACHINE
+                }
+            }),
         )
         .await;
         assert!(next_diagnostic_codes(&mut messages).await.is_empty());
