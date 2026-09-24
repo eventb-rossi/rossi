@@ -272,10 +272,16 @@ pub(crate) fn project_diagnostics(
     let local = crate::closure::local_names(doc);
     let (result, _model) = rossi_build::check_with_model(&project);
 
+    // Only a component's own SEES / REFINES / EXTENDS target leaves its
+    // closure incomplete. An event's REFINES target naming no abstract event
+    // is reported against the event, and says nothing about the environment.
+    let about_the_component =
+        |diagnostic: &&rossi_build::Diagnostic| diagnostic.origin == diagnostic.component();
     let unresolved: std::collections::HashSet<&str> = result
         .diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.rule_id == Some(RuleId::CrossReferenceNotFound))
+        .filter(about_the_component)
         .map(|diagnostic| diagnostic.component())
         .collect();
 
@@ -284,13 +290,18 @@ pub(crate) fn project_diagnostics(
         .iter()
         .filter(|diagnostic| local.contains(diagnostic.component()))
         .filter(|diagnostic| !unresolved.contains(diagnostic.component()))
-        .filter(|diagnostic| !diagnostic.rule_id.is_some_and(reported_from_the_graph))
+        .filter(|diagnostic| {
+            !(diagnostic.rule_id.is_some_and(reported_from_the_graph)
+                && about_the_component(diagnostic))
+        })
         .map(|diagnostic| build_diagnostic_to_lsp(diagnostic, doc.text()))
         .collect()
 }
 
 /// Whether the server reports this rule itself, from the workspace dependency
-/// graph, so the project check must not report it a second time.
+/// graph, so the project check must not report it a second time. Only a
+/// finding about a component as a whole is the graph's: an event refining an
+/// unknown abstract event is the project check's own.
 ///
 /// These four are findings about how components relate, and the graph knows
 /// more about that than a single file's closure does. The graph's own pass is
