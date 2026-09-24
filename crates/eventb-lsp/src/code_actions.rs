@@ -248,39 +248,52 @@ fn enclosing_event_range(masked: &str, offset: usize) -> std::ops::Range<usize> 
     start..end
 }
 
-/// A name to write into a list of names: where, and the text to insert.
-struct NameInsert {
-    position: Position,
-    text: String,
+/// Names to write into a list of names: where, and the text to insert.
+pub(crate) struct NameInsert {
+    pub(crate) position: Position,
+    pub(crate) text: String,
 }
 
 /// The start of the line holding byte `offset` of `text`.
-fn line_start(text: &str, offset: usize) -> usize {
+pub(crate) fn line_start(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map_or(0, |at| at + 1)
 }
 
 /// The leading whitespace of `line`.
-fn indentation(line: &str) -> &str {
+pub(crate) fn indentation(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
 }
 
-/// `name` added to a name list opened by `keyword` whose last name ends at
+/// `names` added to a name list opened by `keyword` whose last name ends at
 /// byte `end`: on the same line when the list is written inline (`sees a b`),
-/// on a line of its own at the same indentation when every name has one.
-fn append_to_list(text: &str, end: usize, keyword: KeywordId, name: &str) -> NameInsert {
+/// each on a line of its own at the same indentation when every name has one.
+fn append_to_list(text: &str, end: usize, keyword: KeywordId, names: &[&str]) -> NameInsert {
     let line = &text[line_start(text, end)..end];
-    let insert = if line_keyword(line) == Some(keyword) {
-        format!(" {name}")
+    let separator = if line_keyword(line) == Some(keyword) {
+        " ".to_string()
     } else {
-        format!("\n{}{name}", indentation(line))
+        format!("\n{}", indentation(line))
     };
     NameInsert {
         position: crate::position::offset_to_position(text, end),
-        text: insert,
+        text: names
+            .iter()
+            .map(|name| format!("{separator}{name}"))
+            .collect(),
     }
 }
 
-/// A new `keyword name` clause on the line after the one holding byte
+/// The spelling of `keyword`, in lower case when `lowercase`.
+pub(crate) fn keyword_text(keyword: KeywordId, lowercase: bool) -> String {
+    let spelled = rossi::keywords::spell(keyword);
+    if lowercase {
+        spelled.to_lowercase()
+    } else {
+        spelled.to_string()
+    }
+}
+
+/// A new `keyword names` clause on the line after the one holding byte
 /// `after`, indented by `indent` and in lower case when `lowercase`. `None`
 /// when a block comment opened on that line is still open at its end, where
 /// it would swallow the clause.
@@ -290,21 +303,19 @@ fn new_clause_line(
     indent: &str,
     keyword: KeywordId,
     lowercase: bool,
-    name: &str,
+    names: &[&str],
 ) -> Option<NameInsert> {
     let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
     if rossi::comments::offset_in_comment(text, line_end) {
         return None;
     }
-    let spelled = rossi::keywords::spell(keyword);
-    let keyword = if lowercase {
-        spelled.to_lowercase()
-    } else {
-        spelled.to_string()
-    };
     Some(NameInsert {
         position: crate::position::offset_to_position(text, line_end),
-        text: format!("\n{indent}{keyword} {name}"),
+        text: format!(
+            "\n{indent}{} {}",
+            keyword_text(keyword, lowercase),
+            names.join(" ")
+        ),
     })
 }
 
@@ -322,7 +333,7 @@ fn component_list_insert(
     name: &str,
 ) -> Option<NameInsert> {
     if let Some(region) = component.clauses().iter().find(|r| r.keyword == clause) {
-        return Some(append_to_list(text, region.span.end, clause, name));
+        return Some(append_to_list(text, region.span.end, clause, &[name]));
     }
     let follows = match component {
         Component::Context(_) => rossi::keywords::context_clause_boundary(clause),
@@ -342,14 +353,56 @@ fn component_list_insert(
         indentation(&text[line_start(text, header)..header]),
         clause,
         text[header..].starts_with(char::is_lowercase),
-        name,
+        &[name],
     )
 }
 
-/// `name` added to `event`'s parameters, or `None` when there is nowhere safe
-/// to write it. A new ANY clause goes after the header and any REFINES
+/// The end of `event`'s header: past its name and any REFINES targets.
+pub(crate) fn event_header_end(event: &rossi::Event) -> Option<usize> {
+    event
+        .refines
+        .iter()
+        .filter_map(|target| target.span)
+        .map(|s| s.end)
+        .chain(event.name_span.map(|s| s.end))
+        .max()
+}
+
+/// The indentation of `event`'s clause keywords: that of the first one
+/// written under the header, or for an event with no clause yet its
+/// header's indentation and two more. The event's END is no clause: in the
+/// camille layout it sits at the header's indentation.
+pub(crate) fn event_clause_indent(text: &str, event: &rossi::Event) -> Option<String> {
+    let span = event.span?;
+    let header_line = &text[line_start(text, span.start)..span.start];
+    Some(
+        text[event_header_end(event)?..span.end]
+            .lines()
+            .skip(1)
+            .find(|line| line_keyword(line).is_some_and(|keyword| keyword != KeywordId::End))
+            .map(|line| indentation(line).to_string())
+            .unwrap_or_else(|| format!("{}  ", indentation(header_line))),
+    )
+}
+
+/// Whether `event`'s header spells EVENT in lower case.
+pub(crate) fn event_is_lowercase(text: &str, event: &rossi::Event) -> bool {
+    event.span.is_some_and(|span| {
+        text[span.start..span.end]
+            .split_whitespace()
+            .find(|word| line_keyword(word) == Some(KeywordId::Event))
+            .is_some_and(|word| word.starts_with(char::is_lowercase))
+    })
+}
+
+/// `names` added to `event`'s parameters, or `None` when there is nowhere
+/// safe to write them. A new ANY clause goes after the header and any REFINES
 /// targets, indented like the event's other clauses.
-fn parameter_insert(text: &str, event: &rossi::Event, name: &str) -> Option<NameInsert> {
+pub(crate) fn parameter_insert(
+    text: &str,
+    event: &rossi::Event,
+    names: &[&str],
+) -> Option<NameInsert> {
     if let Some(last) = event
         .parameters
         .iter()
@@ -357,31 +410,16 @@ fn parameter_insert(text: &str, event: &rossi::Event, name: &str) -> Option<Name
         .map(|s| s.end)
         .max()
     {
-        return Some(append_to_list(text, last, KeywordId::Any, name));
+        return Some(append_to_list(text, last, KeywordId::Any, names));
     }
-    let span = event.span?;
-    let after = event
-        .refines
-        .iter()
-        .filter_map(|target| target.span)
-        .map(|s| s.end)
-        .chain(event.name_span.map(|s| s.end))
-        .max()?;
-    let header_line = &text[line_start(text, span.start)..span.start];
-    // Indent like the first clause keyword written under the header; an
-    // event with no clause yet gets its header's indentation and two more.
-    let body = &text[after..span.end];
-    let indent = body
-        .lines()
-        .skip(1)
-        .find(|line| line_keyword(line).is_some())
-        .map(|line| indentation(line).to_string())
-        .unwrap_or_else(|| format!("{}  ", indentation(header_line)));
-    let lowercase = text[span.start..span.end]
-        .split_whitespace()
-        .find(|word| line_keyword(word) == Some(KeywordId::Event))
-        .is_some_and(|word| word.starts_with(char::is_lowercase));
-    new_clause_line(text, after, &indent, KeywordId::Any, lowercase, name)
+    new_clause_line(
+        text,
+        event_header_end(event)?,
+        &event_clause_indent(text, event)?,
+        KeywordId::Any,
+        event_is_lowercase(text, event),
+        names,
+    )
 }
 
 /// A label for the item at byte `item` that no other label in its scope
@@ -1665,7 +1703,7 @@ impl CodeActionProvider {
                 {
                     declarations.push((
                         format!("Declare {name} as a parameter of {}", event.name),
-                        parameter_insert(text, event, name),
+                        parameter_insert(text, event, &[name]),
                     ));
                 }
             }
