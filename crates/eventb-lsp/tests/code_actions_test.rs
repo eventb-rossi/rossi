@@ -1586,6 +1586,17 @@ end
         applied(machine, uri, fix),
         machine.replace("variables w\n", "variables w v\n")
     );
+
+    // A comment after the last name does not swallow the one written.
+    let commented = machine.replace("variables w\n", "variables w // kept\n");
+    let actions = provider
+        .provide_code_actions(&params, &commented, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Keep v").expect("a keep fix for EB025");
+    assert_eq!(
+        applied(&commented, uri, fix),
+        machine.replace("variables w\n", "variables w v // kept\n")
+    );
 }
 
 #[test]
