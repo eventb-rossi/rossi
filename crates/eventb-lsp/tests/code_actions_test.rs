@@ -1585,3 +1585,74 @@ end
         machine.replace("variables w\n", "variables w v\n")
     );
 }
+
+#[test]
+fn eb022_relabels_past_a_comment_holding_wide_characters() {
+    // Each `≔` in the comment is three bytes but one character: a fix that
+    // mixed the two would read eight bytes on, inside the `∈`.
+    let uri = "file:///c0.eventb";
+    let text = "context c0\n// ≔≔≔≔\nconstants c d\naxioms\n  @a1 c ∈ ℕ\n  @a1 d ∈ ℕ\nend\n";
+    let first = Range::new(Position::new(4, 2), Position::new(4, 11));
+    let fix = eb022_fix(&CodeActionProvider::new(), uri, text, first);
+    assert_eq!(
+        applied(text, uri, &fix),
+        text.replace("  @a1 d ∈ ℕ", "  @axm1 d ∈ ℕ")
+    );
+}
+
+/// The single quick fix offered for an EB022 whose range is `range`.
+fn eb022_fix(provider: &CodeActionProvider, uri: &str, text: &str, range: Range) -> CodeAction {
+    let mut params = diagnostic_params(uri, range, "EB022");
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    let actions: Vec<CodeAction> = provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    actions.into_iter().next().unwrap()
+}
+
+#[test]
+fn eb022_relabels_the_last_duplicate() {
+    // The finding underlines the first `@inv1`; the one written later is the
+    // one relabeled, so an existing proof keeps its obligation name.
+    let uri = "file:///m.eventb";
+    let text =
+        "machine m\nvariables x\ninvariants\n  @inv1 x ∈ ℕ\n  @inv2 x ≥ 0\n  @inv1 x < 9\nend\n";
+    let first = Range::new(Position::new(3, 2), Position::new(3, 13));
+    let fix = eb022_fix(&CodeActionProvider::new(), uri, text, first);
+    assert_eq!(fix.title, "Relabel the last @inv1 as @inv3");
+    assert_eq!(
+        applied(text, uri, &fix),
+        text.replace("  @inv1 x < 9", "  @inv3 x < 9")
+    );
+
+    // Guards and actions share one namespace, but each keeps its own stem.
+    let text = "machine m\nevents\n  event e\n    where\n      @a1 1 = 1\n    then\n      @a1 x ≔ 1\n  end\nend\n";
+    let first = Range::new(Position::new(4, 6), Position::new(4, 15));
+    let fix = eb022_fix(&CodeActionProvider::new(), uri, text, first);
+    assert_eq!(
+        applied(text, uri, &fix),
+        text.replace("@a1 x ≔ 1", "@act1 x ≔ 1")
+    );
+}
+
+#[test]
+fn eb022_relabels_clear_of_the_inherited_labels() {
+    let abstraction = "machine a\nevents\n  event e\n    where\n      @grd1 1 = 1\n      @grd2 2 = 2\n  end\nend\n";
+    let machine = "machine m\nrefines a\nevents\n  event e extends e\n    where\n      @grd1 3 = 3\n  end\nend\n";
+    let uri = "file:///m.eventb";
+    let provider = workspace_provider(&[("file:///a.eventb", abstraction), (uri, machine)]);
+    let clash = Range::new(Position::new(5, 6), Position::new(5, 17));
+    let fix = eb022_fix(&provider, uri, machine, clash);
+    assert_eq!(fix.title, "Relabel @grd1 as @grd3");
+    assert_eq!(
+        applied(machine, uri, &fix),
+        machine.replace("@grd1 3 = 3", "@grd3 3 = 3")
+    );
+}

@@ -384,6 +384,50 @@ fn parameter_insert(text: &str, event: &rossi::Event, name: &str) -> Option<Name
     new_clause_line(text, after, &indent, KeywordId::Any, lowercase, name)
 }
 
+/// A label for the item at byte `item` that no other label in its scope
+/// takes, nor any of `also_taken`. `masked` is `text` with its comment bytes
+/// blanked, so byte offsets agree between the two.
+///
+/// The stem follows Rodin's own naming for the enclosing clause
+/// ([`label_stem`]), whose keyword is the last one written before the item:
+/// on the item's own line for an inline `EVENT e THEN x ≔ 1 END`, on a line
+/// above it for the indented form. A guard, witness or action label is unique
+/// within its event, an axiom, invariant or theorem within the component, and
+/// Rodin numbers each event's items from 1, so the first free number is looked
+/// for in the scope a clash would be found in.
+fn free_label(
+    text: &str,
+    lexical: &rossi::comments::LexicalSpans,
+    masked: &str,
+    item: usize,
+    also_taken: &HashSet<String>,
+) -> Option<String> {
+    let stem = masked[..item]
+        .split_whitespace()
+        .rev()
+        .find_map(label_stem)?;
+    let scope = label_scope(stem, masked, item);
+    let taken: HashSet<&str> = lexical
+        .labels
+        .iter()
+        .filter(|span| scope.contains(&span.start))
+        // The span covers `@name`; only the leading sigil is syntax.
+        .map(|span| &text[span.start + 1..span.end])
+        .collect();
+    (1..)
+        .map(|n| format!("{stem}{n}"))
+        .find(|label| !taken.contains(label.as_str()) && !also_taken.contains(label))
+}
+
+/// The byte range a label with `stem` must be unique in: its event for a
+/// guard, witness or action, the whole document otherwise.
+fn label_scope(stem: &str, masked: &str, item: usize) -> std::ops::Range<usize> {
+    match stem {
+        "grd" | "wit" | "act" => enclosing_event_range(masked, item),
+        _ => 0..masked.len(),
+    }
+}
+
 /// The optimal string alignment distance between `a` and `b`: edits of one
 /// character, a swap of two adjacent ones counting as one edit.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -829,10 +873,30 @@ impl CodeActionProvider {
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
             .collect();
-        // The fixes below read the AST; the document is parsed once, and only
-        // when one of them has a diagnostic to fix.
+        // The fixes below read the AST, and some the checked model; each is
+        // computed at most once, and only when a fix has a diagnostic to fix.
         let parsed = std::cell::OnceCell::new();
         let components = || parsed.get_or_init(|| crate::component_util::parse_all(text));
+        let model = std::cell::OnceCell::new();
+
+        // Relabel an item whose label another one takes (EB022).
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::DuplicateLabel.code()))
+        {
+            actions.extend(
+                self.create_relabel_action(
+                    &params.text_document.uri,
+                    diagnostic,
+                    text,
+                    components(),
+                    &model,
+                )
+                .map(CodeActionOrCommand::CodeAction),
+            );
+        }
 
         // Keep a variable the refinement dropped but still uses (EB025).
         for diagnostic in params
@@ -883,8 +947,6 @@ impl CodeActionProvider {
                     .map(CodeActionOrCommand::CodeAction),
                 );
             }
-            // Checked at most once, and only for a fix that reads the model.
-            let model = std::cell::OnceCell::new();
             for diagnostic in misspelled {
                 actions.extend(
                     self.create_respell_actions(
@@ -1025,6 +1087,86 @@ impl CodeActionProvider {
                 })
             })
             .collect()
+    }
+
+    /// Quick fix for EB022 (a label another item already takes): give the
+    /// item a free label. Of two items sharing a label, the finding marks the
+    /// first; the one written last is relabeled, so the label an existing
+    /// proof is filed under stays where it was. A label clashing with one an
+    /// extended event inherits is relabeled clear of the inherited labels,
+    /// which the checked model knows.
+    fn create_relabel_action(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+        model: &std::cell::OnceCell<Option<rossi_build::sc_model::ScModel>>,
+    ) -> Option<CodeAction> {
+        let lexical = rossi::comments::lexical_spans(text);
+        let masked = lexical.mask_comments(text);
+        let start = crate::position::position_to_offset(text, diagnostic.range.start)?;
+        let end = crate::position::position_to_offset(text, diagnostic.range.end)?;
+        let marked = lexical
+            .labels
+            .iter()
+            .find(|span| (start..end.max(start + 1)).contains(&span.start))?;
+        let old = &text[marked.start + 1..marked.end];
+        let stem = masked[..marked.start]
+            .split_whitespace()
+            .rev()
+            .find_map(label_stem)?;
+        let scope = label_scope(stem, &masked, marked.start);
+        let same: Vec<_> = lexical
+            .labels
+            .iter()
+            .filter(|span| scope.contains(&span.start) && &text[span.start + 1..span.end] == old)
+            .collect();
+        let target = **same.last()?;
+
+        // The labels an extended event inherits share its guards' and
+        // actions' namespace without being written in this document.
+        let mut inherited = HashSet::new();
+        if matches!(stem, "grd" | "act")
+            && let Some(Component::Machine(machine)) =
+                crate::component_util::component_at_offset(components, target.start)
+            && let Some(event) = machine.events.iter().find(|event| {
+                event.extended && event.span.is_some_and(|span| span.contains(target.start))
+            })
+            && let Some(decl) = model
+                .get_or_init(|| self.checked_model(uri))
+                .as_ref()
+                .and_then(|model| model.machines.get(&machine.name))
+                .and_then(|checked| checked.events_by_label.get(&event.name))
+        {
+            for ancestor in decl.chain_root_first() {
+                inherited.extend(ancestor.guards.iter().map(|g| g.label.clone()));
+                inherited.extend(ancestor.own_actions().iter().map(|a| a.label.clone()));
+            }
+        }
+        let label = free_label(text, &lexical, &masked, target.start, &inherited)?;
+        let title = if same.len() > 1 {
+            format!("Relabel the last @{old} as @{label}")
+        } else {
+            format!("Relabel @{old} as @{label}")
+        };
+        let range = crate::position::span_to_range(
+            &rossi::ast::Span {
+                start: target.start + 1,
+                end: target.end,
+            },
+            text,
+        );
+        Some(CodeAction {
+            title,
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            edit: Some(single_edit(uri, range, label)),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        })
     }
 
     /// Quick fix for EB025 (a variable the refinement dropped is still used):
@@ -1302,33 +1444,9 @@ impl CodeActionProvider {
     ) -> Option<CodeAction> {
         // One lexical scan serves both the mask and the labels already written.
         let lexical = rossi::comments::lexical_spans(text);
-        let masked = lexical.mask_comments_chars(text);
-        let item = crate::position::position_to_offset(&masked, diagnostic.range.start)?;
-        // The clause keyword is the last one written before the item: on the
-        // item's own line for an inline `EVENT e THEN x ≔ 1 END`, on a line
-        // above it for the indented form.
-        let stem = masked[..item]
-            .split_whitespace()
-            .rev()
-            .find_map(label_stem)?;
-        // A guard, witness or action label is unique within its event, an
-        // axiom, invariant or theorem within the component, and Rodin numbers
-        // each event's items from 1 — so the free number is looked for in the
-        // scope the clash would be found in.
-        let scope = match stem {
-            "grd" | "wit" | "act" => enclosing_event_range(&masked, item),
-            _ => 0..masked.len(),
-        };
-        let taken: HashSet<&str> = lexical
-            .labels
-            .iter()
-            .filter(|span| scope.contains(&span.start))
-            // The span covers `@name`; only the leading sigil is syntax.
-            .map(|span| &text[span.start + 1..span.end])
-            .collect();
-        let label = (1..)
-            .map(|n| format!("{stem}{n}"))
-            .find(|label| !taken.contains(label.as_str()))?;
+        let masked = lexical.mask_comments(text);
+        let item = crate::position::position_to_offset(text, diagnostic.range.start)?;
+        let label = free_label(text, &lexical, &masked, item, &HashSet::new())?;
         Some(CodeAction {
             title: format!("Insert label @{label}"),
             kind: Some(CodeActionKind::QUICKFIX),

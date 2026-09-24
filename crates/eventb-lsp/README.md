@@ -329,6 +329,8 @@ Implemented code actions include:
 - Replace a misspelled name with one spelled alike: a name in scope (EB018),
   or a component or abstract event nothing declares (EB009)
 - Keep a variable the refinement dropped but still uses (EB025)
+- Relabel an item whose label another one takes, clear of the labels an
+  extended event inherits (EB022)
 
 ### Signature Help
 
