@@ -331,6 +331,8 @@ Implemented code actions include:
 - Keep a variable the refinement dropped but still uses (EB025)
 - Relabel an item whose label another one takes, clear of the labels an
   extended event inherits (EB022)
+- Move the predicate that types a name above the one that reads it first
+  (EB020)
 
 ### Signature Help
 
