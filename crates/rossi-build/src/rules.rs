@@ -489,7 +489,8 @@ impl RuleId {
             rossi::ParseError::MissingLabel { .. } => Some(RuleId::MissingLabel),
             rossi::ParseError::AssignmentInPredicate { .. } => Some(RuleId::AssignmentInPredicate),
             rossi::ParseError::NotAPrefixOperator { .. }
-            | rossi::ParseError::UnknownInfixOperator { .. } => Some(RuleId::FormulaParseError),
+            | rossi::ParseError::UnknownInfixOperator { .. }
+            | rossi::ParseError::IncompatibleOperators { .. } => Some(RuleId::FormulaParseError),
             _ => None,
         }
     }
