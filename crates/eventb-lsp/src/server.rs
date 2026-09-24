@@ -1154,9 +1154,10 @@ impl RossiLanguageServer {
             Arc::clone(&document_manager),
         ));
 
-        let refinement_actions_provider = Arc::new(RefinementActionProvider::new(Arc::clone(
-            &cross_reference_manager,
-        )));
+        let refinement_actions_provider = Arc::new(RefinementActionProvider::new(
+            Arc::clone(&cross_reference_manager),
+            Arc::clone(&document_manager),
+        ));
 
         let mut code_actions_provider = CodeActionProvider::new();
         code_actions_provider.set_workspace_symbols(Arc::clone(&workspace_symbol_provider));

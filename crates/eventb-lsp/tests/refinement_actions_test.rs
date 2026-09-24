@@ -1,6 +1,8 @@
 //! Integration tests for the refactorings along the refinement chain.
 
 use eventb_lsp::cross_references::CrossReferenceManager;
+use eventb_lsp::document::DocumentManager;
+use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionParams, DocumentChangeOperation,
     DocumentChanges, OneOf, Position, Range, ResourceOp, TextDocumentIdentifier, Uri,
@@ -9,13 +11,33 @@ use eventb_lsp::lsp_types::{
 use eventb_lsp::refinement::RefinementActionProvider;
 use std::sync::Arc;
 
-/// A provider over a workspace holding `files` (URI, text).
+/// A provider over a workspace holding `files` (URI, text), each open.
 fn provider(files: &[(&str, &str)]) -> RefinementActionProvider {
     let components = Arc::new(CrossReferenceManager::new());
+    let documents = Arc::new(DocumentManager::new());
     for (uri, text) in files {
         components.update_component((*uri).to_string(), text);
+        documents.open(uri.parse::<Uri>().unwrap(), 1, (*text).to_string());
     }
-    RefinementActionProvider::new(components)
+    RefinementActionProvider::new(components, documents)
+}
+
+/// The text `action` leaves in the document `uri` it edits in place.
+fn applied(text: &str, uri: &str, action: &CodeAction) -> String {
+    let changes = action
+        .edit
+        .as_ref()
+        .and_then(|edit| edit.changes.as_ref())
+        .unwrap_or_else(|| panic!("{:?} edits no document in place", action.title));
+    let mut edits = changes[&uri.parse::<Uri>().unwrap()].clone();
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let mut result = text.to_string();
+    for edit in edits {
+        let start = position_to_offset(&result, edit.range.start).unwrap();
+        let end = position_to_offset(&result, edit.range.end).unwrap();
+        result.replace_range(start..end, &edit.new_text);
+    }
+    result
 }
 
 /// The refactors offered with the cursor at `line`, `column` of `uri`.
@@ -187,4 +209,120 @@ fn an_extension_is_created_the_way_rodin_extends() {
     let (created_uri, text) = created(action);
     assert_eq!(created_uri, "file:///ws/C1.eventb");
     assert_eq!(text, "context C1 extends C0\nend\n");
+}
+
+#[test]
+fn an_abstract_event_on_a_dropped_variable_is_left_unrefined() {
+    // M1 drops `v`. Extending `tick` would inherit its action on `v`, which
+    // M1 no longer has; how to refine it is the user's to say. `tock` only
+    // touches the kept `w`, so its stub is written.
+    let abstraction = "\
+machine M0
+variables v w
+invariants
+  @t1 v ∈ ℕ
+  @t2 w ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a1 v ≔ 0
+      @a2 w ≔ 0
+  end
+  event tick
+    then
+      @a1 v ≔ v + 1
+  end
+  event tock
+    where
+      @g1 w < 9
+    then
+      @a2 w ≔ w + 1
+  end
+end
+";
+    let refinement = "\
+machine M1 refines M0
+variables w
+events
+  event INITIALISATION
+    then
+      @a2 w ≔ 0
+  end
+end
+";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", abstraction), (uri, refinement)];
+    let actions = refactors(&provider(&files), uri, refinement, 0, 3, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Refine"))
+        .expect("tock is still offered");
+    assert_eq!(action.title, "Refine abstract event tock");
+    assert_eq!(
+        applied(refinement, uri, action),
+        refinement.replace(
+            "      @a2 w ≔ 0\n  end\n",
+            "      @a2 w ≔ 0\n  end\n\n  event tock extends tock\n  end\n"
+        )
+    );
+}
+
+#[test]
+fn the_abstract_events_left_unrefined_are_refined() {
+    let refinement = "\
+machine M1 refines M0 sees C0 C1
+
+variables x y
+
+events
+  event INITIALISATION extends INITIALISATION
+  end
+
+  event dec extends dec
+  end
+end
+";
+    let files = [
+        ("file:///ws/M0.eventb", ABSTRACT),
+        ("file:///ws/M1.eventb", refinement),
+    ];
+    let actions = refactors(
+        &provider(&files),
+        "file:///ws/M1.eventb",
+        refinement,
+        0,
+        3,
+        false,
+    );
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Refine"))
+        .expect("offered on the refinement's header");
+    assert_eq!(action.title, "Refine abstract event wait");
+    assert_eq!(
+        applied(refinement, "file:///ws/M1.eventb", action),
+        refinement.replace(
+            "  event dec extends dec\n  end\n",
+            "  event dec extends dec\n  end\n\n  anticipated event wait extends wait\n  end\n",
+        )
+    );
+
+    // A refinement with no event yet gets its EVENTS clause too.
+    let bare = "machine M1 refines M0\nvariables x y\nend\n";
+    let provider = provider(&[
+        ("file:///ws/M0.eventb", ABSTRACT),
+        ("file:///ws/M1.eventb", bare),
+    ]);
+    let actions = refactors(&provider, "file:///ws/M1.eventb", bare, 0, 3, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Refine"))
+        .unwrap();
+    assert_eq!(action.title, "Refine 3 abstract events left unrefined");
+    let fixed = applied(bare, "file:///ws/M1.eventb", action);
+    assert_eq!(
+        fixed,
+        "machine M1 refines M0\nvariables x y\nevents\n  event INITIALISATION extends INITIALISATION\n  end\n\n  event dec extends dec\n  end\n\n  anticipated event wait extends wait\n  end\nend\n"
+    );
+    rossi::parse(&fixed).expect("the refinement parses");
 }
