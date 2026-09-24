@@ -329,6 +329,9 @@ next to your sources by default (add `.rossi/` to `.gitignore`); override with
 live alongside the generated proof obligations and survive rebuilds: clicking
 the lens again after editing the model reconciles the regenerated obligations
 with the recorded proof state, so unchanged obligations keep their proofs.
+A project is named after its folder's path, so renaming or moving the folder
+starts a new project; the lens then names the old one, which rossi no longer
+updates, for you to delete in Rodin.
 
 While Rodin stays open, the two tools keep each other current
 (`rossi.rodin.sync`, on by default). Saving an `.eventb` file rebuilds the
