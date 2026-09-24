@@ -617,6 +617,26 @@ fn a_refining_event_repeating_its_abstract_one_becomes_extended() {
 }
 
 #[test]
+fn a_status_written_before_the_refines_clause_stays() {
+    let block = REPEATS_DEC.replace(
+        "  event dec refines dec\n",
+        "  event dec\n    status ordinary\n    refines dec\n",
+    );
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, block.as_str())];
+    let actions = refactors(&provider(&files), uri, &block, 9, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Extend"))
+        .expect("offered on the event's header");
+    let extended = applied(&block, uri, action);
+    assert!(
+        extended.contains("  event dec extends dec\n    status ordinary\n    any m\n"),
+        "{extended}"
+    );
+}
+
+#[test]
 fn an_event_that_changes_its_abstract_one_is_not_extended() {
     // `@g2` is strengthened, so the abstract guard is not repeated.
     let changed = REPEATS_DEC.replace("@g2 x > n", "@g2 x > n + 1");

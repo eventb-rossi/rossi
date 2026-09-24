@@ -214,22 +214,12 @@ impl RefinementActionProvider {
             .unwrap_or_else(|| format!("{clause_indent}  "));
 
         // The header: `extends t` becomes `refines t`.
-        let name_end = event.name_span?.end;
-        let target_start = target.span?.start;
-        let keyword =
-            name_end + masked[name_end..target_start].find(|c: char| !c.is_whitespace())?;
-        let keyword_end = keyword + masked[keyword..target_start].trim_end().len();
+        let keyword = target_keyword(&masked, target.span?)?;
         let mut edits = vec![TextEdit {
-            range: crate::position::span_to_range(
-                &rossi::ast::Span {
-                    start: keyword,
-                    end: keyword_end,
-                },
-                text,
-            ),
+            range: crate::position::span_to_range(&keyword, text),
             new_text: keyword_text(
                 KeywordId::Refines,
-                masked[keyword..].starts_with(char::is_lowercase),
+                masked[keyword.start..].starts_with(char::is_lowercase),
             ),
         }];
         if !parameters.is_empty() {
@@ -396,11 +386,10 @@ impl RefinementActionProvider {
         // header line when the target was written in a clause below it.
         let name_end = event.name_span?.end;
         let target_span = target.span?;
-        let keyword =
-            name_end + masked[name_end..target_span.start].find(|c: char| !c.is_whitespace())?;
+        let keyword = target_keyword(&masked, target_span)?;
         let mut edits = Vec::new();
-        if text[name_end..keyword].contains('\n') {
-            removed.push(own_lines(text, &masked, keyword, target_span.end)?);
+        if text[name_end..keyword.start].contains('\n') {
+            removed.push(own_lines(text, &masked, keyword.start, target_span.end)?);
             edits.push(TextEdit {
                 range: point(text, name_end),
                 new_text: format!(
@@ -411,16 +400,10 @@ impl RefinementActionProvider {
             });
         } else {
             edits.push(TextEdit {
-                range: crate::position::span_to_range(
-                    &rossi::ast::Span {
-                        start: keyword,
-                        end: keyword + masked[keyword..target_span.start].trim_end().len(),
-                    },
-                    text,
-                ),
+                range: crate::position::span_to_range(&keyword, text),
                 new_text: keyword_text(
                     KeywordId::Extends,
-                    masked[keyword..].starts_with(char::is_lowercase),
+                    masked[keyword.start..].starts_with(char::is_lowercase),
                 ),
             });
         }
@@ -739,6 +722,21 @@ fn refinement_of(machine: &Machine, name: String) -> Machine {
         })
         .collect();
     refinement
+}
+
+/// The REFINES or EXTENDS keyword written before an event's refinement
+/// `target`, which a STATUS clause may separate from the event's name.
+/// `masked` is the document with its comment bytes blanked.
+fn target_keyword(masked: &str, target: rossi::ast::Span) -> Option<rossi::ast::Span> {
+    let end = masked[..target.start].trim_end().len();
+    let start = masked[..end]
+        .trim_end_matches(|c: char| !c.is_whitespace())
+        .len();
+    matches!(
+        line_keyword(&masked[start..end]),
+        Some(KeywordId::Refines | KeywordId::Extends)
+    )
+    .then_some(rossi::ast::Span { start, end })
 }
 
 /// The ranges deleting the `items` of one clause marked in `dropped`, or the
