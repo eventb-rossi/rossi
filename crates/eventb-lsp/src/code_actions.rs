@@ -822,14 +822,36 @@ impl CodeActionProvider {
         }
 
         // See or extend the context that declares an undeclared name, or
-        // declare it here (EB018). The document is parsed only when there is
-        // one to fix.
+        // declare it here (EB018).
         let undeclared: Vec<_> = params
             .context
             .diagnostics
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
             .collect();
+        // The fixes below read the AST; the document is parsed once, and only
+        // when one of them has a diagnostic to fix.
+        let parsed = std::cell::OnceCell::new();
+        let components = || parsed.get_or_init(|| crate::component_util::parse_all(text));
+
+        // Keep a variable the refinement dropped but still uses (EB025).
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::DisappearedVariable.code()))
+        {
+            actions.extend(
+                self.create_keep_variable_action(
+                    &params.text_document.uri,
+                    diagnostic,
+                    text,
+                    components(),
+                )
+                .map(CodeActionOrCommand::CodeAction),
+            );
+        }
+
         // A name nothing resolves (EB018) or a component or abstract event
         // nothing declares (EB009) may be a misspelling of one in scope.
         let misspelled: Vec<_> = params
@@ -842,21 +864,21 @@ impl CodeActionProvider {
             })
             .collect();
         if !undeclared.is_empty() || !misspelled.is_empty() {
-            let components = crate::component_util::parse_all(text);
+            let components = components();
             for diagnostic in undeclared {
                 actions.extend(
                     self.create_import_context_actions(
                         &params.text_document.uri,
                         diagnostic,
                         text,
-                        &components,
+                        components,
                     )
                     .into_iter()
                     .chain(self.create_declare_actions(
                         &params.text_document.uri,
                         diagnostic,
                         text,
-                        &components,
+                        components,
                     ))
                     .map(CodeActionOrCommand::CodeAction),
                 );
@@ -869,7 +891,7 @@ impl CodeActionProvider {
                         &params.text_document.uri,
                         diagnostic,
                         text,
-                        &components,
+                        components,
                         &model,
                     )
                     .into_iter()
@@ -1003,6 +1025,43 @@ impl CodeActionProvider {
                 })
             })
             .collect()
+    }
+
+    /// Quick fix for EB025 (a variable the refinement dropped is still used):
+    /// declare it again in the machine's VARIABLES, which is how Event-B
+    /// keeps an abstract variable. The diagnostic underlines the variable.
+    fn create_keep_variable_action(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+    ) -> Option<CodeAction> {
+        let written = text_in_range(text, diagnostic.range)?;
+        let name = written.strip_suffix('\'').unwrap_or(written);
+        if !rossi::names::is_valid_math_identifier(name) {
+            return None;
+        }
+        let offset = crate::position::position_to_offset(text, diagnostic.range.start)?;
+        let component = crate::component_util::component_at_offset(components, offset)?;
+        if !matches!(component, Component::Machine(_)) {
+            return None;
+        }
+        let insert = component_list_insert(text, component, KeywordId::Variables, name)?;
+        Some(CodeAction {
+            title: format!("Keep {name} in VARIABLES"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            edit: Some(single_edit(
+                uri,
+                Range::new(insert.position, insert.position),
+                insert.text,
+            )),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        })
     }
 
     /// Quick fixes replacing a name nothing declares with one spelled alike:
