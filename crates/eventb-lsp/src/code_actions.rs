@@ -428,6 +428,50 @@ fn label_scope(stem: &str, masked: &str, item: usize) -> std::ops::Range<usize> 
     }
 }
 
+/// The groupings an incompatible-operators `error` offers, located in the
+/// document `text`. The first such error of a document is reported bare; one
+/// the recovery met after another error is wrapped, its positions relative to
+/// the predicate it failed on, and is placed by that predicate's start.
+fn incompatible_groupings(error: &rossi::ParseError, text: &str) -> Option<Vec<rossi::ast::Span>> {
+    use rossi::ParseError;
+    let (groupings, base, within) = match error {
+        ParseError::IncompatibleOperators { groupings, .. } => (groupings, 0, 0..text.len()),
+        ParseError::RecoverableError {
+            span: Some(element),
+            source: Some(source),
+            ..
+        } => match source.as_ref() {
+            ParseError::IncompatibleOperators { groupings, .. } => {
+                (groupings, element.start, element.start..element.end)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let located: Vec<rossi::ast::Span> = groupings
+        .iter()
+        .map(|group| rossi::ast::Span {
+            start: base + group.start,
+            end: base + group.end,
+        })
+        .collect();
+    let sound = located.iter().all(|group| {
+        within.start <= group.start
+            && group.end <= within.end
+            && text.get(group.start..group.end).is_some()
+    });
+    (sound && !located.is_empty()).then_some(located)
+}
+
+/// `text` shortened for a title: at most 40 characters, the cut marked.
+fn abbreviated(text: &str) -> String {
+    if text.chars().count() <= 40 {
+        text.to_string()
+    } else {
+        format!("{}…", text.chars().take(39).collect::<String>())
+    }
+}
+
 /// Whether `pred` has a top-level conjunct of the shape that types `name`
 /// on its own: `name ∈ E`, `name ⊆ E` or `name = E`, the name bare on the
 /// left.
@@ -893,6 +937,31 @@ impl CodeActionProvider {
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
             .collect();
+        // Parenthesize operators mixed without the parentheses Event-B
+        // requires. The first such error is EB005; one recovered after another
+        // error carries no code, so both are matched against a fresh parse.
+        let syntax: Vec<_> = params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.is_none() || diagnostic_code_is(d, RuleId::FormulaParseError.code()))
+            .collect();
+        if !syntax.is_empty() {
+            let errors = rossi::parse_components_with_recovery(text).errors;
+            for diagnostic in syntax {
+                actions.extend(
+                    self.create_parenthesize_actions(
+                        &params.text_document.uri,
+                        diagnostic,
+                        text,
+                        &errors,
+                    )
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction),
+                );
+            }
+        }
+
         // The fixes below read the AST, and some the checked model; each is
         // computed at most once, and only when a fix has a diagnostic to fix.
         let parsed = std::cell::OnceCell::new();
@@ -1205,6 +1274,66 @@ impl CodeActionProvider {
             disabled: None,
             data: None,
         })
+    }
+
+    /// Quick fixes for operators mixed without the parentheses Event-B
+    /// requires: parenthesize one of the groupings the parser says resolve
+    /// it. `errors` is the document's parse; the fixes answer the error the
+    /// diagnostic was made from. A grouping is offered only when the document
+    /// parses with fewer errors once it is parenthesized, so one that moves
+    /// the mistake along the chain is not.
+    fn create_parenthesize_actions(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        errors: &[rossi::ParseError],
+    ) -> Vec<CodeAction> {
+        let Some(groupings) = errors.iter().find_map(|error| {
+            let groupings = incompatible_groupings(error, text)?;
+            (crate::diagnostics::parse_error_to_diagnostic(error, text).range == diagnostic.range)
+                .then_some(groupings)
+        }) else {
+            return Vec::new();
+        };
+        groupings
+            .into_iter()
+            .filter_map(|group| {
+                let grouped = &text[group.start..group.end];
+                let fixed = format!("{}({grouped}){}", &text[..group.start], &text[group.end..]);
+                if rossi::parse_components_with_recovery(&fixed).errors.len() >= errors.len() {
+                    return None;
+                }
+                let at = |offset| {
+                    let position = crate::position::offset_to_position(text, offset);
+                    Range::new(position, position)
+                };
+                let edits = vec![
+                    TextEdit {
+                        range: at(group.start),
+                        new_text: "(".to_string(),
+                    },
+                    TextEdit {
+                        range: at(group.end),
+                        new_text: ")".to_string(),
+                    },
+                ];
+                Some(CodeAction {
+                    title: format!("Parenthesize {}", abbreviated(grouped)),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![diagnostic.clone()]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(HashMap::from([(uri.clone(), edits)])),
+                        document_changes: None,
+                        change_annotations: None,
+                    }),
+                    command: None,
+                    is_preferred: Some(false),
+                    disabled: None,
+                    data: None,
+                })
+            })
+            .collect()
     }
 
     /// Quick fix for EB020 (a predicate reads names before any predicate of

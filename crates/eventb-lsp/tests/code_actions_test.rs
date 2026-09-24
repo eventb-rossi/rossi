@@ -1709,3 +1709,70 @@ fn eb020_moves_the_typing_predicate_above_the_read() {
         assert_eq!(applied(text, uri, fix), expected);
     }
 }
+
+/// The parenthesizing fixes offered for the diagnostic the server publishes
+/// first for `text`, as (title, fixed text).
+fn parenthesize_fixes(text: &str, error_index: usize) -> Vec<(String, String)> {
+    let uri = "file:///m.eventb";
+    let errors = rossi::parse_components_with_recovery(text).errors;
+    let diagnostic = eventb_lsp::diagnostics::parse_error_to_diagnostic(&errors[error_index], text);
+    let mut params = create_test_params(uri, diagnostic.range);
+    params.context.diagnostics = vec![diagnostic];
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    CodeActionProvider::new()
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) if action.title.starts_with("Parenthesize") => {
+                let fixed = applied(text, uri, &action);
+                Some((action.title, fixed))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn incompatible_operators_are_parenthesized_either_way() {
+    let text = "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x = 1 ∧ x = 2 ∨ x = 3\nend\n";
+    let fixes = parenthesize_fixes(text, 0);
+    assert_eq!(
+        fixes,
+        [
+            (
+                "Parenthesize x = 1 ∧ x = 2".to_string(),
+                text.replace("x = 1 ∧ x = 2 ∨", "(x = 1 ∧ x = 2) ∨"),
+            ),
+            (
+                "Parenthesize x = 2 ∨ x = 3".to_string(),
+                text.replace("∧ x = 2 ∨ x = 3", "∧ (x = 2 ∨ x = 3)"),
+            ),
+        ]
+    );
+    for (_, fixed) in fixes {
+        rossi::parse(&fixed).expect("the parenthesized model parses");
+    }
+}
+
+#[test]
+fn a_recovered_incompatible_operators_error_is_parenthesized_too() {
+    // Only the first error is reported bare; a later one arrives wrapped by
+    // the recovery, located relative to its own predicate.
+    let text = "machine m\nvariables x\ninvariants\n  @i x = 1 ∧ x = 2 ∨ x = 3\n  @j x ∈ {1} ∪ {2} ∩ {3}\nend\n";
+    let fixes = parenthesize_fixes(text, 1);
+    let titles: Vec<&str> = fixes.iter().map(|(title, _)| title.as_str()).collect();
+    assert_eq!(titles, ["Parenthesize {1} ∪ {2}", "Parenthesize {2} ∩ {3}"]);
+    assert_eq!(fixes[0].1, text.replace("{1} ∪ {2} ∩", "({1} ∪ {2}) ∩"));
+}
+
+#[test]
+fn a_grouping_that_leaves_the_formula_broken_is_not_offered() {
+    // Grouping the chain so far leaves `… ∧ c = 3 ∨ d = 4` just as broken.
+    let text = "machine m\nvariables a\ninvariants\n  @i a = 1 ∨ a = 2 ∧ a = 3 ∨ a = 4\nend\n";
+    let titles: Vec<String> = parenthesize_fixes(text, 0)
+        .into_iter()
+        .map(|(title, _)| title)
+        .collect();
+    assert_eq!(titles, ["Parenthesize a = 2 ∧ a = 3"]);
+}

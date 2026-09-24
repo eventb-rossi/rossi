@@ -154,7 +154,7 @@ fn concise_pest_message(message: &str) -> String {
 }
 
 /// Convert a parse error to an LSP diagnostic
-pub(crate) fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -> Diagnostic {
+pub fn parse_error_to_diagnostic(error: &rossi::ParseError, text: &str) -> Diagnostic {
     use rossi::ParseError;
 
     // pest's multi-line dump is collapsed to a single line; located variants
