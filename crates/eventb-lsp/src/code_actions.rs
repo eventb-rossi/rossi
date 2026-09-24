@@ -2,9 +2,7 @@
 //!
 //! Provides quick fixes and refactorings including:
 //! - Operator conversion (ASCII ↔ Unicode)
-//! - Extract constant from literal
-//! - Sort clauses alphabetically
-//! - And more refactorings
+//! - Quick fixes for the rule diagnostics
 
 use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
@@ -286,23 +284,6 @@ impl CodeActionProvider {
             actions.extend(self.provide_diagnostic_based_actions(params, text, private_use_glyphs));
         }
 
-        if requested(&CodeActionKind::REFACTOR) {
-            // Add sort clauses action
-            actions.extend(self.provide_sort_clauses_actions(params, text));
-
-            // Add rename event action if cursor is on an event name
-            if let Some(action) = self.provide_rename_event_action(params, text) {
-                actions.push(action);
-            }
-        }
-
-        // Add extract constant action if a literal is selected
-        if requested(&CodeActionKind::REFACTOR_EXTRACT)
-            && let Some(action) = self.provide_extract_constant_action(params, text)
-        {
-            actions.push(action);
-        }
-
         if actions.is_empty() {
             None
         } else {
@@ -494,61 +475,6 @@ impl CodeActionProvider {
             disabled: None,
             data: None,
         })
-    }
-
-    /// Provide action to extract a constant from a literal
-    fn provide_extract_constant_action(
-        &self,
-        params: &CodeActionParams,
-        text: &str,
-    ) -> Option<CodeActionOrCommand> {
-        // Only provide this action if there's a selection
-        if params.range.start == params.range.end {
-            return None;
-        }
-
-        let selected_text = self.get_text_in_range(text, &params.range)?;
-
-        // Check if selection looks like a numeric literal or simple expression
-        if !self.is_extractable_literal(&selected_text) {
-            return None;
-        }
-
-        let constant_name = format!("CONSTANT_{}", selected_text.replace([' ', '-'], "_"));
-
-        // Find where to insert the constant declaration
-        // For now, we'll just provide the action without automatic insertion
-        // This would need more sophisticated analysis to find the right location
-
-        Some(CodeActionOrCommand::CodeAction(CodeAction {
-            title: format!("Extract constant '{}'", constant_name),
-            kind: Some(CodeActionKind::REFACTOR_EXTRACT),
-            diagnostics: None,
-            edit: None, // Would need to implement full text editing logic
-            command: None,
-            is_preferred: Some(false),
-            disabled: Some(crate::lsp_types::CodeActionDisabled {
-                reason: "Not yet implemented - requires multi-location editing".to_string(),
-            }),
-            data: None,
-        }))
-    }
-
-    /// Check if the selected text is an extractable literal
-    fn is_extractable_literal(&self, text: &str) -> bool {
-        let trimmed = text.trim();
-
-        // Check for numeric literals
-        if trimmed.parse::<i64>().is_ok() {
-            return true;
-        }
-
-        // Check for simple set literals like {1, 2, 3}
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            return true;
-        }
-
-        false
     }
 
     /// Provide diagnostic-based quick fixes
@@ -1014,167 +940,6 @@ impl CodeActionProvider {
             data: None,
         })
     }
-
-    /// Provide actions to sort clauses alphabetically
-    fn provide_sort_clauses_actions(
-        &self,
-        params: &CodeActionParams,
-        text: &str,
-    ) -> Vec<CodeActionOrCommand> {
-        let mut actions = Vec::new();
-
-        // Try to find sortable clauses
-        if let Some(action) = self.create_sort_variables_action(&params.text_document.uri, text) {
-            actions.push(CodeActionOrCommand::CodeAction(action));
-        }
-
-        if let Some(action) = self.create_sort_constants_action(&params.text_document.uri, text) {
-            actions.push(CodeActionOrCommand::CodeAction(action));
-        }
-
-        actions
-    }
-
-    /// Create action to sort VARIABLES clause
-    fn create_sort_variables_action(&self, uri: &Uri, text: &str) -> Option<CodeAction> {
-        self.create_sort_clause_action(uri, text, "VARIABLES")
-    }
-
-    /// Create action to sort CONSTANTS clause
-    fn create_sort_constants_action(&self, uri: &Uri, text: &str) -> Option<CodeAction> {
-        self.create_sort_clause_action(uri, text, "CONSTANTS")
-    }
-
-    /// Generic method to create a sort clause action
-    fn create_sort_clause_action(
-        &self,
-        uri: &Uri,
-        text: &str,
-        clause_name: &str,
-    ) -> Option<CodeAction> {
-        let lines: Vec<&str> = text.lines().collect();
-
-        // Find the clause
-        let mut clause_start = None;
-        let mut clause_end = None;
-
-        for (idx, line) in lines.iter().enumerate() {
-            if line.trim().eq_ignore_ascii_case(clause_name) {
-                clause_start = Some(idx);
-            } else if clause_start.is_some() && clause_end.is_none() {
-                // Check if we've reached the end of the clause (keywords are
-                // case-insensitive)
-                let trimmed = line.trim();
-                if trimmed.is_empty()
-                    || line_keyword_is(trimmed, KeywordId::Invariants)
-                    || line_keyword_is(trimmed, KeywordId::Axioms)
-                    || line_keyword_is(trimmed, KeywordId::Events)
-                    || line_keyword_is(trimmed, KeywordId::End)
-                    || line_keyword_is(trimmed, KeywordId::Initialisation)
-                {
-                    clause_end = Some(idx);
-                    break;
-                }
-            }
-        }
-
-        if let (Some(start), Some(end)) = (clause_start, clause_end) {
-            if end <= start + 1 {
-                return None; // No items to sort
-            }
-
-            // Extract and sort the items
-            let items: Vec<&str> = lines[start + 1..end].to_vec();
-            if items.is_empty() {
-                return None;
-            }
-
-            let mut sorted_items: Vec<String> = items.iter().map(|s| s.to_string()).collect();
-            sorted_items.sort();
-
-            // Check if already sorted
-            let already_sorted = items.iter().zip(sorted_items.iter()).all(|(a, b)| a == b);
-            if already_sorted {
-                return None;
-            }
-
-            let sorted_text = sorted_items.join("\n") + "\n";
-
-            let mut changes = HashMap::new();
-            changes.insert(
-                uri.clone(),
-                vec![TextEdit {
-                    range: Range {
-                        start: Position::new((start + 1) as u32, 0),
-                        end: Position::new(end as u32, 0),
-                    },
-                    new_text: sorted_text,
-                }],
-            );
-
-            Some(CodeAction {
-                title: format!("Sort {} alphabetically", clause_name.to_lowercase()),
-                kind: Some(CodeActionKind::REFACTOR),
-                diagnostics: None,
-                edit: Some(WorkspaceEdit {
-                    changes: Some(changes),
-                    document_changes: None,
-                    change_annotations: None,
-                }),
-                command: None,
-                is_preferred: Some(false),
-                disabled: None,
-                data: None,
-            })
-        } else {
-            None
-        }
-    }
-
-    /// Provide action to trigger rename on an event
-    fn provide_rename_event_action(
-        &self,
-        params: &CodeActionParams,
-        text: &str,
-    ) -> Option<CodeActionOrCommand> {
-        // Check if cursor is on an EVENT declaration
-        let lines: Vec<&str> = text.lines().collect();
-        let cursor_line = params.range.start.line as usize;
-
-        if cursor_line >= lines.len() {
-            return None;
-        }
-
-        let line = lines[cursor_line].trim();
-
-        // Check if this line is an event declaration (keyword is case-insensitive)
-        if line_keyword_is(line, KeywordId::Event) {
-            // Note: Rename is better handled by the LSP rename feature
-            // This code action would just provide a hint
-            Some(CodeActionOrCommand::CodeAction(CodeAction {
-                title: "Rename event (use F2 or rename command)".to_string(),
-                kind: Some(CodeActionKind::REFACTOR),
-                diagnostics: None,
-                edit: None,
-                command: None,
-                is_preferred: Some(false),
-                disabled: Some(crate::lsp_types::CodeActionDisabled {
-                    reason: "Use the LSP rename feature instead (F2)".to_string(),
-                }),
-                data: None,
-            }))
-        } else {
-            None
-        }
-    }
-
-    /// Get text within a range.
-    ///
-    /// LSP positions are UTF-16 offsets, so this goes through the one
-    /// converter rather than indexing bytes.
-    fn get_text_in_range(&self, text: &str, range: &Range) -> Option<String> {
-        text_in_range(text, *range).map(str::to_owned)
-    }
 }
 
 impl Default for CodeActionProvider {
@@ -1346,44 +1111,27 @@ mod tests {
     }
 
     #[test]
-    fn test_is_extractable_literal() {
-        let provider = CodeActionProvider::new();
-        assert!(provider.is_extractable_literal("42"));
-        assert!(provider.is_extractable_literal("  123  "));
-        assert!(provider.is_extractable_literal("{1, 2, 3}"));
-        assert!(!provider.is_extractable_literal("x + y"));
-    }
-
-    #[test]
-    fn test_get_text_in_range_single_line() {
-        let provider = CodeActionProvider::new();
+    fn test_text_in_range_single_line() {
         let text = "hello world";
         let range = Range {
             start: Position::new(0, 0),
             end: Position::new(0, 5),
         };
-        assert_eq!(
-            provider.get_text_in_range(text, &range),
-            Some("hello".to_string())
-        );
+        assert_eq!(text_in_range(text, range), Some("hello"));
     }
 
     #[test]
-    fn test_get_text_in_range_multi_line() {
-        let provider = CodeActionProvider::new();
+    fn test_text_in_range_multi_line() {
         let text = "line1\nline2\nline3";
         let range = Range {
             start: Position::new(0, 2),
             end: Position::new(2, 3),
         };
-        let result = provider.get_text_in_range(text, &range);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), "ne1\nline2\nlin");
+        assert_eq!(text_in_range(text, range), Some("ne1\nline2\nlin"));
     }
 
     #[test]
-    fn test_get_text_in_range_unicode() {
-        let provider = CodeActionProvider::new();
+    fn test_text_in_range_unicode() {
         // "x ∈ ℕ" — ∈ is 3 bytes, ℕ is 3 bytes, but each is 1 character
         let text = "x ∈ ℕ ∧ y ≤ 10";
         // Character positions: x(0) (1)∈(2) (3)ℕ(4) (5)∧(6) (7)y(8) (9)≤(10) (11)1(12)0(13)
@@ -1391,8 +1139,7 @@ mod tests {
             start: Position::new(0, 2),
             end: Position::new(0, 4),
         };
-        let result = provider.get_text_in_range(text, &range);
-        assert_eq!(result, Some("∈ ".to_string()));
+        assert_eq!(text_in_range(text, range), Some("∈ "));
     }
 
     #[test]
@@ -1405,17 +1152,5 @@ mod tests {
         assert!(!has_keyword_line("context c\nend", KeywordId::Machine));
         // First-token precision: a keyword embedded in an identifier never matches.
         assert!(!has_keyword_line("    machinery\n", KeywordId::Machine));
-    }
-
-    #[test]
-    fn test_sort_clause_action_lowercase_keywords() {
-        let provider = CodeActionProvider::new();
-        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
-        // Lowercase keywords; an out-of-order `variables` clause ended by `events`.
-        let text = "machine m\nvariables\n    b\n    a\n    c\nevents\nend";
-        let action = provider
-            .create_sort_clause_action(&uri, text, "VARIABLES")
-            .expect("should offer to sort the lowercase variables clause");
-        assert_eq!(action.title, "Sort variables alphabetically");
     }
 }

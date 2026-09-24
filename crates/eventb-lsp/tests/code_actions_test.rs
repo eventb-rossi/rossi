@@ -118,10 +118,8 @@ fn test_code_action_kinds() {
     for action in actions {
         if let CodeActionOrCommand::CodeAction(action) = action {
             assert!(
-                action.kind == Some(CodeActionKind::REFACTOR)
-                    || action.kind == Some(CodeActionKind::REFACTOR_EXTRACT)
-                    || action.kind == Some(FIX_ALL_KIND),
-                "Action kind should be REFACTOR, REFACTOR_EXTRACT, or the fix-all source kind"
+                action.kind == Some(CodeActionKind::REFACTOR) || action.kind == Some(FIX_ALL_KIND),
+                "Action kind should be REFACTOR or the fix-all source kind"
             );
         }
     }
@@ -248,40 +246,6 @@ fn fix_all_honours_the_only_filter() {
 }
 
 #[test]
-fn test_extract_constant_action_numeric_literal() {
-    let provider = CodeActionProvider::new();
-    let text = "MACHINE test\nVARIABLES x\nINVARIANTS\n  @inv1 x <= 42\nEND";
-
-    // Select the numeric literal "42"
-    let params = create_test_params(
-        "file:///test.eventb",
-        Range {
-            start: Position::new(3, 13),
-            end: Position::new(3, 15),
-        },
-    );
-
-    let actions = provider.provide_code_actions(&params, text, true, false);
-
-    assert!(actions.is_some());
-    let actions = actions.unwrap();
-
-    // Should have extract constant action
-    let has_extract = actions.iter().any(|action| {
-        if let CodeActionOrCommand::CodeAction(action) = action {
-            action.title.contains("Extract constant")
-        } else {
-            false
-        }
-    });
-
-    assert!(
-        has_extract,
-        "Should have extract constant action for numeric literal"
-    );
-}
-
-#[test]
 fn test_operator_detection_offers_conversion_actions() {
     let provider = CodeActionProvider::new();
     // (case, text, min_actions, required_title): a Some(required_title) row
@@ -339,110 +303,6 @@ fn test_operator_detection_offers_conversion_actions() {
             );
         }
     }
-}
-
-#[test]
-fn test_sort_actions_offered() {
-    let provider = CodeActionProvider::new();
-    // (case, text, title_groups): each group is a set of substrings that must
-    // all appear in the title of a SINGLE offered action; different groups may
-    // be satisfied by different actions.
-    let cases: [(&str, &str, &[&[&str]]); 2] = [
-        (
-            "unsorted variables",
-            "MACHINE test\nVARIABLES\n    z\n    a\n    m\nINVARIANTS\nEND",
-            &[&["Sort", "variables"]],
-        ),
-        (
-            "unsorted constants",
-            "CONTEXT test\nCONSTANTS\n    c_z\n    c_a\n    c_m\nAXIOMS\nEND",
-            &[&["Sort", "constants"]],
-        ),
-    ];
-
-    for (case, text, title_groups) in cases {
-        let params = create_test_params(
-            "file:///test.eventb",
-            Range {
-                start: Position::new(0, 0),
-                end: Position::new(0, 0),
-            },
-        );
-        let actions = provider
-            .provide_code_actions(&params, text, true, false)
-            .unwrap_or_default();
-
-        for group in title_groups {
-            assert!(
-                actions.iter().any(|action| matches!(
-                    action,
-                    CodeActionOrCommand::CodeAction(action)
-                        if group.iter().all(|fragment| action.title.contains(fragment))
-                )),
-                "{case}: expected one action whose title contains all of {group:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn test_no_sort_action_when_already_sorted() {
-    let provider = CodeActionProvider::new();
-    let text = "MACHINE test\nVARIABLES\n    a\n    m\n    z\nINVARIANTS\nEND";
-    let params = create_test_params(
-        "file:///test.eventb",
-        Range {
-            start: Position::new(0, 0),
-            end: Position::new(0, 0),
-        },
-    );
-
-    let actions = provider.provide_code_actions(&params, text, true, false);
-
-    if let Some(actions) = actions {
-        // Should NOT have action to sort variables (already sorted)
-        let has_sort_vars = actions.iter().any(|action| {
-            if let CodeActionOrCommand::CodeAction(action) = action {
-                action.title.contains("Sort") && action.title.contains("variables")
-            } else {
-                false
-            }
-        });
-
-        assert!(
-            !has_sort_vars,
-            "Should not suggest sorting when already sorted"
-        );
-    }
-}
-
-#[test]
-fn test_rename_event_hint() {
-    let provider = CodeActionProvider::new();
-    let text = "MACHINE test\nEVENTS\n    EVENT evt1\n    END\nEND";
-    let params = create_test_params(
-        "file:///test.eventb",
-        Range {
-            start: Position::new(2, 0),
-            end: Position::new(2, 0),
-        },
-    );
-
-    let actions = provider.provide_code_actions(&params, text, true, false);
-
-    assert!(actions.is_some());
-    let actions = actions.unwrap();
-
-    // Should have rename event hint
-    let has_rename = actions.iter().any(|action| {
-        if let CodeActionOrCommand::CodeAction(action) = action {
-            action.title.contains("Rename event")
-        } else {
-            false
-        }
-    });
-
-    assert!(has_rename, "Should suggest rename event hint");
 }
 
 #[test]
