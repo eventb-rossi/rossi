@@ -2037,6 +2037,9 @@ fn parse_binary_expr(
     // open same-operator associative run (`run_op`), or — between runs —
     // exactly the folded left operand.
     let first = inner.next().ok_or(ParseError::EmptyExpression)?;
+    let chain_start = first.as_span().start();
+    // The latest operand, which the next operator shares with the chain.
+    let mut last = first.as_span();
     let mut operands = vec![parse_expression(first, fx)?];
     let mut run_op: Option<AssocExprOp> = None;
 
@@ -2063,15 +2066,18 @@ fn parse_binary_expr(
             && let Some((prev_op, prev_rule)) = prev
             && !op_info::set_ops_acceptable(prev_op, op)
         {
+            let right = inner.peek().ok_or(ParseError::EmptyExpression)?.as_span();
             return Err(incompatible_operators(
                 op_pair.as_span(),
                 display_rule(prev_rule),
                 display_rule(op_rule),
+                chain_groupings(chain_start, last, right),
             ));
         }
 
         let right_pair = inner.next().ok_or(ParseError::EmptyExpression)?;
         let right_span = right_pair.as_span();
+        last = right_span;
         let right = parse_expression(right_pair, fx)?;
         // An ascription's type side takes the same type grammar as a binder
         // annotation — Rodin runs the one `TYPE_PARSER` for both. The left
@@ -2205,6 +2211,7 @@ fn parse_infix_ext_expr(
                 operator.as_span(),
                 symbol.to_string(),
                 word.to_string(),
+                Vec::new(),
             ));
         }
         operands.push(parse_infix_ext_operand(operand, symbol, fx)?);
@@ -2241,6 +2248,7 @@ fn parse_infix_ext_operand(
                 operator.as_span(),
                 display_rule(operator.as_rule()),
                 symbol.to_string(),
+                Vec::new(),
             ));
         }
         pair = first;
@@ -2285,9 +2293,15 @@ fn unknown_infix_operator(name: &str, span: pest::Span<'_>) -> ParseError {
 }
 
 /// Build an [`ParseError::IncompatibleOperators`] anchored at the operator
-/// `span` (the operator at which the incompatibility is detected). Called only
-/// on the rejection path, so the `line_col` scan stays off the accepting path.
-fn incompatible_operators(span: pest::Span<'_>, left: String, right: String) -> ParseError {
+/// `span` (the operator at which the incompatibility is detected), offering
+/// `groupings` to parenthesize. Called only on the rejection path, so the
+/// `line_col` scan stays off the accepting path.
+fn incompatible_operators(
+    span: pest::Span<'_>,
+    left: String,
+    right: String,
+    groupings: Vec<Span>,
+) -> ParseError {
     let (line, column) = span.start_pos().line_col();
     ParseError::IncompatibleOperators {
         left,
@@ -2295,7 +2309,25 @@ fn incompatible_operators(span: pest::Span<'_>, left: String, right: String) -> 
         line,
         column,
         span: Some(Span::from_pest(span)),
+        groupings,
     }
+}
+
+/// The two groupings resolving an incompatibility met in a chain: the chain
+/// so far, from `chain_start` to the end of its `last` operand, and that
+/// operand together with the `right` one after the rejected operator.
+fn chain_groupings(chain_start: usize, last: pest::Span<'_>, right: pest::Span<'_>) -> Vec<Span> {
+    let (last, right) = (Span::from_pest(last), Span::from_pest(right));
+    vec![
+        Span {
+            start: chain_start,
+            end: last.end,
+        },
+        Span {
+            start: last.start,
+            end: right.end,
+        },
+    ]
 }
 
 /// Build a [`ParseError::ExpressionNotBinding`] anchored at the member
@@ -3168,6 +3200,9 @@ fn parse_binary_predicate(
     // holds an open ∧/∨ run's operands, or exactly the folded left
     // operand between runs.
     let first = inner.next().ok_or(ParseError::EmptyPredicate)?;
+    let chain_start = first.as_span().start();
+    // The latest operand, which the next operator shares with the chain.
+    let mut last = first.as_span();
     let mut operands = vec![parse_predicate_inner(first, bracketed, fx)?];
     let mut run_op: Option<AssocPredOp> = None;
 
@@ -3197,6 +3232,7 @@ fn parse_binary_predicate(
                     op_pair.as_span(),
                     display_rule(prev_rule),
                     display_rule(op_rule),
+                    chain_groupings(chain_start, last, right_pair.as_span()),
                 ));
             }
             // A bare quantifier as the right operand, when no closing bracket
@@ -3206,8 +3242,10 @@ fn parse_binary_predicate(
                     op_pair.as_span(),
                     display_rule(op_rule),
                     quantifier,
+                    vec![Span::from_pest(right_pair.as_span())],
                 ));
             }
+            last = right_pair.as_span();
 
             let right = parse_predicate_inner(right_pair, bracketed, fx)?;
             match op {
@@ -3452,6 +3490,7 @@ fn parse_predicate_inner(
                         first.as_span(),
                         display_rule(Rule::op_not),
                         quantifier,
+                        vec![Span::from_pest(operand.as_span())],
                     ));
                 }
                 let pred = parse_predicate_inner(operand, bracketed, fx)?;
