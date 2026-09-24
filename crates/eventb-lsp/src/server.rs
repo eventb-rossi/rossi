@@ -27,6 +27,7 @@ use crate::hierarchy::TypeHierarchyProvider;
 use crate::hover::HoverProvider;
 use crate::inlay_hints::InlayHintsProvider;
 use crate::references::ReferenceProvider;
+use crate::refinement::RefinementActionProvider;
 use crate::rename::RenameProvider;
 use crate::selection_range::SelectionRangeProvider;
 use crate::semantic_tokens::SemanticTokensProvider;
@@ -945,6 +946,7 @@ pub struct RossiLanguageServer {
     document_links_provider: Arc<DocumentLinkProvider>,
     /// Code actions provider
     code_actions_provider: Arc<CodeActionProvider>,
+    refinement_actions_provider: Arc<RefinementActionProvider>,
     /// Folding range provider
     folding_range_provider: Arc<FoldingRangeProvider>,
     /// Inlay hints provider
@@ -976,6 +978,9 @@ pub struct RossiLanguageServer {
     progress_cancels: Arc<crate::progress::CancelRegistry>,
     /// Whether the client advertised `workspace.inlayHint.refreshSupport`.
     supports_inlay_hint_refresh: std::sync::atomic::AtomicBool,
+    /// Whether the client applies a workspace edit that creates a file, which
+    /// the refactors writing a new component need.
+    supports_create_files: std::sync::atomic::AtomicBool,
     /// Whether the client advertised
     /// `workspace.didChangeWatchedFiles.dynamicRegistration`, i.e. whether it
     /// will watch the source tree for us if asked.
@@ -1149,6 +1154,10 @@ impl RossiLanguageServer {
             Arc::clone(&document_manager),
         ));
 
+        let refinement_actions_provider = Arc::new(RefinementActionProvider::new(Arc::clone(
+            &cross_reference_manager,
+        )));
+
         let mut code_actions_provider = CodeActionProvider::new();
         code_actions_provider.set_workspace_symbols(Arc::clone(&workspace_symbol_provider));
         code_actions_provider.set_cross_reference_manager(Arc::clone(&cross_reference_manager));
@@ -1170,6 +1179,7 @@ impl RossiLanguageServer {
             semantic_tokens_provider: Arc::new(SemanticTokensProvider::new()),
             document_links_provider: Arc::new(document_links_provider),
             code_actions_provider: Arc::new(code_actions_provider),
+            refinement_actions_provider,
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             inlay_hints_provider,
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
@@ -1181,6 +1191,7 @@ impl RossiLanguageServer {
             supports_work_done_progress: std::sync::atomic::AtomicBool::new(false),
             progress_cancels: Arc::new(crate::progress::CancelRegistry::default()),
             supports_inlay_hint_refresh: std::sync::atomic::AtomicBool::new(false),
+            supports_create_files: std::sync::atomic::AtomicBool::new(false),
             supports_watched_files_registration: std::sync::atomic::AtomicBool::new(false),
             supports_type_hierarchy_registration: std::sync::atomic::AtomicBool::new(false),
             rodin_sync: Arc::new(parking_lot::Mutex::new(RodinSyncState::Off)),
@@ -1712,6 +1723,22 @@ impl LanguageServer for RossiLanguageServer {
                 .as_ref()
                 .and_then(|window| window.work_done_progress)
                 .unwrap_or(false),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        let workspace_edit = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.workspace_edit.as_ref());
+        self.supports_create_files.store(
+            workspace_edit.is_some_and(|edit| {
+                edit.document_changes == Some(true)
+                    && edit
+                        .resource_operations
+                        .as_ref()
+                        .is_some_and(|kinds| kinds.contains(&ResourceOperationKind::Create))
+            }),
             std::sync::atomic::Ordering::Relaxed,
         );
 
@@ -3056,9 +3083,23 @@ impl LanguageServer for RossiLanguageServer {
         let format = &self.config_manager.get().format;
         let (use_unicode, private_use_glyphs) =
             (format.use_unicode, format.emits_private_use_glyphs());
+        let printer = format.printer();
+        let creates_files = self
+            .supports_create_files
+            .load(std::sync::atomic::Ordering::Relaxed);
         let provider = Arc::clone(&self.code_actions_provider);
+        let refinements = Arc::clone(&self.refinement_actions_provider);
         let response = run_blocking(move || {
-            provider.provide_code_actions(&params, &text, use_unicode, private_use_glyphs)
+            let mut actions = provider
+                .provide_code_actions(&params, &text, use_unicode, private_use_glyphs)
+                .unwrap_or_default();
+            actions.extend(
+                refinements
+                    .provide(&params, &text, &printer, creates_files)
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction),
+            );
+            (!actions.is_empty()).then_some(actions)
         })
         .await?;
 

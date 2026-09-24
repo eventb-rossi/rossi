@@ -3356,3 +3356,96 @@ mod quick_fixes {
         );
     }
 }
+
+mod refinement_refactors {
+    //! The refactors that write a new component reach a client that can
+    //! create files, and only such a client.
+
+    use super::{TempWorkspace, notification};
+    use eventb_lsp::lsp_types::Uri;
+    use eventb_lsp::server::RossiLanguageServer;
+    use futures::StreamExt;
+    use serde_json::{Value, json};
+    use tower::{Service, ServiceExt};
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
+
+    const ABSTRACT: &str = "machine M0\nvariables x\ninvariants\n  @t x ∈ ℕ\nend\n";
+
+    /// The titles of the refactors offered on the header of `M0` by a server
+    /// initialized with client `capabilities`.
+    async fn refactor_titles(capabilities: Value) -> Vec<String> {
+        let workspace = TempWorkspace::new("refinement-refactors");
+        let uri = Uri::from_file_path(workspace.as_ref().join("M0.eventb")).unwrap();
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        tokio::spawn(async move { while socket.next().await.is_some() {} });
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": capabilities }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": ABSTRACT,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        let request = Request::build("textDocument/codeAction")
+            .id(2)
+            .params(json!({
+                "textDocument": { "uri": uri },
+                "range": {"start": {"line": 0, "character": 2}, "end": {"line": 0, "character": 2}},
+                "context": { "diagnostics": [], "only": ["refactor"] },
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("codeAction responds");
+        let (_, result) = response.into_parts();
+        let actions = result.expect("codeAction succeeds");
+        actions
+            .as_array()
+            .map(|actions| {
+                actions
+                    .iter()
+                    .map(|action| action["title"].as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refinement_is_offered_to_a_client_that_creates_files() {
+        let creates = json!({
+            "workspace": {
+                "workspaceEdit": { "documentChanges": true, "resourceOperations": ["create"] }
+            }
+        });
+        let titles = refactor_titles(creates).await;
+        assert!(
+            titles.contains(&"Create refinement M1 of M0".to_string()),
+            "{titles:?}"
+        );
+        let titles = refactor_titles(json!({})).await;
+        assert!(
+            !titles.iter().any(|title| title.starts_with("Create")),
+            "{titles:?}"
+        );
+    }
+}
