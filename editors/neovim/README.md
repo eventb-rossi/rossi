@@ -297,6 +297,8 @@ Press `<leader>rn` or `:LspRename` to rename:
 Press `<leader>ca` or `:LspCodeAction` for:
 - **Convert operators**: ASCII ↔ Unicode
 - **Add missing END**: Quick fix for parse errors
+- **Quick fixes for rule diagnostics**: declare, see or respell an unknown
+  name, relabel, reorder, parenthesize; see the language server README
 
 ### Document Symbols
 
