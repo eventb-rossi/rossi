@@ -11,6 +11,21 @@
 
 use rossi_build::{Project, ProjectComponent, RuleId, Severity, build, sc_view::ScView};
 
+/// The refinement `M2` of [`build_refinement`], with the caller's events.
+fn refinement_source(m2_events: &str) -> String {
+    // M2 refines M1 but keeps only `w`, so `v` has disappeared.
+    format!(
+        "MACHINE M2\n\
+        REFINES M1\n\
+        VARIABLES\n    w\n\
+        INVARIANTS\n    @i1 w >= 0\n\
+        EVENTS\n\
+        EVENT INITIALISATION\n    THEN\n        @a2 w := 0\n    END\n\n\
+        {m2_events}\
+        END\n"
+    )
+}
+
 /// Build a project from two `.eventb` machines: an abstract `M1` and a
 /// refinement `M2` whose body is supplied by the caller.
 fn build_refinement(m2_events: &str) -> rossi_build::BuildResult {
@@ -21,17 +36,7 @@ fn build_refinement(m2_events: &str) -> rossi_build::BuildResult {
         EVENT INITIALISATION\n    THEN\n        @a1 v := 0\n        @a2 w := 0\n    END\n\n\
         EVENT tick\n    THEN\n        @a1 v := v + 1\n    END\n\
         END\n";
-    // M2 refines M1 but keeps only `w`, so `v` has disappeared.
-    let m2 = format!(
-        "MACHINE M2\n\
-        REFINES M1\n\
-        VARIABLES\n    w\n\
-        INVARIANTS\n    @i1 w >= 0\n\
-        EVENTS\n\
-        EVENT INITIALISATION\n    THEN\n        @a2 w := 0\n    END\n\n\
-        {m2_events}\
-        END\n"
-    );
+    let m2 = refinement_source(m2_events);
     let mut components = ProjectComponent::from_eventb("M1.eventb", m1).unwrap();
     components.extend(ProjectComponent::from_eventb("M2.eventb", &m2).unwrap());
     build(&Project::new("disv", components))
@@ -82,6 +87,28 @@ fn referencing_disappeared_variable_is_an_error() {
                 found[0].message
             );
         }
+    }
+}
+
+#[test]
+fn disappeared_variable_is_anchored_at_its_use() {
+    // Each finding underlines the variable itself, so the editor marks the
+    // name to keep or replace rather than the whole clause.
+    for events in [
+        "EVENT bump\n    THEN\n        @a1 v := w + 1\n    END\n\n",
+        "EVENT peek\n    THEN\n        @a2 w := w + v\n    END\n\n",
+        "EVENT chk\n    WHERE\n        @g1 w > v\n    THEN\n        @a2 w := w + 1\n    END\n\n",
+        "EVENT thm\n    WHERE\n        theorem @g1 w > v\n    THEN\n        @a2 w := w + 1\n    END\n\n",
+    ] {
+        let r = build_refinement(events);
+        let source = refinement_source(events);
+        let finding = r
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("'v'"))
+            .unwrap_or_else(|| panic!("`v` is reported: {:#?}", r.diagnostics));
+        let span = finding.span.expect("a text clause carries a span");
+        assert_eq!(&source[span.start..span.end], "v", "{events}");
     }
 }
 
