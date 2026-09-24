@@ -638,15 +638,20 @@ fn arb_event() -> impl Strategy<Value = Event> {
 }
 
 fn arb_initialisation() -> impl Strategy<Value = InitialisationEvent> {
-    proptest::collection::vec(arb_labeled_action(), 1..3).prop_map(|actions| InitialisationEvent {
-        actions,
-        comment: None,
-        extended: false,
-        with: Vec::new(),
-        witnesses: Vec::new(),
-        span: None,
-        name_span: None,
-    })
+    (
+        proptest::collection::vec(arb_labeled_action(), 1..3),
+        proptest::collection::vec(arb_witness_predicate(), 0..2),
+        proptest::collection::vec(arb_witness_predicate(), 0..2),
+    )
+        .prop_map(|(actions, with, witnesses)| InitialisationEvent {
+            actions,
+            comment: None,
+            extended: false,
+            with,
+            witnesses,
+            span: None,
+            name_span: None,
+        })
 }
 
 fn arb_context() -> impl Strategy<Value = Component> {

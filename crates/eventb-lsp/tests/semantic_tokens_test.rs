@@ -557,3 +557,15 @@ fn lowered_actions_emit_one_token_per_position() {
         );
     }
 }
+
+#[test]
+fn initialisation_witnesses_are_highlighted() {
+    // INITIALISATION holds witnesses like any refining event: the WITH
+    // keyword and the witness's identifiers get their tokens.
+    let text = "machine M1 refines M0\nvariables x\nevents\n  event INITIALISATION\n    with\n      @e' e' = x' − 1\n    then\n      @act1 x ≔ 1\n  end\nend\n";
+    let tokens = decode_tokens(text);
+    assert!(
+        tokens.contains(&(4, 4, 4, token_type_index("keyword"))),
+        "WITH is a keyword: {tokens:?}"
+    );
+}

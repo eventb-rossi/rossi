@@ -13,8 +13,7 @@
 //! comment's own position instead, via [`crate::comment_place`]. That module
 //! enumerates the same elements as this one, so the two lists have to stay in
 //! step — every element given a comment slot here needs an `Item` anchor there,
-//! or `fmt` will drop its comments. The documented exceptions are
-//! `init.with`/`init.witnesses`, which the printer never emits.
+//! or `fmt` will drop its comments.
 //!
 //! Attachment is by byte position: an element "anchors" at the start of its
 //! span, and a comment belongs to the anchor with the greatest start not

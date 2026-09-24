@@ -1052,6 +1052,13 @@ impl PrettyPrinter {
             &event_indent,
             item_anchor(init.span),
         );
+        self.print_witness_clauses(
+            output,
+            &init.with,
+            &init.witnesses,
+            &kw_indent,
+            &item_indent,
+        );
         if !init.actions.is_empty() {
             writeln!(output, "{kw_indent}{}", self.kw("THEN", "then")).unwrap();
             self.print_action_list(output, &init.actions, &item_indent);
@@ -1063,6 +1070,29 @@ impl PrettyPrinter {
             &event_indent,
             end_anchor(init.span),
         );
+    }
+
+    /// Print an event's WITH and WITNESS clauses, each only when it holds a
+    /// witness. INITIALISATION has them too.
+    fn print_witness_clauses(
+        &self,
+        output: &mut Sink<'_>,
+        with: &[LabeledPredicate],
+        witnesses: &[LabeledPredicate],
+        kw_indent: &str,
+        item_indent: &str,
+    ) {
+        for (keyword, clause) in [
+            (("WITH", "with"), with),
+            (("WITNESS", "witness"), witnesses),
+        ] {
+            if !clause.is_empty() {
+                writeln!(output, "{kw_indent}{}", self.kw(keyword.0, keyword.1)).unwrap();
+                for lp in clause {
+                    self.print_labeled_predicate(output, lp, item_indent);
+                }
+            }
+        }
     }
 
     /// Print an event
@@ -1159,19 +1189,13 @@ impl PrettyPrinter {
             }
         }
 
-        if !event.with.is_empty() {
-            writeln!(output, "{kw_indent}{}", self.kw("WITH", "with")).unwrap();
-            for lp in &event.with {
-                self.print_labeled_predicate(output, lp, &item_indent);
-            }
-        }
-
-        if !event.witnesses.is_empty() {
-            writeln!(output, "{kw_indent}{}", self.kw("WITNESS", "witness")).unwrap();
-            for lp in &event.witnesses {
-                self.print_labeled_predicate(output, lp, &item_indent);
-            }
-        }
+        self.print_witness_clauses(
+            output,
+            &event.with,
+            &event.witnesses,
+            &kw_indent,
+            &item_indent,
+        );
 
         if !event.actions.is_empty() {
             writeln!(output, "{kw_indent}{}", self.kw("THEN", "then")).unwrap();

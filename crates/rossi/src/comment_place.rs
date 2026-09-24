@@ -16,9 +16,8 @@
 //! [`crate::comment_attach`], and the two must stay in step: an element with a
 //! comment slot there and no `Item` anchor here has its comments dropped by
 //! `fmt`. It walks them for a different purpose, though, so it deliberately
-//! differs in three ways — it excludes `init.with`/`init.witnesses` (the
-//! printer never emits them), and it adds `Header`, `Clause` and `End` anchors,
-//! which are lines rather than elements.
+//! differs: it adds `Header`, `Clause` and `End` anchors, which are lines
+//! rather than elements.
 //!
 //! The anchor is a key, not an offset to scan past: the printer does **not**
 //! emit in source order. `print_context_into` always emits SETS, CONSTANTS then
@@ -401,12 +400,12 @@ fn collect_anchors(
                 }
                 if let Some(init) = &machine.initialisation {
                     anchors.item(init.span);
+                    for predicate in init.with.iter().chain(&init.witnesses) {
+                        anchors.item(predicate.span);
+                    }
                     for action in &init.actions {
                         anchors.item(action.span);
                     }
-                    // `init.with` and `init.witnesses` are deliberately absent:
-                    // print_initialisation never emits them, so a comment filed
-                    // there would never be printed.
                     anchors.end(init.span);
                 }
                 for event in &machine.events {
