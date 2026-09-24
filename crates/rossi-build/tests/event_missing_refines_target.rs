@@ -81,3 +81,22 @@ fn missing_refines_target_emits_error_and_drops_event() {
     // INITIALISATION still resolves (M0 has one).
     assert!(v.events.contains_key("INITIALISATION"));
 }
+
+#[test]
+fn missing_refines_target_is_anchored_at_the_target() {
+    // Written as text, the target carries a span, and the error underlines
+    // it rather than the event's name.
+    let concrete = "machine M1 refines M0\nevents\n  event c refines xyz\n  end\nend\n";
+    let mut components =
+        ProjectComponent::from_eventb("M0.eventb", "machine M0\nevents\n  event a\n  end\nend\n")
+            .unwrap();
+    components.extend(ProjectComponent::from_eventb("M1.eventb", concrete).unwrap());
+    let r = build(&Project::new("k", components));
+    let error = r
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("refines target"))
+        .unwrap_or_else(|| panic!("the missing target is reported: {:?}", r.diagnostics));
+    let span = error.span.expect("a text event target carries a span");
+    assert_eq!(&concrete[span.start..span.end], "xyz");
+}
