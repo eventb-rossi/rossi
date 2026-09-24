@@ -1,11 +1,12 @@
 //! Refactorings along the refinement chain.
 //!
-//! The counterparts of Rodin's Refine wizard (`RefineMachine`): a refinement
-//! of the machine at the cursor, written to a new file next to it.
+//! The counterparts of Rodin's Refine wizard (`RefineMachine`, and
+//! `ExtendContext` for a context): a refinement of the machine, or an
+//! extension of the context, at the cursor, written to a new file next to it.
 
 use std::sync::Arc;
 
-use rossi::{Component, Event, EventStatus, InitialisationEvent, Machine, NamedElement};
+use rossi::{Component, Context, Event, EventStatus, InitialisationEvent, Machine, NamedElement};
 
 use crate::code_actions::kind_requested;
 use crate::cross_references::CrossReferenceManager;
@@ -53,37 +54,43 @@ impl RefinementActionProvider {
             line(name.start) == line(cursor)
         });
         let mut actions = Vec::new();
-        if on_header
-            && creates_files
-            && let Component::Machine(machine) = component
-        {
-            actions.extend(self.create_refinement_action(
+        if on_header && creates_files {
+            actions.extend(self.create_next_level_action(
                 &params.text_document.uri,
-                machine,
+                component,
                 printer,
             ));
         }
         actions
     }
 
-    /// Create a refinement of `machine` in a new file beside it.
-    fn create_refinement_action(
+    /// Create the next level of `component` in a new file beside it: a
+    /// refinement of a machine, an extension of a context.
+    fn create_next_level_action(
         &self,
         uri: &Uri,
-        machine: &Machine,
+        component: &Component,
         printer: &rossi::PrettyPrinter,
     ) -> Option<CodeAction> {
         let directory = uri.to_file_path()?.parent()?.to_path_buf();
-        let name = self.free_name(&machine.name, &directory);
+        let name = self.free_name(component.name(), &directory);
         let target = Uri::from_file_path(directory.join(format!("{name}.eventb")))?;
+        let (what, text) = match component {
+            Component::Machine(machine) => (
+                "refinement",
+                printer.print_machine(&refinement_of(machine, name.clone())),
+            ),
+            Component::Context(context) => {
+                let mut extension = Context::new(name.clone());
+                extension.extends = vec![context.name.clone()];
+                ("extension", printer.print_context(&extension))
+            }
+        };
         Some(CodeAction {
-            title: format!("Create refinement {name} of {}", machine.name),
+            title: format!("Create {what} {name} of {}", component.name()),
             kind: Some(CodeActionKind::REFACTOR),
             diagnostics: None,
-            edit: Some(create_file_edit(
-                target,
-                printer.print_machine(&refinement_of(machine, name)),
-            )),
+            edit: Some(create_file_edit(target, text)),
             command: None,
             is_preferred: Some(false),
             disabled: None,
