@@ -1149,6 +1149,10 @@ impl RossiLanguageServer {
             Arc::clone(&document_manager),
         ));
 
+        let mut code_actions_provider = CodeActionProvider::new();
+        code_actions_provider.set_workspace_symbols(Arc::clone(&workspace_symbol_provider));
+        code_actions_provider.set_cross_reference_manager(Arc::clone(&cross_reference_manager));
+
         Self {
             client,
             config_manager,
@@ -1164,7 +1168,7 @@ impl RossiLanguageServer {
             workspace_folders: parking_lot::Mutex::new(Vec::new()),
             semantic_tokens_provider: Arc::new(SemanticTokensProvider::new()),
             document_links_provider: Arc::new(document_links_provider),
-            code_actions_provider: Arc::new(CodeActionProvider::new()),
+            code_actions_provider: Arc::new(code_actions_provider),
             folding_range_provider: Arc::new(FoldingRangeProvider::new()),
             inlay_hints_provider,
             selection_range_provider: Arc::new(SelectionRangeProvider::new()),
@@ -3046,14 +3050,16 @@ impl LanguageServer for RossiLanguageServer {
             }
         };
 
-        // Get code actions
+        // Get code actions. A fix may parse the document and consult the
+        // workspace indexes, so keep it off the async handler threads.
         let format = &self.config_manager.get().format;
-        let response = self.code_actions_provider.provide_code_actions(
-            &params,
-            &text,
-            format.use_unicode,
-            format.emits_private_use_glyphs(),
-        );
+        let (use_unicode, private_use_glyphs) =
+            (format.use_unicode, format.emits_private_use_glyphs());
+        let provider = Arc::clone(&self.code_actions_provider);
+        let response = run_blocking(move || {
+            provider.provide_code_actions(&params, &text, use_unicode, private_use_glyphs)
+        })
+        .await?;
 
         debug!(
             "Code actions returned: {}",

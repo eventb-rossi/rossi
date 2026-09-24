@@ -178,6 +178,23 @@ impl WorkspaceSymbolProvider {
         results
     }
 
+    /// The components declaring `name` exactly, each with the kind of the
+    /// declaration: the containers of every indexed symbol spelled `name`.
+    pub fn declarations_of(&self, name: &str) -> Vec<(String, SymbolKind)> {
+        self.symbol_index
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .value()
+                    .effective()
+                    .iter()
+                    .filter(|symbol| symbol.name == name)
+                    .filter_map(|symbol| Some((symbol.container.clone()?, symbol.kind)))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     fn extract_symbols(&self, components: &[Component], uri: &str, text: &str) -> Vec<SymbolEntry> {
         if components.is_empty() {
             return vec![];

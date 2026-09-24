@@ -322,6 +322,8 @@ Implemented code actions include:
 - Normalize every operator to the configured convention and nothing else
   (`source.fixAll.rossi`, for editors' run-on-save hooks)
 - Add a missing `END` keyword when diagnostics indicate that shape
+- See or extend the workspace context that declares an undeclared constant
+  or carrier set (EB018)
 
 ### Signature Help
 
