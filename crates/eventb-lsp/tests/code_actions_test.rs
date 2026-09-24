@@ -3,6 +3,7 @@
 use eventb_lsp::code_actions::{CodeActionProvider, FIX_ALL_KIND};
 use eventb_lsp::cross_references::CrossReferenceManager;
 use eventb_lsp::diagnostics::ASCII_OPERATOR_CODE;
+use eventb_lsp::document::DocumentManager;
 use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position,
@@ -1209,13 +1210,16 @@ fn eb030_offers_nothing_when_the_clause_shares_its_last_line() {
 fn workspace_provider(files: &[(&str, &str)]) -> CodeActionProvider {
     let symbols = Arc::new(WorkspaceSymbolProvider::new());
     let components = Arc::new(CrossReferenceManager::new());
+    let documents = Arc::new(DocumentManager::new());
     for (uri, text) in files {
         symbols.update_symbols((*uri).to_string(), text);
         components.update_component((*uri).to_string(), text);
+        documents.open(uri.parse::<Uri>().unwrap(), 1, (*text).to_string());
     }
     let mut provider = CodeActionProvider::new();
     provider.set_workspace_symbols(symbols);
     provider.set_cross_reference_manager(components);
+    provider.set_document_manager(documents);
     provider
 }
 
@@ -1457,4 +1461,96 @@ fn eb018_declares_nothing_for_a_primed_name() {
             .all(|action| !action.title.starts_with("Declare")),
         "{fixes:?}"
     );
+}
+
+/// The titles of the quick fixes offered for a diagnostic `code` on `word` at
+/// `line` of the document `uri` in a workspace of `files`.
+fn fix_titles(files: &[(&str, &str)], uri: &str, code: &str, line: u32, word: &str) -> Vec<String> {
+    let text = files.iter().find(|(u, _)| *u == uri).unwrap().1;
+    let provider = workspace_provider(files);
+    let mut params = diagnostic_params(uri, word_on_line(text, line, word), code);
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) => Some(action.title),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn eb018_offers_the_names_in_scope_spelled_alike() {
+    let machine = "\
+machine m
+variables count total
+invariants
+  @t1 count ∈ ℕ
+  @t2 total ∈ ℕ
+  @i cuont ≤ total
+events
+  event add
+    any amount
+    where
+      @g1 amount ∈ ℕ
+      @g2 amuont > 0
+    then
+      @a total ≔ total + amount
+  end
+end
+";
+    let uri = "file:///m.eventb";
+    let titles = fix_titles(&[(uri, machine)], uri, "EB018", 5, "cuont");
+    assert!(
+        titles.contains(&"Change to count".to_string()),
+        "{titles:?}"
+    );
+    // A parameter is in scope inside its own event only.
+    let titles = fix_titles(&[(uri, machine)], uri, "EB018", 11, "amuont");
+    assert!(
+        titles.contains(&"Change to amount".to_string()),
+        "{titles:?}"
+    );
+    let titles = fix_titles(&[(uri, machine)], uri, "EB018", 5, "cuont");
+    assert!(
+        !titles.contains(&"Change to amount".to_string()),
+        "{titles:?}"
+    );
+
+    let context = "context c\nconstants limit\naxioms\n  @l limit ∈ ℕ\n  @m limt > 0\nend\n";
+    let uri = "file:///c.eventb";
+    let titles = fix_titles(&[(uri, context)], uri, "EB018", 4, "limt");
+    assert!(
+        titles.contains(&"Change to limit".to_string()),
+        "{titles:?}"
+    );
+}
+
+#[test]
+fn eb018_offers_nothing_spelled_too_differently() {
+    let machine = "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i y > x\nend\n";
+    let uri = "file:///m.eventb";
+    let titles = fix_titles(&[(uri, machine)], uri, "EB018", 4, "y");
+    assert!(
+        titles.iter().all(|t| !t.starts_with("Change to")),
+        "{titles:?}"
+    );
+}
+
+#[test]
+fn eb009_offers_the_components_and_abstract_events_spelled_alike() {
+    let context = "context ctx\nend\n";
+    let abstraction = "machine abs\nevents\n  event inc\n  end\n  event dec\n  end\nend\n";
+    let machine = "machine m\nrefines abs\nsees ctz\nevents\n  event inc refines inx\n  end\nend\n";
+    let files = [
+        ("file:///ctx.eventb", context),
+        ("file:///abs.eventb", abstraction),
+        ("file:///m.eventb", machine),
+    ];
+    let titles = fix_titles(&files, "file:///m.eventb", "EB009", 2, "ctz");
+    assert_eq!(titles, ["Change to ctx"]);
+    let titles = fix_titles(&files, "file:///m.eventb", "EB009", 4, "inx");
+    assert_eq!(titles, ["Change to inc"]);
 }

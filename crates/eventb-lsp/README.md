@@ -326,6 +326,8 @@ Implemented code actions include:
   or carrier set (EB018)
 - Declare an undeclared name as a constant, a variable, or a parameter of
   the event using it (EB018)
+- Replace a misspelled name with one spelled alike: a name in scope (EB018),
+  or a component or abstract event nothing declares (EB009)
 
 ### Signature Help
 
