@@ -1656,3 +1656,56 @@ fn eb022_relabels_clear_of_the_inherited_labels() {
         machine.replace("@grd1 3 = 3", "@grd3 3 = 3")
     );
 }
+
+#[test]
+fn eb020_moves_past_a_comment_holding_wide_characters() {
+    // Each `≔` in the comment is three bytes but one character: a fix that
+    // mixed the two would misplace every line it reads.
+    let uri = "file:///c0.eventb";
+    let text = "context c0\n// c ≔ d ≔ e\nconstants c d\naxioms\n  @a1 c = d\n  @a2 d > 0\n  @a3 c ∈ ℕ\nend\n";
+    let mut params = diagnostic_params(uri, word_on_line(text, 4, "c"), "EB020");
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    let actions = CodeActionProvider::new()
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Move").expect("a move fix for EB020");
+    assert_eq!(
+        applied(text, uri, fix),
+        text.replace(
+            "  @a1 c = d\n  @a2 d > 0\n  @a3 c ∈ ℕ\n",
+            "  @a3 c ∈ ℕ\n  @a1 c = d\n  @a2 d > 0\n"
+        )
+    );
+}
+
+#[test]
+fn eb020_moves_the_typing_predicate_above_the_read() {
+    let uri = "file:///c0.eventb";
+    // (document, line of the untyped read, name, expected title, expected text)
+    let cases = [
+        (
+            "context c0\nconstants c d\naxioms\n  @a1 c = d\n  @a2 d > 0\n  @a3 c ∈ ℕ\nend\n",
+            3,
+            "c",
+            "Move @a3 above @a1",
+            "context c0\nconstants c d\naxioms\n  @a3 c ∈ ℕ\n  @a1 c = d\n  @a2 d > 0\nend\n",
+        ),
+        (
+            "machine m\nevents\n  event e\n    any p q\n    where\n      @g1 p = q\n      // types it\n      @g2 q ⊆ ℕ\n  end\nend\n",
+            5,
+            "p",
+            "Move @g2 above @g1",
+            "machine m\nevents\n  event e\n    any p q\n    where\n      // types it\n      @g2 q ⊆ ℕ\n      @g1 p = q\n  end\nend\n",
+        ),
+    ];
+    for (text, line, name, title, expected) in cases {
+        let mut params = diagnostic_params(uri, word_on_line(text, line, name), "EB020");
+        params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+        let actions = CodeActionProvider::new()
+            .provide_code_actions(&params, text, true, false)
+            .unwrap_or_default();
+        let fix = action_titled(&actions, "Move").expect("a move fix for EB020");
+        assert_eq!(fix.title, title);
+        assert_eq!(applied(text, uri, fix), expected);
+    }
+}

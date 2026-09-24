@@ -428,6 +428,26 @@ fn label_scope(stem: &str, masked: &str, item: usize) -> std::ops::Range<usize> 
     }
 }
 
+/// Whether `pred` has a top-level conjunct of the shape that types `name`
+/// on its own: `name ∈ E`, `name ⊆ E` or `name = E`, the name bare on the
+/// left.
+fn types_by_shape(pred: &rossi::Predicate, name: &str) -> bool {
+    use rossi::formula::PredicateKind;
+    use rossi::formula::tag::{AssocPredOp, RelationalOp};
+    match pred.kind() {
+        PredicateKind::Associative {
+            op: AssocPredOp::LAnd,
+            children,
+        } => children.iter().any(|child| types_by_shape(child, name)),
+        PredicateKind::Relational {
+            op: RelationalOp::In | RelationalOp::SubsetEq | RelationalOp::Equal,
+            left,
+            ..
+        } => matches!(left.kind(), rossi::formula::ExpressionKind::FreeIdentifier(n) if n == name),
+        _ => false,
+    }
+}
+
 /// The optimal string alignment distance between `a` and `b`: edits of one
 /// character, a swap of two adjacent ones counting as one edit.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -898,6 +918,24 @@ impl CodeActionProvider {
             );
         }
 
+        // Move the predicate typing a name above the one reading it (EB020).
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::UnknownType.code()))
+        {
+            actions.extend(
+                self.create_move_typing_action(
+                    &params.text_document.uri,
+                    diagnostic,
+                    text,
+                    components(),
+                )
+                .map(CodeActionOrCommand::CodeAction),
+            );
+        }
+
         // Keep a variable the refinement dropped but still uses (EB025).
         for diagnostic in params
             .context
@@ -1162,6 +1200,127 @@ impl CodeActionProvider {
             kind: Some(CodeActionKind::QUICKFIX),
             diagnostics: Some(vec![diagnostic.clone()]),
             edit: Some(single_edit(uri, range, label)),
+            command: None,
+            is_preferred: Some(true),
+            disabled: None,
+            data: None,
+        })
+    }
+
+    /// Quick fix for EB020 (a predicate reads names before any predicate of
+    /// its list types them): move the predicate that types one of them above
+    /// the one reading it, with the comment lines written above each kept
+    /// with its predicate.
+    ///
+    /// The typing predicate is the first later one in the same list (axioms,
+    /// invariants, or an event's guards) with a conjunct of the typing shape
+    /// `n ∈ E`, `n ⊆ E` or `n = E` for a name the reading predicate uses; failing
+    /// that, the first later one using the name the finding underlines.
+    fn create_move_typing_action(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+    ) -> Option<CodeAction> {
+        let name = text_in_range(text, diagnostic.range)?;
+        let offset = crate::position::position_to_offset(text, diagnostic.range.start)?;
+        let lists: Vec<&[rossi::LabeledPredicate]> =
+            match crate::component_util::component_at_offset(components, offset)? {
+                Component::Context(context) => vec![&context.axioms],
+                Component::Machine(machine) => std::iter::once(machine.invariants.as_slice())
+                    .chain(machine.events.iter().map(|event| event.guards.as_slice()))
+                    .collect(),
+            };
+        let (list, read) = lists.into_iter().find_map(|list| {
+            let index = list
+                .iter()
+                .position(|item| item.span.is_some_and(|span| span.contains(offset)))?;
+            Some((list, index))
+        })?;
+        let reading = &list[read];
+        let later = &list[read + 1..];
+        let typing = later
+            .iter()
+            .find(|item| {
+                reading
+                    .predicate
+                    .free_identifiers()
+                    .iter()
+                    .any(|read| types_by_shape(&item.predicate, read))
+            })
+            .or_else(|| {
+                later
+                    .iter()
+                    .find(|item| item.predicate.free_identifiers().iter().any(|n| n == name))
+            })?;
+
+        let masked = rossi::comments::mask_comments(text);
+        let (raw_lines, masked_lines): (Vec<&str>, Vec<&str>) =
+            (text.lines().collect(), masked.lines().collect());
+        let line_of = |offset: usize| text[..offset].matches('\n').count();
+        // Whole lines move, so each predicate must have its lines to itself.
+        let owns_lines = |span: rossi::ast::Span| {
+            masked[line_start(&masked, span.start)..span.start]
+                .trim()
+                .is_empty()
+                && masked[span.end..]
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+        };
+        // A span may run on over a comment written after the predicate; the
+        // predicate ends at its last character of code.
+        let code = |span: rossi::ast::Span| rossi::ast::Span {
+            start: span.start,
+            end: span.start + masked[span.start..span.end].trim_end().len(),
+        };
+        let (read_span, typing_span) = (code(reading.span?), code(typing.span?));
+        if !owns_lines(read_span) || !owns_lines(typing_span) {
+            return None;
+        }
+        let destination = section_start(text, &raw_lines, &masked_lines, line_of(read_span.start));
+        let first = section_start(text, &raw_lines, &masked_lines, line_of(typing_span.start));
+        let last = line_of(typing_span.end);
+        if first <= line_of(read_span.end) {
+            return None;
+        }
+        let moved: String = raw_lines[first..=last]
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let edits = vec![
+            TextEdit {
+                range: Range::new(
+                    Position::new(destination as u32, 0),
+                    Position::new(destination as u32, 0),
+                ),
+                new_text: moved,
+            },
+            TextEdit {
+                range: Range::new(
+                    Position::new(first as u32, 0),
+                    Position::new(last as u32 + 1, 0),
+                ),
+                new_text: String::new(),
+            },
+        ];
+        let label = |item: &rossi::LabeledPredicate| {
+            item.label
+                .as_deref()
+                .map_or_else(|| "the predicate".to_string(), |label| format!("@{label}"))
+        };
+        Some(CodeAction {
+            title: format!("Move {} above {}", label(typing), label(reading)),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![diagnostic.clone()]),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::from([(uri.clone(), edits)])),
+                document_changes: None,
+                change_annotations: None,
+            }),
             command: None,
             is_preferred: Some(true),
             disabled: None,
