@@ -348,6 +348,8 @@ Implemented code actions include:
   (`refactor`; needs a client that creates files)
 - Create an extension of the context at the cursor in a new file
   (`refactor`; needs a client that creates files)
+- Refine the abstract events a refinement leaves unrefined, with extended
+  events (`refactor`, on the machine header)
 
 ### Signature Help
 
