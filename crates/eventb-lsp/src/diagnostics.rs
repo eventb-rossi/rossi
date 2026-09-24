@@ -488,22 +488,40 @@ fn component_kind_word(kind: ComponentKind) -> &'static str {
 /// target would look missing. Even with a workspace, Rodin-XML components
 /// (`.buc`/`.bcc`, …) aren't `.eventb` and so aren't indexed, so a reference to
 /// one can be a false positive; the diagnostic is an Error to match `rossi
-/// validate`, accepting that residual risk. Anchored on the clause keyword
-/// (per-name spans aren't recorded), with the missing target named in the message.
+/// validate`, accepting that residual risk. Anchored on the missing target's
+/// name, or on the clause keyword when the name cannot be located, with the
+/// target named in the message.
 pub(crate) fn cross_reference_diagnostics(
     components: &[rossi::Component],
     exists: impl Fn(ComponentKind, &str) -> bool,
     text: &str,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    // The AST keeps no span per target, so the names are located in the
+    // text, once, and matched to their component by position.
+    let mut occurrences = None;
     for component in components {
         for (edge, target) in component_references(component) {
             let kind = edge.target_kind();
             if exists(kind, target) {
                 continue;
             }
+            let occurrences = occurrences
+                .get_or_insert_with(|| rossi::component_name_occurrences_with_sites(text));
+            let name_span = occurrences.iter().find_map(|occurrence| {
+                let span = occurrence.span?;
+                (occurrence.name == target
+                    && occurrence.site == rossi::ComponentNameSite::Dependency(edge)
+                    && component
+                        .span()
+                        .is_some_and(|within| within.contains(span.start)))
+                .then_some(span)
+            });
             out.push(lsp_diagnostic(
-                clause_keyword_range(component, edge_keyword(edge), text),
+                name_span.map_or_else(
+                    || clause_keyword_range(component, edge_keyword(edge), text),
+                    |span| crate::position::span_to_range(&span, text),
+                ),
                 rule_severity(RuleId::CrossReferenceNotFound),
                 Some(NumberOrString::String(
                     RuleId::CrossReferenceNotFound.code().to_string(),
@@ -601,7 +619,7 @@ mod tests {
     };
     use crate::document::ParsedDocument;
     use crate::lsp_types::{
-        Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString, Position,
+        Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString, Position, Range,
     };
     use rossi::deps::{ComponentKind, Cycle, EdgeKind};
     use rossi_build::RuleId;
@@ -1212,6 +1230,22 @@ mod tests {
             diags[0].message.contains("context `C`"),
             "{}",
             diags[0].message
+        );
+    }
+
+    #[test]
+    fn unknown_target_is_anchored_at_its_name() {
+        // Only `D` is missing, so only `D` is underlined: in the second
+        // machine of the file, and not the keyword of its clause.
+        let text = "MACHINE m\nSEES C\nEND\nMACHINE n\nSEES C D\nEND\n";
+        let components = rossi::parse_components_with_recovery(text)
+            .component
+            .unwrap();
+        let diags = cross_reference_diagnostics(&components, |_k, name| name != "D", text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].range,
+            Range::new(Position::new(4, 7), Position::new(4, 8))
         );
     }
 
