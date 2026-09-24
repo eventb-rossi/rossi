@@ -189,6 +189,10 @@ it back as `previousResultId` answers `unchanged` for exactly as long as the
 report says the same thing, including when a proof-status, animate or
 workspace-graph change moved the findings without touching the file. A closed
 file is rechecked only when one of those inputs, or the file itself, changed.
+A file the sweep no longer reaches (deleted, or its folder renamed) is
+answered once with an empty report while the client still holds findings for
+it, since a client keeps the last report for a URI until another one replaces
+it.
 
 ### Document Symbols
 

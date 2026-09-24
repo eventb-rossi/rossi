@@ -2705,7 +2705,7 @@ impl LanguageServer for RossiLanguageServer {
         self.workspace_scan_state.wait().await;
 
         let analyzer = self.analyzer.clone();
-        let previous: std::collections::HashMap<Uri, String> = params
+        let mut previous: std::collections::HashMap<Uri, String> = params
             .previous_result_ids
             .into_iter()
             .map(|previous| (previous.uri, previous.value))
@@ -2719,12 +2719,23 @@ impl LanguageServer for RossiLanguageServer {
                 uris.binary_search_by(|swept| swept.as_str().cmp(uri.as_str()))
                     .is_ok()
             });
-            uris.into_iter()
+            let full_report = |uri, result_id, items| {
+                WorkspaceDocumentDiagnosticReport::Full(WorkspaceFullDocumentDiagnosticReport {
+                    uri,
+                    version: None,
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        result_id,
+                        items,
+                    },
+                })
+            };
+            let mut items = uris
+                .into_iter()
                 .filter_map(|uri| {
                     let (result_id, items) = analyzer.pull_report(&uri)?;
                     let unchanged = result_id
                         .as_deref()
-                        .zip(previous.get(&uri).map(String::as_str))
+                        .zip(previous.remove(&uri))
                         .is_some_and(|(current, seen)| current == seen);
                     Some(if unchanged {
                         WorkspaceDocumentDiagnosticReport::Unchanged(
@@ -2738,19 +2749,22 @@ impl LanguageServer for RossiLanguageServer {
                             },
                         )
                     } else {
-                        WorkspaceDocumentDiagnosticReport::Full(
-                            WorkspaceFullDocumentDiagnosticReport {
-                                uri,
-                                version: None,
-                                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                                    result_id,
-                                    items,
-                                },
-                            },
-                        )
+                        full_report(uri, result_id, items)
                     })
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            // What `previous` still holds, the sweep no longer reports: a file
+            // deleted, or in a renamed folder. A client keeps the last report
+            // for a URI until another one replaces it, so an empty report
+            // retracts its findings, once.
+            let empty = report_result_id(&[]);
+            items.extend(
+                previous
+                    .into_iter()
+                    .filter(|(_, seen)| Some(seen) != empty.as_ref())
+                    .map(|(uri, _)| full_report(uri, empty.clone(), Vec::new())),
+            );
+            items
         })
         .await?;
 
