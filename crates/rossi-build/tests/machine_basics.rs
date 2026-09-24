@@ -11,6 +11,7 @@
 //!   the long form in emitted actions.
 //! - `primed_declarations`: a variable or event parameter carrying the
 //!   after-state prime is refused and dropped.
+//! - `undeclared_identifiers`: EB018 in an action underlines the name.
 
 mod invariants_variables {
     //! M1: smallest useful machine — SEES a context, declares variables, and
@@ -944,5 +945,59 @@ END
 "#,
         );
         assert!(r.is_ok(), "diagnostics: {:?}", r.diagnostics);
+    }
+}
+
+mod undeclared_identifiers {
+    //! EB018 underlines the name nothing declares, in an action as in a
+    //! predicate, so the editor marks the word to fix and a quick fix can
+    //! read it from the range.
+
+    use rossi_build::{Project, ProjectComponent, RuleId, build};
+
+    #[test]
+    fn undeclared_names_in_actions_are_anchored_at_their_use() {
+        let source = "\
+machine m
+variables x
+invariants
+  @i x ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a x ≔ 0
+  end
+  event read
+    then
+      @r x ≔ z + 1
+  end
+  event write
+    then
+      @w w ≔ 1
+  end
+  event primed
+    then
+      @p x :∣ x' = y'
+  end
+end
+";
+        let components = ProjectComponent::from_eventb("m.eventb", source).unwrap();
+        let result = build(&Project::new("p", components));
+        let mut underlined: Vec<(&str, &str)> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.rule_id == Some(RuleId::UndeclaredIdentifier))
+            .map(|d| {
+                let span = d.span.expect("EB018 carries a span");
+                (d.origin.as_str(), &source[span.start..span.end])
+            })
+            .collect();
+        underlined.sort();
+        assert_eq!(
+            underlined,
+            [("m.primed.p", "y'"), ("m.read.r", "z"), ("m.write.w", "w")],
+            "{:?}",
+            result.diagnostics
+        );
     }
 }

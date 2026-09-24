@@ -130,12 +130,11 @@ pub fn first_free_primed_in_predicate(pred: &Predicate) -> Option<(String, Optio
     v.found
 }
 
-/// First free primed name on an action's read side. No span: the SC anchors
-/// an action diagnostic on the whole action, so its callers have nothing to
-/// do with one. The primed declarations of a such-that assignment bind in
-/// the model, so an after-state read of an assigned variable resolves and is
-/// not reported.
-pub fn first_free_primed_in_action_rhs(assignment: &Assignment) -> Option<String> {
+/// First free primed name on an action's read side, with its span, the
+/// action counterpart of [`first_free_primed_in_predicate`]. The primed
+/// declarations of a such-that assignment bind in the model, so an
+/// after-state read of an assigned variable resolves and is not reported.
+pub fn first_free_primed_in_action_rhs(assignment: &Assignment) -> Option<(String, Option<Span>)> {
     if !assignment
         .free_identifiers()
         .iter()
@@ -145,7 +144,7 @@ pub fn first_free_primed_in_action_rhs(assignment: &Assignment) -> Option<String
     }
     let mut v = PrimedFinder { found: None };
     let _ = occurrences::walk_assignment(assignment, &mut Vec::new(), &mut v);
-    v.found.map(|(name, _)| name)
+    v.found
 }
 
 /// Locate the first identifier in `pred` that appears in `forbidden` and
@@ -199,8 +198,25 @@ pub fn first_forbidden_identifier_in_action_rhs(
 /// that scan flagged. `None` if `name` does not occur free (or the
 /// occurrence carries no span, as for Rodin-XML imports).
 pub fn usage_span_in_predicate(pred: &Predicate, name: &str) -> Option<Span> {
-    let mut v = UsageSpanFinder { name, span: None };
+    let mut v = UsageSpanFinder {
+        name,
+        span: None,
+        targets: false,
+    };
     let _ = occurrences::walk_predicate(pred, &mut Vec::new(), &mut v);
+    v.span
+}
+
+/// The action counterpart of [`usage_span_in_predicate`]: the first free
+/// read of `name` on the action's read side, or `name` as an assignment
+/// target, which is where an undeclared left-hand variable is written.
+pub fn usage_span_in_action(assignment: &Assignment, name: &str) -> Option<Span> {
+    let mut v = UsageSpanFinder {
+        name,
+        span: None,
+        targets: true,
+    };
+    let _ = occurrences::walk_assignment(assignment, &mut Vec::new(), &mut v);
     v.span
 }
 
@@ -340,13 +356,16 @@ impl occurrences::OccurrenceVisitor for ForbiddenFinder<'_> {
 struct UsageSpanFinder<'a> {
     name: &'a str,
     span: Option<Span>,
+    /// Whether an assignment target counts as an occurrence too.
+    targets: bool,
 }
 
 impl occurrences::OccurrenceVisitor for UsageSpanFinder<'_> {
     fn visit(&mut self, occ: Occurrence<'_>) -> ControlFlow<()> {
         // Match the raw occurrence text, mirroring `FreeFinder` (which reports
         // the unstripped name), so we anchor on the same occurrence it flagged.
-        if free_usage(&occ) && occ.name == self.name {
+        let counted = free_usage(&occ) || (self.targets && occ.role == Role::WriteTarget);
+        if counted && occ.name == self.name {
             self.span = occ.span;
             return ControlFlow::Break(());
         }
@@ -559,9 +578,7 @@ mod tests {
         let bound = rossi::parse_action_str("x :∣ x' = x + 1").unwrap();
         assert!(first_free_primed_in_action_rhs(&bound).is_none());
         let free = rossi::parse_action_str("x :∣ y' = x + 1").unwrap();
-        assert_eq!(
-            first_free_primed_in_action_rhs(&free).as_deref(),
-            Some("y'")
-        );
+        let (name, _) = first_free_primed_in_action_rhs(&free).expect("y' is free here");
+        assert_eq!(name, "y'");
     }
 }
