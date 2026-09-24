@@ -1776,3 +1776,18 @@ fn a_grouping_that_leaves_the_formula_broken_is_not_offered() {
         .collect();
     assert_eq!(titles, ["Parenthesize a = 2 ∧ a = 3"]);
 }
+
+#[test]
+fn eb031_replaces_the_separator_with_a_space() {
+    let uri = "file:///c.eventb";
+    let text = "context c\nconstants a\u{3000}b\nend\n";
+    let separator = Range::new(Position::new(1, 11), Position::new(1, 12));
+    let mut params = diagnostic_params(uri, separator, "EB031");
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    let actions = CodeActionProvider::new()
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Replace").expect("a fix for EB031");
+    assert_eq!(fix.title, "Replace U+3000 with a space");
+    assert_eq!(applied(text, uri, fix), "context c\nconstants a b\nend\n");
+}
