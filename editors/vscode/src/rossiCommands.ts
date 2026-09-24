@@ -10,7 +10,6 @@ import {
     Position,
     ProgressLocation,
     Range,
-    TextDocument,
     Uri,
     env,
     window,
@@ -92,8 +91,8 @@ export class RossiCommandController {
     private readonly output: OutputChannel;
     private readonly cliPath: string;
     private readonly waitForLanguageServer?: () => Promise<void>;
-    /** Cancellation handle for the in-flight validate-on-save run, if any. */
-    private onSaveRun?: CancellationTokenSource;
+    /** Cancellation handles for the in-flight quiet validate runs, by folder. */
+    private readonly onSaveRuns = new Map<string, CancellationTokenSource>();
 
     constructor(
         diagnostics: DiagnosticCollection,
@@ -351,12 +350,13 @@ export class RossiCommandController {
         }
     }
 
-    // Validate the project a just-saved .eventb file belongs to and refresh the
-    // diagnostics. Unlike `validateWorkspace`, this runs quietly: it spawns the
-    // CLI directly (no progress notification) and shows no completion popups, so
-    // an automatic pass never interrupts editing.
+    // Validate the project directory of a just-saved .eventb file, or of proof
+    // files that changed, and refresh the diagnostics. Unlike
+    // `validateWorkspace`, this runs quietly: it spawns the CLI directly (no
+    // progress notification) and shows no completion popups, so an automatic
+    // pass never interrupts editing.
     //
-    // The saved file's *directory* is handed to `rossi validate` as a single
+    // The *directory* is handed to `rossi validate` as a single
     // argument so the CLI loads it as one project and runs the static checker
     // and the project lints across the components. The language server runs the
     // same static check, so what this adds is the project lints
@@ -369,16 +369,12 @@ export class RossiCommandController {
     // assumes a project's components are colocated in one directory (as
     // `rossi import`/New Project produce); a component split into a sibling
     // subdirectory would not see its cross-referenced siblings here.
-    async validateWorkspaceOnSave(document: TextDocument): Promise<void> {
-        if (document.uri.scheme !== 'file' || !isEventBTextFile(document.uri.fsPath)) {
-            return;
-        }
-        const projectDir = path.dirname(document.uri.fsPath);
-
-        // A newer save supersedes any in-flight run; the latest save wins.
-        this.onSaveRun?.cancel();
+    async validateProjectQuietly(projectDir: string): Promise<void> {
+        // A newer run for the same folder supersedes an in-flight one; runs for
+        // other folders are left to finish.
+        this.onSaveRuns.get(projectDir)?.cancel();
         const source = new CancellationTokenSource();
-        this.onSaveRun = source;
+        this.onSaveRuns.set(projectDir, source);
 
         try {
             const toolPath = this.resolveToolPath();
@@ -398,8 +394,8 @@ export class RossiCommandController {
             const message = error instanceof Error ? error.message : String(error);
             this.output.appendLine(`Validate on save failed: ${message}`);
         } finally {
-            if (this.onSaveRun === source) {
-                this.onSaveRun = undefined;
+            if (this.onSaveRuns.get(projectDir) === source) {
+                this.onSaveRuns.delete(projectDir);
             }
             source.dispose();
         }
@@ -869,31 +865,51 @@ export function registerRossiCommands(
     );
 
     // On by default (`rossi.validate.onSave`): re-run the full project
-    // validation when an .eventb file is saved. The setting is read at save time
-    // so toggling it takes effect without a window reload. Saves are debounced so
-    // a burst — Save All, format-on-save, or the extension's own programmatic
-    // saves — coalesces into a single validate of the last-saved file's project
-    // instead of spawning (and then cancelling) one CLI run per file.
-    let saveDebounce: ReturnType<typeof setTimeout> | undefined;
-    const onSave = workspace.onDidSaveTextDocument((document) => {
-        if (!workspace.getConfiguration('rossi').get<boolean>('validate.onSave', true)) {
-            return;
+    // validation of a folder when an .eventb file in it is saved, and when its
+    // `.bpo`, `.bpr` or `.bps` files change. Validation reads proof status from
+    // those, and something other than a save writes them: the language server
+    // mirroring a Rodin session's proofs back when Rodin closes, `rossi prove`,
+    // a checkout. The setting is read at run time so toggling it takes effect
+    // without a window reload. Requests are debounced so a burst — Save All,
+    // format-on-save, the extension's own programmatic saves, a mirror — runs
+    // one validate per folder instead of spawning (and then cancelling) one CLI
+    // run per file. A folder with no .eventb file is not validated, which leaves
+    // out the Rodin workspace under `.rossi` that Rodin writes while proving.
+    const pendingDirs = new Set<string>();
+    let validateDebounce: ReturnType<typeof setTimeout> | undefined;
+    const queueValidation = (uri: Uri) => {
+        pendingDirs.add(path.dirname(uri.fsPath));
+        if (validateDebounce) {
+            clearTimeout(validateDebounce);
         }
-        if (document.uri.scheme !== 'file' || !isEventBTextFile(document.uri.fsPath)) {
-            return;
-        }
-        if (saveDebounce) {
-            clearTimeout(saveDebounce);
-        }
-        saveDebounce = setTimeout(() => {
-            saveDebounce = undefined;
-            void controller.validateWorkspaceOnSave(document);
+        validateDebounce = setTimeout(async () => {
+            validateDebounce = undefined;
+            const dirs = [...pendingDirs];
+            pendingDirs.clear();
+            if (!workspace.getConfiguration('rossi').get<boolean>('validate.onSave', true)) {
+                return;
+            }
+            for (const dir of dirs) {
+                const names = await fs.readdir(dir).catch(() => [] as string[]);
+                if (names.some(isEventBTextFile)) {
+                    await controller.validateProjectQuietly(dir);
+                }
+            }
         }, ON_SAVE_DEBOUNCE_MS);
+    };
+    const onSave = workspace.onDidSaveTextDocument((document) => {
+        if (document.uri.scheme === 'file' && isEventBTextFile(document.uri.fsPath)) {
+            queueValidation(document.uri);
+        }
     });
-    context.subscriptions.push(onSave, {
+    const proofFiles = workspace.createFileSystemWatcher('**/*.{bpo,bpr,bps}');
+    proofFiles.onDidCreate(queueValidation);
+    proofFiles.onDidChange(queueValidation);
+    proofFiles.onDidDelete(queueValidation);
+    context.subscriptions.push(onSave, proofFiles, {
         dispose: () => {
-            if (saveDebounce) {
-                clearTimeout(saveDebounce);
+            if (validateDebounce) {
+                clearTimeout(validateDebounce);
             }
         },
     });
