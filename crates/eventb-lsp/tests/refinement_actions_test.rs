@@ -172,3 +172,19 @@ fn no_file_is_created_for_a_client_that_cannot() {
     // Nor away from the header.
     assert!(refactors(&provider, uri, ABSTRACT, 3, 3, true).is_empty());
 }
+
+#[test]
+fn an_extension_is_created_the_way_rodin_extends() {
+    let uri = "file:///ws/C0.eventb";
+    let context = "context C0\nsets S\nconstants k\naxioms\n  @k k ∈ S\nend\n";
+    let provider = provider(&[(uri, context)]);
+    let actions = refactors(&provider, uri, context, 0, 3, true);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Create extension"))
+        .expect("offered on the context header");
+    assert_eq!(action.title, "Create extension C1 of C0");
+    let (created_uri, text) = created(action);
+    assert_eq!(created_uri, "file:///ws/C1.eventb");
+    assert_eq!(text, "context C1 extends C0\nend\n");
+}

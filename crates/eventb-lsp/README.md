@@ -346,6 +346,8 @@ Implemented code actions include:
 - Create a refinement of the machine at the cursor in a new file, as Rodin's
   Refine wizard does: the same SEES, every variable, each event extended
   (`refactor`; needs a client that creates files)
+- Create an extension of the context at the cursor in a new file
+  (`refactor`; needs a client that creates files)
 
 ### Signature Help
 
