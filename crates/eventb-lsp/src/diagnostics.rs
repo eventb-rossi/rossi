@@ -786,6 +786,11 @@ mod tests {
                 "EB032",
                 (Position::new(6, 8), Position::new(6, 13)),
             ),
+            (
+                "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x = 1 ∧ x = 2 ∨ x = 3\nEND\n",
+                "EB005",
+                (Position::new(4, 24), Position::new(4, 25)),
+            ),
         ] {
             let error = rossi::parse(text).expect_err("must fail strict parsing");
             let diagnostic = parse_error_to_diagnostic(&error, text);
