@@ -333,6 +333,8 @@ Implemented code actions include:
   extended event inherits (EB022)
 - Move the predicate that types a name above the one that reads it first
   (EB020)
+- Parenthesize operators mixed without the parentheses Event-B requires,
+  either way the parser says resolves it (EB005)
 
 ### Signature Help
 
