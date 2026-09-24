@@ -478,15 +478,7 @@ export class RossiCommandController {
         if (scopeDir) {
             // Scoped refresh: drop only this project's previous diagnostics so a
             // save in one project never erases another project's results.
-            const stale: Uri[] = [];
-            this.diagnostics.forEach((uri) => {
-                if (isPathInside(uri.fsPath, scopeDir)) {
-                    stale.push(uri);
-                }
-            });
-            for (const uri of stale) {
-                this.diagnostics.delete(uri);
-            }
+            this.forgetValidationUnder(scopeDir);
         } else {
             this.diagnostics.clear();
         }
@@ -549,6 +541,19 @@ export class RossiCommandController {
 
         for (const [uri, diagnostics] of byUri.entries()) {
             this.diagnostics.set(Uri.parse(uri), diagnostics);
+        }
+    }
+
+    // Drop the validate diagnostics on `root` and on every path under it.
+    forgetValidationUnder(root: string): void {
+        const stale: Uri[] = [];
+        this.diagnostics.forEach((uri) => {
+            if (isPathInside(uri.fsPath, root)) {
+                stale.push(uri);
+            }
+        });
+        for (const uri of stale) {
+            this.diagnostics.delete(uri);
         }
     }
 
@@ -892,6 +897,13 @@ export function registerRossiCommands(
             }
         },
     });
+
+    // A deleted path takes its validate diagnostics along, since no later save
+    // in a folder that is gone refreshes them. A folder deleted or renamed is
+    // reported as one event for the folder, hence every path is watched.
+    const deletions = workspace.createFileSystemWatcher('**/*', true, true, false);
+    deletions.onDidDelete((uri) => controller.forgetValidationUnder(uri.fsPath));
+    context.subscriptions.push(deletions);
 }
 
 // The starter project keeps one component per .eventb file, matching the
