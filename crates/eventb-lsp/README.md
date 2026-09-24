@@ -335,6 +335,7 @@ Implemented code actions include:
   (EB020)
 - Parenthesize operators mixed without the parentheses Event-B requires,
   either way the parser says resolves it (EB005)
+- Replace a separator Camille cannot read with an ordinary space (EB031)
 
 ### Signature Help
 

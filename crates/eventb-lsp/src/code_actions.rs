@@ -1069,6 +1069,36 @@ impl CodeActionProvider {
             }
         }
 
+        // Write an ordinary space for a separator Camille cannot read (EB031).
+        for diagnostic in params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::NonPortableWhitespace.code()))
+        {
+            let mut separator = text_in_range(text, diagnostic.range)
+                .into_iter()
+                .flat_map(str::chars);
+            if let (Some(c), None) = (separator.next(), separator.next())
+                && rossi::keywords::camille_unreadable_separator(c)
+            {
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Replace U+{:04X} with a space", c as u32),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![diagnostic.clone()]),
+                    edit: Some(single_edit(
+                        &params.text_document.uri,
+                        diagnostic.range,
+                        " ".to_string(),
+                    )),
+                    command: None,
+                    is_preferred: Some(true),
+                    disabled: None,
+                    data: None,
+                }));
+            }
+        }
+
         // Rewrite an ASCII operator spelling flagged under
         // rossi.format.enforceUnicode to its Unicode form — for a diagnostic
         // that is still current, i.e. whose range is one of the operators the
