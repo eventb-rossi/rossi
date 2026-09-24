@@ -485,3 +485,109 @@ fn an_extended_event_with_no_clause_gets_them_written() {
         "machine M1 refines M0\nvariables x\nevents\n  event dec refines dec\n    any n\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n    then\n      @a1 x ≔ x − n\n  end\nend\n"
     );
 }
+
+#[test]
+fn a_repeating_event_is_extended_past_wide_characters() {
+    // Each `≔` in the comment is three bytes but one character: a refactor
+    // that mixed the two would drop the wrong lines.
+    let commented = REPEATS_DEC.replace(
+        "  event dec refines dec\n",
+        "  // ≔≔≔≔\n  event dec refines dec\n",
+    );
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, commented.as_str())];
+    let actions = refactors(&provider(&files), uri, &commented, 10, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Extend"))
+        .expect("offered on the event's header");
+    let extended = applied(&commented, uri, action);
+    assert!(
+        extended.contains(
+            "  // ≔≔≔≔\n  event dec extends dec\n    any m\n    where\n      @g3 m = n\n"
+        ),
+        "{extended}"
+    );
+    assert_eq!(
+        check_errors(&[("M0", BASE), ("M1", &extended)]),
+        Vec::<String>::new()
+    );
+}
+
+const REPEATS_DEC: &str = "\
+machine M1 refines M0
+variables x y
+invariants
+  @t y ∈ ℕ
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @b y ≔ 0
+  end
+  event dec refines dec
+    any n m
+    where
+      @g1 n ∈ ℕ
+      @g2 x > n
+      @g3 m = n
+    then
+      @a1 x ≔ x − n
+      @b1 y ≔ m
+  end
+end
+";
+
+#[test]
+fn a_refining_event_repeating_its_abstract_one_becomes_extended() {
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, REPEATS_DEC)];
+    let actions = refactors(&provider(&files), uri, REPEATS_DEC, 9, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Extend"))
+        .expect("offered on the event's header");
+    assert_eq!(action.title, "Extend dec instead of repeating it");
+    let extended = applied(REPEATS_DEC, uri, action);
+    assert_eq!(
+        extended,
+        REPEATS_DEC.replace(
+            "  event dec refines dec\n    any n m\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n      @g3 m = n\n    then\n      @a1 x ≔ x − n\n      @b1 y ≔ m\n",
+            "  event dec extends dec\n    any m\n    where\n      @g3 m = n\n    then\n      @b1 y ≔ m\n",
+        )
+    );
+    assert_eq!(
+        check_errors(&[("M0", BASE), ("M1", &extended)]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_event_that_changes_its_abstract_one_is_not_extended() {
+    // `@g2` is strengthened, so the abstract guard is not repeated.
+    let changed = REPEATS_DEC.replace("@g2 x > n", "@g2 x > n + 1");
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, changed.as_str())];
+    let actions = refactors(&provider(&files), uri, &changed, 9, 9, false);
+    assert!(
+        actions
+            .iter()
+            .all(|action| !action.title.starts_with("Extend")),
+        "{actions:?}"
+    );
+}
+
+#[test]
+fn an_event_keeping_nothing_of_its_own_loses_the_emptied_clauses() {
+    let only = "machine M1 refines M0\nvariables x\nevents\n  event dec refines dec\n    any n\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n    then\n      @a1 x ≔ x − n\n  end\nend\n";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, only)];
+    let actions = refactors(&provider(&files), uri, only, 3, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Extend"))
+        .unwrap();
+    assert_eq!(
+        applied(only, uri, action),
+        "machine M1 refines M0\nvariables x\nevents\n  event dec extends dec\n  end\nend\n"
+    );
+}

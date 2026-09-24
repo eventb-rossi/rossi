@@ -259,6 +259,21 @@ pub(crate) fn line_start(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map_or(0, |at| at + 1)
 }
 
+/// The whole lines from the one holding byte `start` through the one holding
+/// `end`, newline included, when nothing but whitespace and comments shares
+/// them with `start..end`.
+pub(crate) fn own_lines(
+    text: &str,
+    masked: &str,
+    start: usize,
+    end: usize,
+) -> Option<std::ops::Range<usize>> {
+    let first = line_start(text, start);
+    let line_end = text[end..].find('\n').map_or(text.len(), |at| end + at);
+    (masked[first..start].trim().is_empty() && masked[end..line_end].trim().is_empty())
+        .then(|| first..(line_end + 1).min(text.len()))
+}
+
 /// The leading whitespace of `line`.
 pub(crate) fn indentation(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
