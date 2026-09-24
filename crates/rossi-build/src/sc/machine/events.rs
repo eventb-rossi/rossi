@@ -1186,13 +1186,15 @@ fn build_event_buckets(
                     machine.vanished_earlier,
                 )
                 .is_none();
+            let span = crate::sc::identifier_walker::usage_span_in_predicate(&g.predicate, &bad)
+                .or(g.span);
             if theorem_kept {
                 context.diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
                     origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
                     message: format!("theorem guard references abstract-only variable '{bad}'"),
                     rule_id: Some(crate::RuleId::UndeclaredIdentifier),
-                    span: g.span,
+                    span,
                 });
             } else {
                 context.diagnostics.push(Diagnostic {
@@ -1203,7 +1205,7 @@ fn build_event_buckets(
                          refinement (declared in an abstract machine but not kept here)"
                     ),
                     rule_id: Some(crate::RuleId::DisappearedVariable),
-                    span: g.span,
+                    span,
                 });
                 accurate = false;
                 continue;
@@ -1309,7 +1311,8 @@ fn build_event_buckets(
                      refinement (declared in an abstract machine but not kept here)"
                 ),
                 rule_id: Some(crate::RuleId::DisappearedVariable),
-                span: act.span,
+                span: crate::sc::identifier_walker::usage_span_in_action(&act.action, &bad)
+                    .or(act.span),
             });
             accurate = false;
             continue;
