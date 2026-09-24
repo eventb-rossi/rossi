@@ -1490,6 +1490,40 @@ mod project_diagnostics {
             "an unresolvable closure must report nothing; got {diagnostics:?}"
         );
     }
+
+    /// The abstraction is loaded; only the event's REFINES target is wrong.
+    const UNKNOWN_ABSTRACT_EVENT: &str = concat!(
+        "machine base\n",
+        "events\n",
+        "  event f\n",
+        "  end\n",
+        "end\n",
+        "machine concrete\n",
+        "refines base\n",
+        "invariants\n",
+        "  @inv1 y > 0\n",
+        "events\n",
+        "  event e refines g\n",
+        "  end\n",
+        "end\n",
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_event_refining_an_unknown_abstract_event_is_reported() {
+        // A wrong event target leaves the closure complete, so it is the
+        // project check's to report, and it does not silence the rest of
+        // the machine the way an unloadable dependency does.
+        let diagnostics = diagnostics_for(UNKNOWN_ABSTRACT_EVENT).await;
+        let codes: Vec<&Value> = diagnostics.iter().map(|d| &d["code"]).collect();
+        assert!(
+            codes.contains(&&json!("EB009")),
+            "the unknown target `g` must be reported; got {diagnostics:?}"
+        );
+        assert!(
+            codes.contains(&&json!("EB018")),
+            "the rest of the machine is still checked; got {diagnostics:?}"
+        );
+    }
 }
 
 mod type_hierarchy {
