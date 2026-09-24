@@ -1,12 +1,15 @@
 //! Integration tests for code actions
 
 use eventb_lsp::code_actions::{CodeActionProvider, FIX_ALL_KIND};
+use eventb_lsp::cross_references::CrossReferenceManager;
 use eventb_lsp::diagnostics::ASCII_OPERATOR_CODE;
 use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
     CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position,
     Range, TextDocumentIdentifier, TextEdit, Uri, WorkDoneProgressParams,
 };
+use eventb_lsp::workspace::WorkspaceSymbolProvider;
+use std::sync::Arc;
 
 fn create_test_params(uri: &str, range: Range) -> CodeActionParams {
     CodeActionParams {
@@ -1198,5 +1201,142 @@ fn eb030_offers_nothing_when_the_clause_shares_its_last_line() {
     assert!(
         action_titled(&actions, "Move").is_none(),
         "the END shares the line: {actions:?}"
+    );
+}
+
+/// A provider over a workspace holding `files` (URI, text), with the indexes
+/// the cross-file fixes read.
+fn workspace_provider(files: &[(&str, &str)]) -> CodeActionProvider {
+    let symbols = Arc::new(WorkspaceSymbolProvider::new());
+    let components = Arc::new(CrossReferenceManager::new());
+    for (uri, text) in files {
+        symbols.update_symbols((*uri).to_string(), text);
+        components.update_component((*uri).to_string(), text);
+    }
+    let mut provider = CodeActionProvider::new();
+    provider.set_workspace_symbols(symbols);
+    provider.set_cross_reference_manager(components);
+    provider
+}
+
+/// The range of the first `word` on 0-indexed `line` of `text`, in the
+/// UTF-16 columns LSP counts (every character here is in the BMP).
+fn word_on_line(text: &str, line: u32, word: &str) -> Range {
+    let content = text.lines().nth(line as usize).expect("line exists");
+    let byte = content.find(word).expect("word on the line");
+    let start = content[..byte].chars().count() as u32;
+    Range {
+        start: Position::new(line, start),
+        end: Position::new(line, start + word.chars().count() as u32),
+    }
+}
+
+/// The quick fixes offered for an EB018 on `word` at `line`.
+fn eb018_fixes(
+    provider: &CodeActionProvider,
+    uri: &str,
+    text: &str,
+    line: u32,
+    word: &str,
+) -> Vec<CodeAction> {
+    let mut params = diagnostic_params(uri, word_on_line(text, line, word), "EB018");
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    provider
+        .provide_code_actions(&params, text, true, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            _ => None,
+        })
+        .collect()
+}
+
+const DECLARES_K: &str = "context c\nconstants k\naxioms\n  @k k ∈ ℕ\nend\n";
+
+#[test]
+fn eb018_sees_the_context_declaring_the_name() {
+    // (machine as written, the same machine seeing `c`): no SEES yet, one
+    // written inline, one written as a block, and one to go after REFINES.
+    let cases = [
+        (
+            "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+            "machine m\nsees c\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+        ),
+        (
+            "machine m\nsees d\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+            "machine m\nsees d c\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+        ),
+        (
+            "MACHINE m\nSEES\n    d\nVARIABLES\n    x\nINVARIANTS\n    @t x ∈ ℕ\n    @i x < k\nEND\n",
+            "MACHINE m\nSEES\n    d\n    c\nVARIABLES\n    x\nINVARIANTS\n    @t x ∈ ℕ\n    @i x < k\nEND\n",
+        ),
+        (
+            "machine m\nrefines a // the abstraction\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+            "machine m\nrefines a // the abstraction\nsees c\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n",
+        ),
+    ];
+    for (text, expected) in cases {
+        let uri = "file:///m.eventb";
+        let provider = workspace_provider(&[("file:///c.eventb", DECLARES_K), (uri, text)]);
+        let line = text.lines().position(|l| l.contains("@i")).unwrap() as u32;
+        let fixes = eb018_fixes(&provider, uri, text, line, "k");
+        let fix = fixes
+            .iter()
+            .find(|action| action.title == "Add c to SEES")
+            .unwrap_or_else(|| panic!("no SEES fix for:\n{text}\ngot {fixes:?}"));
+        assert_eq!(fix.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(fix.is_preferred, Some(true));
+        assert_eq!(applied(text, uri, fix), expected);
+        rossi::parse(expected).expect("the fixed machine parses");
+    }
+}
+
+#[test]
+fn eb018_extends_the_context_declaring_the_name() {
+    let uri = "file:///d.eventb";
+    let text = "context d\nconstants j\naxioms\n  @j j = k\nend\n";
+    let provider = workspace_provider(&[("file:///c.eventb", DECLARES_K), (uri, text)]);
+    let fixes = eb018_fixes(&provider, uri, text, 3, "k");
+    let fix = fixes
+        .iter()
+        .find(|action| action.title == "Add c to EXTENDS")
+        .unwrap_or_else(|| panic!("no EXTENDS fix, got {fixes:?}"));
+    assert_eq!(
+        applied(text, uri, fix),
+        "context d\nextends c\nconstants j\naxioms\n  @j j = k\nend\n"
+    );
+}
+
+#[test]
+fn eb018_never_extends_into_a_cycle() {
+    // `c` already extends `d`, so `d` extending `c` would close a cycle.
+    let uri = "file:///d.eventb";
+    let text = "context d\nconstants j\naxioms\n  @j j = k\nend\n";
+    let extends_d = "context c\nextends d\nconstants k\naxioms\n  @k k ∈ ℕ\nend\n";
+    let provider = workspace_provider(&[("file:///c.eventb", extends_d), (uri, text)]);
+    let fixes = eb018_fixes(&provider, uri, text, 3, "k");
+    assert!(
+        fixes.iter().all(|action| !action.title.contains("EXTENDS")),
+        "{fixes:?}"
+    );
+}
+
+#[test]
+fn eb018_offers_every_declaring_context_and_prefers_none() {
+    let uri = "file:///m.eventb";
+    let text = "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n";
+    let provider = workspace_provider(&[
+        ("file:///c.eventb", DECLARES_K),
+        ("file:///e.eventb", "context e\nsets k\nend\n"),
+        (uri, text),
+    ]);
+    let fixes = eb018_fixes(&provider, uri, text, 4, "k");
+    let titles: Vec<&str> = fixes.iter().map(|action| action.title.as_str()).collect();
+    assert_eq!(titles, ["Add c to SEES", "Add e to SEES"]);
+    assert!(
+        fixes
+            .iter()
+            .all(|action| action.is_preferred == Some(false))
     );
 }

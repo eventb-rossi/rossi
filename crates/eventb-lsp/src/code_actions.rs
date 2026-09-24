@@ -4,15 +4,19 @@
 //! - Operator conversion (ASCII ↔ Unicode)
 //! - Quick fixes for the rule diagnostics
 
+use crate::cross_references::{CrossReferenceManager, ReferenceKind};
 use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Position, Range, TextEdit, Uri, WorkspaceEdit,
+    Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
 };
 use crate::text_utils::{line_keyword, line_keyword_is};
+use crate::workspace::WorkspaceSymbolProvider;
+use rossi::Component;
 use rossi::keywords::KeywordId;
 use rossi::operators;
 use rossi_build::rules::RuleId;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// The source action that normalizes every operator to the configured
 /// convention (`rossi.format.useUnicode`) and changes nothing else. A
@@ -243,12 +247,98 @@ fn enclosing_event_range(masked: &str, offset: usize) -> std::ops::Range<usize> 
     start..end
 }
 
+/// Where [`dependency_edit`] writes a new EXTENDS or SEES target, and what.
+struct DependencyInsert {
+    position: Position,
+    text: String,
+}
+
+/// The edit adding `target` to `component`'s `clause` (EXTENDS of a context,
+/// SEES of a machine), or `None` when there is nowhere safe to write it.
+///
+/// An existing clause gets the name after its last one: on the same line when
+/// the clause is written inline (`sees a b`), on a line of its own at the same
+/// indentation when every name has one. A missing clause is written on the
+/// line after the clauses it must follow (only REFINES precedes SEES) or after
+/// the header, in the header keyword's case, where `rossi fmt` would put it.
+fn dependency_edit(
+    text: &str,
+    component: &Component,
+    clause: KeywordId,
+    target: &str,
+) -> Option<DependencyInsert> {
+    let line_start = |offset: usize| text[..offset].rfind('\n').map_or(0, |at| at + 1);
+    let indentation = |line: &str| line[..line.len() - line.trim_start().len()].to_string();
+
+    if let Some(region) = component.clauses().iter().find(|r| r.keyword == clause) {
+        let end = region.span.end;
+        let line = &text[line_start(end)..end];
+        let insert = if line_keyword(line) == Some(clause) {
+            format!(" {target}")
+        } else {
+            format!("\n{}{target}", indentation(line))
+        };
+        return Some(DependencyInsert {
+            position: crate::position::offset_to_position(text, end),
+            text: insert,
+        });
+    }
+
+    let header = component.span()?.start;
+    let after = component
+        .clauses()
+        .iter()
+        .filter(|r| clause == KeywordId::Sees && r.keyword == KeywordId::Refines)
+        .map(|r| r.span.end)
+        .chain(component.name_span().map(|span| span.end))
+        .max()?;
+    let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
+    // A block comment opened on that line and still open at its end would
+    // swallow the new clause.
+    if rossi::comments::offset_in_comment(text, line_end) {
+        return None;
+    }
+    let spelled = rossi::keywords::spell(clause);
+    let keyword = if text[header..].starts_with(char::is_lowercase) {
+        spelled.to_lowercase()
+    } else {
+        spelled.to_string()
+    };
+    Some(DependencyInsert {
+        position: crate::position::offset_to_position(text, line_end),
+        text: format!(
+            "\n{}{keyword} {target}",
+            indentation(&text[line_start(header)..header])
+        ),
+    })
+}
+
 /// Provides code actions and refactorings
-pub struct CodeActionProvider;
+pub struct CodeActionProvider {
+    /// The workspace's declared names, for the fixes that look beyond the
+    /// document: which context declares a name the document does not.
+    workspace_symbols: Option<Arc<WorkspaceSymbolProvider>>,
+    /// The workspace's component graph, so a fix never adds an EXTENDS that
+    /// closes a cycle.
+    cross_ref_manager: Option<Arc<CrossReferenceManager>>,
+}
 
 impl CodeActionProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            workspace_symbols: None,
+            cross_ref_manager: None,
+        }
+    }
+
+    /// Set the workspace symbol index the cross-file fixes search.
+    pub fn set_workspace_symbols(&mut self, symbols: Arc<WorkspaceSymbolProvider>) {
+        self.workspace_symbols = Some(symbols);
+    }
+
+    /// Set the cross-reference manager the cross-file fixes consult.
+    pub fn set_cross_reference_manager(&mut self, manager: Arc<CrossReferenceManager>) {
+        self.cross_ref_manager = Some(manager);
     }
 
     /// Provide code actions for a given document position/range.
@@ -594,6 +684,30 @@ impl CodeActionProvider {
             }
         }
 
+        // See or extend the context that declares an undeclared name
+        // (EB018). The document is parsed only when there is one to fix.
+        let undeclared: Vec<_> = params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
+            .collect();
+        if !undeclared.is_empty() {
+            let components = crate::component_util::parse_all(text);
+            for diagnostic in undeclared {
+                actions.extend(
+                    self.create_import_context_actions(
+                        &params.text_document.uri,
+                        diagnostic,
+                        text,
+                        &components,
+                    )
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction),
+                );
+            }
+        }
+
         // Rewrite an ASCII operator spelling flagged under
         // rossi.format.enforceUnicode to its Unicode form — for a diagnostic
         // that is still current, i.e. whose range is one of the operators the
@@ -644,6 +758,81 @@ impl CodeActionProvider {
             disabled: None,
             data: None,
         }
+    }
+
+    /// Quick fixes for EB018 (an undeclared identifier) naming a constant or
+    /// carrier set that a workspace context declares: a machine sees that
+    /// context, a context extends it. One fix per declaring context, the only
+    /// one preferred.
+    ///
+    /// The diagnostic underlines the name itself, so the range is the name.
+    /// A context that already extends the document's context (directly or
+    /// not) is left out, since extending it back would close a cycle.
+    fn create_import_context_actions(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+    ) -> Vec<CodeAction> {
+        let Some(symbols) = &self.workspace_symbols else {
+            return Vec::new();
+        };
+        let Some(name) = text_in_range(text, diagnostic.range)
+            .filter(|name| rossi::names::is_valid_math_identifier(name))
+        else {
+            return Vec::new();
+        };
+        let Some(component) = crate::position::position_to_offset(text, diagnostic.range.start)
+            .and_then(|offset| crate::component_util::component_at_offset(components, offset))
+        else {
+            return Vec::new();
+        };
+        let (clause, present) = match component {
+            Component::Machine(machine) => (KeywordId::Sees, &machine.sees),
+            Component::Context(context) => (KeywordId::Extends, &context.extends),
+        };
+        let closes_cycle = |target: &str| {
+            clause == KeywordId::Extends
+                && self.cross_ref_manager.as_ref().is_some_and(|manager| {
+                    manager
+                        .transitive_closure(target, ReferenceKind::Extends)
+                        .iter()
+                        .any(|ancestor| ancestor == component.name())
+                })
+        };
+        let mut contexts: Vec<String> = symbols
+            .declarations_of(name)
+            .into_iter()
+            .filter(|(_, kind)| matches!(*kind, SymbolKind::CONSTANT | SymbolKind::ENUM))
+            .map(|(container, _)| container)
+            .filter(|target| {
+                target != component.name() && !present.contains(target) && !closes_cycle(target)
+            })
+            .collect();
+        contexts.sort();
+        contexts.dedup();
+        let preferred = contexts.len() == 1;
+        contexts
+            .iter()
+            .filter_map(|target| {
+                let insert = dependency_edit(text, component, clause, target)?;
+                Some(CodeAction {
+                    title: format!("Add {target} to {}", rossi::keywords::spell(clause)),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![diagnostic.clone()]),
+                    edit: Some(single_edit(
+                        uri,
+                        Range::new(insert.position, insert.position),
+                        insert.text,
+                    )),
+                    command: None,
+                    is_preferred: Some(preferred),
+                    disabled: None,
+                    data: None,
+                })
+            })
+            .collect()
     }
 
     /// Quick fix for EB026 (assignment operator in a predicate). The diagnostic

@@ -3194,3 +3194,131 @@ mod watched_files {
         assert!(next_diagnostic_codes(&mut messages).await.is_empty());
     }
 }
+
+mod quick_fixes {
+    //! Quick fixes answer the diagnostics the server itself publishes, with
+    //! the workspace indexes the cross-file ones read.
+
+    use super::{TempWorkspace, notification};
+    use eventb_lsp::lsp_types::Uri;
+    use eventb_lsp::server::RossiLanguageServer;
+    use futures::StreamExt;
+    use serde_json::{Value, json};
+    use std::time::Duration;
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tower::{Service, ServiceExt};
+    use tower_lsp_server::LspService;
+    use tower_lsp_server::jsonrpc::Request;
+
+    /// The next diagnostics published for `uri`.
+    async fn next_diagnostics_for(
+        published: &mut UnboundedReceiver<Value>,
+        uri: &Uri,
+    ) -> Vec<Value> {
+        loop {
+            let params = tokio::time::timeout(Duration::from_secs(20), published.recv())
+                .await
+                .ok()
+                .flatten()
+                .expect("diagnostics must be published");
+            if params["uri"] == json!(uri) {
+                return params["diagnostics"].as_array().unwrap().clone();
+            }
+        }
+    }
+
+    async fn open(service: &mut LspService<RossiLanguageServer>, uri: &Uri, text: &str) {
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "eventb",
+                        "version": 1,
+                        "text": text,
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_undeclared_constant_is_fixed_by_seeing_its_context() {
+        let workspace = TempWorkspace::new("quick-fixes");
+        let context = Uri::from_file_path(workspace.as_ref().join("c.eventb")).unwrap();
+        let machine = Uri::from_file_path(workspace.as_ref().join("m.eventb")).unwrap();
+        let machine_text = "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x < k\nend\n";
+
+        // The server waits on the channel to publish, so it is drained
+        // throughout; publishes are kept for the test to read.
+        let (mut service, mut socket) = LspService::build(RossiLanguageServer::new).finish();
+        let (sender, mut published) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(message) = socket.next().await {
+                if message.method() == "textDocument/publishDiagnostics" {
+                    let _ = sender.send(message.params().cloned().unwrap_or_default());
+                }
+            }
+        });
+        let init = Request::build("initialize")
+            .id(1)
+            .params(json!({ "capabilities": {} }))
+            .finish();
+        service.ready().await.unwrap().call(init).await.unwrap();
+        open(
+            &mut service,
+            &context,
+            "context c\nconstants k\naxioms\n  @k k ∈ ℕ\nend\n",
+        )
+        .await;
+        open(&mut service, &machine, machine_text).await;
+
+        let undeclared = loop {
+            let diagnostics = next_diagnostics_for(&mut published, &machine).await;
+            if let Some(found) = diagnostics.iter().find(|d| d["code"] == json!("EB018")) {
+                break found.clone();
+            }
+        };
+        assert_eq!(
+            undeclared["range"],
+            json!({"start": {"line": 4, "character": 9}, "end": {"line": 4, "character": 10}})
+        );
+
+        let request = Request::build("textDocument/codeAction")
+            .id(2)
+            .params(json!({
+                "textDocument": { "uri": machine },
+                "range": undeclared["range"],
+                "context": { "diagnostics": [undeclared], "only": ["quickfix"] },
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .expect("codeAction responds");
+        let (_, result) = response.into_parts();
+        let actions = result.expect("codeAction succeeds");
+        let fix = actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["title"] == json!("Add c to SEES"))
+            .unwrap_or_else(|| panic!("no SEES fix in {actions}"));
+        assert_eq!(
+            fix["edit"]["changes"][machine.as_str()],
+            json!([{
+                "range": {"start": {"line": 0, "character": 9}, "end": {"line": 0, "character": 9}},
+                "newText": "\nsees c",
+            }])
+        );
+    }
+}
