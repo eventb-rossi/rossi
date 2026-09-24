@@ -480,7 +480,7 @@ fn resolve_witnesses(
             severity: Severity::Warning,
             origin: format!("{}.{}", machine.machine_name, label),
             message: format!("missing or ill-typed witness for '{name}' — event is inaccurate"),
-            rule_id: None,
+            rule_id: Some(crate::RuleId::MissingWitness),
             span: kind.name_span(),
         });
         witnesses.push(synthesize_witness(
