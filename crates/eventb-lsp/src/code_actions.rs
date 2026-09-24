@@ -283,6 +283,9 @@ pub(crate) fn indentation(line: &str) -> &str {
 /// byte `end`: on the same line when the list is written inline (`sees a b`),
 /// each on a line of its own at the same indentation when every name has one.
 fn append_to_list(text: &str, end: usize, keyword: KeywordId, names: &[&str]) -> NameInsert {
+    // A clause's span may run on over a comment after its last name, where a
+    // name written would be commented out: write it after the last code.
+    let end = rossi::comments::mask_comments(text)[..end].trim_end().len();
     let line = &text[line_start(text, end)..end];
     let separator = if line_keyword(line) == Some(keyword) {
         " ".to_string()
