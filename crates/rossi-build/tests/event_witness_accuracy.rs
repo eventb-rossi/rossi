@@ -107,6 +107,25 @@ fn missing_global_witness_is_inaccurate() {
 }
 
 #[test]
+fn missing_witness_is_reported_as_eb035() {
+    let r = init_refinement_build(
+        ABS_NONDET,
+        r#"<org.eventb.core.action name="_a" org.eventb.core.assignment="x ≔ 0" org.eventb.core.label="act1"/>"#,
+    );
+    let missing: Vec<_> = r
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("witness for 'e''"))
+        .collect();
+    assert_eq!(missing.len(), 1, "{:?}", r.diagnostics);
+    assert_eq!(
+        missing[0].rule_id,
+        Some(rossi_build::RuleId::MissingWitness)
+    );
+    assert_eq!(missing[0].severity, rossi_build::Severity::Warning);
+}
+
+#[test]
 fn provided_global_witness_is_accurate_and_kept() {
     let r = init_refinement_build(
         ABS_NONDET,

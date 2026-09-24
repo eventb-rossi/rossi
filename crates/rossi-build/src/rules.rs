@@ -9,7 +9,7 @@ use crate::Severity;
 
 /// Validation rule identifiers exposed in `Diagnostic.rule_id`.
 ///
-/// Codes use the stable `EBnnn` scheme: `"EB001"`..`"EB034"` for the
+/// Codes use the stable `EBnnn` scheme: `"EB001"`..`"EB035"` for the
 /// validation rules, with one gap for a rule removed as valueless (EB013
 /// dead constant — every hit was already an EB006 typing Error), and
 /// `"EB100"`.. for the runtime-translation suitability rules of
@@ -113,6 +113,10 @@ pub enum RuleId {
     /// precede (`SETS` below `AXIOMS`, say). rossi accepts it, as Rodin and
     /// CamilleX do; stock Camille does not. (rossi-only.)
     SectionOutOfOrder,
+    /// EB035 — A refining event gives no well-typed witness for an abstract
+    /// parameter it drops, or for the after-state of a disappearing variable
+    /// its abstract event assigns nondeterministically; `⊤` is assumed.
+    MissingWitness,
 
     // Runtime-translation suitability (EB1xx). Reported by
     // `crate::runtime` over the leaf machines and the contexts they see,
@@ -163,7 +167,7 @@ pub enum RuleId {
 }
 
 impl RuleId {
-    /// Stable string code (`"EB001"`..`"EB034"`, `"EB100"`..`"EB113"`).
+    /// Stable string code (`"EB001"`..`"EB035"`, `"EB100"`..`"EB113"`).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
@@ -200,6 +204,7 @@ impl RuleId {
             RuleId::MissingLabel => "EB032",
             RuleId::PrimedDeclaredName => "EB033",
             RuleId::SectionOutOfOrder => "EB034",
+            RuleId::MissingWitness => "EB035",
             RuleId::BecomesMemberOfInEvent => "EB100",
             RuleId::NonCanonicalBecomesSuchThat => "EB101",
             RuleId::NondeterministicInitialisation => "EB102",
@@ -254,6 +259,7 @@ impl RuleId {
             RuleId::MissingLabel => "Missing label",
             RuleId::PrimedDeclaredName => "Primed declared name",
             RuleId::SectionOutOfOrder => "Section out of order",
+            RuleId::MissingWitness => "Missing witness",
             RuleId::BecomesMemberOfInEvent => "Nondeterministic choice in an event",
             RuleId::NonCanonicalBecomesSuchThat => {
                 "Assignment by predicate is not in canonical form"
@@ -372,6 +378,9 @@ impl RuleId {
             RuleId::SectionOutOfOrder => {
                 "A context or machine writes a section after one it must precede — `SETS` below `AXIOMS`, `VARIABLES` below `INVARIANTS`. Rodin stores a component's children as an unordered set and cannot express an order, so rossi accepts any, but stock Camille fixes the order in its lexer and refuses to open the file (\"Set declarations are only allowed before the constants declarations\"). Run `rossi fmt -i` to reorder the sections."
             }
+            RuleId::MissingWitness => {
+                "A refining event drops an abstract parameter, or its abstract event assigns a variable that disappears here nondeterministically, and gives no well-typed witness for it (`@p …` for the parameter, `@x' …` for the after-state). Rodin warns and assumes `⊤`, the witness that says nothing: the refinement proof obligations then have to hold for any value, which usually makes them unprovable. Write a witness relating the dropped value to the concrete state."
+            }
             RuleId::BecomesMemberOfInEvent => {
                 "An ordinary event of a leaf machine assigns by choice from a set (`x :∈ S`) whose set is not a singleton. Event-B leaves the choice to the refinement; a runtime translation has to make it, and the model does not say which value to take, so two faithful translations can disagree on every run. Refine the action into a deterministic assignment, or narrow the set to one element. Only a singleton set is exempt: the choice is then certain."
             }
@@ -462,6 +471,7 @@ impl RuleId {
             | RuleId::KeywordName
             | RuleId::NonPortableWhitespace
             | RuleId::SectionOutOfOrder
+            | RuleId::MissingWitness
             | RuleId::BecomesMemberOfInEvent
             | RuleId::NonCanonicalBecomesSuchThat
             | RuleId::NondeterministicInitialisation
@@ -533,6 +543,7 @@ impl RuleId {
             RuleId::MissingLabel,
             RuleId::PrimedDeclaredName,
             RuleId::SectionOutOfOrder,
+            RuleId::MissingWitness,
             RuleId::BecomesMemberOfInEvent,
             RuleId::NonCanonicalBecomesSuchThat,
             RuleId::NondeterministicInitialisation,
@@ -595,6 +606,7 @@ mod tests {
         assert_eq!(RuleId::MissingLabel.code(), "EB032");
         assert_eq!(RuleId::PrimedDeclaredName.code(), "EB033");
         assert_eq!(RuleId::SectionOutOfOrder.code(), "EB034");
+        assert_eq!(RuleId::MissingWitness.code(), "EB035");
         assert_eq!(RuleId::BecomesMemberOfInEvent.code(), "EB100");
         assert_eq!(RuleId::NonCanonicalBecomesSuchThat.code(), "EB101");
         assert_eq!(RuleId::NondeterministicInitialisation.code(), "EB102");
@@ -620,9 +632,9 @@ mod tests {
     /// order also subsumes the uniqueness and length checks.
     #[test]
     fn all_lists_every_rule() {
-        // `EB001`..`EB034` minus the one documented gap (EB013), then the
+        // `EB001`..`EB035` minus the one documented gap (EB013), then the
         // runtime-translation block `EB100`..`EB113`.
-        let expected: Vec<String> = (1..=34)
+        let expected: Vec<String> = (1..=35)
             .filter(|n| *n != 13)
             .chain(100..=113)
             .map(|n| format!("EB{n:03}"))
