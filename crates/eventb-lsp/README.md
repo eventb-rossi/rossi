@@ -322,6 +322,13 @@ Implemented code actions include:
 - Normalize every operator to the configured convention and nothing else
   (`source.fixAll.rossi`, for editors' run-on-save hooks)
 - Add a missing `END` keyword when diagnostics indicate that shape
+- Replace an ASCII operator spelling flagged under `enforceUnicode` with its
+  Unicode form
+- Replace an assignment operator written in a predicate with `=` or `∈`
+  (EB026)
+- Remove an empty clause (EB029)
+- Insert a missing label, numbered as Rodin numbers its clause (EB032)
+- Move an event clause or a section written out of order (EB030, EB034)
 - See or extend the workspace context that declares an undeclared constant
   or carrier set (EB018)
 - Declare an undeclared name as a constant, a variable, or a parameter of
