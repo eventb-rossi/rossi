@@ -328,6 +328,7 @@ Implemented code actions include:
   the event using it (EB018)
 - Replace a misspelled name with one spelled alike: a name in scope (EB018),
   or a component or abstract event nothing declares (EB009)
+- Keep a variable the refinement dropped but still uses (EB025)
 
 ### Signature Help
 

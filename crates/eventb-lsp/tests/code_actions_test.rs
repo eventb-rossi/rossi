@@ -1554,3 +1554,34 @@ fn eb009_offers_the_components_and_abstract_events_spelled_alike() {
     let titles = fix_titles(&files, "file:///m.eventb", "EB009", 4, "inx");
     assert_eq!(titles, ["Change to inc"]);
 }
+
+#[test]
+fn eb025_keeps_the_disappeared_variable() {
+    let machine = "\
+machine m2
+refines m1
+variables w
+invariants
+  @i w ∈ ℕ
+events
+  event tick
+    where
+      @g v > 0
+  end
+end
+";
+    let uri = "file:///m2.eventb";
+    let provider = CodeActionProvider::new();
+    let mut params = diagnostic_params(uri, word_on_line(machine, 8, "v"), "EB025");
+    params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+    let actions = provider
+        .provide_code_actions(&params, machine, true, false)
+        .unwrap_or_default();
+    let fix = action_titled(&actions, "Keep v").expect("a keep fix for EB025");
+    assert_eq!(fix.title, "Keep v in VARIABLES");
+    assert_eq!(fix.is_preferred, Some(true));
+    assert_eq!(
+        applied(machine, uri, fix),
+        machine.replace("variables w\n", "variables w v\n")
+    );
+}
