@@ -1865,7 +1865,6 @@ impl LanguageServer for RossiLanguageServer {
                     CodeActionOptions {
                         code_action_kinds: Some(vec![
                             CodeActionKind::REFACTOR,
-                            CodeActionKind::REFACTOR_EXTRACT,
                             CodeActionKind::QUICKFIX,
                             crate::code_actions::FIX_ALL_KIND,
                         ]),

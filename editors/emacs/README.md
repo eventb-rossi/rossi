@@ -314,7 +314,6 @@ Press `C-c l r r` (or `M-x lsp-rename`) to rename:
 Press `C-c l a a` (or `M-x lsp-execute-code-action`) for:
 - **Convert operators**: ASCII ↔ Unicode
 - **Add missing END**: Quick fix for parse errors
-- **Sort clauses**: Alphabetically sort VARIABLES, CONSTANTS
 
 ### Document Symbols
 
