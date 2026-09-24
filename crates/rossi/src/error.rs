@@ -66,7 +66,11 @@ pub enum ParseError {
     /// operator binding the accumulated left operand, `right` the next operator
     /// (or, for a bare quantifier conjunct, the quantifier). `line` and `column`
     /// are 1-indexed; `span` is the byte range of the operator at which the
-    /// incompatibility is detected (additive, oracle-safe).
+    /// incompatibility is detected (additive, oracle-safe). `groupings` are
+    /// the byte ranges that, each wrapped in parentheses, would resolve this
+    /// incompatibility: the accumulated left operand, then the operand the two
+    /// operators share with the right one; for a bare quantifier, the
+    /// quantified operand. Empty when the parser has no grouping to offer.
     #[error("Operator: {left} is not compatible with: {right}, parentheses are required")]
     IncompatibleOperators {
         left: String,
@@ -74,6 +78,7 @@ pub enum ParseError {
         line: usize,
         column: usize,
         span: Option<Span>,
+        groupings: Vec<Span>,
     },
 
     /// A predicate context (invariant, guard, witness, axiom) used an assignment
@@ -398,13 +403,24 @@ impl ParseError {
         }
 
         match self {
+            ParseError::IncompatibleOperators {
+                line,
+                span,
+                groupings,
+                ..
+            } => {
+                *line += line_delta;
+                shift_span(span, byte_delta);
+                for grouping in groupings {
+                    grouping.shift(byte_delta);
+                }
+            }
             ParseError::PestError { line, span, .. }
             | ParseError::EmptyClause { line, span, .. }
             | ParseError::MissingFormula { line, span, .. }
             | ParseError::MissingLabel { line, span, .. }
             | ParseError::ClauseOutOfOrder { line, span, .. }
             | ParseError::ReservedWord { line, span, .. }
-            | ParseError::IncompatibleOperators { line, span, .. }
             | ParseError::AssignmentInPredicate { line, span, .. }
             | ParseError::ExpressionNotBinding { line, span, .. }
             | ParseError::InvalidTypeExpression { line, span, .. }
@@ -598,6 +614,7 @@ mod tests {
                     line: 1,
                     column: 8,
                     span: Some(Span { start: 3, end: 6 }),
+                    groupings: Vec::new(),
                 })),
             }),
         }])
@@ -690,6 +707,7 @@ mod tests {
             line: 1,
             column: 7,
             span: Some(Span { start: 6, end: 7 }),
+            groupings: Vec::new(),
         };
         assert_eq!(
             err.to_string(),

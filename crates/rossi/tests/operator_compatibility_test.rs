@@ -275,3 +275,36 @@ fn negated_quantifier_bounded_by_a_bracket_parses() {
     pred_ok("x > 0 ∧ (¬ ∃ w · w > 0)"); // bracketed negation as an operand
     pred_ok("z ∈ {x ∣ ¬ ∃ w · w > x}"); // comprehension closes it
 }
+
+// ---------------------------------------------------------------------------
+// Groupings: what parentheses would resolve a rejection
+// ---------------------------------------------------------------------------
+
+/// The text of each grouping the rejection of `src` offers.
+fn groupings<T: std::fmt::Debug>(src: &str, result: Result<T, rossi::ParseError>) -> Vec<&str> {
+    match result.expect_err("the formula is rejected") {
+        rossi::ParseError::IncompatibleOperators { groupings, .. } => groupings
+            .iter()
+            .map(|span| &src[span.start..span.end])
+            .collect(),
+        other => panic!("expected incompatible operators, got {other:?}"),
+    }
+}
+
+#[test_case("a = 1 ∧ b = 2 ∨ c = 3", &["a = 1 ∧ b = 2", "b = 2 ∨ c = 3"] ; "and then or")]
+#[test_case("a = 1 ∧ b = 2 ∧ c = 3 ∨ d = 4", &["a = 1 ∧ b = 2 ∧ c = 3", "c = 3 ∨ d = 4"] ; "a run then or")]
+#[test_case("a = 1 ⇒ b = 2 ⇒ c = 3", &["a = 1 ⇒ b = 2", "b = 2 ⇒ c = 3"] ; "chained implication")]
+#[test_case("a = 1 ∧ ∀x·x > 0", &["∀x·x > 0"] ; "bare quantifier operand")]
+#[test_case("¬ ∃x·x > 0", &["∃x·x > 0"] ; "bare quantifier under negation")]
+fn predicate_rejections_offer_their_groupings(src: &str, expected: &[&str]) {
+    assert_eq!(groupings(src, parse_predicate_str(src)), expected);
+}
+
+#[test]
+fn set_operator_rejections_offer_their_groupings() {
+    let src = "A ∪ B ∩ C";
+    assert_eq!(
+        groupings(src, parse_expression_str(src)),
+        ["A ∪ B", "B ∩ C"]
+    );
+}
