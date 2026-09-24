@@ -14,7 +14,7 @@ use crate::code_actions::{
     document_edit, event_clause_indent, event_header_end, event_is_lowercase, keyword_text,
     kind_requested, line_end, line_start, own_lines, parameter_insert, point, single_edit,
 };
-use crate::component_loader::ComponentLoader;
+use crate::component_loader::{ComponentLoader, LoadedComponent};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::lsp_types::{
@@ -46,15 +46,6 @@ impl RefinementActionProvider {
         }
     }
 
-    /// The machine `name`, as the open documents or the workspace have it.
-    fn load_machine(&self, name: &str) -> Option<Machine> {
-        let loader = ComponentLoader::new(&self.cross_ref_manager, Some(&self.document_manager));
-        match loader.load(name)?.component() {
-            Component::Machine(machine) => Some(machine.clone()),
-            Component::Context(_) => None,
-        }
-    }
-
     /// The refactors for the component at the cursor. `components` are the
     /// recovered parse of `text`; `printer` writes new components in the
     /// configured style; a refactor creating a file is offered only when the
@@ -83,6 +74,7 @@ impl RefinementActionProvider {
         let on_header = component
             .name_span()
             .is_some_and(|name| on_line(name.start));
+        let loader = ComponentLoader::new(&self.cross_ref_manager, Some(&self.document_manager));
         let mut actions = Vec::new();
         if refactor && on_header && creates_files {
             actions.extend(self.create_next_level_action(
@@ -99,6 +91,7 @@ impl RefinementActionProvider {
         {
             if inline && event.extended {
                 actions.extend(self.inline_inherited_action(
+                    &loader,
                     &params.text_document.uri,
                     text,
                     machine,
@@ -107,6 +100,7 @@ impl RefinementActionProvider {
             }
             if refactor && !event.extended {
                 actions.extend(self.extend_instead_action(
+                    &loader,
                     &params.text_document.uri,
                     text,
                     machine,
@@ -119,6 +113,7 @@ impl RefinementActionProvider {
             && let Component::Machine(machine) = component
         {
             actions.extend(self.refine_unrefined_action(
+                &loader,
                 &params.text_document.uri,
                 text,
                 machine,
@@ -126,35 +121,6 @@ impl RefinementActionProvider {
             ));
         }
         actions
-    }
-
-    /// The events `event` of `machine` extends, root first, each with the
-    /// text of the file it is written in: its abstract event, and that one's
-    /// while it is extended in turn.
-    fn extended_chain(&self, machine: &Machine, event: &Event) -> Option<Vec<(String, Event)>> {
-        let loader = ComponentLoader::new(&self.cross_ref_manager, Some(&self.document_manager));
-        let mut chain = Vec::new();
-        let mut visited = HashSet::new();
-        let mut parent = machine.refines.clone()?;
-        let mut target = event.refines.first()?.name.clone();
-        loop {
-            if !visited.insert(parent.clone()) {
-                return None;
-            }
-            let loaded = loader.load(&parent)?;
-            let Component::Machine(abstraction) = loaded.component() else {
-                return None;
-            };
-            let abstract_event = abstraction.events.iter().find(|e| e.name == target)?;
-            chain.push((loaded.text().to_string(), abstract_event.clone()));
-            if !abstract_event.extended {
-                break;
-            }
-            parent = abstraction.refines.clone()?;
-            target = abstract_event.refines.first()?.name.clone();
-        }
-        chain.reverse();
-        Some(chain)
     }
 
     /// Write what an extended `event` inherits into it: the parameters,
@@ -165,12 +131,13 @@ impl RefinementActionProvider {
     /// element is copied as written in its own file.
     fn inline_inherited_action(
         &self,
+        loader: &ComponentLoader,
         uri: &Uri,
         text: &str,
         machine: &Machine,
         event: &Event,
     ) -> Option<CodeAction> {
-        let chain = self.extended_chain(machine, event)?;
+        let chain = extended_chain(loader, machine, event)?;
         let target = event.refines.first()?;
         let title = format!("Inline what {} inherits from {}", event.name, target.name);
         // Written into one event, two guards or actions under one label are
@@ -203,7 +170,8 @@ impl RefinementActionProvider {
         let mut parameters: Vec<&str> = Vec::new();
         let mut guards = Vec::new();
         let mut actions = Vec::new();
-        for (file, ancestor) in &chain {
+        for (loaded, ancestor) in &chain {
+            let file = loaded.text();
             let masked = rossi::comments::mask_comments(file);
             // An element's span may run on over a comment written after it.
             let written = |span: rossi::ast::Span| {
@@ -342,6 +310,7 @@ impl RefinementActionProvider {
     /// would clash with an inherited one.
     fn extend_instead_action(
         &self,
+        loader: &ComponentLoader,
         uri: &Uri,
         text: &str,
         machine: &Machine,
@@ -350,7 +319,7 @@ impl RefinementActionProvider {
         let [target] = event.refines.as_slice() else {
             return None;
         };
-        let chain = self.extended_chain(machine, event)?;
+        let chain = extended_chain(loader, machine, event)?;
         let inherited_parameters: HashSet<&str> = chain
             .iter()
             .flat_map(|(_, e)| e.parameters.iter().map(|p| p.name.as_str()))
@@ -517,12 +486,13 @@ impl RefinementActionProvider {
     /// whose extension would inherit a variable `machine` drops is left out.
     fn refine_unrefined_action(
         &self,
+        loader: &ComponentLoader,
         uri: &Uri,
         text: &str,
         machine: &Machine,
         printer: &rossi::PrettyPrinter,
     ) -> Option<CodeAction> {
-        let abstraction = self.load_machine(machine.refines.as_deref()?)?;
+        let abstraction = load_machine(loader, machine.refines.as_deref()?)?;
         let refined: HashSet<&str> = machine
             .events
             .iter()
@@ -559,8 +529,7 @@ impl RefinementActionProvider {
         };
         if !dropped.is_empty() {
             stubs.events.retain(|event| {
-                !self
-                    .extended_chain(machine, event)
+                !extended_chain(loader, machine, event)
                     .is_some_and(|chain| chain.iter().any(|(_, e)| touches(&e.guards, &e.actions)))
             });
             // INITIALISATION inherits up the chain as far as it is extended.
@@ -575,7 +544,10 @@ impl RefinementActionProvider {
                     break;
                 }
                 if init.extended {
-                    level = parent.refines.as_deref().and_then(|p| self.load_machine(p));
+                    level = parent
+                        .refines
+                        .as_deref()
+                        .and_then(|p| load_machine(loader, p));
                 }
             }
         }
@@ -680,6 +652,52 @@ impl RefinementActionProvider {
             }
         }
     }
+}
+
+/// The machine `name`, as the open documents or the workspace have it.
+fn load_machine(loader: &ComponentLoader, name: &str) -> Option<Machine> {
+    match loader.load(name)?.component() {
+        Component::Machine(machine) => Some(machine.clone()),
+        Component::Context(_) => None,
+    }
+}
+
+/// The events `event` of `machine` extends, root first, each with the
+/// loaded file it is written in: its abstract event, and that one's while it
+/// is extended in turn.
+fn extended_chain(
+    loader: &ComponentLoader,
+    machine: &Machine,
+    event: &Event,
+) -> Option<Vec<(LoadedComponent, Event)>> {
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+    let mut parent = machine.refines.clone()?;
+    let mut target = event.refines.first()?.name.clone();
+    loop {
+        if !visited.insert(parent.clone()) {
+            return None;
+        }
+        let loaded = loader.load(&parent)?;
+        let Component::Machine(abstraction) = loaded.component() else {
+            return None;
+        };
+        let abstract_event = abstraction
+            .events
+            .iter()
+            .find(|e| e.name == target)?
+            .clone();
+        let grand = abstraction.refines.clone();
+        let next = abstract_event.refines.first().map(|t| t.name.clone());
+        let extended = abstract_event.extended;
+        chain.push((loaded, abstract_event));
+        if !extended {
+            break;
+        }
+        (parent, target) = (grand?, next?);
+    }
+    chain.reverse();
+    Some(chain)
 }
 
 /// The refinement `name` of `machine` Rodin's Refine wizard writes: REFINES
