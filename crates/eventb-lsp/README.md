@@ -350,6 +350,9 @@ Implemented code actions include:
   (`refactor`; needs a client that creates files)
 - Refine the abstract events a refinement leaves unrefined, with extended
   events (`refactor`, on the machine header)
+- Inline what an extended event inherits: the abstract parameters, guards
+  and actions written into it, and `extends` turned into `refines`
+  (`refactor.inline`, on the event header)
 
 ### Signature Help
 

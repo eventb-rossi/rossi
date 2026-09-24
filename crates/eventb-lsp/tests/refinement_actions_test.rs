@@ -29,10 +29,15 @@ fn applied(text: &str, uri: &str, action: &CodeAction) -> String {
         .as_ref()
         .and_then(|edit| edit.changes.as_ref())
         .unwrap_or_else(|| panic!("{:?} edits no document in place", action.title));
-    let mut edits = changes[&uri.parse::<Uri>().unwrap()].clone();
-    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    // Last position first; inserts at one position land in array order, so
+    // among those the last is applied first.
+    let mut edits: Vec<_> = changes[&uri.parse::<Uri>().unwrap()]
+        .iter()
+        .enumerate()
+        .collect();
+    edits.sort_by_key(|(index, edit)| std::cmp::Reverse((edit.range.start, *index)));
     let mut result = text.to_string();
-    for edit in edits {
+    for (_, edit) in edits {
         let start = position_to_offset(&result, edit.range.start).unwrap();
         let end = position_to_offset(&result, edit.range.end).unwrap();
         result.replace_range(start..end, &edit.new_text);
@@ -325,4 +330,158 @@ end
         "machine M1 refines M0\nvariables x y\nevents\n  event INITIALISATION extends INITIALISATION\n  end\n\n  event dec extends dec\n  end\n\n  anticipated event wait extends wait\n  end\nend\n"
     );
     rossi::parse(&fixed).expect("the refinement parses");
+}
+
+/// The error diagnostics of a static check over `files` (name, text).
+fn check_errors(files: &[(&str, &str)]) -> Vec<String> {
+    let components = files
+        .iter()
+        .flat_map(|(name, text)| {
+            rossi_build::ProjectComponent::from_eventb(format!("{name}.eventb"), text).unwrap()
+        })
+        .collect();
+    rossi_build::build(&rossi_build::Project::new("p", components))
+        .diagnostics
+        .into_iter()
+        .filter(|d| d.severity == rossi_build::Severity::Error)
+        .map(|d| d.to_string())
+        .collect()
+}
+
+#[test]
+fn an_extended_event_takes_in_what_it_inherits_past_wide_characters() {
+    // Each `≔` in the comments is three bytes but one character: a refactor
+    // that mixed the two would read the wrong lines, in either file.
+    let base = BASE.replace("  event dec\n", "  // ≔≔≔≔\n  event dec\n");
+    let refinement = "machine M1 refines M0\nvariables x\nevents\n  // ≔≔≔≔\n  event dec extends dec\n    then\n      @b1 x ≔ x\n  end\nend\n";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", base.as_str()), (uri, refinement)];
+    let actions = refactors(&provider(&files), uri, refinement, 4, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Inline"))
+        .expect("offered on the event's header");
+    assert_eq!(
+        applied(refinement, uri, action),
+        "machine M1 refines M0\nvariables x\nevents\n  // ≔≔≔≔\n  event dec refines dec\n    any n\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n    then\n      @a1 x ≔ x − n\n      @b1 x ≔ x\n  end\nend\n"
+    );
+}
+
+#[test]
+fn an_extended_event_reusing_an_inherited_label_is_not_inlined() {
+    // Inlined, `@g1` would be a local duplicate, and the checker drops every
+    // copy of one: the event would lose a guard it has now.
+    let refinement = "machine M1 refines M0\nvariables x\nevents\n  event dec extends dec\n    where\n      @g1 x < 9\n  end\nend\n";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, refinement)];
+    let actions = refactors(&provider(&files), uri, refinement, 3, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Inline"))
+        .expect("offered, disabled");
+    assert!(action.edit.is_none());
+    assert_eq!(
+        action
+            .disabled
+            .as_ref()
+            .map(|disabled| disabled.reason.as_str()),
+        Some("@g1 would be written twice")
+    );
+
+    // The same when two levels of the chain share the label.
+    let deeper =
+        "machine M2 refines M1\nvariables x\nevents\n  event dec extends dec\n  end\nend\n";
+    let uri = "file:///ws/M2.eventb";
+    let files = [
+        ("file:///ws/M0.eventb", BASE),
+        ("file:///ws/M1.eventb", refinement),
+        (uri, deeper),
+    ];
+    let actions = refactors(&provider(&files), uri, deeper, 3, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Inline"))
+        .expect("offered, disabled");
+    assert!(action.edit.is_none());
+}
+
+const BASE: &str = "\
+machine M0
+variables x
+invariants
+  @t x ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a x ≔ 9
+  end
+  event dec
+    any n
+    where
+      @g1 n ∈ ℕ
+      @g2 x > n
+    then
+      @a1 x ≔ x − n
+  end
+end
+";
+
+#[test]
+fn an_extended_event_takes_in_what_it_inherits() {
+    let refinement = "\
+machine M1 refines M0
+variables x y
+invariants
+  @t y ∈ ℕ
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @b y ≔ 0
+  end
+  event dec extends dec
+    where
+      @g3 x > 1
+    then
+      @b1 y ≔ y + 1
+  end
+end
+";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, refinement)];
+    let actions = refactors(&provider(&files), uri, refinement, 9, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Inline"))
+        .expect("offered on an extended event's header");
+    assert_eq!(action.title, "Inline what dec inherits from dec");
+    let inlined = applied(refinement, uri, action);
+    assert_eq!(
+        inlined,
+        refinement.replace(
+            "  event dec extends dec\n    where\n      @g3 x > 1\n    then\n      @b1 y ≔ y + 1\n",
+            "  event dec refines dec\n    any n\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n      @g3 x > 1\n    then\n      @a1 x ≔ x − n\n      @b1 y ≔ y + 1\n",
+        )
+    );
+    // The inlined event means what the extended one did.
+    assert_eq!(
+        check_errors(&[("M0", BASE), ("M1", &inlined)]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_extended_event_with_no_clause_gets_them_written() {
+    let refinement =
+        "machine M1 refines M0\nvariables x\nevents\n  event dec extends dec\n  end\nend\n";
+    let uri = "file:///ws/M1.eventb";
+    let files = [("file:///ws/M0.eventb", BASE), (uri, refinement)];
+    let actions = refactors(&provider(&files), uri, refinement, 3, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Inline"))
+        .unwrap();
+    assert_eq!(
+        applied(refinement, uri, action),
+        "machine M1 refines M0\nvariables x\nevents\n  event dec refines dec\n    any n\n    where\n      @g1 n ∈ ℕ\n      @g2 x > n\n    then\n      @a1 x ≔ x − n\n  end\nend\n"
+    );
 }

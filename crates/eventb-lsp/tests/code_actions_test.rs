@@ -394,10 +394,12 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
 /// Apply one document's `edits` to `text`, last position first so the earlier
 /// ones stay where they were computed.
 fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
-    let mut edits: Vec<&TextEdit> = edits.iter().collect();
-    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    // Inserts at one position land in array order, so among those the last
+    // is applied first.
+    let mut edits: Vec<(usize, &TextEdit)> = edits.iter().enumerate().collect();
+    edits.sort_by_key(|(index, edit)| std::cmp::Reverse((edit.range.start, *index)));
     let mut result = text.to_string();
-    for edit in edits {
+    for (_, edit) in edits {
         let start = position_to_offset(&result, edit.range.start).expect("edit start in bounds");
         let end = position_to_offset(&result, edit.range.end).expect("edit end in bounds");
         result.replace_range(start..end, &edit.new_text);

@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use rossi::{Component, Context, Event, EventStatus, InitialisationEvent, Machine, NamedElement};
 
-use crate::code_actions::kind_requested;
+use crate::code_actions::{
+    event_clause_indent, event_header_end, event_is_lowercase, keyword_text, kind_requested,
+    line_start, parameter_insert,
+};
 use crate::component_loader::ComponentLoader;
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
@@ -62,7 +65,9 @@ impl RefinementActionProvider {
         printer: &rossi::PrettyPrinter,
         creates_files: bool,
     ) -> Vec<CodeAction> {
-        if !kind_requested(params, &CodeActionKind::REFACTOR) {
+        let refactor = kind_requested(params, &CodeActionKind::REFACTOR);
+        let inline = kind_requested(params, &CodeActionKind::REFACTOR_INLINE);
+        if !refactor && !inline {
             return Vec::new();
         }
         let Some(cursor) = crate::position::position_to_offset(text, params.range.start) else {
@@ -73,19 +78,39 @@ impl RefinementActionProvider {
         else {
             return Vec::new();
         };
-        let on_header = component.name_span().is_some_and(|name| {
-            let line = |offset: usize| text[..offset].matches('\n').count();
-            line(name.start) == line(cursor)
-        });
+        let cursor_line = line_start(text, cursor)
+            ..text[cursor..]
+                .find('\n')
+                .map_or(text.len(), |at| cursor + at);
+        let on_line = |offset: usize| cursor_line.contains(&offset);
+        let on_header = component
+            .name_span()
+            .is_some_and(|name| on_line(name.start));
         let mut actions = Vec::new();
-        if on_header && creates_files {
+        if refactor && on_header && creates_files {
             actions.extend(self.create_next_level_action(
                 &params.text_document.uri,
                 component,
                 printer,
             ));
         }
-        if on_header && let Component::Machine(machine) = component {
+        if inline
+            && let Component::Machine(machine) = component
+            && let Some(event) = machine.events.iter().find(|event| {
+                event.extended && event.name_span.is_some_and(|name| on_line(name.start))
+            })
+        {
+            actions.extend(self.inline_inherited_action(
+                &params.text_document.uri,
+                text,
+                machine,
+                event,
+            ));
+        }
+        if refactor
+            && on_header
+            && let Component::Machine(machine) = component
+        {
             actions.extend(self.refine_unrefined_action(
                 &params.text_document.uri,
                 text,
@@ -94,6 +119,230 @@ impl RefinementActionProvider {
             ));
         }
         actions
+    }
+
+    /// The events `event` of `machine` extends, root first, each with the
+    /// text of the file it is written in: its abstract event, and that one's
+    /// while it is extended in turn.
+    fn extended_chain(&self, machine: &Machine, event: &Event) -> Option<Vec<(String, Event)>> {
+        let loader = ComponentLoader::new(&self.cross_ref_manager, Some(&self.document_manager));
+        let mut chain = Vec::new();
+        let mut visited = HashSet::new();
+        let mut parent = machine.refines.clone()?;
+        let mut target = event.refines.first()?.name.clone();
+        loop {
+            if !visited.insert(parent.clone()) {
+                return None;
+            }
+            let loaded = loader.load(&parent)?;
+            let Component::Machine(abstraction) = loaded.component() else {
+                return None;
+            };
+            let abstract_event = abstraction.events.iter().find(|e| e.name == target)?;
+            chain.push((loaded.text().to_string(), abstract_event.clone()));
+            if !abstract_event.extended {
+                break;
+            }
+            parent = abstraction.refines.clone()?;
+            target = abstract_event.refines.first()?.name.clone();
+        }
+        chain.reverse();
+        Some(chain)
+    }
+
+    /// Write what an extended `event` inherits into it: the parameters,
+    /// guards and actions of the events it extends, root first and under
+    /// their own labels, ahead of its own; and make it refine its abstract
+    /// event instead of extending it. The event means what it did: it keeps
+    /// every abstract parameter, so it needs no witness. Each inherited
+    /// element is copied as written in its own file.
+    fn inline_inherited_action(
+        &self,
+        uri: &Uri,
+        text: &str,
+        machine: &Machine,
+        event: &Event,
+    ) -> Option<CodeAction> {
+        let chain = self.extended_chain(machine, event)?;
+        let target = event.refines.first()?;
+        let title = format!("Inline what {} inherits from {}", event.name, target.name);
+        // Written into one event, two guards or actions under one label are
+        // a local duplicate, and the checker drops every copy of one: an own
+        // label reusing an inherited one, or two levels of the chain sharing
+        // a label, would lose an element the event has now.
+        let mut labels = HashSet::new();
+        let shared = chain
+            .iter()
+            .map(|(_, e)| e)
+            .chain(std::iter::once(event))
+            .flat_map(|e| {
+                e.guards
+                    .iter()
+                    .filter_map(|g| g.label.as_deref())
+                    .chain(e.actions.iter().filter_map(|a| a.label.as_deref()))
+            })
+            .find(|label| !labels.insert(*label));
+        if let Some(label) = shared {
+            return Some(CodeAction {
+                title,
+                kind: Some(CodeActionKind::REFACTOR_INLINE),
+                diagnostics: None,
+                edit: None,
+                command: None,
+                is_preferred: Some(false),
+                disabled: Some(crate::lsp_types::CodeActionDisabled {
+                    reason: format!("@{label} would be written twice"),
+                }),
+                data: None,
+            });
+        }
+        let mut parameters: Vec<&str> = Vec::new();
+        let mut guards = Vec::new();
+        let mut actions = Vec::new();
+        for (file, ancestor) in &chain {
+            let masked = rossi::comments::mask_comments(file);
+            // An element's span may run on over a comment written after it.
+            let written = |span: rossi::ast::Span| {
+                file[span.start..span.start + masked[span.start..span.end].trim_end().len()]
+                    .to_string()
+            };
+            for parameter in &ancestor.parameters {
+                let name = parameter.name.as_str();
+                if !parameters.contains(&name)
+                    && !event.parameters.iter().any(|own| own.name == name)
+                {
+                    parameters.push(name);
+                }
+            }
+            // An element with no span cannot be copied, and leaving it out
+            // would change what the event means.
+            for guard in &ancestor.guards {
+                guards.push(written(guard.span?));
+            }
+            for action in &ancestor.actions {
+                actions.push(written(action.span?));
+            }
+        }
+
+        let masked = rossi::comments::mask_comments(text);
+        let span = event.span?;
+        let lowercase = event_is_lowercase(text, event);
+        let clause_indent = event_clause_indent(text, event)?;
+        // The start of a line an element has to itself, or `None`.
+        let own_line = |offset: usize| {
+            let start = line_start(text, offset);
+            masked[start..offset].trim().is_empty().then_some(start)
+        };
+        let item_indent = event
+            .guards
+            .iter()
+            .filter_map(|g| g.span)
+            .chain(event.actions.iter().filter_map(|a| a.span))
+            .find_map(|item| own_line(item.start))
+            .map(|start| crate::code_actions::indentation(&text[start..]).to_string())
+            .unwrap_or_else(|| format!("{clause_indent}  "));
+        let at = |offset: usize| {
+            let position = crate::position::offset_to_position(text, offset);
+            Range::new(position, position)
+        };
+
+        // The header: `extends t` becomes `refines t`.
+        let name_end = event.name_span?.end;
+        let target_start = target.span?.start;
+        let keyword =
+            name_end + masked[name_end..target_start].find(|c: char| !c.is_whitespace())?;
+        let keyword_end = keyword + masked[keyword..target_start].trim_end().len();
+        let mut edits = vec![TextEdit {
+            range: crate::position::span_to_range(
+                &rossi::ast::Span {
+                    start: keyword,
+                    end: keyword_end,
+                },
+                text,
+            ),
+            new_text: keyword_text(
+                KeywordId::Refines,
+                masked[keyword..].starts_with(char::is_lowercase),
+            ),
+        }];
+        if !parameters.is_empty() {
+            let insert = parameter_insert(text, event, &parameters)?;
+            edits.push(TextEdit {
+                range: Range::new(insert.position, insert.position),
+                new_text: insert.text,
+            });
+        }
+        let items = |items: &[String]| -> String {
+            items
+                .iter()
+                .map(|item| format!("{item_indent}{item}\n"))
+                .collect()
+        };
+        if !guards.is_empty() {
+            match event.guards.first().and_then(|g| g.span) {
+                Some(first) => edits.push(TextEdit {
+                    range: at(own_line(first.start)?),
+                    new_text: items(&guards),
+                }),
+                None => {
+                    let after = event
+                        .parameters
+                        .iter()
+                        .filter_map(|p| p.span)
+                        .map(|s| s.end)
+                        .chain(event_header_end(event))
+                        .max()?;
+                    let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
+                    let block = items(&guards);
+                    edits.push(TextEdit {
+                        range: at(line_end),
+                        new_text: format!(
+                            "\n{clause_indent}{}\n{}",
+                            keyword_text(KeywordId::Where, lowercase),
+                            block.trim_end_matches('\n')
+                        ),
+                    });
+                }
+            }
+        }
+        if !actions.is_empty() {
+            match event.actions.first().and_then(|a| a.span) {
+                Some(first) => edits.push(TextEdit {
+                    range: at(own_line(first.start)?),
+                    new_text: items(&actions),
+                }),
+                None => {
+                    // A new THEN goes on the line of the event's END, which
+                    // must hold nothing else.
+                    let end_line = line_start(text, span.end.checked_sub(1)?);
+                    if line_keyword(&masked[end_line..span.end]) != Some(KeywordId::End) {
+                        return None;
+                    }
+                    edits.push(TextEdit {
+                        range: at(end_line),
+                        new_text: format!(
+                            "{clause_indent}{}\n{}",
+                            keyword_text(KeywordId::Then, lowercase),
+                            items(&actions)
+                        ),
+                    });
+                }
+            }
+        }
+        Some(CodeAction {
+            title,
+            kind: Some(CodeActionKind::REFACTOR_INLINE),
+            diagnostics: None,
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::from([(uri.clone(), edits)])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            command: None,
+            is_preferred: Some(false),
+            disabled: None,
+            data: None,
+        })
     }
 
     /// Refine the events of `machine`'s abstraction that no event of it
@@ -340,11 +589,6 @@ fn refinement_of(machine: &Machine, name: String) -> Machine {
         })
         .collect();
     refinement
-}
-
-/// The start of the line holding byte `offset` of `text`.
-fn line_start(text: &str, offset: usize) -> usize {
-    text[..offset].rfind('\n').map_or(0, |at| at + 1)
 }
 
 /// `machine`'s events as the printer writes them: the EVENTS keyword line and
