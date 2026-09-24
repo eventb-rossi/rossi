@@ -148,7 +148,7 @@ export async function activate(context: ExtensionContext) {
         synchronize: {
             configurationSection: 'rossi',
             // No `fileEvents` watcher here: the server registers its own
-            // `**/*.eventb` watcher once it has started.
+            // `**/*.eventb` and folder watchers once it has started.
         },
         initializationOptions: getRossiConfiguration(),
     };
