@@ -95,6 +95,18 @@ impl<'a> EventKind<'a> {
             EventKind::Ordinary(e) => e.name_span,
         }
     }
+    /// Span of the explicit REFINES target `label`, for diagnostics about
+    /// the target. INITIALISATION writes none.
+    fn target_span(&self, label: &str) -> Option<rossi::ast::Span> {
+        match self {
+            EventKind::Init(_) => None,
+            EventKind::Ordinary(e) => e
+                .refines
+                .iter()
+                .find(|target| target.name == label)
+                .and_then(|target| target.span),
+        }
+    }
 }
 
 /// Machine-wide state shared by every event check.
@@ -651,7 +663,10 @@ pub(super) fn build_event_decl(
                         "refines target '{target}' not found in parent — event dropped"
                     ),
                     rule_id: Some(crate::RuleId::CrossReferenceNotFound),
-                    span: context.kind.name_span(),
+                    span: context
+                        .kind
+                        .target_span(target)
+                        .or(context.kind.name_span()),
                 });
                 return None;
             }
