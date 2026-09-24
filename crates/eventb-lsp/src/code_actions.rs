@@ -4,7 +4,8 @@
 //! - Operator conversion (ASCII ↔ Unicode)
 //! - Quick fixes for the rule diagnostics
 
-use crate::cross_references::{CrossReferenceManager, ReferenceKind};
+use crate::cross_references::{ComponentKind, CrossReferenceManager, ReferenceKind};
+use crate::document::DocumentManager;
 use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
@@ -383,14 +384,63 @@ fn parameter_insert(text: &str, event: &rossi::Event, name: &str) -> Option<Name
     new_clause_line(text, after, &indent, KeywordId::Any, lowercase, name)
 }
 
+/// The optimal string alignment distance between `a` and `b`: edits of one
+/// character, a swap of two adjacent ones counting as one edit.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut rows = vec![vec![0; b.len() + 1]; a.len() + 1];
+    for (i, row) in rows.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in rows[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (rows[i - 1][j] + 1)
+                .min(rows[i][j - 1] + 1)
+                .min(rows[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(rows[i - 2][j - 2] + 1);
+            }
+            rows[i][j] = best;
+        }
+    }
+    rows[a.len()][b.len()]
+}
+
+/// The `candidates` close enough to `name` to be what was meant, closest
+/// first, at most three. A short name admits fewer edits, and one of one or
+/// two characters none: any other short name is as close as the right one.
+fn spelled_alike(name: &str, candidates: &[String]) -> Vec<String> {
+    let budget = match name.chars().count() {
+        0..=2 => return Vec::new(),
+        3..=4 => 1,
+        _ => 2,
+    };
+    let mut close: Vec<(usize, &String)> = candidates
+        .iter()
+        .filter(|candidate| candidate.as_str() != name)
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .filter(|(distance, _)| *distance <= budget)
+        .collect();
+    close.sort();
+    close.dedup();
+    close.into_iter().take(3).map(|(_, c)| c.clone()).collect()
+}
+
 /// Provides code actions and refactorings
 pub struct CodeActionProvider {
     /// The workspace's declared names, for the fixes that look beyond the
     /// document: which context declares a name the document does not.
     workspace_symbols: Option<Arc<WorkspaceSymbolProvider>>,
     /// The workspace's component graph, so a fix never adds an EXTENDS that
-    /// closes a cycle.
+    /// closes a cycle, and knows the components a misspelled target may mean.
     cross_ref_manager: Option<Arc<CrossReferenceManager>>,
+    /// The open documents, whose dependency closure the fixes reading the
+    /// checked model check.
+    document_manager: Option<Arc<DocumentManager>>,
 }
 
 impl CodeActionProvider {
@@ -398,7 +448,24 @@ impl CodeActionProvider {
         Self {
             workspace_symbols: None,
             cross_ref_manager: None,
+            document_manager: None,
         }
+    }
+
+    /// Set the document manager whose parses the model-reading fixes check.
+    pub fn set_document_manager(&mut self, manager: Arc<DocumentManager>) {
+        self.document_manager = Some(manager);
+    }
+
+    /// The checked model of the open document at `uri` and its dependency
+    /// closure, as the semantic diagnostics see it.
+    fn checked_model(&self, uri: &Uri) -> Option<rossi_build::sc_model::ScModel> {
+        let documents = self.document_manager.as_ref()?;
+        let manager = self.cross_ref_manager.as_ref()?;
+        let doc = documents.parse_result(uri)?;
+        let loader = crate::component_loader::ComponentLoader::new(manager, Some(documents));
+        let project = crate::closure::project_for(&doc, &loader, "lsp-code-actions");
+        Some(rossi_build::check_with_model(&project).1)
     }
 
     /// Set the workspace symbol index the cross-file fixes search.
@@ -763,7 +830,18 @@ impl CodeActionProvider {
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
             .collect();
-        if !undeclared.is_empty() {
+        // A name nothing resolves (EB018) or a component or abstract event
+        // nothing declares (EB009) may be a misspelling of one in scope.
+        let misspelled: Vec<_> = params
+            .context
+            .diagnostics
+            .iter()
+            .filter(|d| {
+                diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code())
+                    || diagnostic_code_is(d, RuleId::CrossReferenceNotFound.code())
+            })
+            .collect();
+        if !undeclared.is_empty() || !misspelled.is_empty() {
             let components = crate::component_util::parse_all(text);
             for diagnostic in undeclared {
                 actions.extend(
@@ -780,6 +858,21 @@ impl CodeActionProvider {
                         text,
                         &components,
                     ))
+                    .map(CodeActionOrCommand::CodeAction),
+                );
+            }
+            // Checked at most once, and only for a fix that reads the model.
+            let model = std::cell::OnceCell::new();
+            for diagnostic in misspelled {
+                actions.extend(
+                    self.create_respell_actions(
+                        &params.text_document.uri,
+                        diagnostic,
+                        text,
+                        &components,
+                        &model,
+                    )
+                    .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
                 );
             }
@@ -908,6 +1001,105 @@ impl CodeActionProvider {
                     disabled: None,
                     data: None,
                 })
+            })
+            .collect()
+    }
+
+    /// Quick fixes replacing a name nothing declares with one spelled alike:
+    /// for EB018, a name in scope where it is used (the event's parameters
+    /// included); for EB009, a component of the kind the clause names, or an
+    /// event of the abstract machine for an event's REFINES target. Closest
+    /// first, at most three, preferred when there is only one. `model` is the
+    /// document's checked model, computed on first use.
+    fn create_respell_actions(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+        model: &std::cell::OnceCell<Option<rossi_build::sc_model::ScModel>>,
+    ) -> Vec<CodeAction> {
+        let Some(name) = text_in_range(text, diagnostic.range) else {
+            return Vec::new();
+        };
+        let Some(offset) = crate::position::position_to_offset(text, diagnostic.range.start) else {
+            return Vec::new();
+        };
+        let Some(component) = crate::component_util::component_at_offset(components, offset) else {
+            return Vec::new();
+        };
+        let event = match component {
+            Component::Machine(machine) => machine
+                .events
+                .iter()
+                .find(|event| event.span.is_some_and(|span| span.contains(offset))),
+            Component::Context(_) => None,
+        };
+        let model = || model.get_or_init(|| self.checked_model(uri)).as_ref();
+        let names = |env: &rossi_build::type_env::TypeEnv| {
+            env.iter()
+                .map(|(name, _)| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        let in_event_target = event.is_some_and(|event| {
+            event
+                .refines
+                .iter()
+                .any(|target| target.span.is_some_and(|span| span.contains(offset)))
+        });
+        let candidates: Vec<String> = match component {
+            _ if diagnostic_code_is(diagnostic, RuleId::UndeclaredIdentifier.code()) => {
+                match component {
+                    Component::Context(context) => model()
+                        .and_then(|model| model.contexts.get(&context.name))
+                        .map(|checked| names(checked.env())),
+                    Component::Machine(machine) => model()
+                        .and_then(|model| model.machines.get(&machine.name))
+                        .map(|checked| {
+                            match event.and_then(|e| checked.events_by_label.get(&e.name)) {
+                                Some(decl) => names(&checked.event_env(decl)),
+                                None => names(checked.env()),
+                            }
+                        }),
+                }
+                .unwrap_or_default()
+            }
+            Component::Machine(machine) if in_event_target => machine
+                .refines
+                .as_ref()
+                .and_then(|parent| model()?.machines.get(parent))
+                .map(|parent| parent.events_by_label.keys().cloned().collect())
+                .unwrap_or_default(),
+            _ => {
+                let Some(manager) = &self.cross_ref_manager else {
+                    return Vec::new();
+                };
+                let kind = match component {
+                    Component::Machine(machine) if machine.refines.as_deref() == Some(name) => {
+                        ComponentKind::Machine
+                    }
+                    _ => ComponentKind::Context,
+                };
+                manager
+                    .component_names_of_kind(kind)
+                    .into_iter()
+                    .filter(|candidate| candidate != component.name())
+                    .collect()
+            }
+        };
+        let similar = spelled_alike(name, &candidates);
+        let preferred = similar.len() == 1;
+        similar
+            .into_iter()
+            .map(|replacement| CodeAction {
+                title: format!("Change to {replacement}"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(single_edit(uri, diagnostic.range, replacement)),
+                command: None,
+                is_preferred: Some(preferred),
+                disabled: None,
+                data: None,
             })
             .collect()
     }

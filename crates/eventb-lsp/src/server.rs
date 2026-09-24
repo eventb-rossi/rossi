@@ -1152,6 +1152,7 @@ impl RossiLanguageServer {
         let mut code_actions_provider = CodeActionProvider::new();
         code_actions_provider.set_workspace_symbols(Arc::clone(&workspace_symbol_provider));
         code_actions_provider.set_cross_reference_manager(Arc::clone(&cross_reference_manager));
+        code_actions_provider.set_document_manager(Arc::clone(&document_manager));
 
         Self {
             client,
