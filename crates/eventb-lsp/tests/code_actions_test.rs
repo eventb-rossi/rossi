@@ -1332,11 +1332,129 @@ fn eb018_offers_every_declaring_context_and_prefers_none() {
         (uri, text),
     ]);
     let fixes = eb018_fixes(&provider, uri, text, 4, "k");
-    let titles: Vec<&str> = fixes.iter().map(|action| action.title.as_str()).collect();
+    let titles: Vec<&str> = fixes
+        .iter()
+        .map(|action| action.title.as_str())
+        .filter(|title| title.starts_with("Add"))
+        .collect();
     assert_eq!(titles, ["Add c to SEES", "Add e to SEES"]);
     assert!(
         fixes
             .iter()
             .all(|action| action.is_preferred == Some(false))
+    );
+}
+
+/// The document the quick fix titled `title` leaves, among those offered for
+/// an EB018 on `word` at `line`.
+fn eb018_fixed(text: &str, line: u32, word: &str, title: &str) -> String {
+    let uri = "file:///m.eventb";
+    let provider = CodeActionProvider::new();
+    let fixes = eb018_fixes(&provider, uri, text, line, word);
+    let fix = fixes
+        .iter()
+        .find(|action| action.title == title)
+        .unwrap_or_else(|| panic!("no {title:?} for:\n{text}\ngot {fixes:?}"));
+    assert_eq!(
+        fix.is_preferred,
+        Some(false),
+        "a new declaration is a choice"
+    );
+    let fixed = applied(text, uri, fix);
+    rossi::parse(&fixed).unwrap_or_else(|error| panic!("{error}:\n{fixed}"));
+    fixed
+}
+
+#[test]
+fn eb018_declares_the_name_as_a_variable() {
+    let cases = [
+        (
+            "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i k ∈ ℕ\nend\n",
+            "machine m\nvariables x k\ninvariants\n  @t x ∈ ℕ\n  @i k ∈ ℕ\nend\n",
+        ),
+        (
+            "machine m\nsees c\ninvariants\n  @i k ∈ ℕ\nend\n",
+            "machine m\nsees c\nvariables k\ninvariants\n  @i k ∈ ℕ\nend\n",
+        ),
+        (
+            "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @t x ∈ ℕ\n    @i k ∈ ℕ\nEND\n",
+            "MACHINE m\nVARIABLES\n    x\n    k\nINVARIANTS\n    @t x ∈ ℕ\n    @i k ∈ ℕ\nEND\n",
+        ),
+    ];
+    for (text, expected) in cases {
+        let line = text.lines().position(|l| l.contains("@i")).unwrap() as u32;
+        assert_eq!(
+            eb018_fixed(text, line, "k", "Declare k as a variable"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn eb018_declares_the_name_as_a_parameter_of_its_event() {
+    let cases = [
+        (
+            "machine m\nevents\n  event e\n    where\n      @g p > 0\n  end\nend\n",
+            "machine m\nevents\n  event e\n    any p\n    where\n      @g p > 0\n  end\nend\n",
+        ),
+        (
+            "machine m\nevents\n  event e\n    any q\n    where\n      @g p > q\n  end\nend\n",
+            "machine m\nevents\n  event e\n    any q p\n    where\n      @g p > q\n  end\nend\n",
+        ),
+        (
+            "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        q\n    WHERE\n        @g p > q\n    END\nEND\n",
+            "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        q\n        p\n    WHERE\n        @g p > q\n    END\nEND\n",
+        ),
+        (
+            "machine m\nrefines a\nevents\n  convergent event e refines f\n    where\n      @g p > 0\n  end\nend\n",
+            "machine m\nrefines a\nevents\n  convergent event e refines f\n    any p\n    where\n      @g p > 0\n  end\nend\n",
+        ),
+    ];
+    for (text, expected) in cases {
+        let line = text.lines().position(|l| l.contains("@g")).unwrap() as u32;
+        assert_eq!(
+            eb018_fixed(text, line, "p", "Declare p as a parameter of e"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn eb018_declares_the_name_as_a_constant() {
+    let cases = [
+        (
+            "context d\naxioms\n  @a j > 0\nend\n",
+            "context d\nconstants j\naxioms\n  @a j > 0\nend\n",
+        ),
+        (
+            "context d\nextends c\nsets S\naxioms\n  @a j > 0\nend\n",
+            "context d\nextends c\nsets S\nconstants j\naxioms\n  @a j > 0\nend\n",
+        ),
+    ];
+    for (text, expected) in cases {
+        let line = text.lines().position(|l| l.contains("@a")).unwrap() as u32;
+        assert_eq!(
+            eb018_fixed(text, line, "j", "Declare j as a constant"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn eb018_declares_nothing_for_a_primed_name() {
+    // An after-state name is never declared; the prime is what is wrong.
+    let text = "machine m\nvariables x\ninvariants\n  @t x ∈ ℕ\n  @i x' ∈ ℕ\nend\n";
+    let fixes = eb018_fixes(
+        &CodeActionProvider::new(),
+        "file:///m.eventb",
+        text,
+        4,
+        "x'",
+    );
+    assert!(
+        fixes
+            .iter()
+            .all(|action| !action.title.starts_with("Declare")),
+        "{fixes:?}"
     );
 }

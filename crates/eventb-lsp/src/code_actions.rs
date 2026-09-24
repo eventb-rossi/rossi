@@ -247,70 +247,140 @@ fn enclosing_event_range(masked: &str, offset: usize) -> std::ops::Range<usize> 
     start..end
 }
 
-/// Where [`dependency_edit`] writes a new EXTENDS or SEES target, and what.
-struct DependencyInsert {
+/// A name to write into a list of names: where, and the text to insert.
+struct NameInsert {
     position: Position,
     text: String,
 }
 
-/// The edit adding `target` to `component`'s `clause` (EXTENDS of a context,
-/// SEES of a machine), or `None` when there is nowhere safe to write it.
-///
-/// An existing clause gets the name after its last one: on the same line when
-/// the clause is written inline (`sees a b`), on a line of its own at the same
-/// indentation when every name has one. A missing clause is written on the
-/// line after the clauses it must follow (only REFINES precedes SEES) or after
-/// the header, in the header keyword's case, where `rossi fmt` would put it.
-fn dependency_edit(
-    text: &str,
-    component: &Component,
-    clause: KeywordId,
-    target: &str,
-) -> Option<DependencyInsert> {
-    let line_start = |offset: usize| text[..offset].rfind('\n').map_or(0, |at| at + 1);
-    let indentation = |line: &str| line[..line.len() - line.trim_start().len()].to_string();
+/// The start of the line holding byte `offset` of `text`.
+fn line_start(text: &str, offset: usize) -> usize {
+    text[..offset].rfind('\n').map_or(0, |at| at + 1)
+}
 
-    if let Some(region) = component.clauses().iter().find(|r| r.keyword == clause) {
-        let end = region.span.end;
-        let line = &text[line_start(end)..end];
-        let insert = if line_keyword(line) == Some(clause) {
-            format!(" {target}")
-        } else {
-            format!("\n{}{target}", indentation(line))
-        };
-        return Some(DependencyInsert {
-            position: crate::position::offset_to_position(text, end),
-            text: insert,
-        });
+/// The leading whitespace of `line`.
+fn indentation(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// `name` added to a name list opened by `keyword` whose last name ends at
+/// byte `end`: on the same line when the list is written inline (`sees a b`),
+/// on a line of its own at the same indentation when every name has one.
+fn append_to_list(text: &str, end: usize, keyword: KeywordId, name: &str) -> NameInsert {
+    let line = &text[line_start(text, end)..end];
+    let insert = if line_keyword(line) == Some(keyword) {
+        format!(" {name}")
+    } else {
+        format!("\n{}{name}", indentation(line))
+    };
+    NameInsert {
+        position: crate::position::offset_to_position(text, end),
+        text: insert,
     }
+}
 
-    let header = component.span()?.start;
-    let after = component
-        .clauses()
-        .iter()
-        .filter(|r| clause == KeywordId::Sees && r.keyword == KeywordId::Refines)
-        .map(|r| r.span.end)
-        .chain(component.name_span().map(|span| span.end))
-        .max()?;
+/// A new `keyword name` clause on the line after the one holding byte
+/// `after`, indented by `indent` and in lower case when `lowercase`. `None`
+/// when a block comment opened on that line is still open at its end, where
+/// it would swallow the clause.
+fn new_clause_line(
+    text: &str,
+    after: usize,
+    indent: &str,
+    keyword: KeywordId,
+    lowercase: bool,
+    name: &str,
+) -> Option<NameInsert> {
     let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
-    // A block comment opened on that line and still open at its end would
-    // swallow the new clause.
     if rossi::comments::offset_in_comment(text, line_end) {
         return None;
     }
-    let spelled = rossi::keywords::spell(clause);
-    let keyword = if text[header..].starts_with(char::is_lowercase) {
+    let spelled = rossi::keywords::spell(keyword);
+    let keyword = if lowercase {
         spelled.to_lowercase()
     } else {
         spelled.to_string()
     };
-    Some(DependencyInsert {
+    Some(NameInsert {
         position: crate::position::offset_to_position(text, line_end),
-        text: format!(
-            "\n{}{keyword} {target}",
-            indentation(&text[line_start(header)..header])
-        ),
+        text: format!("\n{indent}{keyword} {name}"),
     })
+}
+
+/// `name` added to `component`'s name-list `clause` (EXTENDS, SEES,
+/// VARIABLES, SETS or CONSTANTS), or `None` when there is nowhere safe to
+/// write it.
+///
+/// An existing clause gets the name after its last one. A missing clause is
+/// written where `rossi fmt` would put it: on the line after the last clause
+/// that must precede it, or after the header, in the header keyword's case.
+fn component_list_insert(
+    text: &str,
+    component: &Component,
+    clause: KeywordId,
+    name: &str,
+) -> Option<NameInsert> {
+    if let Some(region) = component.clauses().iter().find(|r| r.keyword == clause) {
+        return Some(append_to_list(text, region.span.end, clause, name));
+    }
+    let follows = match component {
+        Component::Context(_) => rossi::keywords::context_clause_boundary(clause),
+        Component::Machine(_) => rossi::keywords::machine_clause_boundary(clause),
+    };
+    let header = component.span()?.start;
+    let after = component
+        .clauses()
+        .iter()
+        .filter(|r| !follows.contains(&r.keyword))
+        .map(|r| r.span.end)
+        .chain(component.name_span().map(|span| span.end))
+        .max()?;
+    new_clause_line(
+        text,
+        after,
+        indentation(&text[line_start(text, header)..header]),
+        clause,
+        text[header..].starts_with(char::is_lowercase),
+        name,
+    )
+}
+
+/// `name` added to `event`'s parameters, or `None` when there is nowhere safe
+/// to write it. A new ANY clause goes after the header and any REFINES
+/// targets, indented like the event's other clauses.
+fn parameter_insert(text: &str, event: &rossi::Event, name: &str) -> Option<NameInsert> {
+    if let Some(last) = event
+        .parameters
+        .iter()
+        .filter_map(|p| p.span)
+        .map(|s| s.end)
+        .max()
+    {
+        return Some(append_to_list(text, last, KeywordId::Any, name));
+    }
+    let span = event.span?;
+    let after = event
+        .refines
+        .iter()
+        .filter_map(|target| target.span)
+        .map(|s| s.end)
+        .chain(event.name_span.map(|s| s.end))
+        .max()?;
+    let header_line = &text[line_start(text, span.start)..span.start];
+    // Indent like the first clause keyword written under the header; an
+    // event with no clause yet gets its header's indentation and two more.
+    let body = &text[after..span.end];
+    let indent = body
+        .lines()
+        .skip(1)
+        .find(|line| line_keyword(line).is_some())
+        .map(|line| indentation(line).to_string())
+        .unwrap_or_else(|| format!("{}  ", indentation(header_line)));
+    let lowercase = text[span.start..span.end]
+        .split_whitespace()
+        .find(|word| line_keyword(word) == Some(KeywordId::Event))
+        .is_some_and(|word| word.starts_with(char::is_lowercase));
+    new_clause_line(text, after, &indent, KeywordId::Any, lowercase, name)
 }
 
 /// Provides code actions and refactorings
@@ -684,8 +754,9 @@ impl CodeActionProvider {
             }
         }
 
-        // See or extend the context that declares an undeclared name
-        // (EB018). The document is parsed only when there is one to fix.
+        // See or extend the context that declares an undeclared name, or
+        // declare it here (EB018). The document is parsed only when there is
+        // one to fix.
         let undeclared: Vec<_> = params
             .context
             .diagnostics
@@ -703,6 +774,12 @@ impl CodeActionProvider {
                         &components,
                     )
                     .into_iter()
+                    .chain(self.create_declare_actions(
+                        &params.text_document.uri,
+                        diagnostic,
+                        text,
+                        &components,
+                    ))
                     .map(CodeActionOrCommand::CodeAction),
                 );
             }
@@ -816,7 +893,7 @@ impl CodeActionProvider {
         contexts
             .iter()
             .filter_map(|target| {
-                let insert = dependency_edit(text, component, clause, target)?;
+                let insert = component_list_insert(text, component, clause, target)?;
                 Some(CodeAction {
                     title: format!("Add {target} to {}", rossi::keywords::spell(clause)),
                     kind: Some(CodeActionKind::QUICKFIX),
@@ -828,6 +905,75 @@ impl CodeActionProvider {
                     )),
                     command: None,
                     is_preferred: Some(preferred),
+                    disabled: None,
+                    data: None,
+                })
+            })
+            .collect()
+    }
+
+    /// Quick fixes for EB018 (an undeclared identifier) that declare the name
+    /// where it is used: a constant of a context; a variable of a machine, and
+    /// also a parameter of the event it is used in. Never preferred, since
+    /// each introduces a symbol the user has to type. A primed name is left
+    /// alone: an after-state name is never declared, the prime is the error.
+    fn create_declare_actions(
+        &self,
+        uri: &Uri,
+        diagnostic: &crate::lsp_types::Diagnostic,
+        text: &str,
+        components: &[Component],
+    ) -> Vec<CodeAction> {
+        let Some(name) = text_in_range(text, diagnostic.range).filter(|name| {
+            rossi::names::is_valid_math_identifier(name)
+                && !rossi::names::is_primed_identifier(name)
+        }) else {
+            return Vec::new();
+        };
+        let Some(offset) = crate::position::position_to_offset(text, diagnostic.range.start) else {
+            return Vec::new();
+        };
+        let Some(component) = crate::component_util::component_at_offset(components, offset) else {
+            return Vec::new();
+        };
+        let mut declarations = Vec::new();
+        match component {
+            Component::Context(_) => declarations.push((
+                format!("Declare {name} as a constant"),
+                component_list_insert(text, component, KeywordId::Constants, name),
+            )),
+            Component::Machine(machine) => {
+                declarations.push((
+                    format!("Declare {name} as a variable"),
+                    component_list_insert(text, component, KeywordId::Variables, name),
+                ));
+                if let Some(event) = machine
+                    .events
+                    .iter()
+                    .find(|event| event.span.is_some_and(|span| span.contains(offset)))
+                {
+                    declarations.push((
+                        format!("Declare {name} as a parameter of {}", event.name),
+                        parameter_insert(text, event, name),
+                    ));
+                }
+            }
+        }
+        declarations
+            .into_iter()
+            .filter_map(|(title, insert)| {
+                let insert = insert?;
+                Some(CodeAction {
+                    title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![diagnostic.clone()]),
+                    edit: Some(single_edit(
+                        uri,
+                        Range::new(insert.position, insert.position),
+                        insert.text,
+                    )),
+                    command: None,
+                    is_preferred: Some(false),
                     disabled: None,
                     data: None,
                 })

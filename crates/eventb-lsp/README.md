@@ -324,6 +324,8 @@ Implemented code actions include:
 - Add a missing `END` keyword when diagnostics indicate that shape
 - See or extend the workspace context that declares an undeclared constant
   or carrier set (EB018)
+- Declare an undeclared name as a constant, a variable, or a parameter of
+  the event using it (EB018)
 
 ### Signature Help
 
