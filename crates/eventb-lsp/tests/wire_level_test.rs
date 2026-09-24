@@ -1910,11 +1910,16 @@ mod pull_diagnostics {
         (service, messages)
     }
 
-    /// The findings a full `workspace/diagnostic` sweep reports for `uri`.
-    async fn swept(service: &mut LspService<RossiLanguageServer>, id: i64, uri: &Uri) -> Value {
+    /// A `workspace/diagnostic` sweep's report, for a client holding
+    /// `previous` (`previousResultIds`).
+    async fn sweep(
+        service: &mut LspService<RossiLanguageServer>,
+        id: i64,
+        previous: Value,
+    ) -> Value {
         let request = Request::build("workspace/diagnostic")
             .id(id)
-            .params(json!({ "previousResultIds": [] }))
+            .params(json!({ "previousResultIds": previous }))
             .finish();
         let response = service
             .ready()
@@ -1925,12 +1930,23 @@ mod pull_diagnostics {
             .unwrap()
             .expect("workspace/diagnostic must respond");
         let (_id, result) = response.into_parts();
-        let report: Value = result.expect("workspace/diagnostic must succeed");
+        result.expect("workspace/diagnostic must succeed")
+    }
+
+    /// A sweep report's entry for `uri`, if it has one.
+    fn report_for(report: &Value, uri: &Uri) -> Option<Value> {
         report["items"]
             .as_array()
             .unwrap()
             .iter()
             .find(|item| item["uri"] == json!(uri))
+            .cloned()
+    }
+
+    /// The findings a full `workspace/diagnostic` sweep reports for `uri`.
+    async fn swept(service: &mut LspService<RossiLanguageServer>, id: i64, uri: &Uri) -> Value {
+        let report = sweep(service, id, json!([])).await;
+        report_for(&report, uri)
             .unwrap_or_else(|| panic!("{} must be swept; got {report}", uri.as_str()))["items"]
             .clone()
     }
@@ -2080,6 +2096,49 @@ mod pull_diagnostics {
         assert_ne!(
             rewritten, rechecked,
             "M's own edit is picked up; got {rewritten}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_file_that_is_gone_has_its_report_retracted() {
+        let workspace = TempWorkspace::new("pull-diagnostics-gone");
+        let broken = workspace.as_ref().join("broken.eventb");
+        std::fs::write(&broken, BROKEN).unwrap();
+        let broken_uri = Uri::from_file_path(&broken).unwrap();
+        let (mut service, _messages) = initialized_service(workspace.as_ref()).await;
+
+        let first = sweep(&mut service, 2, json!([])).await;
+        let first = report_for(&first, &broken_uri).expect("the broken file must be swept");
+        assert_ne!(first["items"], json!([]), "the parse error is reported");
+
+        // The file goes (deleted, or its folder renamed). A client keeps the
+        // last report for a URI until a report replaces it, so leaving the
+        // URI out of the sweep would show the parse error for good.
+        std::fs::remove_file(&broken).unwrap();
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "workspace/didChangeWatchedFiles",
+                json!({ "changes": [{ "uri": broken_uri, "type": 3 }] }),
+            ))
+            .await
+            .unwrap();
+        let held = json!([{ "uri": broken_uri, "value": first["resultId"] }]);
+        let second = sweep(&mut service, 3, held).await;
+        let retracted =
+            report_for(&second, &broken_uri).expect("the vanished file must be retracted");
+        assert_eq!(retracted["kind"], json!("full"));
+        assert_eq!(retracted["items"], json!([]));
+
+        // Once the client holds the empty report, there is nothing to say.
+        let held = json!([{ "uri": broken_uri, "value": retracted["resultId"] }]);
+        let third = sweep(&mut service, 4, held).await;
+        assert_eq!(
+            report_for(&third, &broken_uri),
+            None,
+            "an empty report is not repeated"
         );
     }
 }
