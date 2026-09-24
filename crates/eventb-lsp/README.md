@@ -25,7 +25,7 @@ VS Code, Neovim, Emacs, or any editor with LSP support.
 - **Rename refactoring** - Rename identifiers and components in every file that uses them, following the refinement chain
 - **Semantic highlighting** - LSP semantic tokens for Event-B constructs
 - **Document links** - Clickable links for `SEES`, `REFINES`, and `EXTENDS` targets
-- **Code actions** - ASCII/Unicode operator conversion, missing-clause fixes, missing `END`, sorting, and rename hints
+- **Code actions** - ASCII/Unicode operator conversion, missing `END`, sorting, and rename hints
 - **Folding** - Folding ranges for components, events, initialisation, and clauses
 - **Signature help** - Parameter hints for quantifiers, lambdas, and set comprehensions
 - **Inlay hints** - Inferred declaration types and well-definedness markers
@@ -322,7 +322,6 @@ Implemented code actions include:
 - Normalize every operator to the configured convention and nothing else
   (`source.fixAll.rossi`, for editors' run-on-save hooks)
 - Add a missing `END` keyword when diagnostics indicate that shape
-- Add common missing clauses for contexts and machines
 - Sort `VARIABLES` and `CONSTANTS` clauses alphabetically
 - Show a rename hint when the cursor is on an event name
 

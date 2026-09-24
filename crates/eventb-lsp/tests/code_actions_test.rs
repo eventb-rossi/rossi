@@ -2,9 +2,10 @@
 
 use eventb_lsp::code_actions::{CodeActionProvider, FIX_ALL_KIND};
 use eventb_lsp::diagnostics::ASCII_OPERATOR_CODE;
+use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
-    CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position, Range,
-    TextDocumentIdentifier, Uri, WorkDoneProgressParams,
+    CodeAction, CodeActionContext, CodeActionKind, CodeActionOrCommand, CodeActionParams, Position,
+    Range, TextDocumentIdentifier, TextEdit, Uri, WorkDoneProgressParams,
 };
 
 fn create_test_params(uri: &str, range: Range) -> CodeActionParams {
@@ -341,22 +342,12 @@ fn test_operator_detection_offers_conversion_actions() {
 }
 
 #[test]
-fn test_clause_and_sort_actions_offered() {
+fn test_sort_actions_offered() {
     let provider = CodeActionProvider::new();
     // (case, text, title_groups): each group is a set of substrings that must
     // all appear in the title of a SINGLE offered action; different groups may
     // be satisfied by different actions.
-    let cases: [(&str, &str, &[&[&str]]); 4] = [
-        (
-            "machine missing INVARIANTS",
-            "MACHINE test\nVARIABLES x\nEND",
-            &[&["INVARIANTS"]],
-        ),
-        (
-            "context missing AXIOMS and CONSTANTS",
-            "CONTEXT test\nSETS S\nEND",
-            &[&["AXIOMS"], &["CONSTANTS"]],
-        ),
+    let cases: [(&str, &str, &[&[&str]]); 2] = [
         (
             "unsorted variables",
             "MACHINE test\nVARIABLES\n    z\n    a\n    m\nINVARIANTS\nEND",
@@ -533,6 +524,79 @@ fn test_add_missing_end_offered_for_eof_diagnostic() {
         )),
         "the Add-missing-END quick fix must be offered for an EOF diagnostic, got {actions:?}"
     );
+}
+
+/// Apply one document's `edits` to `text`, last position first so the earlier
+/// ones stay where they were computed.
+fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
+    let mut edits: Vec<&TextEdit> = edits.iter().collect();
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let mut result = text.to_string();
+    for edit in edits {
+        let start = position_to_offset(&result, edit.range.start).expect("edit start in bounds");
+        let end = position_to_offset(&result, edit.range.end).expect("edit end in bounds");
+        result.replace_range(start..end, &edit.new_text);
+    }
+    result
+}
+
+/// The document an action's edit leaves behind, for an action editing only
+/// the document at `uri`.
+fn applied(text: &str, uri: &str, action: &CodeAction) -> String {
+    let changes = action
+        .edit
+        .as_ref()
+        .and_then(|edit| edit.changes.as_ref())
+        .unwrap_or_else(|| panic!("{:?} carries no edit", action.title));
+    apply_edits(text, &changes[&uri.parse::<Uri>().unwrap()])
+}
+
+/// A quick fix offered on a document with no diagnostic is one the user takes
+/// on trust, so it must leave a valid model valid and meaning what it did.
+#[test]
+fn quick_fixes_offered_without_a_diagnostic_keep_the_model() {
+    let provider = CodeActionProvider::new();
+    let uri = "file:///m.eventb";
+    for text in [
+        "machine m\nsees c\nend\n",
+        "context c\nend\n",
+        "context c\nextends b\nend\n",
+    ] {
+        let original = rossi::parse(text).expect("the fixture parses");
+        let mut params = create_test_params(
+            uri,
+            Range {
+                start: Position::new(0, 0),
+                end: Position::new(0, 0),
+            },
+        );
+        params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+        for action in provider
+            .provide_code_actions(&params, text, true, false)
+            .unwrap_or_default()
+        {
+            let CodeActionOrCommand::CodeAction(action) = action else {
+                continue;
+            };
+            let result = applied(text, uri, &action);
+            let parsed = rossi::parse(&result).unwrap_or_else(|error| {
+                panic!(
+                    "{:?} left text that does not parse:\n{result}\n{error}",
+                    action.title
+                )
+            });
+            let clauses = |component: &rossi::Component| match component {
+                rossi::Component::Machine(machine) => (machine.sees.clone(), vec![]),
+                rossi::Component::Context(context) => (vec![], context.extends.clone()),
+            };
+            assert_eq!(
+                clauses(&parsed),
+                clauses(&original),
+                "{:?} changed what the model sees or extends:\n{result}",
+                action.title
+            );
+        }
+    }
 }
 
 /// The quick fix among `actions` whose title starts with `prefix`, if offered.
