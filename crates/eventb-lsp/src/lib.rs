@@ -37,6 +37,7 @@ pub mod position;
 pub(crate) mod progress;
 pub mod proof;
 pub mod references;
+pub mod refinement;
 pub mod rename;
 mod resolved_environment;
 pub mod rodin;

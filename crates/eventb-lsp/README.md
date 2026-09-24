@@ -343,6 +343,9 @@ Implemented code actions include:
 - Parenthesize operators mixed without the parentheses Event-B requires,
   either way the parser says resolves it (EB005)
 - Replace a separator Camille cannot read with an ordinary space (EB031)
+- Create a refinement of the machine at the cursor in a new file, as Rodin's
+  Refine wizard does: the same SEES, every variable, each event extended
+  (`refactor`; needs a client that creates files)
 
 ### Signature Help
 

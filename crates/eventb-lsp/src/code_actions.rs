@@ -129,7 +129,7 @@ fn style_name(to_unicode: bool) -> &'static str {
 /// Whether the client's `only` filter admits `kind`: no filter, or an entry
 /// equal to `kind` or a dot-delimited prefix of it (`source` and
 /// `source.fixAll` both admit `source.fixAll.rossi`).
-fn kind_requested(params: &CodeActionParams, kind: &CodeActionKind) -> bool {
+pub(crate) fn kind_requested(params: &CodeActionParams, kind: &CodeActionKind) -> bool {
     params.context.only.as_ref().is_none_or(|only| {
         only.iter().any(|requested| {
             kind.as_str()
