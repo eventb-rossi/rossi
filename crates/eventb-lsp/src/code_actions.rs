@@ -284,9 +284,6 @@ impl CodeActionProvider {
         if requested(&CodeActionKind::QUICKFIX) {
             // Add diagnostic-based quick fixes (from diagnostics in context)
             actions.extend(self.provide_diagnostic_based_actions(params, text, private_use_glyphs));
-
-            // Add missing clause actions
-            actions.extend(self.provide_add_missing_clause_actions(params, text));
         }
 
         if requested(&CodeActionKind::REFACTOR) {
@@ -1018,129 +1015,6 @@ impl CodeActionProvider {
         })
     }
 
-    /// Provide actions to add missing clauses
-    fn provide_add_missing_clause_actions(
-        &self,
-        params: &CodeActionParams,
-        text: &str,
-    ) -> Vec<CodeActionOrCommand> {
-        let mut actions = Vec::new();
-
-        // Detect if we're in a MACHINE or CONTEXT — on comment-masked text,
-        // so clause keywords mentioned in comments neither suppress nor
-        // trigger these actions.
-        let masked = rossi::comments::mask_comments(text);
-        let text = masked.as_str();
-
-        // Detect if we're in a MACHINE or CONTEXT (keywords are case-insensitive)
-        let is_machine = has_keyword_line(text, KeywordId::Machine);
-        let is_context = has_keyword_line(text, KeywordId::Context);
-
-        if is_machine {
-            // Check for missing clauses in machines
-            if !has_keyword_line(text, KeywordId::Invariants)
-                && let Some(action) = self.create_add_clause_action(
-                    &params.text_document.uri,
-                    text,
-                    "INVARIANTS",
-                    "    @inv1 TRUE",
-                )
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-            if !has_keyword_line(text, KeywordId::Variables)
-                && let Some(action) =
-                    self.create_add_clause_action(&params.text_document.uri, text, "VARIABLES", "")
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-        }
-
-        if is_context {
-            // Check for missing clauses in contexts
-            if !has_keyword_line(text, KeywordId::Axioms)
-                && let Some(action) = self.create_add_clause_action(
-                    &params.text_document.uri,
-                    text,
-                    "AXIOMS",
-                    "    @axm1 TRUE",
-                )
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-            if !has_keyword_line(text, KeywordId::Constants)
-                && let Some(action) =
-                    self.create_add_clause_action(&params.text_document.uri, text, "CONSTANTS", "")
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-            if !has_keyword_line(text, KeywordId::Sets)
-                && let Some(action) =
-                    self.create_add_clause_action(&params.text_document.uri, text, "SETS", "")
-            {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-        }
-
-        actions
-    }
-
-    /// Create action to add a missing clause
-    fn create_add_clause_action(
-        &self,
-        uri: &Uri,
-        text: &str,
-        clause_name: &str,
-        example_content: &str,
-    ) -> Option<CodeAction> {
-        let lines: Vec<&str> = text.lines().collect();
-
-        // Find a good insertion point (after the component declaration;
-        // keywords are case-insensitive)
-        let mut insert_line = 1; // Default to line 1
-        for (idx, line) in lines.iter().enumerate() {
-            if line_keyword_is(line, KeywordId::Machine)
-                || line_keyword_is(line, KeywordId::Context)
-            {
-                insert_line = idx + 1;
-                break;
-            }
-        }
-
-        let new_text = if example_content.is_empty() {
-            format!("{}\n", clause_name)
-        } else {
-            format!("{}\n{}\n", clause_name, example_content)
-        };
-
-        let mut changes = HashMap::new();
-        changes.insert(
-            uri.clone(),
-            vec![TextEdit {
-                range: Range {
-                    start: Position::new(insert_line as u32, 0),
-                    end: Position::new(insert_line as u32, 0),
-                },
-                new_text,
-            }],
-        );
-
-        Some(CodeAction {
-            title: format!("Add {} clause", clause_name),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
-            is_preferred: Some(false),
-            disabled: None,
-            data: None,
-        })
-    }
-
     /// Provide actions to sort clauses alphabetically
     fn provide_sort_clauses_actions(
         &self,
@@ -1543,18 +1417,5 @@ mod tests {
             .create_sort_clause_action(&uri, text, "VARIABLES")
             .expect("should offer to sort the lowercase variables clause");
         assert_eq!(action.title, "Sort variables alphabetically");
-    }
-
-    #[test]
-    fn test_add_clause_inserts_after_lowercase_header() {
-        let provider = CodeActionProvider::new();
-        let uri = ("file:///m.eventb").parse::<Uri>().unwrap();
-        let text = "machine m\nvariables\n    x\nend";
-        let action = provider
-            .create_add_clause_action(&uri, text, "INVARIANTS", "    @inv1 TRUE")
-            .expect("should offer to add a clause");
-        let edit = &action.edit.unwrap().changes.unwrap()[&uri][0];
-        // Inserted right after the lowercase `machine` header (line 0).
-        assert_eq!(edit.range.start.line, 1);
     }
 }

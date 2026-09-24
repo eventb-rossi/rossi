@@ -297,7 +297,6 @@ Press `<leader>rn` or `:LspRename` to rename:
 Press `<leader>ca` or `:LspCodeAction` for:
 - **Convert operators**: ASCII ↔ Unicode
 - **Add missing END**: Quick fix for parse errors
-- **Add missing clauses**: INVARIANTS, AXIOMS, etc.
 - **Sort clauses**: Alphabetically sort VARIABLES, CONSTANTS
 
 ### Document Symbols
