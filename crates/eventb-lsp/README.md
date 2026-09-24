@@ -353,6 +353,8 @@ Implemented code actions include:
 - Inline what an extended event inherits: the abstract parameters, guards
   and actions written into it, and `extends` turned into `refines`
   (`refactor.inline`, on the event header)
+- Make a refining event that repeats its abstract event extend it instead,
+  dropping what it repeats (`refactor`, on the event header)
 
 ### Signature Help
 

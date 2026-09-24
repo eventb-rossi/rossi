@@ -12,7 +12,7 @@ use rossi::{Component, Context, Event, EventStatus, InitialisationEvent, Machine
 
 use crate::code_actions::{
     event_clause_indent, event_header_end, event_is_lowercase, keyword_text, kind_requested,
-    line_start, parameter_insert,
+    line_start, own_lines, parameter_insert,
 };
 use crate::component_loader::ComponentLoader;
 use crate::cross_references::CrossReferenceManager;
@@ -94,18 +94,28 @@ impl RefinementActionProvider {
                 printer,
             ));
         }
-        if inline
-            && let Component::Machine(machine) = component
-            && let Some(event) = machine.events.iter().find(|event| {
-                event.extended && event.name_span.is_some_and(|name| on_line(name.start))
-            })
+        if let Component::Machine(machine) = component
+            && let Some(event) = machine
+                .events
+                .iter()
+                .find(|event| event.name_span.is_some_and(|name| on_line(name.start)))
         {
-            actions.extend(self.inline_inherited_action(
-                &params.text_document.uri,
-                text,
-                machine,
-                event,
-            ));
+            if inline && event.extended {
+                actions.extend(self.inline_inherited_action(
+                    &params.text_document.uri,
+                    text,
+                    machine,
+                    event,
+                ));
+            }
+            if refactor && !event.extended {
+                actions.extend(self.extend_instead_action(
+                    &params.text_document.uri,
+                    text,
+                    machine,
+                    event,
+                ));
+            }
         }
         if refactor
             && on_header
@@ -332,6 +342,191 @@ impl RefinementActionProvider {
         Some(CodeAction {
             title,
             kind: Some(CodeActionKind::REFACTOR_INLINE),
+            diagnostics: None,
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::from([(uri.clone(), edits)])),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            command: None,
+            is_preferred: Some(false),
+            disabled: None,
+            data: None,
+        })
+    }
+
+    /// Make a refining `event` that repeats everything its abstract event
+    /// has extend it instead: drop the abstract parameters, guards and
+    /// actions it lists again, and turn `refines` into `extends`. The event
+    /// means what it did, since an extended event inherits exactly what is
+    /// dropped. Offered only when each abstract guard and action is repeated
+    /// as it is (compared as formulas, not as text) and each abstract
+    /// parameter is declared again; disabled when a label the event keeps
+    /// would clash with an inherited one.
+    fn extend_instead_action(
+        &self,
+        uri: &Uri,
+        text: &str,
+        machine: &Machine,
+        event: &Event,
+    ) -> Option<CodeAction> {
+        let [target] = event.refines.as_slice() else {
+            return None;
+        };
+        let chain = self.extended_chain(machine, event)?;
+        let inherited_parameters: HashSet<&str> = chain
+            .iter()
+            .flat_map(|(_, e)| e.parameters.iter().map(|p| p.name.as_str()))
+            .collect();
+        if !inherited_parameters
+            .iter()
+            .all(|name| event.parameters.iter().any(|own| own.name == *name))
+        {
+            return None;
+        }
+        // Each inherited element is matched to a distinct own one written the
+        // same; what stays unmatched is the event's own.
+        fn matched<T, U>(
+            own: &[T],
+            inherited: &[&U],
+            same: impl Fn(&T, &U) -> bool,
+        ) -> Option<Vec<bool>> {
+            let mut used = vec![false; own.len()];
+            for element in inherited {
+                let index = (0..own.len()).find(|&i| !used[i] && same(&own[i], element))?;
+                used[index] = true;
+            }
+            Some(used)
+        }
+        let inherited_guards: Vec<&rossi::LabeledPredicate> =
+            chain.iter().flat_map(|(_, e)| e.guards.iter()).collect();
+        let inherited_actions: Vec<&rossi::LabeledAction> =
+            chain.iter().flat_map(|(_, e)| e.actions.iter()).collect();
+        let repeated_guards = matched(&event.guards, &inherited_guards, |own, inherited| {
+            own.is_theorem == inherited.is_theorem && own.predicate == inherited.predicate
+        })?;
+        let repeated_actions = matched(&event.actions, &inherited_actions, |own, inherited| {
+            own.action == inherited.action
+        })?;
+
+        let title = format!("Extend {} instead of repeating it", target.name);
+        let inherited_labels: HashSet<&str> = inherited_guards
+            .iter()
+            .filter_map(|g| g.label.as_deref())
+            .chain(inherited_actions.iter().filter_map(|a| a.label.as_deref()))
+            .collect();
+        let clash = event
+            .guards
+            .iter()
+            .zip(&repeated_guards)
+            .filter(|(_, repeated)| !**repeated)
+            .filter_map(|(g, _)| g.label.as_deref())
+            .chain(
+                event
+                    .actions
+                    .iter()
+                    .zip(&repeated_actions)
+                    .filter(|(_, repeated)| !**repeated)
+                    .filter_map(|(a, _)| a.label.as_deref()),
+            )
+            .find(|label| inherited_labels.contains(label));
+        if let Some(label) = clash {
+            return Some(CodeAction {
+                title,
+                kind: Some(CodeActionKind::REFACTOR),
+                diagnostics: None,
+                edit: None,
+                command: None,
+                is_preferred: Some(false),
+                disabled: Some(crate::lsp_types::CodeActionDisabled {
+                    reason: format!("the event's own @{label} would clash with an inherited label"),
+                }),
+                data: None,
+            });
+        }
+
+        let masked = rossi::comments::mask_comments(text);
+        let lowercase = event_is_lowercase(text, event);
+        let mut removed: Vec<std::ops::Range<usize>> = Vec::new();
+
+        // The header: `refines t` becomes `extends t`, pulled up onto the
+        // header line when the target was written in a clause below it.
+        let name_end = event.name_span?.end;
+        let target_span = target.span?;
+        let keyword =
+            name_end + masked[name_end..target_span.start].find(|c: char| !c.is_whitespace())?;
+        let mut edits = Vec::new();
+        if text[name_end..keyword].contains('\n') {
+            removed.push(own_lines(text, &masked, keyword, target_span.end)?);
+            edits.push(TextEdit {
+                range: point(text, name_end),
+                new_text: format!(
+                    " {} {}",
+                    keyword_text(KeywordId::Extends, lowercase),
+                    target.name
+                ),
+            });
+        } else {
+            edits.push(TextEdit {
+                range: crate::position::span_to_range(
+                    &rossi::ast::Span {
+                        start: keyword,
+                        end: keyword + masked[keyword..target_span.start].trim_end().len(),
+                    },
+                    text,
+                ),
+                new_text: keyword_text(
+                    KeywordId::Extends,
+                    masked[keyword..].starts_with(char::is_lowercase),
+                ),
+            });
+        }
+
+        // The parameters declared again.
+        let parameters: Vec<rossi::ast::Span> = event
+            .parameters
+            .iter()
+            .map(|p| p.span)
+            .collect::<Option<_>>()?;
+        let dropped: Vec<bool> = event
+            .parameters
+            .iter()
+            .map(|p| inherited_parameters.contains(p.name.as_str()))
+            .collect();
+        removed.extend(clause_removals(text, &masked, &parameters, &dropped, true)?);
+        // The guards and actions repeated.
+        let spans =
+            |spans: Vec<Option<rossi::ast::Span>>| spans.into_iter().collect::<Option<Vec<_>>>();
+        let guards = spans(event.guards.iter().map(|g| g.span).collect())?;
+        removed.extend(clause_removals(
+            text,
+            &masked,
+            &guards,
+            &repeated_guards,
+            false,
+        )?);
+        let actions = spans(event.actions.iter().map(|a| a.span).collect())?;
+        removed.extend(clause_removals(
+            text,
+            &masked,
+            &actions,
+            &repeated_actions,
+            false,
+        )?);
+
+        edits.extend(removed.into_iter().map(|range| TextEdit {
+            range: crate::position::span_to_range(
+                &rossi::ast::Span {
+                    start: range.start,
+                    end: range.end,
+                },
+                text,
+            ),
+            new_text: String::new(),
+        }));
+        Some(CodeAction {
+            title,
+            kind: Some(CodeActionKind::REFACTOR),
             diagnostics: None,
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::from([(uri.clone(), edits)])),
@@ -589,6 +784,57 @@ fn refinement_of(machine: &Machine, name: String) -> Machine {
         })
         .collect();
     refinement
+}
+
+/// An empty range at byte `offset` of `text`.
+fn point(text: &str, offset: usize) -> Range {
+    let position = crate::position::offset_to_position(text, offset);
+    Range::new(position, position)
+}
+
+/// The ranges deleting the `items` of one clause marked in `dropped`, or the
+/// whole clause, keyword included, when every item goes. An item is deleted
+/// with its lines; a name in an inline list (`names`) with the space before
+/// it. `None` when an item or the clause does not have its lines to itself.
+fn clause_removals(
+    text: &str,
+    masked: &str,
+    items: &[rossi::ast::Span],
+    dropped: &[bool],
+    names: bool,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    // An element's span may run on over a comment written after it.
+    let code_end =
+        |span: &rossi::ast::Span| span.start + masked[span.start..span.end].trim_end().len();
+    if items.is_empty() || !dropped.iter().any(|d| *d) {
+        return Some(Vec::new());
+    }
+    if dropped.iter().all(|d| *d) {
+        let before = masked[..items[0].start].trim_end();
+        let keyword = before.rfind(char::is_whitespace).map_or(0, |at| at + 1);
+        line_keyword(&masked[keyword..items[0].start])?;
+        return Some(vec![own_lines(
+            text,
+            masked,
+            keyword,
+            code_end(items.last()?),
+        )?]);
+    }
+    items
+        .iter()
+        .zip(dropped)
+        .filter(|(_, dropped)| **dropped)
+        .map(
+            |(item, _)| match own_lines(text, masked, item.start, code_end(item)) {
+                Some(lines) => Some(lines),
+                None if names => {
+                    let previous = masked[..item.start].trim_end().len();
+                    Some(previous..item.end)
+                }
+                None => None,
+            },
+        )
+        .collect()
 }
 
 /// `machine`'s events as the printer writes them: the EVENTS keyword line and
