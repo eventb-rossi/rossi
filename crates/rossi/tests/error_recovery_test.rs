@@ -1843,13 +1843,11 @@ END
 }
 
 #[test]
-fn recovery_does_not_invent_with_witness_for_initialisation() {
-    // The grammar gives INITIALISATION only a THEN clause, and the strict parser
-    // always leaves with/witnesses empty. The broken invariant forces recovery;
-    // recover_events then treats `EVENT INITIALISATION` as the init event. Even
-    // with a stray WITH clause present, recovery must NOT synthesize init.with /
-    // init.witnesses (a valid parse could never produce them) while the THEN
-    // actions still recover.
+fn recovery_reads_the_witnesses_of_the_initialisation() {
+    // INITIALISATION holds witnesses like any refining event, so recovery
+    // reads its WITH clause as the strict parser does. The broken invariant
+    // forces recovery; recover_events then treats `EVENT INITIALISATION` as
+    // the init event, and its THEN actions still recover too.
     let source = "\
 MACHINE m
 VARIABLES
@@ -1872,16 +1870,15 @@ END
     );
     let m = expect_machine(&result);
     let init = m.initialisation.as_ref().expect("initialisation recovered");
-    assert!(
-        init.with.is_empty(),
-        "init.with must stay empty (grammar forbids WITH on INITIALISATION), got {:?}",
+    assert_eq!(
         init.with
+            .iter()
+            .map(|w| w.label.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("w1")],
+        "the WITH clause is recovered"
     );
-    assert!(
-        init.witnesses.is_empty(),
-        "init.witnesses must stay empty, got {:?}",
-        init.witnesses
-    );
+    assert!(init.witnesses.is_empty(), "{:?}", init.witnesses);
     assert_eq!(
         init.actions
             .iter()

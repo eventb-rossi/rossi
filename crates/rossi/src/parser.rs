@@ -1701,6 +1701,8 @@ fn parse_initialisation_event(
 ) -> Result<InitialisationEvent, ParseError> {
     let span = Some(Span::from_pest(pair.as_span()));
     let mut actions = Vec::new();
+    let mut with = Vec::new();
+    let mut witnesses = Vec::new();
     let mut extended = false;
     let mut name_span = None;
 
@@ -1709,6 +1711,12 @@ fn parse_initialisation_event(
         match p.as_rule() {
             Rule::action_list => {
                 actions = parse_action_list(p)?;
+            }
+            Rule::event_with => {
+                with = collect_labeled_predicates(p, Rule::kw_with)?;
+            }
+            Rule::event_witness => {
+                witnesses = collect_labeled_predicates(p, Rule::kw_witness)?;
             }
             Rule::kw_extends => {
                 extended = true;
@@ -1735,8 +1743,8 @@ fn parse_initialisation_event(
         actions,
         comment: None,
         extended,
-        with: Vec::new(),
-        witnesses: Vec::new(),
+        with,
+        witnesses,
         span,
         name_span,
     })
@@ -5331,7 +5339,12 @@ fn event_clause_positions(
         }
     };
     if is_initialisation {
-        for keyword in [KeywordId::Then, KeywordId::End] {
+        for keyword in [
+            KeywordId::With,
+            KeywordId::Witness,
+            KeywordId::Then,
+            KeywordId::End,
+        ] {
             add_keyword(keyword);
         }
     } else {
@@ -5365,9 +5378,9 @@ fn clause_content_range(
     Some((content_start, content_end))
 }
 
-/// Recover a named event's WITH, WITNESS, and THEN clause bodies. Called after
-/// the event-specific clauses (ANY/WHERE) have already been handled.
-/// INITIALISATION has only a THEN clause and is handled separately.
+/// Recover an event's WITH, WITNESS, and THEN clause bodies: all an
+/// INITIALISATION has, and what a named event has after the clauses of its
+/// own (ANY/WHERE), which are handled before.
 fn recover_common_event_clauses(
     text: &RecoveryText,
     positions: &[RecoveryPosition],
@@ -5484,18 +5497,15 @@ fn recover_events(
                 span: Some(span),
                 name_span: header_name.map(|(_, span)| span),
             };
-            // INITIALISATION has only a THEN/BEGIN action clause; the grammar
-            // forbids WITH/WITNESS here and the strict parser always leaves
-            // those empty, so recover just the actions rather than synthesizing
-            // clauses a valid parse could never produce.
-            if let Some((content_start, content_end)) = clause_content_range(
+            recover_common_event_clauses(
+                text,
                 &positions,
-                KeywordId::Then,
-                crate::keywords::EVENT_CLAUSE_KEYWORDS,
+                &mut init.with,
+                &mut init.witnesses,
+                &mut init.actions,
                 body_end,
-            ) {
-                init.actions = recover_actions_in_range(text, content_start, content_end, errors);
-            }
+                errors,
+            );
             initialisation = Some(init);
         } else {
             let any_range = clause_content_range(

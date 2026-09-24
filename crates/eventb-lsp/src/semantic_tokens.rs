@@ -648,8 +648,17 @@ impl<'a> SemanticTokensBuilder<'a> {
         self.advance_past_keyword(KeywordId::Event, &mut cur, bound);
         self.advance_past_keyword(KeywordId::Initialisation, &mut cur, bound);
 
-        // THEN/BEGIN clause: unconditional (advance_past_keyword is a no-op when
-        // absent); labels are emitted lexically, advancing cur to the event's END.
+        // WITH, WITNESS and THEN/BEGIN clauses: unconditional
+        // (advance_past_keyword is a no-op when absent); labels are emitted
+        // lexically, advancing cur to the event's END.
+        self.advance_past_keyword(KeywordId::With, &mut cur, bound);
+        for lp in &init.with {
+            cur = self.visit_labeled_predicate(lp, cur);
+        }
+        self.advance_past_keyword(KeywordId::Witness, &mut cur, bound);
+        for lp in &init.witnesses {
+            cur = self.visit_labeled_predicate(lp, cur);
+        }
         self.advance_past_keyword(KeywordId::Then, &mut cur, bound);
         for action in &init.actions {
             cur = self.visit_action(action, cur);

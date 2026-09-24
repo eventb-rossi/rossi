@@ -868,8 +868,11 @@ event = {
   ~ event_body ~ kw_end
 }
 
+// INITIALISATION takes no parameter and no guard, but a refinement that drops
+// a variable the abstract INITIALISATION sets nondeterministically witnesses
+// its after-value here (`@x' …`), as in any refining event.
 initialisation_event = {
-    kw_event ~ kw_initialisation ~ (kw_extends ~ kw_initialisation)? ~ (kw_then ~ (action_list | empty_clause))? ~ kw_end
+    kw_event ~ kw_initialisation ~ (kw_extends ~ kw_initialisation)? ~ event_with? ~ event_witness? ~ (kw_then ~ (action_list | empty_clause))? ~ kw_end
 }
 
 machine_clause_events = {
