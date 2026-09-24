@@ -599,32 +599,6 @@ fn types_by_shape(pred: &rossi::Predicate, name: &str) -> bool {
     }
 }
 
-/// The optimal string alignment distance between `a` and `b`: edits of one
-/// character, a swap of two adjacent ones counting as one edit.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let mut rows = vec![vec![0; b.len() + 1]; a.len() + 1];
-    for (i, row) in rows.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, cell) in rows[0].iter_mut().enumerate() {
-        *cell = j;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            let mut best = (rows[i - 1][j] + 1)
-                .min(rows[i][j - 1] + 1)
-                .min(rows[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                best = best.min(rows[i - 2][j - 2] + 1);
-            }
-            rows[i][j] = best;
-        }
-    }
-    rows[a.len()][b.len()]
-}
-
 /// The `candidates` close enough to `name` to be what was meant, closest
 /// first, at most three. A short name admits fewer edits, and one of one or
 /// two characters none: any other short name is as close as the right one.
@@ -637,7 +611,7 @@ fn spelled_alike(name: &str, candidates: &[String]) -> Vec<String> {
     let mut close: Vec<(usize, &String)> = candidates
         .iter()
         .filter(|candidate| candidate.as_str() != name)
-        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .map(|candidate| (strsim::osa_distance(name, candidate), candidate))
         .filter(|(distance, _)| *distance <= budget)
         .collect();
     close.sort();

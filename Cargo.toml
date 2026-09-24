@@ -68,6 +68,9 @@ diffy = "0.5"
 # RAII temp directories for the eventb-animate lens flow (eventb-lsp):
 # each run builds the model into a throwaway Rodin project directory.
 tempfile = "3"
+# Edit distance for the "Change to" quick fix (eventb-lsp); clap already
+# builds it.
+strsim = "0.11"
 
 # Dev dependencies
 indoc = "2.0"
