@@ -13,9 +13,12 @@
 
 mod events;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
+use rossi::formula::PredicateKind;
+use rossi::formula::tag::LiteralPredOp;
+use rossi::keywords::KeywordId;
 use rossi::names::is_primed_identifier;
 use rossi::{LabeledPredicate, Machine};
 
@@ -390,6 +393,10 @@ pub fn check_machine(
         }
     }
 
+    if let Some(p) = parent {
+        diags.extend(unrefined_abstract_events(machine, p, &event_decls));
+    }
+
     // Ancestors closure.
     let mut ancestors: Vec<String> = Vec::new();
     if let Some(p) = parent {
@@ -478,6 +485,66 @@ pub fn check_machine(
 /// `parent_init.actions` is the parent's full effective action list
 /// (inherited ++ own, plus any generated repair), so an assignment a
 /// grandparent contributed up the chain is covered too.
+/// EB036: the events of `parent` that no event of `machine` refines, and
+/// that no guard disables. This is Rodin's `AbstractEventNotRefinedWarning`,
+/// reported on the REFINES clause. An event refines the targets its `refines` names even
+/// when it is dropped for another error, as in Rodin, and INITIALISATION
+/// refines the abstract one implicitly. Disabled means a guard, inherited
+/// ones included, that is literally `⊥` (`AbstractEventInfo.isClosed`).
+fn unrefined_abstract_events(
+    machine: &Machine,
+    parent: &CheckedMachine,
+    event_decls: &[Rc<EventDecl>],
+) -> Vec<Diagnostic> {
+    let refined: HashSet<&str> = event_decls
+        .iter()
+        .flat_map(|decl| decl.refines.iter().map(|r| r.abstract_label.as_str()))
+        .chain(
+            machine
+                .events
+                .iter()
+                .flat_map(|event| event.refines.iter().map(|target| target.name.as_str())),
+        )
+        .chain(
+            machine
+                .initialisation
+                .as_ref()
+                .map(|_| crate::sc::initialisation_label()),
+        )
+        .collect();
+    let span = machine
+        .clauses
+        .iter()
+        .find(|clause| clause.keyword == KeywordId::Refines)
+        .map(|clause| clause.span)
+        .or(machine.name_span);
+    parent
+        .record
+        .events
+        .iter()
+        .filter(|event| !refined.contains(event.label.as_str()))
+        .filter(|event| {
+            !event.chain_guards().iter().any(|guard| {
+                matches!(
+                    guard.predicate.kind(),
+                    PredicateKind::Literal(LiteralPredOp::BFalse)
+                )
+            })
+        })
+        .map(|event| Diagnostic {
+            severity: Severity::Warning,
+            origin: machine.name.clone(),
+            message: format!(
+                "abstract event `{}` of `{}` is not refined, although not disabled",
+                event.label,
+                parent.name()
+            ),
+            rule_id: Some(crate::RuleId::AbstractEventNotRefined),
+            span,
+        })
+        .collect()
+}
+
 fn should_omit_initialisation(
     init: &rossi::InitialisationEvent,
     parent: Option<&CheckedMachine>,
