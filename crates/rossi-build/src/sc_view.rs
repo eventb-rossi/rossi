@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
-use rossi::{ActionBody, Predicate, parse_action_str, parse_predicate_str};
+use rossi::{Assignment, Predicate, parse_action_str, parse_predicate_str};
 
 use crate::error::{ProjectError, Result};
 use crate::xml_out::tag;
@@ -115,7 +115,7 @@ pub struct ActionRow {
     /// whitespace differences in the assignment text (e.g.
     /// `register ∪ {u}` vs `register∪{u}`) and to Rodin's post-SC
     /// insertion of `⦂ T` on empty-set RHS.
-    pub action: ActionBody,
+    pub action: Assignment,
 }
 
 impl ScView {
@@ -414,9 +414,9 @@ fn predicate_attr(e: &BytesStart) -> Result<Predicate> {
 }
 
 /// Parse the `org.eventb.core.assignment` attribute into an
-/// [`ActionBody`], stripping type ascriptions so Rodin-canonical and
+/// [`Assignment`], stripping type ascriptions so Rodin-canonical and
 /// bare forms compare equal.
-fn action_attr(e: &BytesStart) -> Result<ActionBody> {
+fn action_attr(e: &BytesStart) -> Result<Assignment> {
     let s = string_attr(e, b"assignment")?.unwrap_or_default();
     let s = s.trim();
     let ast = parse_action_str(s).map_err(|err| ProjectError::ReparseFormula {
@@ -445,16 +445,11 @@ pub(crate) fn normalize_source(s: Option<String>) -> Option<String> {
 }
 
 /// Strip type ascriptions from every expression inside an
-/// [`ActionBody`]. Used so `register ≔ ∅ ⦂ ℙ(USERS)` compares equal to
+/// [`Assignment`]. Used so `register ≔ ∅ ⦂ ℙ(USERS)` compares equal to
 /// `register ≔ ∅`.
 #[must_use]
-pub fn strip_type_ascriptions_action(body: ActionBody) -> ActionBody {
-    match body {
-        skip @ ActionBody::Skip { .. } => skip,
-        ActionBody::Assignment(assignment) => {
-            ActionBody::Assignment(assignment.strip_ascriptions())
-        }
-    }
+pub fn strip_type_ascriptions_action(assignment: Assignment) -> Assignment {
+    assignment.strip_ascriptions()
 }
 
 /// Rodin emits type-inference artifacts into predicate strings:

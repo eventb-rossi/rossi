@@ -450,12 +450,8 @@ fn test_multiple_parallel_assignment() {
         .as_ref()
         .expect("Should have initialisation");
     assert_eq!(init.actions.len(), 1);
-    match init.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(rossi::AssignmentKind::BecomesEqualTo { idents, .. }) => {
+    match init.actions[0].action.kind() {
+        rossi::AssignmentKind::BecomesEqualTo { idents, .. } => {
             assert_eq!(idents.len(), 2);
             assert!(matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "x"));
             assert!(matches!(idents[1].kind(), ExpressionKind::FreeIdentifier(n) if n == "y"));
@@ -467,12 +463,8 @@ fn test_multiple_parallel_assignment() {
     assert_eq!(m.events.len(), 1);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match event.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(rossi::AssignmentKind::BecomesEqualTo { idents, .. }) => {
+    match event.actions[0].action.kind() {
+        rossi::AssignmentKind::BecomesEqualTo { idents, .. } => {
             assert_eq!(idents.len(), 2);
             assert!(matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "x"));
             assert!(matches!(idents[1].kind(), ExpressionKind::FreeIdentifier(n) if n == "y"));
@@ -1345,26 +1337,20 @@ fn test_inline_event_header(
     );
 }
 
-// --- skip action -------------------------------------------------------------
+// --- skip --------------------------------------------------------------------
 
+/// Rodin has no skip action: an event without actions is skip. So `skip` is
+/// an ordinary name, which a variable may take, and no action.
 #[test]
-fn test_skip_action_in_event() {
-    let source = r#"
-    MACHINE test
-    EVENTS
-        EVENT foo
-        THEN
-            @act1 skip
-        END
-    END
-    "#;
+fn skip_is_a_name_not_an_action() {
+    let action =
+        "MACHINE test\nEVENTS\n    EVENT foo\n    THEN\n        @act1 skip\n    END\nEND\n";
+    assert!(rossi::parse(action).is_err());
 
-    let m = common::parse_machine(source);
-    assert_eq!(m.events.len(), 1);
-    let event = &m.events[0];
-    assert_eq!(event.actions.len(), 1);
-    assert_eq!(event.actions[0].label, Some("act1".to_string()));
-    assert!(event.actions[0].action.is_skip());
+    let variable = "MACHINE test\nVARIABLES skip\nINVARIANTS @inv1 skip ∈ ℕ\nEVENTS\n    EVENT foo\n    THEN\n        @act1 skip ≔ skip + 1\n    END\nEND\n";
+    let m = common::parse_machine(variable);
+    assert_eq!(m.variables[0].name, "skip");
+    assert_eq!(m.events[0].actions.len(), 1);
 }
 
 #[test]

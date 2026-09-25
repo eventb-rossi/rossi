@@ -18,7 +18,7 @@
 //! table.
 
 use rossi::ast::Span;
-use rossi::{ActionBody, Expression, LabeledPredicate, Predicate};
+use rossi::{Assignment, Expression, LabeledPredicate, Predicate};
 
 use crate::sc::identifier_walker::{
     free_identifier_in_action_rhs, free_identifier_in_expression, free_identifier_in_predicate,
@@ -57,14 +57,12 @@ pub struct ExpressionCheck {
 #[derive(Debug, Clone)]
 pub struct ActionCheck {
     /// The action the check ran on (see [`PredicateCheck::predicate`]).
-    pub action: ActionBody,
+    pub action: Assignment,
     /// First free identifier on the action's read side. `None` iff
     /// every read identifier is in `env` (or a built-in).
     pub free_identifier: Option<String>,
-    /// The fully typed formula-model rebuild, when the action is an
-    /// assignment that type-checks against `env`. `None` for `skip`
-    /// and for ill-typed assignments; the action gate distinguishes
-    /// the two through the seam.
+    /// The fully typed formula-model rebuild, when the assignment
+    /// type-checks against `env`. `None` for an ill-typed assignment.
     pub typed: Option<rossi::formula::Assignment>,
 }
 
@@ -98,7 +96,7 @@ pub fn check_expression(e: &Expression, env: &TypeEnv) -> ExpressionCheck {
 
 /// Check an action against `env`. Walks every read-side expression and
 /// (for `:|`) the becomes-such-that predicate.
-pub fn check_action(a: &ActionBody, env: &TypeEnv) -> ActionCheck {
+pub fn check_action(a: &Assignment, env: &TypeEnv) -> ActionCheck {
     let free_identifier = free_identifier_in_action_rhs(a, env);
     ActionCheck {
         typed: free_identifier

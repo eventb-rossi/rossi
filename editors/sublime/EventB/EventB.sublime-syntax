@@ -18,7 +18,7 @@ contexts:
       push: string
     - match: '(?i)\b(any|axioms|begin|constants|context|end|event|events|extends|initialisation|invariants|machine|refines|sees|sets|status|then|theorems|variables|variant|when|where|with|witness)\b'
       scope: keyword.control.eventb
-    - match: '(?i)\b(anticipated|convergent|ordinary|skip|theorem)\b'
+    - match: '(?i)\b(anticipated|convergent|ordinary|theorem)\b'
       scope: keyword.other.eventb
     - match: '(ℕ1|ℕ|ℤ|∅|⊤|⊥|\{\})'
       scope: constant.language.eventb

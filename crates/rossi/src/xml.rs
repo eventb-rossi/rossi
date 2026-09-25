@@ -297,7 +297,7 @@ fn parse_action_attr(
     element_kind: &str,
     label: Option<&str>,
     attr_name: &str,
-) -> Result<crate::ast::ActionBody> {
+) -> Result<crate::formula::Assignment> {
     parser::parse_action_str(value)
         .map_err(|e| wrap_attr_error(origin, element_kind, label, attr_name, value, e))
 }
@@ -2086,7 +2086,7 @@ fn write_action_xml(
     indent: &str,
     idx: usize,
 ) {
-    let action_str = printer.print_action_body(&action.action);
+    let action_str = printer.print_formula_assignment(&action.action);
     let name = label_or_index(action.label.as_deref(), idx);
     let label_attr = if let Some(label) = &action.label {
         format!(" org.eventb.core.label=\"{}\"", escape_xml(label))

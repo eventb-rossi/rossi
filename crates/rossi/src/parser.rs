@@ -15,8 +15,8 @@ use crate::formula::tag::{
 };
 use crate::formula::typecheck::type_from_expression;
 use crate::formula::{
-    BoundIdentDecl, Expression, ExpressionKind, FactoryError, Form, FormulaFactory, Predicate,
-    PredicateKind,
+    Assignment, BoundIdentDecl, Expression, ExpressionKind, FactoryError, Form, FormulaFactory,
+    Predicate, PredicateKind,
 };
 use crate::nesting::{self, PARSER_STACK_SIZE, parser_stack_red_zone};
 use crate::operators::{
@@ -1764,15 +1764,10 @@ fn parse_action_list(pair: pest::iterators::Pair<Rule>) -> Result<Vec<LabeledAct
 }
 
 /// Parse a single action (supports multiple variables: x, y := e1, e2)
-fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<ActionBody, ParseError> {
+fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<Assignment, ParseError> {
     let mut fx = Fx::new();
     let action_span = fx.at(pair.as_span());
-    // Peek at the first inner token: if it is kw_skip this is a skip action.
-    let mut inner = pair.into_inner().peekable();
-    if inner.peek().map(|p| p.as_rule()) == Some(Rule::kw_skip) {
-        return Ok(ActionBody::Skip { span: action_span });
-    }
-    let inner = inner;
+    let inner = pair.into_inner();
     let fx = &mut fx;
 
     let mut variables: Vec<(String, Option<Span>)> = Vec::new();
@@ -1856,11 +1851,9 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<ActionBody, ParseEr
             None,
         );
         let target = fx.ff.free_identifier(&function, function_span, None);
-        return Ok(ActionBody::Assignment(fx.ff.becomes_equal_to(
-            vec![target],
-            vec![overwrite_rhs],
-            action_span,
-        )));
+        return Ok(fx
+            .ff
+            .becomes_equal_to(vec![target], vec![overwrite_rhs], action_span));
     }
 
     match op_pair.as_rule() {
@@ -1884,11 +1877,7 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<ActionBody, ParseEr
                 .map(|rhs| parse_expression(rhs, fx))
                 .collect::<Result<Vec<_>, ParseError>>()?;
             let idents = target_idents(fx, &variables);
-            Ok(ActionBody::Assignment(fx.ff.becomes_equal_to(
-                idents,
-                values,
-                action_span,
-            )))
+            Ok(fx.ff.becomes_equal_to(idents, values, action_span))
         }
         Rule::op_becomes_in => {
             let rhs = rhs_pairs
@@ -1897,11 +1886,7 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<ActionBody, ParseEr
                 .ok_or(ParseError::MissingValue)?;
             let set = parse_expression(rhs, fx)?;
             let idents = target_idents(fx, &variables);
-            Ok(ActionBody::Assignment(fx.ff.becomes_member_of(
-                idents,
-                set,
-                action_span,
-            )))
+            Ok(fx.ff.becomes_member_of(idents, set, action_span))
         }
         Rule::op_becomes_such => {
             let rhs = rhs_pairs
@@ -1924,12 +1909,7 @@ fn parse_action(pair: pest::iterators::Pair<Rule>) -> Result<ActionBody, ParseEr
             let depth = fx.push_decls(&primed);
             let pred = parse_predicate_inner(rhs, false, fx);
             fx.binders.truncate(depth);
-            Ok(ActionBody::Assignment(fx.ff.becomes_such_that(
-                idents,
-                primed,
-                pred?,
-                action_span,
-            )))
+            Ok(fx.ff.becomes_such_that(idents, primed, pred?, action_span))
         }
         _ => Err(ParseError::UnexpectedRule {
             expected: "assignment operator".to_string(),
@@ -3615,7 +3595,7 @@ pub fn parse_expression_at(
 /// THEN block it is parsed with the full expression grammar
 /// (`standalone_action`): a bare `;` is forward composition, not an
 /// action boundary.
-pub fn parse_action_str(input: &str) -> Result<ActionBody, ParseError> {
+pub fn parse_action_str(input: &str) -> Result<Assignment, ParseError> {
     let depth = nesting::check_nesting(input)?;
     with_parser_stack(depth, || {
         let pairs = RossiParser::parse(Rule::action_complete, input)
@@ -3627,7 +3607,7 @@ pub fn parse_action_str(input: &str) -> Result<ActionBody, ParseError> {
 }
 
 /// [`parse_action_str`] with every formula built by `ff`.
-pub fn parse_action_str_with(input: &str, ff: &FormulaFactory) -> Result<ActionBody, ParseError> {
+pub fn parse_action_str_with(input: &str, ff: &FormulaFactory) -> Result<Assignment, ParseError> {
     with_factory(ff, || parse_action_str(input))
 }
 
@@ -3667,7 +3647,7 @@ fn find_becomes_operator(input: &str) -> Option<(&'static str, usize)> {
 /// The EB026 discrimination: a formula that fails to parse as a predicate but
 /// succeeds as an *action* is a misplaced assignment. Returns the offending
 /// "becomes" operator and its byte offset in `input`, or `None` for a genuine
-/// predicate error and for `skip` (an action carrying no operator).
+/// predicate error.
 ///
 /// The caller must already know the predicate parse failed — this only runs the
 /// action re-parse and the operator scan.
@@ -5866,17 +5846,12 @@ mod tests {
     }
 
     /// A valid predicate parses; a formula that is neither a valid predicate nor
-    /// a valid assignment keeps its generic error; `skip` (an action with no
-    /// becomes operator) is not misreported as EB026.
+    /// a valid assignment keeps its generic error.
     #[test]
     fn parse_predicate_str_does_not_overreach() {
         assert!(parse_predicate_str("x = 5").is_ok());
         assert!(!matches!(
             parse_predicate_str("x ==== y"),
-            Err(ParseError::AssignmentInPredicate { .. })
-        ));
-        assert!(!matches!(
-            parse_predicate_str("skip"),
             Err(ParseError::AssignmentInPredicate { .. })
         ));
     }
@@ -6303,7 +6278,7 @@ mod tests {
         // The broken first component forces the whole-file parse to fail, so the
         // region-splitting recovery path runs; the machine region then starts
         // past offset 0 and its spans are shifted.
-        let source = "CONTEXT c\nAXIOMS\n    @a x ∈\nEND\n\nMACHINE m\nREFINES n\nEVENTS\n    EVENT e extends e\n    THEN\n        skip\n    END\nEND";
+        let source = "CONTEXT c\nAXIOMS\n    @a x ∈\nEND\n\nMACHINE m\nREFINES n\nEVENTS\n    EVENT e extends e\n    END\nEND";
         let components = parse_components_with_recovery(source)
             .component
             .unwrap_or_default();
@@ -6322,30 +6297,6 @@ mod tests {
             span.start > event.name_span.expect("name span").end,
             "the shifted target span follows the event's own name span"
         );
-    }
-
-    /// `skip` carries the only span the lowering puts on a structural AST
-    /// field, so it is the one span that must not be shifted a second time
-    /// when the region-splitting recovery lifts a component's spans.
-    #[test]
-    fn skip_span_is_absolute_in_a_multi_component_document() {
-        let source = "CONTEXT c\nAXIOMS\n    @a x ∈\nEND\n\nMACHINE m\nEVENTS\n    EVENT e\n    THEN\n        @act1 skip\n    END\nEND";
-        let components = parse_components_with_recovery(source)
-            .component
-            .unwrap_or_default();
-        let machine = components
-            .iter()
-            .find_map(|c| match c {
-                Component::Machine(m) => Some(m),
-                Component::Context(_) => None,
-            })
-            .expect("machine recovered");
-        let action = machine.events[0].actions.first().expect("one action");
-        let ActionBody::Skip { span } = action.action else {
-            panic!("expected skip, got {:?}", action.action);
-        };
-        let span = span.expect("skip span");
-        assert_eq!(&source[span.start..span.end], "skip");
     }
 
     /// Clause regions are recorded for every clause in source order, each

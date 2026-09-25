@@ -36,7 +36,7 @@ use std::ops::ControlFlow;
 use rossi::ast::Span;
 use rossi::formula::occurrences::{self, Occurrence, Resolution, Role};
 use rossi::names::is_primed_identifier;
-use rossi::{ActionBody, Expression, Predicate};
+use rossi::{Assignment, Expression, Predicate};
 
 use crate::type_env::TypeEnv;
 
@@ -97,8 +97,7 @@ pub fn free_identifier_in_expression(expr: &Expression, env: &TypeEnv) -> Option
 /// First free identifier on an action's read side, considering `env`
 /// plus locally-bound variables (a such-that assignment binds its primed
 /// declarations in the model, so `x'` reads resolve there).
-pub fn free_identifier_in_action_rhs(body: &ActionBody, env: &TypeEnv) -> Option<String> {
-    let assignment = body.assignment()?;
+pub fn free_identifier_in_action_rhs(assignment: &Assignment, env: &TypeEnv) -> Option<String> {
     if cache_covered(assignment.free_identifiers(), env, &[]) {
         return None;
     }
@@ -136,8 +135,7 @@ pub fn first_free_primed_in_predicate(pred: &Predicate) -> Option<(String, Optio
 /// do with one. The primed declarations of a such-that assignment bind in
 /// the model, so an after-state read of an assigned variable resolves and is
 /// not reported.
-pub fn first_free_primed_in_action_rhs(body: &ActionBody) -> Option<String> {
-    let assignment = body.assignment()?;
+pub fn first_free_primed_in_action_rhs(assignment: &Assignment) -> Option<String> {
     if !assignment
         .free_identifiers()
         .iter()
@@ -176,10 +174,9 @@ pub fn first_forbidden_identifier_in_predicate(
 /// First identifier on an action's read side that's in `forbidden` and
 /// not bound locally (Group R).
 pub fn first_forbidden_identifier_in_action_rhs(
-    body: &ActionBody,
+    assignment: &Assignment,
     forbidden: &BTreeSet<String>,
 ) -> Option<String> {
-    let assignment = body.assignment()?;
     if !assignment
         .free_identifiers()
         .iter()
@@ -226,8 +223,8 @@ pub fn collect_referenced_in_expression(expr: &Expression, acc: &mut BTreeSet<St
 /// Insert every free identifier on an action's read side into `acc`.
 /// For a function override lowered by the parser, the function name on
 /// the Overwrite RHS is a usage and collected here.
-pub fn collect_referenced_in_action_rhs(body: &ActionBody, acc: &mut BTreeSet<String>) {
-    collect_referenced_in_action_rhs_with_locals(body, &[], acc);
+pub fn collect_referenced_in_action_rhs(assignment: &Assignment, acc: &mut BTreeSet<String>) {
+    collect_referenced_in_action_rhs_with_locals(assignment, &[], acc);
 }
 
 /// Same as [`collect_referenced_in_predicate`] but treats `initial_locals`
@@ -249,13 +246,10 @@ pub fn collect_referenced_in_predicate_with_locals(
 /// Same as [`collect_referenced_in_action_rhs`] with initial bound
 /// identifiers (event parameters).
 pub fn collect_referenced_in_action_rhs_with_locals(
-    body: &ActionBody,
+    assignment: &Assignment,
     initial_locals: &[&str],
     acc: &mut BTreeSet<String>,
 ) {
-    let Some(assignment) = body.assignment() else {
-        return;
-    };
     let mut v = IdentifierCollector {
         locals: initial_locals,
         acc,

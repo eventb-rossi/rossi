@@ -62,7 +62,7 @@ pub mod xml;
 // Re-export main types for convenience. The formula types come from the
 // typed model; `ast` holds the structural component types.
 pub use ast::{
-    ActionBody, Component, Context, DEFAULT_VARIANT_LABEL, Event, EventStatus, FileMetadata, Ident,
+    Component, Context, DEFAULT_VARIANT_LABEL, Event, EventStatus, FileMetadata, Ident,
     InitialisationEvent, LabeledAction, LabeledPredicate, Located, Machine, NamedElement, SourceId,
     Variant,
 };

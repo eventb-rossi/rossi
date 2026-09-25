@@ -20,8 +20,8 @@ use rossi::formula::tag::{
 };
 use rossi::formula::{BoundIdentDecl, FormulaFactory};
 use rossi::{
-    ActionBody, Assignment, Component, Context, Event, EventStatus, Expression, ExpressionKind,
-    Form, InitialisationEvent, LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate,
+    Assignment, Component, Context, Event, EventStatus, Expression, ExpressionKind, Form,
+    InitialisationEvent, LabeledAction, LabeledPredicate, Machine, NamedElement, Predicate,
     PredicateKind, PrettyPrinter, Style, Variant, parse,
 };
 
@@ -520,10 +520,6 @@ fn arb_assignment() -> impl Strategy<Value = (Assignment, Vec<String>)> {
     ]
 }
 
-fn arb_action() -> impl Strategy<Value = (ActionBody, Vec<String>)> {
-    arb_assignment().prop_map(|(assignment, names)| (ActionBody::Assignment(assignment), names))
-}
-
 // =============================================================================
 // Component-level strategies
 // =============================================================================
@@ -569,7 +565,7 @@ fn arb_theorem() -> impl Strategy<Value = LabeledPredicate> {
 }
 
 fn arb_labeled_action() -> impl Strategy<Value = LabeledAction> {
-    (arb_label(), arb_action()).prop_map(|(label, (action, _vars))| LabeledAction {
+    (arb_label(), arb_assignment()).prop_map(|(label, (action, _vars))| LabeledAction {
         label,
         action,
         span: None,
@@ -776,7 +772,7 @@ fn wrap_predicate_in_context(pred: &Predicate) -> Component {
 }
 
 /// Wrap an action in a Machine event.
-fn wrap_action_in_machine(action: &ActionBody, variables: &[String]) -> Component {
+fn wrap_action_in_machine(action: &Assignment, variables: &[String]) -> Component {
     let mut machine = Machine::new("proptest".into());
     machine.variables = variables
         .iter()
@@ -898,7 +894,7 @@ fn predicate_roundtrip_ascii() {
 
 #[test]
 fn action_roundtrip_unicode() {
-    check_roundtrip_property(500, arb_action, |(action, vars)| {
+    check_roundtrip_property(500, arb_assignment, |(action, vars)| {
         let component = wrap_action_in_machine(action, vars);
         assert_component_roundtrip(&component, &PrettyPrinter::new());
     });
@@ -906,7 +902,7 @@ fn action_roundtrip_unicode() {
 
 #[test]
 fn action_roundtrip_ascii() {
-    check_roundtrip_property(500, arb_action, |(action, vars)| {
+    check_roundtrip_property(500, arb_assignment, |(action, vars)| {
         let component = wrap_action_in_machine(action, vars);
         assert_component_roundtrip(&component, &PrettyPrinter::ascii());
     });
@@ -919,8 +915,8 @@ fn action_roundtrip_ascii() {
 // `;`-guard generative coverage.
 #[test]
 fn action_roundtrip_standalone() {
-    check_roundtrip_property(500, arb_action, |(action, _vars)| {
-        let printed = PrettyPrinter::new().print_action_body(action);
+    check_roundtrip_property(500, arb_assignment, |(action, _vars)| {
+        let printed = PrettyPrinter::new().print_formula_assignment(action);
         let reparsed = rossi::parse_action_str(&printed).unwrap_or_else(|e| {
             panic!(
                 "Failed to parse printed action:\n{e}\n\nPrinted:\n{printed}\n\nOriginal AST:\n{action:#?}"

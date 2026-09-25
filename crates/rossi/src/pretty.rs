@@ -1257,16 +1257,6 @@ impl PrettyPrinter {
             s
         }
     }
-
-    /// Format an action body: `skip`, or the modelled assignment.
-    pub fn print_action_body(&self, body: &crate::ast::ActionBody) -> String {
-        match body {
-            crate::ast::ActionBody::Skip { .. } => "skip".to_string(),
-            crate::ast::ActionBody::Assignment(assignment) => {
-                self.print_formula_assignment(assignment)
-            }
-        }
-    }
 }
 
 // ===== formula-model printing =====
@@ -2369,23 +2359,18 @@ impl PrettyPrinter {
         self.wrap_expr(expr, start_col, &wc, FormulaContext::Formula, &mut names)
     }
 
-    /// [`Self::print_predicate_at`] for action bodies.
+    /// [`Self::print_predicate_at`] for actions.
     fn print_action_at(
         &self,
-        body: &crate::ast::ActionBody,
+        assign: &formula::Assignment,
         start_col: usize,
         base_col: usize,
     ) -> String {
-        match body {
-            crate::ast::ActionBody::Skip { .. } => "skip".to_string(),
-            crate::ast::ActionBody::Assignment(assign) => {
-                if self.max_line_width == 0 {
-                    return self.print_formula_assignment(assign);
-                }
-                let wc = self.wrap_ctx(base_col);
-                self.wrap_assignment(assign, start_col, &wc)
-            }
+        if self.max_line_width == 0 {
+            return self.print_formula_assignment(assign);
         }
+        let wc = self.wrap_ctx(base_col);
+        self.wrap_assignment(assign, start_col, &wc)
     }
 
     fn wrap_pred(

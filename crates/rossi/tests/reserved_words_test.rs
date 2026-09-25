@@ -110,7 +110,7 @@ fn reserved_words_rejected_in_declarations() {
     assert_reserved(parse, "machine m0 variables ran end", "ran");
     assert_reserved(
         parse,
-        "machine m0 events event e any inter then skip end end",
+        "machine m0 events event e any inter end end",
         "inter",
     );
 }

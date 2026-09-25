@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use rossi::{ActionBody, EventStatus, Expression, Predicate};
+use rossi::{Assignment, EventStatus, Expression, Predicate};
 
 use crate::handles::HandleUri;
 use crate::normalize::{
@@ -248,9 +248,9 @@ pub struct ActionDecl {
     /// find the LHS variables an inherited INITIALISATION action
     /// assigns when deciding extended-event scope, and the render-time
     /// fallback when `typed` is absent.
-    pub action: ActionBody,
-    /// The fully typed formula-model form; `None` for `skip`, which
-    /// has no assignment to rebuild.
+    pub action: Assignment,
+    /// The fully typed formula-model form; `None` when the action could
+    /// not be typed.
     pub typed: Option<rossi::formula::Assignment>,
     pub source: HandleUri,
 }
@@ -535,7 +535,7 @@ fn render_parameter(p: &ParameterDecl) -> Element {
 fn render_action(a: &ActionDecl, internal_name: String) -> Element {
     let assignment = match &a.typed {
         Some(typed) => canonical_typed_assignment(typed),
-        // `skip` has no assignment to rebuild; render the parse.
+        // An action that could not be typed renders its parse.
         None => canonical_action(&a.action),
     };
     Element::new(tag::SC_ACTION)

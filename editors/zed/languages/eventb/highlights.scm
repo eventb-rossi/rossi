@@ -53,8 +53,6 @@
   "anticipated"
 ] @keyword
 
-(skip) @keyword
-
 [
   "∀"
   "∃"

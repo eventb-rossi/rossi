@@ -955,7 +955,7 @@ MACHINE m1
 EVENTS
 EVENT do-step
 THEN
-    @act1 skip
+    @act1 n ≔ 0
 END
 END
 ";
@@ -1859,11 +1859,11 @@ END
     const STEP_CHAIN: [(&str, &str); 3] = [
         (
             "M0.eventb",
-            "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+            "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        @act1 n ≔ 0\n    END\nEND\n",
         ),
         (
             "M1.eventb",
-            "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT step\n    REFINES step\n    THEN\n        skip\n    END\n\n    EVENT pause\n    REFINES step\n    THEN\n        skip\n    END\nEND\n",
+            "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT step\n    REFINES step\n    THEN\n        @act1 n ≔ 0\n    END\n\n    EVENT pause\n    REFINES step\n    THEN\n        @act1 n ≔ 0\n    END\nEND\n",
         ),
         (
             "M2.eventb",
@@ -1913,11 +1913,11 @@ END
         let sources = [
             (
                 "M0.eventb",
-                "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+                "MACHINE M0\nEVENTS\n    EVENT step\n    THEN\n        @act1 n ≔ 0\n    END\nEND\n",
             ),
             (
                 "M1.eventb",
-                "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT pause\n    REFINES step\n    THEN\n        skip\n    END\n\n    EVENT step\n    THEN\n        skip\n    END\nEND\n",
+                "MACHINE M1\nREFINES M0\nEVENTS\n    EVENT pause\n    REFINES step\n    THEN\n        @act1 n ≔ 0\n    END\n\n    EVENT step\n    THEN\n        @act1 n ≔ 0\n    END\nEND\n",
             ),
         ];
         let text = sources[1].1;

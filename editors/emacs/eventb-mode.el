@@ -146,7 +146,7 @@ Returns non-nil when it applied the mapping."
   "Event-B section and event keywords (any case).")
 
 (defconst eventb-status-keywords-regexp
-  "\\<\\(?:[Aa][Nn][Tt][Ii][Cc][Ii][Pp][Aa][Tt][Ee][Dd]\\|[Cc][Oo][Nn][Vv][Ee][Rr][Gg][Ee][Nn][Tt]\\|[Oo][Rr][Dd][Ii][Nn][Aa][Rr][Yy]\\|[Tt][Hh][Ee][Oo][Rr][Ee][Mm]\\|[Ss][Kk][Ii][Pp]\\)\\>"
+  "\\<\\(?:[Aa][Nn][Tt][Ii][Cc][Ii][Pp][Aa][Tt][Ee][Dd]\\|[Cc][Oo][Nn][Vv][Ee][Rr][Gg][Ee][Nn][Tt]\\|[Oo][Rr][Dd][Ii][Nn][Aa][Rr][Yy]\\|[Tt][Hh][Ee][Oo][Rr][Ee][Mm]\\)\\>"
   "Event-B status and inline modifiers (any case).")
 
 (defconst eventb-constants-regexp

@@ -1777,9 +1777,7 @@ END
         let _ = walk_predicate(&guard.predicate, &mut binders, &mut check);
     }
     for action in &event.actions {
-        if let Some(assignment) = action.action.assignment() {
-            let _ = walk_assignment(assignment, &mut binders, &mut check);
-        }
+        let _ = walk_assignment(&action.action, &mut binders, &mut check);
     }
 
     // The guard reads `amount`; the action writes `counter` from `amount`.

@@ -119,12 +119,12 @@ pub struct ActionDump {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub inherited_from: Option<String>,
     pub text: String,
-    /// Absent for `skip`, which has no assignment.
+    /// Absent when the action could not be typed.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub assignment: Option<AssignmentNode>,
     /// The before-after predicate: the same action written as a relation
     /// between the states, with each after-state value a primed identifier.
-    /// Absent for `skip`.
+    /// Absent when the action could not be typed.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub ba: Option<Node>,
 }

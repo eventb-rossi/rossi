@@ -326,9 +326,7 @@ fn test_parse_action_with_forward_composition_xml() {
         let actions = &m.events[0].actions;
         assert_eq!(actions.len(), 2);
         for labeled in actions {
-            let Some(assignment) = labeled.action.assignment() else {
-                panic!("Expected Assignment, got {:?}", labeled.action);
-            };
+            let assignment = &labeled.action;
             let AssignmentKind::BecomesEqualTo { values, .. } = assignment.kind() else {
                 panic!("Expected becomes-equal-to, got {assignment:?}");
             };

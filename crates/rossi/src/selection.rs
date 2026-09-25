@@ -4,11 +4,13 @@
 //! Signature help and smart selection query that shared hierarchy by byte
 //! offset without exposing Pest outside this crate.
 
-use crate::ast::{ActionBody, Component, Span};
+use crate::ast::{Component, Span};
 use crate::comments::{self, LexicalSpans};
 use crate::error::ParseError;
 use crate::formula::tag::{BinaryExprOp, QuantExprOp, QuantPredOp};
-use crate::formula::{AssignmentKind, Expression, ExpressionKind, Form, Predicate, PredicateKind};
+use crate::formula::{
+    Assignment, AssignmentKind, Expression, ExpressionKind, Form, Predicate, PredicateKind,
+};
 use crate::names::is_valid_math_identifier;
 use crate::operators::{self, OperatorId};
 use crate::parser::{Rule, line_start, parse_components_guarded};
@@ -675,10 +677,7 @@ fn push_component_formulas<'a>(component: &'a Component, stack: &mut Vec<Formula
     }
 }
 
-fn push_action_formulas<'a>(body: &'a ActionBody, stack: &mut Vec<Formula<'a>>) {
-    let Some(assignment) = body.assignment() else {
-        return;
-    };
+fn push_action_formulas<'a>(assignment: &'a Assignment, stack: &mut Vec<Formula<'a>>) {
     match assignment.kind() {
         AssignmentKind::BecomesEqualTo { values, .. } => {
             stack.extend(values.iter().map(Formula::Expression));
