@@ -186,7 +186,7 @@ EVENTS
     WHERE
         @grd1 x ∈ ℕ
     THEN
-        skip
+        @act1 n ≔ 0
     END
 
     EVENT second
@@ -195,7 +195,7 @@ EVENTS
     WHERE
         @grd1 x ∈ ℕ
     THEN
-        skip
+        @act1 n ≔ 0
     END
 END
 ";
@@ -228,7 +228,7 @@ EVENTS
     WHERE
         @grd1 x ∈ ℕ
     THEN
-        skip
+        @act1 n ≔ 0
     END
 
     EVENT second
@@ -237,7 +237,7 @@ EVENTS
     WHERE
         @grd1 x ∈ ℕ
     THEN
-        skip
+        @act1 n ≔ 0
     END
 END
 ";

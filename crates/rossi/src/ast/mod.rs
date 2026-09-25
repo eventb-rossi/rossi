@@ -169,53 +169,11 @@ pub struct LabeledPredicate {
     pub comment: Option<String>,
 }
 
-/// An action's body: either the explicit no-op or an assignment.
-///
-/// `skip` is a surface-language construct with no assignment to model,
-/// so it lives here rather than in the formula layer.
-#[derive(Debug, Clone, Eq)]
-pub enum ActionBody {
-    Skip {
-        /// Source location of the `skip` keyword.
-        span: Option<Span>,
-    },
-    Assignment(crate::formula::Assignment),
-}
-
-// Written out rather than derived so `skip`'s span stays out of equality, the
-// way an assignment's does. Both arms carry a span the lowering already lifted
-// into document coordinates, so neither is structural metadata that a layout
-// change should be able to alter.
-impl PartialEq for ActionBody {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ActionBody::Skip { .. }, ActionBody::Skip { .. }) => true,
-            (ActionBody::Assignment(a), ActionBody::Assignment(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl ActionBody {
-    /// The assignment, unless this is `skip`.
-    pub fn assignment(&self) -> Option<&crate::formula::Assignment> {
-        match self {
-            ActionBody::Skip { .. } => None,
-            ActionBody::Assignment(assignment) => Some(assignment),
-        }
-    }
-
-    /// `true` iff this is the explicit no-op.
-    pub fn is_skip(&self) -> bool {
-        matches!(self, ActionBody::Skip { .. })
-    }
-}
-
 /// A labeled action with an optional label identifier
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabeledAction {
     pub label: Option<String>,
-    pub action: ActionBody,
+    pub action: crate::formula::Assignment,
     /// Source location of the entire labeled action
     pub span: Option<Span>,
     /// Comment from Rodin XML

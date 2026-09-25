@@ -705,16 +705,11 @@ const KEYWORD_DOCS: &[KeywordDocEntry] = &[
         "THEN/BEGIN",
         "Declares event actions (state changes).\n\n```eventb\nTHEN\n    @act1 count := count + 1\n    @act2 total := total + count\n```",
     ),
-    // Inline modifiers
+    // Inline modifier
     (
         KeywordId::Theorem,
         "theorem",
         "Marks a labeled predicate as a theorem — a property that follows from the others and is proved once, not preserved by every event.\n\n```eventb\nINVARIANTS\n    @thm1 theorem count ∈ ℕ\n```",
-    ),
-    (
-        KeywordId::Skip,
-        "skip",
-        "A no-op action that makes no state change.\n\n```eventb\nTHEN\n    @act1 skip\n```",
     ),
     // Event status values
     (

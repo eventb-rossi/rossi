@@ -117,11 +117,11 @@ END
 fn test_pretty_print_parallel_assignment_keeps_all_pairs() {
     let action = parse_action_str("x, y := 1, 2").expect("parallel assignment parses");
     assert_eq!(
-        PrettyPrinter::new().print_action_body(&action),
+        PrettyPrinter::new().print_formula_assignment(&action),
         "x, y ≔ 1, 2"
     );
     assert_eq!(
-        PrettyPrinter::ascii().print_action_body(&action),
+        PrettyPrinter::ascii().print_formula_assignment(&action),
         "x, y := 1, 2"
     );
 }
@@ -319,7 +319,7 @@ fn rodin_canonical_spaces_and_parenthesizes_type_ascriptions() {
         printer.print_formula_expression(&bool_expression),
         "bool((a ⦂ b)=c)"
     );
-    assert_eq!(printer.print_action_body(&action), "x ≔ a ⦂ b");
+    assert_eq!(printer.print_formula_assignment(&action), "x ≔ a ⦂ b");
 }
 
 #[test]
@@ -334,14 +334,14 @@ fn rodin_canonical_tightens_comma_separated_formula_lists() {
         printer.print_formula_predicate(&predicate),
         "∀x⦂ℤ,y⦂ℤ·p(x,y)"
     );
-    assert_eq!(printer.print_action_body(&action), "x,y ≔ 1,2");
+    assert_eq!(printer.print_formula_assignment(&action), "x,y ≔ 1,2");
 
     assert_eq!(
         PrettyPrinter::new().print_formula_expression(&expression),
         "{1, 2, 3}"
     );
     assert_eq!(
-        PrettyPrinter::new().print_action_body(&action),
+        PrettyPrinter::new().print_formula_assignment(&action),
         "x, y ≔ 1, 2"
     );
 }
@@ -661,32 +661,6 @@ fn test_theorems_section_roundtrips_to_inline() {
 }
 
 #[test]
-fn test_skip_action_roundtrip() {
-    let source = r#"MACHINE test
-EVENTS
-    EVENT foo
-    THEN
-        @act1 skip
-    END
-END
-"#;
-    let mut component = rossi::parse(source).expect("Failed to parse");
-    let output = rossi::to_string(&component);
-    assert!(
-        output.contains("skip"),
-        "Pretty-printed output should contain 'skip'"
-    );
-    // Parse again and compare (clear spans since source positions differ after pretty-print)
-    let mut component2 = rossi::parse(&output).expect("Failed to re-parse pretty output");
-    common::clear_spans(&mut component);
-    common::clear_spans(&mut component2);
-    assert_eq!(
-        component, component2,
-        "Roundtrip should produce identical AST"
-    );
-}
-
-#[test]
 fn test_extended_initialisation_no_actions_roundtrip() {
     let source = indoc::indoc! {"
         MACHINE m1
@@ -711,32 +685,6 @@ fn test_extended_initialisation_no_actions_roundtrip() {
 // ============================================================================
 // Roundtrip example tests
 // ============================================================================
-
-// `skip` carries the only structural span an action body can own, so a machine
-// using it is the case that proves `clear_spans` reaches that span; the
-// generative round-trips never emit `skip`.
-#[test]
-fn skip_action_roundtrips() {
-    common::assert_roundtrip(
-        r#"MACHINE m
-VARIABLES
-    x
-INVARIANTS
-    @inv1 x ∈ ℕ
-EVENTS
-    EVENT INITIALISATION
-    THEN
-        @act1 x ≔ 0
-    END
-
-    EVENT idle
-    THEN
-        @act1 skip
-    END
-END
-"#,
-    );
-}
 
 // Kept as a readable pinned example of machine-level REFINES with event-level
 // REFINES/WITH; generative cover: machine_roundtrip_* in proptest_roundtrip.rs.

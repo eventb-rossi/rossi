@@ -13,9 +13,8 @@ use super::tag::{self, Tag};
 
 /// An immutable assignment: the formula of one event action.
 ///
-/// `skip` is not an assignment — an event with no effect simply has no
-/// actions — so the machine layer represents it outside the formula
-/// model.
+/// Event-B has no `skip` assignment: an event with no effect simply has no
+/// actions.
 #[derive(Debug, Clone)]
 pub struct Assignment(pub(super) Arc<AssignData>);
 

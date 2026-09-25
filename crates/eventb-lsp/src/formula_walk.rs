@@ -144,7 +144,7 @@ fn drive<V: WalkVisitor>(component: &Component, v: &mut V) {
                     let _ = occurrences::walk_predicate(&lp.predicate, &mut Vec::new(), v);
                 }
                 for la in &init.actions {
-                    walk_action_body(&la.action, v);
+                    let _ = occurrences::walk_assignment(&la.action, &mut Vec::new(), v);
                 }
             }
             for event in &m.events {
@@ -158,13 +158,6 @@ fn drive<V: WalkVisitor>(component: &Component, v: &mut V) {
                 v.set_locals(Locals::new());
             }
         }
-    }
-}
-
-/// Walk an action body's assignment, if any (`skip` has no formulas).
-fn walk_action_body<V: occurrences::OccurrenceVisitor>(body: &rossi::ActionBody, v: &mut V) {
-    if let Some(assignment) = body.assignment() {
-        let _ = occurrences::walk_assignment(assignment, &mut Vec::new(), v);
     }
 }
 
@@ -235,7 +228,7 @@ fn walk_event_body<V: occurrences::OccurrenceVisitor>(event: &Event, v: &mut V) 
         let _ = occurrences::walk_predicate(&lp.predicate, &mut Vec::new(), v);
     }
     for la in &event.actions {
-        walk_action_body(&la.action, v);
+        let _ = occurrences::walk_assignment(&la.action, &mut Vec::new(), v);
     }
 }
 

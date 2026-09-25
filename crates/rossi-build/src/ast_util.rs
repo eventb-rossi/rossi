@@ -3,11 +3,8 @@
 /// Names that an action writes to (its LHS targets). Shared by the SC
 /// cascade-drop logic and the lint module's unmodified-variable / INIT
 /// completeness checks.
-pub(crate) fn lhs_variables(body: &rossi::ActionBody) -> Vec<&str> {
+pub(crate) fn lhs_variables(assignment: &rossi::Assignment) -> Vec<&str> {
     use rossi::{AssignmentKind, ExpressionKind};
-    let Some(assignment) = body.assignment() else {
-        return Vec::new();
-    };
     let idents = match assignment.kind() {
         AssignmentKind::BecomesEqualTo { idents, .. }
         | AssignmentKind::BecomesMemberOf { idents, .. }

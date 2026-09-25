@@ -100,7 +100,7 @@
       "name": "keyword.control.eventb"
     },
     "tokens_1": {
-      "match": "(?i)\\b(anticipated|convergent|ordinary|skip|theorem)\\b",
+      "match": "(?i)\\b(anticipated|convergent|ordinary|theorem)\\b",
       "name": "keyword.other.eventb"
     },
     "tokens_2": {

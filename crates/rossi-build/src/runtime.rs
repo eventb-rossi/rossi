@@ -321,8 +321,8 @@ fn event_guards(event: &EventDecl) -> impl Iterator<Item = (bool, &GuardDecl)> {
 }
 
 /// Every typed action of `event`, oldest inherited first, paired with
-/// whether it was declared by this event. `skip` has no typed form and is
-/// left out.
+/// whether it was declared by this event. An action that could not be
+/// typed is left out.
 ///
 /// `actions` carries the inherited extended-event prefix first; those
 /// actions run in this machine but their text lives in an ancestor, so a

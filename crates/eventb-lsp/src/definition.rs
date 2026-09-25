@@ -368,7 +368,8 @@ END";
         // An event named `ent` is a substring of `EVENT`; resolution reads the
         // name span from the AST and lands on the name, never inside the keyword.
         let uri = "file:///m.eventb";
-        let source = "MACHINE m\nEVENTS\n    EVENT ent\n    THEN\n        @act1 skip\n    END\nEND";
+        let source =
+            "MACHINE m\nEVENTS\n    EVENT ent\n    THEN\n        @act1 n ≔ 0\n    END\nEND";
         let provider = setup(&[(uri, source)]);
 
         // after "    EVENT "

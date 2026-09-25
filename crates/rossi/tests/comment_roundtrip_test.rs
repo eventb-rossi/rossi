@@ -219,13 +219,13 @@ fn commented_parameters_print_one_per_line() {
     // The rossi (one-per-line) layout: each parameter gets its own line, so a
     // trailing comment re-attaches to its parameter on reparse.
     let rossi_style = PrettyPrinter::styled(Style::Rossi);
-    let src = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a // first\n        b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 skip\n    END\nEND\n";
+    let src = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a // first\n        b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 x ≔ a\n    END\nEND\n";
     let printed = rossi_style.print_component(&parse(src).unwrap());
     assert!(printed.contains("        a // first\n        b\n"));
 
     // Uncommented parameters split one per line too — newlines are ordinary
     // whitespace in the structural-list grammar, so the output reparses.
-    let src2 = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 skip\n    END\nEND\n";
+    let src2 = "MACHINE m\nEVENTS\n    EVENT e\n    ANY\n        a b\n    WHERE\n        @grd1 a > 0 ∧ b > 0\n    THEN\n        @act1 x ≔ a\n    END\nEND\n";
     let printed2 = rossi_style.print_component(&parse(src2).unwrap());
     assert!(
         printed2.contains("        a\n        b\n"),

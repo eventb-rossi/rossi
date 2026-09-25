@@ -17,7 +17,7 @@ repository = "https://github.com/eventb-rossi/rossi"
 # workflow.
 [grammars.eventb]
 repository = "https://github.com/eventb-rossi/tree-sitter-eventb"
-rev = "ff8a6521b203739c8ade4e3e21ec8ac4c95445f5"
+rev = "87c4cdb3f8cc1895111cbda648ea386700092117"
 
 [language_servers.eventb-language-server]
 name = "Rossi Event-B Language Server"

@@ -141,9 +141,6 @@ kw_ordinary = @{ ^"ordinary" ~ struct_word_boundary }
 kw_convergent = @{ ^"convergent" ~ struct_word_boundary }
 kw_anticipated = @{ ^"anticipated" ~ struct_word_boundary }
 
-// Action Keywords
-kw_skip = @{ ^"skip" ~ word_boundary }
-
 // Logic keywords — predicate literals. Lowercase ASCII `true`/`false` or the
 // Unicode glyphs ⊤/⊥; the uppercase boolean values/type are the kw_bool_*
 // rules below. ASCII spellings are exact-case, matching the kernel language.
@@ -427,7 +424,7 @@ reserved_word = _{
     kw_context | kw_extends | kw_sets | kw_constants | kw_axioms | kw_theorems | kw_end
   | kw_machine | kw_refines | kw_sees | kw_variables | kw_invariants | kw_variant | kw_events
   | kw_initialisation | kw_event | kw_any | kw_where | kw_when | kw_with | kw_then | kw_begin
-  | kw_witness | kw_status | kw_ordinary | kw_convergent | kw_anticipated | kw_skip
+  | kw_witness | kw_status | kw_ordinary | kw_convergent | kw_anticipated
   | kw_true | kw_false | kw_theorem | kw_nat1 | kw_nat | kw_int | kw_bool
   | kw_bool_true | kw_bool_false | kw_bool_type | kw_UNION | kw_INTER
   | op_or | op_not | op_powerset1 | op_powerset | op_oftype | op_domain | op_range
@@ -622,8 +619,7 @@ action_expression = {
 }
 
 action = {
-    kw_skip                                                                      // Skip (no-op)
-  | identifier ~ lparen ~ action_expression ~ rparen ~ op_becomes_equal ~ action_expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
+    identifier ~ lparen ~ action_expression ~ rparen ~ op_becomes_equal ~ action_expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
   | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ action_expression ~ (comma ~ action_expression)*  // Deterministic (parallel) assignment
   | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ action_expression     // Non-deterministic assignment (becomes member of)
   | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate_no_semi   // Non-deterministic assignment (becomes such that)
@@ -636,8 +632,7 @@ action = {
 // `action` rule above keeps its _no_semi variants because actions in a
 // THEN block are juxtaposed.
 standalone_action = {
-    kw_skip                                                                      // Skip (no-op)
-  | identifier ~ lparen ~ expression ~ rparen ~ op_becomes_equal ~ expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
+    identifier ~ lparen ~ expression ~ rparen ~ op_becomes_equal ~ expression  // Function override: f(x) ≔ E (single arg; pair as maplet f(x ↦ y))
   | identifier ~ (comma ~ identifier)* ~ op_becomes_equal ~ expression ~ (comma ~ expression)*  // Deterministic (parallel) assignment
   | identifier ~ (comma ~ identifier)* ~ op_becomes_in ~ expression            // Non-deterministic assignment (becomes member of)
   | identifier ~ (comma ~ identifier)* ~ op_becomes_such ~ predicate           // Non-deterministic assignment (becomes such that)

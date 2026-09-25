@@ -10,7 +10,7 @@ endif
 " >>> cargo xtask gen-grammars (generated, do not edit)
 syn case ignore
 syn keyword eventbKeyword any axioms begin constants context end event events extends initialisation invariants machine refines sees sets status then theorems variables variant when where with witness
-syn keyword eventbStatusKeyword anticipated convergent ordinary skip theorem
+syn keyword eventbStatusKeyword anticipated convergent ordinary theorem
 syn case match
 syn keyword eventbConstant BOOL FALSE INT NAT NAT1 TRUE bool false true
 syn keyword eventbBuiltin card finite id max min partition pred prj1 prj2 succ

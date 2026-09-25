@@ -532,7 +532,7 @@ fn fmt_raw_copies_non_component_entries() {
 // Style preset and toggles
 // =========================================================================
 
-const STYLE_MACHINE: &str = "MACHINE m REFINES m0\nVARIABLES x y\nINVARIANTS\n@inv1 x : NAT\nEVENTS\nEVENT e ANY p WHERE @g p > 0 THEN @act1 skip END\nEND\n";
+const STYLE_MACHINE: &str = "MACHINE m REFINES m0\nVARIABLES x y\nINVARIANTS\n@inv1 x : NAT\nEVENTS\nEVENT e ANY p WHERE @g p > 0 THEN @act1 x := p END\nEND\n";
 
 #[test]
 fn fmt_style_camille_prints_camille_layout() {
@@ -556,7 +556,7 @@ fn fmt_style_camille_prints_camille_layout() {
                     \x20\x20\x20\x20where\n\
                     \x20\x20\x20\x20\x20\x20@g p > 0\n\
                     \x20\x20\x20\x20then\n\
-                    \x20\x20\x20\x20\x20\x20@act1 skip\n\
+                    \x20\x20\x20\x20\x20\x20@act1 x ≔ p\n\
                     \x20\x20end\n\
                     end";
     assert_eq!(stdout.trim_end_matches('\n'), expected, "got:\n{stdout}");

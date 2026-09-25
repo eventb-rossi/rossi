@@ -443,7 +443,6 @@ mod tests {
         assert!(all.contains(&"context".to_string()));
         assert!(all.contains(&"status".to_string()));
         assert!(all.contains(&"theorem".to_string()));
-        assert!(all.contains(&"skip".to_string()));
         assert!(all.iter().any(|m| m == "<=>"));
         assert!(all.iter().any(|m| m == "|->"));
         assert!(all.iter().any(|m| m == "∈"));
@@ -469,7 +468,7 @@ mod tests {
                 .find(|g| g.members.iter().any(|m| m == member))
                 .unwrap_or_else(|| panic!("{member:?} not classified"))
         };
-        for ci in ["context", "skip"] {
+        for ci in ["context", "theorem"] {
             assert!(find(ci).case_insensitive, "{ci:?} must match (?i)");
         }
         for exact in [

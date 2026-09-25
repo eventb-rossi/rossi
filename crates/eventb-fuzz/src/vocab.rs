@@ -166,8 +166,8 @@ mod tests {
     #[test]
     fn keywords_and_reserved_words_are_rejected() {
         for word in [
-            "end", "END", "End", "machine", "sets", "theorem", "skip", "card", "dom", "TRUE",
-            "bool", "prj1", "", "1x", "x-y",
+            "end", "END", "End", "machine", "sets", "theorem", "card", "dom", "TRUE", "bool",
+            "prj1", "", "1x", "x-y",
         ] {
             assert!(!is_usable_name(word), "{word:?} should not be usable");
         }

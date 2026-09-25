@@ -174,38 +174,6 @@ fn a_comment_reaches_the_element_it_was_written_beside() {
 }
 
 #[test]
-fn a_skip_action_has_no_assignment_and_no_before_after_predicate() {
-    let source = "\
-machine m
-variables
-    v
-invariants
-    @inv1 v ∈ ℕ
-events
-event INITIALISATION
-then
-    @act1 v ≔ 0
-end
-event idle
-then
-    @act1 skip
-end
-end
-";
-    let model = model(&[("m.bum", source)]);
-    let action = &machine(&model, "m")
-        .events
-        .iter()
-        .find(|e| e.label == "idle")
-        .expect("the event")
-        .actions[0];
-
-    assert!(action.assignment.is_none());
-    assert!(action.ba.is_none());
-    assert_eq!(action.text, "skip");
-}
-
-#[test]
 fn a_component_that_declares_nothing_still_reports_its_handle() {
     // A component's own handle is not stored on the checked record, and a
     // context with no carrier set, constant or axiom has no declaration to

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use rossi::{
-    ActionBody, AssignmentKind, Event, InitialisationEvent, LabeledAction, LabeledPredicate,
+    Assignment, AssignmentKind, Event, InitialisationEvent, LabeledAction, LabeledPredicate,
     NamedElement,
 };
 
@@ -278,10 +278,10 @@ fn resolve_convergence(
 /// assigned variable's after-value open, so a refinement that drops that
 /// variable must witness it. A deterministic `x ≔ e` already pins the
 /// after-value and needs no witness.
-fn is_nondeterministic_assignment(action: &ActionBody) -> bool {
+fn is_nondeterministic_assignment(action: &Assignment) -> bool {
     matches!(
-        action.assignment().map(rossi::Assignment::kind),
-        Some(AssignmentKind::BecomesMemberOf { .. } | AssignmentKind::BecomesSuchThat { .. })
+        action.kind(),
+        AssignmentKind::BecomesMemberOf { .. } | AssignmentKind::BecomesSuchThat { .. }
     )
 }
 
@@ -1014,7 +1014,7 @@ fn build_repair_action(
         .map(|name| ff.bound_ident_decl(format!("{name}'"), None, None, None))
         .collect();
     let top = ff.literal_predicate(rossi::formula::tag::LiteralPredOp::BTrue, None);
-    let action = ActionBody::Assignment(ff.becomes_such_that(idents, primed, top, None));
+    let action = ff.becomes_such_that(idents, primed, top, None);
     let checked = check_action(&action, env);
     ActionDecl {
         label,
@@ -1315,9 +1315,9 @@ fn build_event_buckets(
         // `auctions ≔ auctions ∪ {a ↦ i}` where the two operands of `∪`
         // are at different power-set levels. Rodin emits the event
         // `accurate=false` and skips the action. The verdict is already
-        // in hand from check_action: a real assignment without a typed
-        // rebuild failed its check.
-        if checked.action.assignment().is_some() && checked.typed.is_none() {
+        // in hand from check_action: an assignment without a typed rebuild
+        // failed its check.
+        if checked.typed.is_none() {
             context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),

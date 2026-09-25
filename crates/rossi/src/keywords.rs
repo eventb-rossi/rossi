@@ -1,7 +1,7 @@
 //! Canonical Event-B structural keywords.
 //!
 //! This module is the single source of truth for section keywords, event
-//! keywords, status values, and the inline `theorem`/`skip` modifiers. It
+//! keywords, status values, and the inline `theorem` modifier. It
 //! mirrors [`crate::operators`]: a const table ([`KEYWORDS`]) plus lookup
 //! helpers. LSP features (completion, hover, semantic tokens, folding) and the
 //! parser's error recovery all derive their keyword sets from this table rather
@@ -51,9 +51,8 @@ pub enum KeywordId {
     Ordinary,
     Convergent,
     Anticipated,
-    // Inline modifiers (appear inside predicates/actions, not as clause headers)
+    // Inline modifier (appears inside a predicate, not as a clause header)
     Theorem,
-    Skip,
     // The THEOREMS section header (context and machine). The parser lowers its
     // members into the axioms/invariants vec with `is_theorem = true`, since Rodin
     // models a theorem as a flagged axiom/invariant, not a separate container.
@@ -306,20 +305,13 @@ pub const KEYWORDS: &[Keyword] = &[
         0,
         "Anticipated event (may increase variant)",
     ),
-    // Inline modifiers
+    // Inline modifier
     kw(
         Theorem,
         &["theorem"],
         Grp::Inline,
         0,
         "Mark a labeled predicate as a theorem",
-    ),
-    kw(
-        Skip,
-        &["skip"],
-        Grp::Inline,
-        0,
-        "No-op action (does nothing)",
     ),
     // A context AND machine clause; the dual scope is carried by `completion_scopes`
     // (mirroring EXTENDS/REFINES). Members lower into the axioms/invariants vec with
@@ -396,11 +388,9 @@ impl DeclSite {
     }
 }
 
-// The inline keywords re-lex a name wherever it is *used*: `theorem` in any
-// labeled predicate, so every identifier site collides with it; `skip` only
-// as an action's target, so only variables do (`x ≔ skip + 1` parses).
+// The inline keyword re-lexes a name wherever it is *used*: `theorem` in any
+// labeled predicate, so every identifier site collides with it.
 const INLINE: &[KeywordId] = &[Theorem];
-const INLINE_VARIABLE: &[KeywordId] = &[Theorem, Skip];
 const CONTEXT_SECTION: &[KeywordId] = &[Extends, Sets, Constants, Axioms, Theorems, End];
 const MACHINE_SECTION: &[KeywordId] = &[
     Refines, Sees, Variables, Invariants, Theorems, Variant, Events, End,
@@ -473,7 +463,7 @@ pub fn colliding_keyword(word: &str, site: DeclSite) -> Option<&'static str> {
         DeclSite::ContextName => &[CONTEXT_SECTION, MACHINE_SECTION],
         DeclSite::MachineName => &[],
         DeclSite::ContextItem => &[CONTEXT_SECTION, INLINE],
-        DeclSite::Variable => &[MACHINE_SECTION, INLINE_VARIABLE],
+        DeclSite::Variable => &[MACHINE_SECTION, INLINE],
         DeclSite::EventName => &[EVENT_SECTION, EVENT_REFINES_FOLLOW, EVENT_HEADER],
         DeclSite::Parameter => &[EVENT_SECTION, INLINE],
     };
@@ -493,7 +483,7 @@ fn spelling_among(word: &str, sets: &[&[KeywordId]]) -> Option<&'static str> {
 
 // Stock Camille (Rodin's text editor, `EventBParser.scc`) lexes these as
 // tokens in their lowercase spelling only, ahead of `identifier_literal`; it
-// has no `INITIALISATION`, `STATUS`, `WITNESS`, `skip` or `THEOREMS` tokens.
+// has no `INITIALISATION`, `STATUS`, `WITNESS` or `THEOREMS` tokens.
 const CAMILLE: &[KeywordId] = &[
     Context,
     Machine,
@@ -755,7 +745,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn all_ids() -> [KeywordId; 27] {
+    fn all_ids() -> [KeywordId; 26] {
         [
             Context,
             Machine,
@@ -782,7 +772,6 @@ mod tests {
             Convergent,
             Anticipated,
             Theorem,
-            Skip,
             Theorems,
         ]
     }
@@ -854,12 +843,11 @@ mod tests {
             Some("INITIALISATION")
         );
         assert!(colliding_keyword("status", Variable).is_none());
-        // Inline keywords re-lex any *use*, so identifiers collide anywhere.
-        assert_eq!(colliding_keyword("skip", Variable), Some("skip"));
-        assert!(colliding_keyword("skip", ContextItem).is_none());
-        assert!(colliding_keyword("skip", Parameter).is_none());
+        // The inline keyword re-lexes any *use*, so identifiers collide anywhere.
         assert_eq!(colliding_keyword("theorem", ContextItem), Some("theorem"));
-        assert!(colliding_keyword("skip", EventName).is_none());
+        assert_eq!(colliding_keyword("theorem", Variable), Some("theorem"));
+        // Rodin has no skip action, so `skip` is an ordinary name.
+        assert!(colliding_keyword("skip", Variable).is_none());
     }
 
     #[test]
@@ -1227,7 +1215,6 @@ mod tests {
             "ordinary",
             "convergent",
             "anticipated",
-            "skip",
             "STATUS",
             "THEOREMS",
         ]);
