@@ -275,6 +275,59 @@ end
 }
 
 #[test]
+fn a_variable_dropped_two_levels_down_is_found_through_the_extensions() {
+    // M1 extends every event of M0 and keeps `v`; M2 drops it. Extending
+    // M1's `tick` or INITIALISATION would inherit M0's actions on `v`.
+    let root = "\
+machine M0
+variables v w
+invariants
+  @t1 v ∈ ℕ
+  @t2 w ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a1 v ≔ 0
+      @a2 w ≔ 0
+  end
+  event tick
+    then
+      @a1 v ≔ v + 1
+  end
+  event tock
+    then
+      @a2 w ≔ w + 1
+  end
+end
+";
+    let middle = "\
+machine M1 refines M0
+variables v w
+events
+  event INITIALISATION extends INITIALISATION
+  end
+  event tick extends tick
+  end
+  event tock extends tock
+  end
+end
+";
+    let refinement = "machine M2 refines M1\nvariables w\nend\n";
+    let uri = "file:///ws/M2.eventb";
+    let files = [
+        ("file:///ws/M0.eventb", root),
+        ("file:///ws/M1.eventb", middle),
+        (uri, refinement),
+    ];
+    let actions = refactors(&provider(&files), uri, refinement, 0, 3, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Refine"))
+        .expect("tock is still offered");
+    assert_eq!(action.title, "Refine abstract event tock");
+}
+
+#[test]
 fn the_abstract_events_left_unrefined_are_refined() {
     let refinement = "\
 machine M1 refines M0 sees C0 C1

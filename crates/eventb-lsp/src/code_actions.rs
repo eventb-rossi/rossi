@@ -10,7 +10,7 @@ use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
 };
-use crate::text_utils::{line_keyword, line_keyword_is};
+use crate::text_utils::{line_keyword, line_keyword_is, line_tight_end};
 use crate::workspace::WorkspaceSymbolProvider;
 use rossi::Component;
 use rossi::keywords::KeywordId;
@@ -139,16 +139,59 @@ pub(crate) fn kind_requested(params: &CodeActionParams, kind: &CodeActionKind) -
     })
 }
 
+/// A workspace edit applying `edits` to the document at `uri`.
+pub(crate) fn document_edit(uri: &Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
+    WorkspaceEdit::new(HashMap::from([(uri.clone(), edits)]))
+}
+
 /// A workspace edit replacing `range` of the document at `uri` with `new_text`.
-fn single_edit(uri: &Uri, range: Range, new_text: String) -> WorkspaceEdit {
-    WorkspaceEdit {
-        changes: Some(HashMap::from([(
-            uri.clone(),
-            vec![TextEdit { range, new_text }],
-        )])),
-        document_changes: None,
-        change_annotations: None,
+pub(crate) fn single_edit(uri: &Uri, range: Range, new_text: String) -> WorkspaceEdit {
+    document_edit(uri, vec![TextEdit { range, new_text }])
+}
+
+/// The edits moving the whole lines `first..=last` of `text` above line
+/// `destination`.
+fn move_lines(text: &str, first: usize, last: usize, destination: usize) -> Vec<TextEdit> {
+    let moved = text
+        .lines()
+        .skip(first)
+        .take(last - first + 1)
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let line = |index: usize| Position::new(index as u32, 0);
+    vec![
+        TextEdit {
+            range: Range::new(line(destination), line(destination)),
+            new_text: moved,
+        },
+        TextEdit {
+            range: Range::new(line(first), line(last + 1)),
+            new_text: String::new(),
+        },
+    ]
+}
+
+/// A quick fix answering `diagnostic` with `edit`.
+fn quick_fix(
+    title: String,
+    diagnostic: &crate::lsp_types::Diagnostic,
+    edit: WorkspaceEdit,
+    preferred: bool,
+) -> CodeAction {
+    CodeAction {
+        title,
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diagnostic.clone()]),
+        edit: Some(edit),
+        is_preferred: Some(preferred),
+        ..Default::default()
     }
+}
+
+/// An empty range at byte `offset` of `text`, where an insert goes.
+pub(crate) fn point(text: &str, offset: usize) -> Range {
+    let position = crate::position::offset_to_position(text, offset);
+    Range::new(position, position)
 }
 
 /// A workspace edit replacing the whole of `text` (at `uri`) with `new_text`.
@@ -248,15 +291,16 @@ fn enclosing_event_range(masked: &str, offset: usize) -> std::ops::Range<usize> 
     start..end
 }
 
-/// Names to write into a list of names: where, and the text to insert.
-pub(crate) struct NameInsert {
-    pub(crate) position: Position,
-    pub(crate) text: String,
-}
-
 /// The start of the line holding byte `offset` of `text`.
 pub(crate) fn line_start(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map_or(0, |at| at + 1)
+}
+
+/// The end of the line holding byte `offset` of `text`, before its newline.
+pub(crate) fn line_end(text: &str, offset: usize) -> usize {
+    text[offset..]
+        .find('\n')
+        .map_or(text.len(), |at| offset + at)
 }
 
 /// The whole lines from the one holding byte `start` through the one holding
@@ -268,10 +312,9 @@ pub(crate) fn own_lines(
     start: usize,
     end: usize,
 ) -> Option<std::ops::Range<usize>> {
-    let first = line_start(text, start);
-    let line_end = text[end..].find('\n').map_or(text.len(), |at| end + at);
-    (masked[first..start].trim().is_empty() && masked[end..line_end].trim().is_empty())
-        .then(|| first..(line_end + 1).min(text.len()))
+    let (first, last) = (line_start(text, start), line_end(text, end));
+    (masked[first..start].trim().is_empty() && masked[end..last].trim().is_empty())
+        .then(|| first..(last + 1).min(text.len()))
 }
 
 /// The leading whitespace of `line`.
@@ -282,7 +325,7 @@ pub(crate) fn indentation(line: &str) -> &str {
 /// `names` added to a name list opened by `keyword` whose last name ends at
 /// byte `end`: on the same line when the list is written inline (`sees a b`),
 /// each on a line of its own at the same indentation when every name has one.
-fn append_to_list(text: &str, end: usize, keyword: KeywordId, names: &[&str]) -> NameInsert {
+fn append_to_list(text: &str, end: usize, keyword: KeywordId, names: &[&str]) -> TextEdit {
     // A clause's span may run on over a comment after its last name, where a
     // name written would be commented out: write it after the last code.
     let end = rossi::comments::mask_comments(text)[..end].trim_end().len();
@@ -292,9 +335,9 @@ fn append_to_list(text: &str, end: usize, keyword: KeywordId, names: &[&str]) ->
     } else {
         format!("\n{}", indentation(line))
     };
-    NameInsert {
-        position: crate::position::offset_to_position(text, end),
-        text: names
+    TextEdit {
+        range: point(text, end),
+        new_text: names
             .iter()
             .map(|name| format!("{separator}{name}"))
             .collect(),
@@ -322,18 +365,26 @@ fn new_clause_line(
     keyword: KeywordId,
     lowercase: bool,
     names: &[&str],
-) -> Option<NameInsert> {
-    let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
-    if rossi::comments::offset_in_comment(text, line_end) {
-        return None;
-    }
-    Some(NameInsert {
-        position: crate::position::offset_to_position(text, line_end),
-        text: format!(
+) -> Option<TextEdit> {
+    after_line(
+        text,
+        after,
+        format!(
             "\n{indent}{} {}",
             keyword_text(keyword, lowercase),
             names.join(" ")
         ),
+    )
+}
+
+/// `new_text` inserted at the end of the line holding byte `offset`, or
+/// `None` when a block comment opened there is still open at its end, where
+/// it would swallow the insert.
+pub(crate) fn after_line(text: &str, offset: usize, new_text: String) -> Option<TextEdit> {
+    let end = line_end(text, offset);
+    (!rossi::comments::offset_in_comment(text, end)).then(|| TextEdit {
+        range: point(text, end),
+        new_text,
     })
 }
 
@@ -349,7 +400,7 @@ fn component_list_insert(
     component: &Component,
     clause: KeywordId,
     name: &str,
-) -> Option<NameInsert> {
+) -> Option<TextEdit> {
     if let Some(region) = component.clauses().iter().find(|r| r.keyword == clause) {
         return Some(append_to_list(text, region.span.end, clause, &[name]));
     }
@@ -420,7 +471,7 @@ pub(crate) fn parameter_insert(
     text: &str,
     event: &rossi::Event,
     names: &[&str],
-) -> Option<NameInsert> {
+) -> Option<TextEdit> {
     if let Some(last) = event
         .parameters
         .iter()
@@ -1011,36 +1062,28 @@ impl CodeActionProvider {
             }
         }
 
-        // See or extend the context that declares an undeclared name, or
-        // declare it here (EB018).
-        let undeclared: Vec<_> = params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code()))
-            .collect();
+        let uri = &params.text_document.uri;
+        let with_code = |rule: RuleId| {
+            params
+                .context
+                .diagnostics
+                .iter()
+                .filter(move |d| diagnostic_code_is(d, rule.code()))
+        };
+
         // Parenthesize operators mixed without the parentheses Event-B
         // requires. The first such error is EB005; one recovered after another
         // error carries no code, so both are matched against the parse errors.
-        let syntax: Vec<_> = params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| d.code.is_none() || diagnostic_code_is(d, RuleId::FormulaParseError.code()))
-            .collect();
-        if !syntax.is_empty() {
-            for diagnostic in syntax {
-                actions.extend(
-                    self.create_parenthesize_actions(
-                        &params.text_document.uri,
-                        diagnostic,
-                        text,
-                        errors,
-                    )
+        for diagnostic in
+            params.context.diagnostics.iter().filter(|d| {
+                d.code.is_none() || diagnostic_code_is(d, RuleId::FormulaParseError.code())
+            })
+        {
+            actions.extend(
+                self.create_parenthesize_actions(uri, diagnostic, text, errors)
                     .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
-                );
-            }
+            );
         }
 
         // Some fixes below read the checked model, which is computed at most
@@ -1048,132 +1091,66 @@ impl CodeActionProvider {
         let model = std::cell::OnceCell::new();
 
         // Relabel an item whose label another one takes (EB022).
-        for diagnostic in params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| diagnostic_code_is(d, RuleId::DuplicateLabel.code()))
-        {
+        for diagnostic in with_code(RuleId::DuplicateLabel) {
             actions.extend(
-                self.create_relabel_action(
-                    &params.text_document.uri,
-                    diagnostic,
-                    text,
-                    components,
-                    &model,
-                )
-                .map(CodeActionOrCommand::CodeAction),
+                self.create_relabel_action(uri, diagnostic, text, components, &model)
+                    .map(CodeActionOrCommand::CodeAction),
             );
         }
 
         // Move the predicate typing a name above the one reading it (EB020).
-        for diagnostic in params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| diagnostic_code_is(d, RuleId::UnknownType.code()))
-        {
+        for diagnostic in with_code(RuleId::UnknownType) {
             actions.extend(
-                self.create_move_typing_action(
-                    &params.text_document.uri,
-                    diagnostic,
-                    text,
-                    components,
-                )
-                .map(CodeActionOrCommand::CodeAction),
+                self.create_move_typing_action(uri, diagnostic, text, components)
+                    .map(CodeActionOrCommand::CodeAction),
             );
         }
 
         // Keep a variable the refinement dropped but still uses (EB025).
-        for diagnostic in params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| diagnostic_code_is(d, RuleId::DisappearedVariable.code()))
-        {
+        for diagnostic in with_code(RuleId::DisappearedVariable) {
             actions.extend(
-                self.create_keep_variable_action(
-                    &params.text_document.uri,
-                    diagnostic,
-                    text,
-                    components,
-                )
-                .map(CodeActionOrCommand::CodeAction),
+                self.create_keep_variable_action(uri, diagnostic, text, components)
+                    .map(CodeActionOrCommand::CodeAction),
+            );
+        }
+
+        // See or extend the context that declares an undeclared name, or
+        // declare it here (EB018).
+        for diagnostic in with_code(RuleId::UndeclaredIdentifier) {
+            actions.extend(
+                self.create_import_context_actions(uri, diagnostic, text, components)
+                    .into_iter()
+                    .chain(self.create_declare_actions(uri, diagnostic, text, components))
+                    .map(CodeActionOrCommand::CodeAction),
             );
         }
 
         // A name nothing resolves (EB018) or a component or abstract event
         // nothing declares (EB009) may be a misspelling of one in scope.
-        let misspelled: Vec<_> = params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| {
-                diagnostic_code_is(d, RuleId::UndeclaredIdentifier.code())
-                    || diagnostic_code_is(d, RuleId::CrossReferenceNotFound.code())
-            })
-            .collect();
-        if !undeclared.is_empty() || !misspelled.is_empty() {
-            for diagnostic in undeclared {
-                actions.extend(
-                    self.create_import_context_actions(
-                        &params.text_document.uri,
-                        diagnostic,
-                        text,
-                        components,
-                    )
-                    .into_iter()
-                    .chain(self.create_declare_actions(
-                        &params.text_document.uri,
-                        diagnostic,
-                        text,
-                        components,
-                    ))
-                    .map(CodeActionOrCommand::CodeAction),
-                );
-            }
-            for diagnostic in misspelled {
-                actions.extend(
-                    self.create_respell_actions(
-                        &params.text_document.uri,
-                        diagnostic,
-                        text,
-                        components,
-                        &model,
-                    )
+        for diagnostic in
+            with_code(RuleId::UndeclaredIdentifier).chain(with_code(RuleId::CrossReferenceNotFound))
+        {
+            actions.extend(
+                self.create_respell_actions(uri, diagnostic, text, components, &model)
                     .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
-                );
-            }
+            );
         }
 
         // Write an ordinary space for a separator Camille cannot read (EB031).
-        for diagnostic in params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|d| diagnostic_code_is(d, RuleId::NonPortableWhitespace.code()))
-        {
+        for diagnostic in with_code(RuleId::NonPortableWhitespace) {
             let mut separator = text_in_range(text, diagnostic.range)
                 .into_iter()
                 .flat_map(str::chars);
             if let (Some(c), None) = (separator.next(), separator.next())
                 && rossi::keywords::camille_unreadable_separator(c)
             {
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Replace U+{:04X} with a space", c as u32),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    edit: Some(single_edit(
-                        &params.text_document.uri,
-                        diagnostic.range,
-                        " ".to_string(),
-                    )),
-                    command: None,
-                    is_preferred: Some(true),
-                    disabled: None,
-                    data: None,
-                }));
+                actions.push(CodeActionOrCommand::CodeAction(quick_fix(
+                    format!("Replace U+{:04X} with a space", c as u32),
+                    diagnostic,
+                    single_edit(uri, diagnostic.range, " ".to_string()),
+                    true,
+                )));
             }
         }
 
@@ -1286,20 +1263,12 @@ impl CodeActionProvider {
             .iter()
             .filter_map(|target| {
                 let insert = component_list_insert(text, component, clause, target)?;
-                Some(CodeAction {
-                    title: format!("Add {target} to {}", rossi::keywords::spell(clause)),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    edit: Some(single_edit(
-                        uri,
-                        Range::new(insert.position, insert.position),
-                        insert.text,
-                    )),
-                    command: None,
-                    is_preferred: Some(preferred),
-                    disabled: None,
-                    data: None,
-                })
+                Some(quick_fix(
+                    format!("Add {target} to {}", rossi::keywords::spell(clause)),
+                    diagnostic,
+                    document_edit(uri, vec![insert]),
+                    preferred,
+                ))
             })
             .collect()
     }
@@ -1345,9 +1314,8 @@ impl CodeActionProvider {
         if matches!(stem, "grd" | "act")
             && let Some(Component::Machine(machine)) =
                 crate::component_util::component_at_offset(components, target.start)
-            && let Some(event) = machine.events.iter().find(|event| {
-                event.extended && event.span.is_some_and(|span| span.contains(target.start))
-            })
+            && let Some(event) = crate::symbols::event_at_offset(machine, target.start)
+            && event.extended
             && let Some(decl) = model
                 .get_or_init(|| self.checked_model(uri))
                 .as_ref()
@@ -1372,16 +1340,12 @@ impl CodeActionProvider {
             },
             text,
         );
-        Some(CodeAction {
+        Some(quick_fix(
             title,
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            edit: Some(single_edit(uri, range, label)),
-            command: None,
-            is_preferred: Some(true),
-            disabled: None,
-            data: None,
-        })
+            diagnostic,
+            single_edit(uri, range, label),
+            true,
+        ))
     }
 
     /// Quick fixes for operators mixed without the parentheses Event-B
@@ -1426,20 +1390,12 @@ impl CodeActionProvider {
                         new_text: ")".to_string(),
                     },
                 ];
-                Some(CodeAction {
-                    title: format!("Parenthesize {}", abbreviated(grouped)),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    edit: Some(WorkspaceEdit {
-                        changes: Some(HashMap::from([(uri.clone(), edits)])),
-                        document_changes: None,
-                        change_annotations: None,
-                    }),
-                    command: None,
-                    is_preferred: Some(false),
-                    disabled: None,
-                    data: None,
-                })
+                Some(quick_fix(
+                    format!("Parenthesize {}", abbreviated(grouped)),
+                    diagnostic,
+                    document_edit(uri, edits),
+                    false,
+                ))
             })
             .collect()
     }
@@ -1495,74 +1451,43 @@ impl CodeActionProvider {
         let masked = rossi::comments::mask_comments(text);
         let (raw_lines, masked_lines): (Vec<&str>, Vec<&str>) =
             (text.lines().collect(), masked.lines().collect());
-        let line_of = |offset: usize| text[..offset].matches('\n').count();
+        let line_index = |offset: usize| text[..offset].matches('\n').count();
         // Whole lines move, so each predicate must have its lines to itself.
-        let owns_lines = |span: rossi::ast::Span| {
-            masked[line_start(&masked, span.start)..span.start]
-                .trim()
-                .is_empty()
-                && masked[span.end..]
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .is_empty()
-        };
+        let owns_lines =
+            |span: rossi::ast::Span| own_lines(text, &masked, span.start, span.end).is_some();
         // A span may run on over a comment written after the predicate; the
         // predicate ends at its last character of code.
         let code = |span: rossi::ast::Span| rossi::ast::Span {
             start: span.start,
-            end: span.start + masked[span.start..span.end].trim_end().len(),
+            end: line_tight_end(&masked, span),
         };
         let (read_span, typing_span) = (code(reading.span?), code(typing.span?));
         if !owns_lines(read_span) || !owns_lines(typing_span) {
             return None;
         }
-        let destination = section_start(text, &raw_lines, &masked_lines, line_of(read_span.start));
-        let first = section_start(text, &raw_lines, &masked_lines, line_of(typing_span.start));
-        let last = line_of(typing_span.end);
-        if first <= line_of(read_span.end) {
+        let destination =
+            section_start(text, &raw_lines, &masked_lines, line_index(read_span.start));
+        let first = section_start(
+            text,
+            &raw_lines,
+            &masked_lines,
+            line_index(typing_span.start),
+        );
+        let last = line_index(typing_span.end);
+        if first <= line_index(read_span.end) {
             return None;
         }
-        let moved: String = raw_lines[first..=last]
-            .iter()
-            .map(|line| format!("{line}\n"))
-            .collect();
-        let edits = vec![
-            TextEdit {
-                range: Range::new(
-                    Position::new(destination as u32, 0),
-                    Position::new(destination as u32, 0),
-                ),
-                new_text: moved,
-            },
-            TextEdit {
-                range: Range::new(
-                    Position::new(first as u32, 0),
-                    Position::new(last as u32 + 1, 0),
-                ),
-                new_text: String::new(),
-            },
-        ];
         let label = |item: &rossi::LabeledPredicate| {
             item.label
                 .as_deref()
                 .map_or_else(|| "the predicate".to_string(), |label| format!("@{label}"))
         };
-        Some(CodeAction {
-            title: format!("Move {} above {}", label(typing), label(reading)),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            edit: Some(WorkspaceEdit {
-                changes: Some(HashMap::from([(uri.clone(), edits)])),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
-            is_preferred: Some(true),
-            disabled: None,
-            data: None,
-        })
+        Some(quick_fix(
+            format!("Move {} above {}", label(typing), label(reading)),
+            diagnostic,
+            document_edit(uri, move_lines(text, first, last, destination)),
+            true,
+        ))
     }
 
     /// Quick fix for EB025 (a variable the refinement dropped is still used):
@@ -1576,7 +1501,7 @@ impl CodeActionProvider {
         components: &[Component],
     ) -> Option<CodeAction> {
         let written = text_in_range(text, diagnostic.range)?;
-        let name = written.strip_suffix('\'').unwrap_or(written);
+        let name = crate::formula_walk::canonical(written);
         if !rossi::names::is_valid_math_identifier(name) {
             return None;
         }
@@ -1586,20 +1511,12 @@ impl CodeActionProvider {
             return None;
         }
         let insert = component_list_insert(text, component, KeywordId::Variables, name)?;
-        Some(CodeAction {
-            title: format!("Keep {name} in VARIABLES"),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            edit: Some(single_edit(
-                uri,
-                Range::new(insert.position, insert.position),
-                insert.text,
-            )),
-            command: None,
-            is_preferred: Some(true),
-            disabled: None,
-            data: None,
-        })
+        Some(quick_fix(
+            format!("Keep {name} in VARIABLES"),
+            diagnostic,
+            document_edit(uri, vec![insert]),
+            true,
+        ))
     }
 
     /// Quick fixes replacing a name nothing declares with one spelled alike:
@@ -1626,10 +1543,7 @@ impl CodeActionProvider {
             return Vec::new();
         };
         let event = match component {
-            Component::Machine(machine) => machine
-                .events
-                .iter()
-                .find(|event| event.span.is_some_and(|span| span.contains(offset))),
+            Component::Machine(machine) => crate::symbols::event_at_offset(machine, offset),
             Component::Context(_) => None,
         };
         let model = || model.get_or_init(|| self.checked_model(uri)).as_ref();
@@ -1688,15 +1602,13 @@ impl CodeActionProvider {
         let preferred = similar.len() == 1;
         similar
             .into_iter()
-            .map(|replacement| CodeAction {
-                title: format!("Change to {replacement}"),
-                kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![diagnostic.clone()]),
-                edit: Some(single_edit(uri, diagnostic.range, replacement)),
-                command: None,
-                is_preferred: Some(preferred),
-                disabled: None,
-                data: None,
+            .map(|replacement| {
+                quick_fix(
+                    format!("Change to {replacement}"),
+                    diagnostic,
+                    single_edit(uri, diagnostic.range, replacement),
+                    preferred,
+                )
             })
             .collect()
     }
@@ -1736,11 +1648,7 @@ impl CodeActionProvider {
                     format!("Declare {name} as a variable"),
                     component_list_insert(text, component, KeywordId::Variables, name),
                 ));
-                if let Some(event) = machine
-                    .events
-                    .iter()
-                    .find(|event| event.span.is_some_and(|span| span.contains(offset)))
-                {
+                if let Some(event) = crate::symbols::event_at_offset(machine, offset) {
                     declarations.push((
                         format!("Declare {name} as a parameter of {}", event.name),
                         parameter_insert(text, event, &[name]),
@@ -1751,21 +1659,12 @@ impl CodeActionProvider {
         declarations
             .into_iter()
             .filter_map(|(title, insert)| {
-                let insert = insert?;
-                Some(CodeAction {
+                Some(quick_fix(
                     title,
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![diagnostic.clone()]),
-                    edit: Some(single_edit(
-                        uri,
-                        Range::new(insert.position, insert.position),
-                        insert.text,
-                    )),
-                    command: None,
-                    is_preferred: Some(false),
-                    disabled: None,
-                    data: None,
-                })
+                    diagnostic,
+                    document_edit(uri, vec![insert?]),
+                    false,
+                ))
             })
             .collect()
     }
@@ -1939,28 +1838,7 @@ impl CodeActionProvider {
         if target_line >= first {
             return None;
         }
-        let moved: String = text
-            .lines()
-            .skip(first)
-            .take(last - first + 1)
-            .map(|line| format!("{line}\n"))
-            .collect();
-        let edits = vec![
-            TextEdit {
-                range: Range {
-                    start: Position::new(target_line as u32, 0),
-                    end: Position::new(target_line as u32, 0),
-                },
-                new_text: moved,
-            },
-            TextEdit {
-                range: Range {
-                    start: Position::new(first as u32, 0),
-                    end: Position::new(last as u32 + 1, 0),
-                },
-                new_text: String::new(),
-            },
-        ];
+        let edits = move_lines(text, first, last, target_line);
         Some(CodeAction {
             title: format!(
                 "Move {} above {}",
