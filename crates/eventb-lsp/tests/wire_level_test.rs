@@ -1524,6 +1524,37 @@ mod project_diagnostics {
             "the rest of the machine is still checked; got {diagnostics:?}"
         );
     }
+
+    /// The refinement leaves the abstract event `f` out.
+    const UNREFINED_ABSTRACT_EVENT: &str = concat!(
+        "machine base\n",
+        "events\n",
+        "  event f\n",
+        "  end\n",
+        "end\n",
+        "machine concrete\n",
+        "refines base\n",
+        "end\n",
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_abstract_event_the_refinement_leaves_out_is_reported() {
+        let diagnostics = diagnostics_for(UNREFINED_ABSTRACT_EVENT).await;
+        let found: Vec<&Value> = diagnostics
+            .iter()
+            .filter(|d| d["code"] == json!("EB036"))
+            .collect();
+        assert_eq!(found.len(), 1, "{diagnostics:?}");
+        assert_eq!(found[0]["severity"], json!(2), "a warning");
+        assert_eq!(
+            found[0]["range"],
+            json!({
+                "start": { "line": 6, "character": 0 },
+                "end": { "line": 6, "character": 12 },
+            }),
+            "on the REFINES clause"
+        );
+    }
 }
 
 mod type_hierarchy {
