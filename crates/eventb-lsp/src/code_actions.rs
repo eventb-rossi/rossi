@@ -642,11 +642,8 @@ impl CodeActionProvider {
         self.cross_ref_manager = Some(manager);
     }
 
-    /// Provide code actions for a given document position/range.
-    /// `use_unicode` is the operator convention (`rossi.format.useUnicode`)
-    /// the fix-all source action normalizes to; `private_use_glyphs`
-    /// (`rossi.format.privateUseGlyphs`) is how a conversion toward Unicode
-    /// spells the four relation/override operators.
+    /// [`Self::provide_code_actions_parsed`] over a parse of `text` made
+    /// here, for a caller holding none of its own.
     pub fn provide_code_actions(
         &self,
         params: &CodeActionParams,
@@ -654,6 +651,26 @@ impl CodeActionProvider {
         use_unicode: bool,
         private_use_glyphs: bool,
     ) -> Option<CodeActionResponse> {
+        let parsed = rossi::parse_components_with_recovery(text);
+        self.provide_code_actions_parsed(params, text, &parsed, use_unicode, private_use_glyphs)
+    }
+
+    /// Provide code actions for a given document position/range.
+    /// `parsed` is the recovered parse of `text`, which every fix reading the
+    /// AST or the parse errors shares rather than parsing again. `use_unicode`
+    /// is the operator convention (`rossi.format.useUnicode`) the fix-all
+    /// source action normalizes to; `private_use_glyphs`
+    /// (`rossi.format.privateUseGlyphs`) is how a conversion toward Unicode
+    /// spells the four relation/override operators.
+    pub fn provide_code_actions_parsed(
+        &self,
+        params: &CodeActionParams,
+        text: &str,
+        parsed: &rossi::ParseResult<Vec<Component>>,
+        use_unicode: bool,
+        private_use_glyphs: bool,
+    ) -> Option<CodeActionResponse> {
+        let components = parsed.component.as_deref().unwrap_or_default();
         // Each group is computed only when the client's `only` filter admits
         // its kind, so an on-save request for the fix-all neither pays for
         // nor receives the refactors and quick fixes it would discard.
@@ -672,7 +689,13 @@ impl CodeActionProvider {
 
         if requested(&CodeActionKind::QUICKFIX) {
             // Add diagnostic-based quick fixes (from diagnostics in context)
-            actions.extend(self.provide_diagnostic_based_actions(params, text, private_use_glyphs));
+            actions.extend(self.provide_diagnostic_based_actions(
+                params,
+                text,
+                components,
+                &parsed.errors,
+                private_use_glyphs,
+            ));
         }
 
         if actions.is_empty() {
@@ -868,11 +891,14 @@ impl CodeActionProvider {
         })
     }
 
-    /// Provide diagnostic-based quick fixes
+    /// Provide diagnostic-based quick fixes. `components` and `errors` are
+    /// the recovered parse of `text`.
     fn provide_diagnostic_based_actions(
         &self,
         params: &CodeActionParams,
         text: &str,
+        components: &[Component],
+        errors: &[rossi::ParseError],
         private_use_glyphs: bool,
     ) -> Vec<CodeActionOrCommand> {
         let mut actions = Vec::new();
@@ -995,7 +1021,7 @@ impl CodeActionProvider {
             .collect();
         // Parenthesize operators mixed without the parentheses Event-B
         // requires. The first such error is EB005; one recovered after another
-        // error carries no code, so both are matched against a fresh parse.
+        // error carries no code, so both are matched against the parse errors.
         let syntax: Vec<_> = params
             .context
             .diagnostics
@@ -1003,14 +1029,13 @@ impl CodeActionProvider {
             .filter(|d| d.code.is_none() || diagnostic_code_is(d, RuleId::FormulaParseError.code()))
             .collect();
         if !syntax.is_empty() {
-            let errors = rossi::parse_components_with_recovery(text).errors;
             for diagnostic in syntax {
                 actions.extend(
                     self.create_parenthesize_actions(
                         &params.text_document.uri,
                         diagnostic,
                         text,
-                        &errors,
+                        errors,
                     )
                     .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
@@ -1018,10 +1043,8 @@ impl CodeActionProvider {
             }
         }
 
-        // The fixes below read the AST, and some the checked model; each is
-        // computed at most once, and only when a fix has a diagnostic to fix.
-        let parsed = std::cell::OnceCell::new();
-        let components = || parsed.get_or_init(|| crate::component_util::parse_all(text));
+        // Some fixes below read the checked model, which is computed at most
+        // once, and only when such a fix has a diagnostic to fix.
         let model = std::cell::OnceCell::new();
 
         // Relabel an item whose label another one takes (EB022).
@@ -1036,7 +1059,7 @@ impl CodeActionProvider {
                     &params.text_document.uri,
                     diagnostic,
                     text,
-                    components(),
+                    components,
                     &model,
                 )
                 .map(CodeActionOrCommand::CodeAction),
@@ -1055,7 +1078,7 @@ impl CodeActionProvider {
                     &params.text_document.uri,
                     diagnostic,
                     text,
-                    components(),
+                    components,
                 )
                 .map(CodeActionOrCommand::CodeAction),
             );
@@ -1073,7 +1096,7 @@ impl CodeActionProvider {
                     &params.text_document.uri,
                     diagnostic,
                     text,
-                    components(),
+                    components,
                 )
                 .map(CodeActionOrCommand::CodeAction),
             );
@@ -1091,7 +1114,6 @@ impl CodeActionProvider {
             })
             .collect();
         if !undeclared.is_empty() || !misspelled.is_empty() {
-            let components = components();
             for diagnostic in undeclared {
                 actions.extend(
                     self.create_import_context_actions(

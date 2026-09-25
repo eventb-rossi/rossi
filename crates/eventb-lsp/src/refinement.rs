@@ -55,13 +55,15 @@ impl RefinementActionProvider {
         }
     }
 
-    /// The refactors for the component at the cursor. `printer` writes new
-    /// components in the configured style; a refactor creating a file is
-    /// offered only when the client `creates_files`.
+    /// The refactors for the component at the cursor. `components` are the
+    /// recovered parse of `text`; `printer` writes new components in the
+    /// configured style; a refactor creating a file is offered only when the
+    /// client `creates_files`.
     pub fn provide(
         &self,
         params: &CodeActionParams,
         text: &str,
+        components: &[Component],
         printer: &rossi::PrettyPrinter,
         creates_files: bool,
     ) -> Vec<CodeAction> {
@@ -73,9 +75,7 @@ impl RefinementActionProvider {
         let Some(cursor) = crate::position::position_to_offset(text, params.range.start) else {
             return Vec::new();
         };
-        let components = crate::component_util::parse_all(text);
-        let Some(component) = crate::component_util::component_at_offset(&components, cursor)
-        else {
+        let Some(component) = crate::component_util::component_at_offset(components, cursor) else {
             return Vec::new();
         };
         let cursor_line = line_start(text, cursor)

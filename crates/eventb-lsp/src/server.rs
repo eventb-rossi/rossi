@@ -3068,20 +3068,15 @@ impl LanguageServer for RossiLanguageServer {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let uri = &params.text_document.uri;
-        debug!("Code action request for: {}", uri.as_str());
+        debug!(
+            "Code action request for: {}",
+            params.text_document.uri.as_str()
+        );
 
-        // Get document text
-        let text = match self.document_manager.get_text(uri) {
-            Some(text) => text,
-            None => {
-                debug!("Document not found: {}", uri.as_str());
-                return Ok(None);
-            }
-        };
-
-        // Get code actions. A fix may parse the document and consult the
-        // workspace indexes, so keep it off the async handler threads.
+        // The actions read the document's own parse, the one its diagnostics
+        // came from, rather than parsing it again. Getting it may still parse
+        // after an edit, and a fix may consult the workspace indexes, so keep
+        // it all off the async handler threads.
         let format = &self.config_manager.get().format;
         let (use_unicode, private_use_glyphs) =
             (format.use_unicode, format.emits_private_use_glyphs());
@@ -3089,15 +3084,32 @@ impl LanguageServer for RossiLanguageServer {
         let creates_files = self
             .supports_create_files
             .load(std::sync::atomic::Ordering::Relaxed);
+        let manager = Arc::clone(&self.document_manager);
         let provider = Arc::clone(&self.code_actions_provider);
         let refinements = Arc::clone(&self.refinement_actions_provider);
         let response = run_blocking(move || {
+            let Some(doc) = manager.parse_result_for_request(&params.text_document.uri) else {
+                debug!("Document not found: {}", params.text_document.uri.as_str());
+                return None;
+            };
             let mut actions = provider
-                .provide_code_actions(&params, &text, use_unicode, private_use_glyphs)
+                .provide_code_actions_parsed(
+                    &params,
+                    doc.text(),
+                    doc.parse(),
+                    use_unicode,
+                    private_use_glyphs,
+                )
                 .unwrap_or_default();
             actions.extend(
                 refinements
-                    .provide(&params, &text, &printer, creates_files)
+                    .provide(
+                        &params,
+                        doc.text(),
+                        doc.components(),
+                        &printer,
+                        creates_files,
+                    )
                     .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
             );
