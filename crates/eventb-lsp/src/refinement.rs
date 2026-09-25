@@ -756,7 +756,7 @@ fn clause_removals(
     // An element's span may run on over a comment written after it.
     if dropped.iter().all(|d| *d) {
         let before = masked[..items[0].start].trim_end();
-        let keyword = before.rfind(char::is_whitespace).map_or(0, |at| at + 1);
+        let keyword = before.trim_end_matches(|c: char| !c.is_whitespace()).len();
         line_keyword(&masked[keyword..items[0].start])?;
         return Some(vec![own_lines(
             text,
