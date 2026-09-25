@@ -68,9 +68,11 @@ fn refactors(
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: Default::default(),
     };
+    let components = eventb_lsp::component_util::parse_all(text);
     provider.provide(
         &params,
         text,
+        &components,
         &rossi::PrettyPrinter::default(),
         creates_files,
     )
