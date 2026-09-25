@@ -61,7 +61,6 @@ impl MachineVariables {
 fn assigned_variables(actions: &[ActionDecl]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for decl in actions {
-        // `skip` assigns nothing.
         let Some(assignment) = &decl.typed else {
             continue;
         };
@@ -81,8 +80,7 @@ pub(super) struct ActionInfo {
     pub assignment: Assignment,
 }
 
-/// An event's actions, split by determinism. `skip` actions assign
-/// nothing and constrain nothing, so they carry no row.
+/// An event's actions, split by determinism.
 pub(super) struct EventActionTable {
     pub actions: Vec<ActionInfo>,
     /// Indices into `actions` of the nondeterministic ones, with their

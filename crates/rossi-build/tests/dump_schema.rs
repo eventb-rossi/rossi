@@ -196,8 +196,6 @@ then
     @act1 v :∣ v' < v
 end
 event noop
-then
-    @act1 skip
 end
 end
 ";

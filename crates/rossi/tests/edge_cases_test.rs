@@ -40,12 +40,8 @@ fn test_becomes_in(op: &str) {
     let m = common::parse_machine(&source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match event.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(AssignmentKind::BecomesMemberOf { idents, set }) => {
+    match event.actions[0].action.kind() {
+        AssignmentKind::BecomesMemberOf { idents, set } => {
             assert!(matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "x"));
             assert!(
                 matches!(set.kind(), ExpressionKind::SetExtension(_)),
@@ -83,12 +79,8 @@ fn test_becomes_such_that() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match event.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(AssignmentKind::BecomesSuchThat { idents, pred, .. }) => {
+    match event.actions[0].action.kind() {
+        AssignmentKind::BecomesSuchThat { idents, pred, .. } => {
             assert!(matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "x"));
             assert!(
                 matches!(pred.kind(), PredicateKind::Relational { .. }),
@@ -210,12 +202,8 @@ fn test_forward_composition_parenthesized_in_action() {
     let m = common::parse_machine(source);
     let event = &m.events[0];
     assert_eq!(event.actions.len(), 1);
-    match event.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(AssignmentKind::BecomesEqualTo { idents, values }) => {
+    match event.actions[0].action.kind() {
+        AssignmentKind::BecomesEqualTo { idents, values } => {
             assert_eq!(idents.len(), 1);
             assert!(matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "x"));
             // The parenthesized (f ; g) should parse as forward composition
@@ -240,10 +228,7 @@ fn test_standalone_action_forward_composition_unparenthesized() {
     // A standalone action string (one action, as in a Rodin XML assignment
     // attribute) has no following action to separate, so a bare semicolon
     // is forward composition.
-    let action = rossi::parse_action_str("x ≔ f;g").expect("standalone action parses");
-    let Some(assignment) = action.assignment() else {
-        panic!("Expected Assignment, got {:?}", action);
-    };
+    let assignment = rossi::parse_action_str("x ≔ f;g").expect("standalone action parses");
     let AssignmentKind::BecomesEqualTo { idents, values } = assignment.kind() else {
         panic!("Expected becomes-equal-to, got {assignment:?}");
     };
@@ -261,10 +246,7 @@ fn test_standalone_action_forward_composition_unparenthesized() {
 fn test_standalone_action_chained_composition_with_inverse() {
     // Left-associative chain mixing inverse and a parenthesized set
     // expression: h∼;(s ∪ t);h parses as (h∼;(s ∪ t));h.
-    let action = rossi::parse_action_str("x ≔ h∼;(s ∪ t);h").expect("standalone action parses");
-    let Some(assignment) = action.assignment() else {
-        panic!("Expected Assignment, got {:?}", action);
-    };
+    let assignment = rossi::parse_action_str("x ≔ h∼;(s ∪ t);h").expect("standalone action parses");
     let AssignmentKind::BecomesEqualTo { values, .. } = assignment.kind() else {
         panic!("Expected becomes-equal-to, got {assignment:?}");
     };
@@ -286,10 +268,7 @@ fn test_standalone_action_chained_composition_with_inverse() {
 
 #[test]
 fn test_standalone_becomes_such_that_with_composition() {
-    let action = rossi::parse_action_str("x :∣ x' = f;g").expect("standalone action parses");
-    let Some(assignment) = action.assignment() else {
-        panic!("Expected BecomesSuchThat, got {:?}", action);
-    };
+    let assignment = rossi::parse_action_str("x :∣ x' = f;g").expect("standalone action parses");
     let AssignmentKind::BecomesSuchThat { pred, .. } = assignment.kind() else {
         panic!("Expected becomes-such-that, got {assignment:?}");
     };
@@ -602,16 +581,12 @@ fn test_primed_identifier_in_becomes_such_that() {
         .find(|e| e.name == "decrease")
         .expect("Expected 'decrease' event");
     assert_eq!(decrease.actions.len(), 1);
-    match decrease.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(AssignmentKind::BecomesSuchThat {
+    match decrease.actions[0].action.kind() {
+        AssignmentKind::BecomesSuchThat {
             idents,
             pred,
             primed,
-        }) => {
+        } => {
             assert!(
                 matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "abstract_state")
             );
@@ -647,12 +622,7 @@ fn test_primed_identifier_in_becomes_such_that() {
             assert_eq!(primed[0].name(), "abstract_state'");
             let _ = pred;
             assert!(
-                contains_primed_ident(
-                    decrease.actions[0]
-                        .action
-                        .assignment()
-                        .expect("an assignment")
-                ),
+                contains_primed_ident(&decrease.actions[0].action),
                 "Expected the condition to bind the primed after-state"
             );
         }

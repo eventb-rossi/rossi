@@ -1435,7 +1435,6 @@ mod tests {
             ("BeGiN", "begin"),
             ("WHEN", "when"),
             ("Theorem", "theorem"),
-            ("SKIP", "skip"),
         ] {
             assert_eq!(
                 lowercase_keyword(token).as_deref(),

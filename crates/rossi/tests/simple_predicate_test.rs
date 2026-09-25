@@ -564,12 +564,8 @@ fn test_maplet_binds_looser_than_arrow_in_action() {
     "#,
     );
     let event = &m.events[0];
-    match event.actions[0]
-        .action
-        .assignment()
-        .map(rossi::Assignment::kind)
-    {
-        Some(rossi::AssignmentKind::BecomesEqualTo { values, .. }) => match values[0].kind() {
+    match event.actions[0].action.kind() {
+        rossi::AssignmentKind::BecomesEqualTo { values, .. } => match values[0].kind() {
             ExpressionKind::Binary { op, right, .. } => {
                 assert_eq!(*op, BinaryExprOp::Mapsto);
                 assert!(matches!(
@@ -1067,8 +1063,8 @@ fn test_postfix_function_update_in_action() {
     let action = parse_action_str("currentFloor ≔ currentFloor{c ↦ f}").expect("action parses");
     let equivalent = parse_action_str("currentFloor ≔ currentFloor <+ {c ↦ f}").expect("explicit");
     assert_eq!(action, equivalent);
-    match action.assignment().map(rossi::Assignment::kind) {
-        Some(rossi::AssignmentKind::BecomesEqualTo { idents, .. }) => {
+    match action.kind() {
+        rossi::AssignmentKind::BecomesEqualTo { idents, .. } => {
             assert_eq!(idents.len(), 1);
             assert!(
                 matches!(idents[0].kind(), ExpressionKind::FreeIdentifier(n) if n == "currentFloor")

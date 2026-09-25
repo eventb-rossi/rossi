@@ -544,7 +544,7 @@ END";
         let cross_ref_manager = Arc::new(CrossReferenceManager::new());
         cross_ref_manager.update_component("file:///M0.eventb".to_string(), "MACHINE M0\nEND");
 
-        let machine = "MACHINE M1\nEVENTS\n    EVENT update\n    REFINES M0\n    THEN\n        @act1 skip\n    END\nEND\n";
+        let machine = "MACHINE M1\nEVENTS\n    EVENT update\n    REFINES M0\n    THEN\n        @act1 n ≔ 0\n    END\nEND\n";
 
         let mut provider = DocumentLinkProvider::new();
         provider.set_cross_reference_manager(cross_ref_manager);

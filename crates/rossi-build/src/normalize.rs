@@ -73,9 +73,9 @@ pub fn canonical_expression(e: &Expression) -> String {
     PrettyPrinter::rodin_canonical().print_formula_expression(e)
 }
 
-/// Canonicalise an action body (`skip` or an assignment).
-pub fn canonical_action(a: &rossi::ActionBody) -> String {
-    PrettyPrinter::rodin_canonical().print_action_body(a)
+/// Canonicalise an action's assignment.
+pub fn canonical_action(a: &rossi::Assignment) -> String {
+    PrettyPrinter::rodin_canonical().print_formula_assignment(a)
 }
 
 #[cfg(test)]

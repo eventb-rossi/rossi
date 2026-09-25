@@ -1026,7 +1026,7 @@ MACHINE machine1
 EVENTS
     EVENT start
     THEN
-        skip
+        @act1 n ≔ 0
     END
 END
 

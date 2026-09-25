@@ -35,7 +35,7 @@ fn conjunction_chain_splits_all_or_nothing() {
 
 #[test]
 fn nested_operand_aligns_one_past_its_paren() {
-    let source = "MACHINE m\nEVENTS\nEVENT e WHERE\n@grd1 (x = aaaaaaaaaa or y = bbbbbbbbbb or z = c) & f(y) <= bound\nTHEN @act1 skip END\nEND\n";
+    let source = "MACHINE m\nEVENTS\nEVENT e WHERE\n@grd1 (x = aaaaaaaaaa or y = bbbbbbbbbb or z = c) & f(y) <= bound\nTHEN @act1 x := 0 END\nEND\n";
     let output = format_checked(source, &wrapped(40));
     let expected = "\
       @grd1 (x = aaaaaaaaaa

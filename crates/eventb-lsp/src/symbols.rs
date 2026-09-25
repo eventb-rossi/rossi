@@ -778,7 +778,7 @@ mod tests {
             manager.update_component(uri.to_owned(), source);
             documents.open(uri.parse::<Uri>().unwrap(), 1, source.to_string());
         }
-        let concrete = "MACHINE concrete\nREFINES\n    abstract\nSEES\n    seen\nEVENTS\n    EVENT step extends step\n    THEN\n        @act1 skip\n    END\nEND";
+        let concrete = "MACHINE concrete\nREFINES\n    abstract\nSEES\n    seen\nEVENTS\n    EVENT step extends step\n    THEN\n        @act1 n ≔ 0\n    END\nEND";
         let loader = ComponentLoader::new(&manager, Some(&documents));
         let mut environments = ResolvedEnvironments::new();
 

@@ -449,11 +449,11 @@
         },
         "text": { "type": "string" },
         "assignment": {
-          "description": "Absent for skip, which has no assignment.",
+          "description": "Absent when the action could not be typed.",
           "$ref": "#/$defs/assignment"
         },
         "ba": {
-          "description": "The before-after predicate: the same action as a relation between the states, where an after-state value is an ordinary primed identifier. Absent for skip. Its synthesized nodes carry no span.",
+          "description": "The before-after predicate: the same action as a relation between the states, where an after-state value is an ordinary primed identifier. Absent when the action could not be typed. Its synthesized nodes carry no span.",
           "$ref": "#/$defs/node"
         }
       }

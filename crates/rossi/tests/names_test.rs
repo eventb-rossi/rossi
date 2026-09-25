@@ -138,7 +138,7 @@ MACHINE m1
 EVENTS
 EVENT end-update
 THEN
-    @act1 skip
+    @act1 x ≔ 0
 END
 EVENT INITIALISATION-x
 END

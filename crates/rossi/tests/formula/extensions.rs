@@ -471,7 +471,7 @@ fn parse_predicate_str_with_builds_with_the_given_factory() {
     let expr = rossi::parse_expression_str_with("x + 1", &ff).expect("parses");
     assert_eq!(expr.factory(), &ff);
     let action = rossi::parse_action_str_with("x ≔ x + 1", &ff).expect("parses");
-    assert_eq!(action.assignment().expect("an assignment").factory(), &ff);
+    assert_eq!(action.factory(), &ff);
 
     // The plain entry points keep building with the default factory, and the
     // scope does not leak out of a `_with` call.

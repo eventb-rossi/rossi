@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rossi::formula::{self, ProblemKind};
-use rossi::{ActionBody, Expression, Predicate};
+use rossi::{Assignment, Expression, Predicate};
 
 use crate::sc::identifier_walker::undeclared_identifier_in_predicate;
 use crate::type_env::TypeEnv;
@@ -140,20 +140,19 @@ pub(crate) fn typed_expression(env: &TypeEnv, expr: &Expression) -> Option<Expre
     accepted(expr.type_check(&env.sealed()))
 }
 
-/// See [`typed_predicate`]. `None` also stands for `skip`, which has
-/// no assignment to rebuild (and nothing to check).
-pub(crate) fn typed_assignment(env: &TypeEnv, action: &ActionBody) -> Option<formula::Assignment> {
-    accepted(action.assignment()?.type_check(&env.sealed()))
+/// See [`typed_predicate`].
+pub(crate) fn typed_assignment(env: &TypeEnv, action: &Assignment) -> Option<formula::Assignment> {
+    accepted(action.type_check(&env.sealed()))
 }
 
-/// See [`typed_predicate`]. `skip` has nothing to check. The pipeline
-/// reads the verdict off an already-computed [`check_action`] result;
-/// this boolean spelling remains as the seam the behavior tests pin.
+/// See [`typed_predicate`]. The pipeline reads the verdict off an
+/// already-computed [`check_action`] result; this boolean spelling remains
+/// as the seam the behavior tests pin.
 ///
 /// [`check_action`]: crate::checked_predicate::check_action
 #[cfg(test)]
-pub(crate) fn action_well_typed(env: &TypeEnv, action: &ActionBody) -> bool {
-    action.assignment().is_none() || typed_assignment(env, action).is_some()
+pub(crate) fn action_well_typed(env: &TypeEnv, action: &Assignment) -> bool {
+    typed_assignment(env, action).is_some()
 }
 
 #[cfg(test)]

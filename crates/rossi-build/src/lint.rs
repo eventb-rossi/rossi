@@ -1125,7 +1125,7 @@ mod tests {
     use super::*;
     use crate::Severity;
     use rossi::{
-        ActionBody, Component, Context, Event, InitialisationEvent, LabeledAction,
+        Assignment, Component, Context, Event, InitialisationEvent, LabeledAction,
         LabeledPredicate, Machine, NamedElement, Predicate,
     };
 
@@ -1158,7 +1158,7 @@ mod tests {
         }
     }
 
-    fn la(action: ActionBody) -> LabeledAction {
+    fn la(action: Assignment) -> LabeledAction {
         LabeledAction {
             label: None,
             action,
@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     /// Parse an action fixture.
-    fn act(src: &str) -> ActionBody {
+    fn act(src: &str) -> Assignment {
         rossi::parse_action_str(src).unwrap()
     }
 
@@ -1382,9 +1382,9 @@ mod tests {
         // Variables, event names, and event parameters are all declaration
         // sites, each guarded by its own list's terminators: `when` ends an
         // ANY list but not VARIABLES (the variable is flagged only because
-        // it is a Camille token), `status` ends an event's REFINES targets
-        // but is a fine variable, and `skip` re-lexes any action on a
-        // variable. The event diagnostic anchors on the name token, not the
+        // it is a Camille token), and `status` ends an event's REFINES
+        // targets but is a fine variable, as is `skip`, which Rodin does not
+        // reserve. The event diagnostic anchors on the name token, not the
         // whole event.
         let name_span = Span { start: 40, end: 44 };
         let mut m = Machine::new("M".into());
@@ -1406,7 +1406,6 @@ mod tests {
             origins,
             [
                 "M.when",
-                "M.skip",
                 "M.then",
                 "M.then.Begin",
                 "M.then.variables",
@@ -1415,7 +1414,7 @@ mod tests {
             ],
             "{keyword:?}"
         );
-        assert_eq!(keyword[2].span, Some(name_span));
+        assert_eq!(keyword[1].span, Some(name_span));
     }
 
     #[test]
