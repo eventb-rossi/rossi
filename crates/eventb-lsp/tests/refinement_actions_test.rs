@@ -665,4 +665,17 @@ fn an_event_keeping_nothing_of_its_own_loses_the_emptied_clauses() {
         applied(only, uri, action),
         "machine M1 refines M0\nvariables x\nevents\n  event dec extends dec\n  end\nend\n"
     );
+
+    // U+00A0 separates like a space but takes two bytes.
+    let wide = only.replace("    where\n", "   \u{a0}where\n");
+    let files = [("file:///ws/M0.eventb", BASE), (uri, wide.as_str())];
+    let actions = refactors(&provider(&files), uri, &wide, 3, 9, false);
+    let action = actions
+        .iter()
+        .find(|action| action.title.starts_with("Extend"))
+        .unwrap();
+    assert_eq!(
+        applied(&wide, uri, action),
+        "machine M1 refines M0\nvariables x\nevents\n  event dec extends dec\n  end\nend\n"
+    );
 }
