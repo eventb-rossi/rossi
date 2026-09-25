@@ -5,14 +5,14 @@
 //! extension of the context, at the cursor, written to a new file next to it;
 //! and the refinement of the abstract events a machine leaves unrefined.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use rossi::{Component, Context, Event, EventStatus, InitialisationEvent, Machine, NamedElement};
 
 use crate::code_actions::{
-    event_clause_indent, event_header_end, event_is_lowercase, keyword_text, kind_requested,
-    line_start, own_lines, parameter_insert,
+    document_edit, event_clause_indent, event_header_end, event_is_lowercase, keyword_text,
+    kind_requested, line_end, line_start, own_lines, parameter_insert, point, single_edit,
 };
 use crate::component_loader::ComponentLoader;
 use crate::cross_references::CrossReferenceManager;
@@ -22,7 +22,7 @@ use crate::lsp_types::{
     DocumentChangeOperation, DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier,
     Position, Range, ResourceOp, TextDocumentEdit, TextEdit, Uri, WorkspaceEdit,
 };
-use crate::text_utils::line_keyword;
+use crate::text_utils::{line_keyword, line_tight_end};
 use rossi::keywords::KeywordId;
 
 /// Provides the refactors that create or rewrite components along the
@@ -78,10 +78,7 @@ impl RefinementActionProvider {
         let Some(component) = crate::component_util::component_at_offset(components, cursor) else {
             return Vec::new();
         };
-        let cursor_line = line_start(text, cursor)
-            ..text[cursor..]
-                .find('\n')
-                .map_or(text.len(), |at| cursor + at);
+        let cursor_line = line_start(text, cursor)..line_end(text, cursor);
         let on_line = |offset: usize| cursor_line.contains(&offset);
         let on_header = component
             .name_span()
@@ -196,14 +193,11 @@ impl RefinementActionProvider {
             return Some(CodeAction {
                 title,
                 kind: Some(CodeActionKind::REFACTOR_INLINE),
-                diagnostics: None,
-                edit: None,
-                command: None,
                 is_preferred: Some(false),
                 disabled: Some(crate::lsp_types::CodeActionDisabled {
                     reason: format!("@{label} would be written twice"),
                 }),
-                data: None,
+                ..Default::default()
             });
         }
         let mut parameters: Vec<&str> = Vec::new();
@@ -213,8 +207,7 @@ impl RefinementActionProvider {
             let masked = rossi::comments::mask_comments(file);
             // An element's span may run on over a comment written after it.
             let written = |span: rossi::ast::Span| {
-                file[span.start..span.start + masked[span.start..span.end].trim_end().len()]
-                    .to_string()
+                file[span.start..line_tight_end(&masked, span)].to_string()
             };
             for parameter in &ancestor.parameters {
                 let name = parameter.name.as_str();
@@ -251,10 +244,6 @@ impl RefinementActionProvider {
             .find_map(|item| own_line(item.start))
             .map(|start| crate::code_actions::indentation(&text[start..]).to_string())
             .unwrap_or_else(|| format!("{clause_indent}  "));
-        let at = |offset: usize| {
-            let position = crate::position::offset_to_position(text, offset);
-            Range::new(position, position)
-        };
 
         // The header: `extends t` becomes `refines t`.
         let name_end = event.name_span?.end;
@@ -276,11 +265,7 @@ impl RefinementActionProvider {
             ),
         }];
         if !parameters.is_empty() {
-            let insert = parameter_insert(text, event, &parameters)?;
-            edits.push(TextEdit {
-                range: Range::new(insert.position, insert.position),
-                new_text: insert.text,
-            });
+            edits.push(parameter_insert(text, event, &parameters)?);
         }
         let items = |items: &[String]| -> String {
             items
@@ -291,7 +276,7 @@ impl RefinementActionProvider {
         if !guards.is_empty() {
             match event.guards.first().and_then(|g| g.span) {
                 Some(first) => edits.push(TextEdit {
-                    range: at(own_line(first.start)?),
+                    range: point(text, own_line(first.start)?),
                     new_text: items(&guards),
                 }),
                 None => {
@@ -302,10 +287,9 @@ impl RefinementActionProvider {
                         .map(|s| s.end)
                         .chain(event_header_end(event))
                         .max()?;
-                    let line_end = text[after..].find('\n').map_or(text.len(), |at| after + at);
                     let block = items(&guards);
                     edits.push(TextEdit {
-                        range: at(line_end),
+                        range: point(text, line_end(text, after)),
                         new_text: format!(
                             "\n{clause_indent}{}\n{}",
                             keyword_text(KeywordId::Where, lowercase),
@@ -318,7 +302,7 @@ impl RefinementActionProvider {
         if !actions.is_empty() {
             match event.actions.first().and_then(|a| a.span) {
                 Some(first) => edits.push(TextEdit {
-                    range: at(own_line(first.start)?),
+                    range: point(text, own_line(first.start)?),
                     new_text: items(&actions),
                 }),
                 None => {
@@ -329,7 +313,7 @@ impl RefinementActionProvider {
                         return None;
                     }
                     edits.push(TextEdit {
-                        range: at(end_line),
+                        range: point(text, end_line),
                         new_text: format!(
                             "{clause_indent}{}\n{}",
                             keyword_text(KeywordId::Then, lowercase),
@@ -342,16 +326,9 @@ impl RefinementActionProvider {
         Some(CodeAction {
             title,
             kind: Some(CodeActionKind::REFACTOR_INLINE),
-            diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(HashMap::from([(uri.clone(), edits)])),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
+            edit: Some(document_edit(uri, edits)),
             is_preferred: Some(false),
-            disabled: None,
-            data: None,
+            ..Default::default()
         })
     }
 
@@ -434,14 +411,11 @@ impl RefinementActionProvider {
             return Some(CodeAction {
                 title,
                 kind: Some(CodeActionKind::REFACTOR),
-                diagnostics: None,
-                edit: None,
-                command: None,
                 is_preferred: Some(false),
                 disabled: Some(crate::lsp_types::CodeActionDisabled {
                     reason: format!("the event's own @{label} would clash with an inherited label"),
                 }),
-                data: None,
+                ..Default::default()
             });
         }
 
@@ -495,9 +469,8 @@ impl RefinementActionProvider {
             .collect();
         removed.extend(clause_removals(text, &masked, &parameters, &dropped, true)?);
         // The guards and actions repeated.
-        let spans =
-            |spans: Vec<Option<rossi::ast::Span>>| spans.into_iter().collect::<Option<Vec<_>>>();
-        let guards = spans(event.guards.iter().map(|g| g.span).collect())?;
+        let guards: Vec<rossi::ast::Span> =
+            event.guards.iter().map(|g| g.span).collect::<Option<_>>()?;
         removed.extend(clause_removals(
             text,
             &masked,
@@ -505,7 +478,11 @@ impl RefinementActionProvider {
             &repeated_guards,
             false,
         )?);
-        let actions = spans(event.actions.iter().map(|a| a.span).collect())?;
+        let actions: Vec<rossi::ast::Span> = event
+            .actions
+            .iter()
+            .map(|a| a.span)
+            .collect::<Option<_>>()?;
         removed.extend(clause_removals(
             text,
             &masked,
@@ -527,16 +504,9 @@ impl RefinementActionProvider {
         Some(CodeAction {
             title,
             kind: Some(CodeActionKind::REFACTOR),
-            diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(HashMap::from([(uri.clone(), edits)])),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
+            edit: Some(document_edit(uri, edits)),
             is_preferred: Some(false),
-            disabled: None,
-            data: None,
+            ..Default::default()
         })
     }
 
@@ -576,55 +546,37 @@ impl RefinementActionProvider {
             .map(|v| v.name.as_str())
             .filter(|name| !kept.contains(name))
             .collect();
-        let initialisation = rossi::keywords::spell(KeywordId::Initialisation);
-        let inherits_dropped = |event: &str| {
-            let mut visited = HashSet::new();
-            let (mut parent, mut target) = (abstraction.clone(), event.to_string());
-            while visited.insert(parent.name.clone()) {
-                let (guards, actions, extended, next) = if target == initialisation {
-                    let Some(init) = &parent.initialisation else {
-                        return false;
-                    };
-                    (&[][..], &init.actions[..], init.extended, target.clone())
-                } else {
-                    let Some(abstract_event) = parent.events.iter().find(|e| e.name == target)
-                    else {
-                        return false;
-                    };
-                    let next = abstract_event.refines.first().map(|t| t.name.clone());
-                    (
-                        &abstract_event.guards[..],
-                        &abstract_event.actions[..],
-                        abstract_event.extended,
-                        next.unwrap_or_default(),
-                    )
-                };
-                let touches = guards
-                    .iter()
-                    .flat_map(|guard| guard.predicate.free_identifiers())
-                    .chain(
-                        actions
-                            .iter()
-                            .flat_map(|action| action.action.free_identifiers()),
-                    )
-                    .any(|name| dropped.contains(name.trim_end_matches('\'')));
-                if touches {
-                    return true;
-                }
-                let Some(grand) = extended
-                    .then(|| parent.refines.as_deref().and_then(|p| self.load_machine(p)))
-                    .flatten()
-                else {
-                    return false;
-                };
-                (parent, target) = (grand, next);
-            }
-            false
+        let touches = |guards: &[rossi::LabeledPredicate], actions: &[rossi::LabeledAction]| {
+            guards
+                .iter()
+                .flat_map(|guard| guard.predicate.free_identifiers())
+                .chain(
+                    actions
+                        .iter()
+                        .flat_map(|action| action.action.free_identifiers()),
+                )
+                .any(|name| dropped.contains(crate::formula_walk::canonical(name)))
         };
         if !dropped.is_empty() {
-            stubs.events.retain(|event| !inherits_dropped(&event.name));
-            if stubs.initialisation.is_some() && inherits_dropped(initialisation) {
-                stubs.initialisation = None;
+            stubs.events.retain(|event| {
+                !self
+                    .extended_chain(machine, event)
+                    .is_some_and(|chain| chain.iter().any(|(_, e)| touches(&e.guards, &e.actions)))
+            });
+            // INITIALISATION inherits up the chain as far as it is extended.
+            let mut visited = HashSet::new();
+            let mut level = stubs.initialisation.is_some().then(|| abstraction.clone());
+            while let Some(parent) = level.take().filter(|p| visited.insert(p.name.clone())) {
+                let Some(init) = &parent.initialisation else {
+                    break;
+                };
+                if touches(&[], &init.actions) {
+                    stubs.initialisation = None;
+                    break;
+                }
+                if init.extended {
+                    level = parent.refines.as_deref().and_then(|p| self.load_machine(p));
+                }
             }
         }
         let count = stubs.events.len() + usize::from(stubs.initialisation.is_some());
@@ -644,7 +596,7 @@ impl RefinementActionProvider {
             .max();
         let (at, insert) = match last_event {
             Some(end) => (
-                text[end..].find('\n').map_or(text.len(), |at| end + at + 1),
+                (line_end(text, end) + 1).min(text.len()),
                 format!("\n{block}"),
             ),
             None => {
@@ -661,26 +613,12 @@ impl RefinementActionProvider {
                 (end_line, format!("{header}{block}"))
             }
         };
-        let position = crate::position::offset_to_position(text, at);
         Some(CodeAction {
             title,
             kind: Some(CodeActionKind::REFACTOR),
-            diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(HashMap::from([(
-                    uri.clone(),
-                    vec![TextEdit {
-                        range: Range::new(position, position),
-                        new_text: insert,
-                    }],
-                )])),
-                document_changes: None,
-                change_annotations: None,
-            }),
-            command: None,
+            edit: Some(single_edit(uri, point(text, at), insert)),
             is_preferred: Some(false),
-            disabled: None,
-            data: None,
+            ..Default::default()
         })
     }
 
@@ -709,12 +647,9 @@ impl RefinementActionProvider {
         Some(CodeAction {
             title: format!("Create {what} {name} of {}", component.name()),
             kind: Some(CodeActionKind::REFACTOR),
-            diagnostics: None,
             edit: Some(create_file_edit(target, text)),
-            command: None,
             is_preferred: Some(false),
-            disabled: None,
-            data: None,
+            ..Default::default()
         })
     }
 
@@ -724,7 +659,6 @@ impl RefinementActionProvider {
     /// takes it (`RefineProposer`). Rodin also counts a leading number on,
     /// but a name written in `.eventb` text cannot start with a digit.
     fn free_name(&self, name: &str, directory: &std::path::Path) -> String {
-        let taken = self.cross_ref_manager.all_component_names();
         let base = name.trim_end_matches(|c: char| c.is_ascii_digit());
         let digits = &name[base.len()..];
         let width = digits.len().max(1);
@@ -734,7 +668,10 @@ impl RefinementActionProvider {
             let candidate = format!("{base}{number:0width$}");
             // The workspace indexes only `.eventb` text: a Rodin machine or
             // context file beside it takes the name too.
-            if !taken.contains(&candidate)
+            if self
+                .cross_ref_manager
+                .find_component_uri(&candidate)
+                .is_none()
                 && ["eventb", "bum", "buc"]
                     .iter()
                     .all(|extension| !directory.join(format!("{candidate}.{extension}")).exists())
@@ -786,12 +723,6 @@ fn refinement_of(machine: &Machine, name: String) -> Machine {
     refinement
 }
 
-/// An empty range at byte `offset` of `text`.
-fn point(text: &str, offset: usize) -> Range {
-    let position = crate::position::offset_to_position(text, offset);
-    Range::new(position, position)
-}
-
 /// The ranges deleting the `items` of one clause marked in `dropped`, or the
 /// whole clause, keyword included, when every item goes. An item is deleted
 /// with its lines; a name in an inline list (`names`) with the space before
@@ -803,12 +734,10 @@ fn clause_removals(
     dropped: &[bool],
     names: bool,
 ) -> Option<Vec<std::ops::Range<usize>>> {
-    // An element's span may run on over a comment written after it.
-    let code_end =
-        |span: &rossi::ast::Span| span.start + masked[span.start..span.end].trim_end().len();
     if items.is_empty() || !dropped.iter().any(|d| *d) {
         return Some(Vec::new());
     }
+    // An element's span may run on over a comment written after it.
     if dropped.iter().all(|d| *d) {
         let before = masked[..items[0].start].trim_end();
         let keyword = before.rfind(char::is_whitespace).map_or(0, |at| at + 1);
@@ -817,23 +746,17 @@ fn clause_removals(
             text,
             masked,
             keyword,
-            code_end(items.last()?),
+            line_tight_end(masked, *items.last()?),
         )?]);
     }
     items
         .iter()
         .zip(dropped)
         .filter(|(_, dropped)| **dropped)
-        .map(
-            |(item, _)| match own_lines(text, masked, item.start, code_end(item)) {
-                Some(lines) => Some(lines),
-                None if names => {
-                    let previous = masked[..item.start].trim_end().len();
-                    Some(previous..item.end)
-                }
-                None => None,
-            },
-        )
+        .map(|(item, _)| {
+            own_lines(text, masked, item.start, line_tight_end(masked, *item))
+                .or_else(|| names.then(|| masked[..item.start].trim_end().len()..item.end))
+        })
         .collect()
 }
 
