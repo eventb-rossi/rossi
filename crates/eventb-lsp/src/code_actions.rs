@@ -224,7 +224,7 @@ fn has_keyword_line(text: &str, id: KeywordId) -> bool {
 
 /// Whether an LSP diagnostic carries the string rule `code` (e.g. `"EB026"`),
 /// so a quick fix can attach itself to exactly that diagnostic.
-fn diagnostic_code_is(diagnostic: &crate::lsp_types::Diagnostic, code: &str) -> bool {
+pub(crate) fn diagnostic_code_is(diagnostic: &crate::lsp_types::Diagnostic, code: &str) -> bool {
     matches!(
         &diagnostic.code,
         Some(crate::lsp_types::NumberOrString::String(s)) if s == code

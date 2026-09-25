@@ -4,10 +4,11 @@ use eventb_lsp::cross_references::CrossReferenceManager;
 use eventb_lsp::document::DocumentManager;
 use eventb_lsp::identifier_utils::position_to_offset;
 use eventb_lsp::lsp_types::{
-    CodeAction, CodeActionContext, CodeActionKind, CodeActionParams, DocumentChangeOperation,
-    DocumentChanges, OneOf, Position, Range, ResourceOp, TextDocumentIdentifier, Uri,
-    WorkDoneProgressParams,
+    CodeAction, CodeActionContext, CodeActionKind, CodeActionParams, Diagnostic,
+    DocumentChangeOperation, DocumentChanges, NumberOrString, OneOf, Position, Range, ResourceOp,
+    TextDocumentIdentifier, Uri, WorkDoneProgressParams,
 };
+use eventb_lsp::position::span_to_range;
 use eventb_lsp::refinement::RefinementActionProvider;
 use std::sync::Arc;
 
@@ -54,17 +55,32 @@ fn refactors(
     column: u32,
     creates_files: bool,
 ) -> Vec<CodeAction> {
+    let context = CodeActionContext {
+        diagnostics: vec![],
+        only: Some(vec![CodeActionKind::REFACTOR]),
+        trigger_kind: None,
+    };
+    offered(provider, uri, text, line, column, context, creates_files)
+}
+
+/// The actions offered in `context` with the cursor at `line`, `column` of
+/// `uri`.
+fn offered(
+    provider: &RefinementActionProvider,
+    uri: &str,
+    text: &str,
+    line: u32,
+    column: u32,
+    context: CodeActionContext,
+    creates_files: bool,
+) -> Vec<CodeAction> {
     let cursor = Position::new(line, column);
     let params = CodeActionParams {
         text_document: TextDocumentIdentifier {
             uri: uri.parse::<Uri>().unwrap(),
         },
         range: Range::new(cursor, cursor),
-        context: CodeActionContext {
-            diagnostics: vec![],
-            only: Some(vec![CodeActionKind::REFACTOR]),
-            trigger_kind: None,
-        },
+        context,
         work_done_progress_params: WorkDoneProgressParams::default(),
         partial_result_params: Default::default(),
     };
@@ -385,6 +401,92 @@ end
         "machine M1 refines M0\nvariables x y\nevents\n  event INITIALISATION extends INITIALISATION\n  end\n\n  event dec extends dec\n  end\n\n  anticipated event wait extends wait\n  end\nend\n"
     );
     rossi::parse(&fixed).expect("the refinement parses");
+}
+
+/// The abstract events a static check over `files` (name, text) reports
+/// unrefined (EB036), as the editor receives them for `text`.
+fn unrefined_warnings(files: &[(&str, &str)], text: &str) -> Vec<Diagnostic> {
+    let components = files
+        .iter()
+        .flat_map(|(name, text)| {
+            rossi_build::ProjectComponent::from_eventb(format!("{name}.eventb"), text).unwrap()
+        })
+        .collect();
+    rossi_build::build(&rossi_build::Project::new("p", components))
+        .diagnostics
+        .into_iter()
+        .filter(|d| d.rule_id == Some(rossi_build::RuleId::AbstractEventNotRefined))
+        .map(|d| Diagnostic {
+            range: span_to_range(&d.span.unwrap(), text),
+            code: Some(NumberOrString::String("EB036".to_string())),
+            message: d.message,
+            ..Default::default()
+        })
+        .collect()
+}
+
+#[test]
+fn the_events_the_check_reports_unrefined_are_refined_as_its_quick_fix() {
+    let abstraction = "\
+machine M0
+variables x
+invariants
+  @t x ∈ ℕ
+events
+  event INITIALISATION
+    then
+      @a x ≔ 0
+  end
+  event inc
+    then
+      @a x ≔ x + 1
+  end
+  event off
+    where
+      @g ⊥
+    then
+      @a x ≔ 0
+  end
+end
+";
+    let refinement = "\
+machine M1 refines M0
+variables x
+events
+  event INITIALISATION extends INITIALISATION
+  end
+end
+";
+    let files = [("M0", abstraction), ("M1", refinement)];
+    // `off` can never happen, so only `inc` is reported.
+    let warnings = unrefined_warnings(&files, refinement);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let uri = "file:///ws/M1.eventb";
+    let provider = provider(&[("file:///ws/M0.eventb", abstraction), (uri, refinement)]);
+    let context = CodeActionContext {
+        diagnostics: warnings.clone(),
+        only: None,
+        trigger_kind: None,
+    };
+    // On the header, where the refactor is offered too, it comes once, as
+    // the warning's quick fix.
+    let actions = offered(&provider, uri, refinement, 0, 3, context, false);
+    let [action] = actions.as_slice() else {
+        panic!("one action: {actions:?}");
+    };
+    assert_eq!(action.title, "Refine abstract event inc");
+    assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+    assert_eq!(action.diagnostics.as_ref(), Some(&warnings));
+    let fixed = applied(refinement, uri, action);
+    assert_eq!(
+        fixed,
+        refinement.replace(
+            "  end\nend\n",
+            "  end\n\n  event inc extends inc\n  end\nend\n"
+        )
+    );
+    let files = [("M0", abstraction), ("M1", fixed.as_str())];
+    assert_eq!(unrefined_warnings(&files, &fixed), []);
 }
 
 /// The error diagnostics of a static check over `files` (name, text).

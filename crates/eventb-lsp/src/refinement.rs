@@ -11,19 +11,23 @@ use std::sync::Arc;
 use rossi::{Component, Context, Event, EventStatus, InitialisationEvent, Machine, NamedElement};
 
 use crate::code_actions::{
-    document_edit, event_clause_indent, event_header_end, event_is_lowercase, keyword_text,
-    kind_requested, line_end, line_start, own_lines, parameter_insert, point, single_edit,
+    diagnostic_code_is, document_edit, event_clause_indent, event_header_end, event_is_lowercase,
+    keyword_text, kind_requested, line_end, line_start, own_lines, parameter_insert, point,
+    single_edit,
 };
 use crate::component_loader::{ComponentLoader, LoadedComponent};
 use crate::cross_references::CrossReferenceManager;
 use crate::document::DocumentManager;
 use crate::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionParams, CreateFile, CreateFileOptions,
+    CodeAction, CodeActionKind, CodeActionParams, CreateFile, CreateFileOptions, Diagnostic,
     DocumentChangeOperation, DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier,
     Position, Range, ResourceOp, TextDocumentEdit, TextEdit, Uri, WorkspaceEdit,
 };
 use crate::text_utils::{line_keyword, line_tight_end};
+use rossi::formula::PredicateKind;
+use rossi::formula::tag::LiteralPredOp;
 use rossi::keywords::KeywordId;
+use rossi_build::RuleId;
 
 /// Provides the refactors that create or rewrite components along the
 /// refinement chain.
@@ -46,7 +50,8 @@ impl RefinementActionProvider {
         }
     }
 
-    /// The refactors for the component at the cursor. `components` are the
+    /// The refactors for the component at the cursor, and the quick fix for
+    /// the unrefined abstract events it is warned about. `components` are the
     /// recovered parse of `text`; `printer` writes new components in the
     /// configured style; a refactor creating a file is offered only when the
     /// client `creates_files`.
@@ -60,7 +65,20 @@ impl RefinementActionProvider {
     ) -> Vec<CodeAction> {
         let refactor = kind_requested(params, &CodeActionKind::REFACTOR);
         let inline = kind_requested(params, &CodeActionKind::REFACTOR_INLINE);
-        if !refactor && !inline {
+        // The abstract events the check reports unrefined (EB036), which
+        // the refinement of unrefined events fixes.
+        let unrefined: Vec<Diagnostic> = if kind_requested(params, &CodeActionKind::QUICKFIX) {
+            params
+                .context
+                .diagnostics
+                .iter()
+                .filter(|d| diagnostic_code_is(d, RuleId::AbstractEventNotRefined.code()))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !refactor && !inline && unrefined.is_empty() {
             return Vec::new();
         }
         let Some(cursor) = crate::position::position_to_offset(text, params.range.start) else {
@@ -108,17 +126,30 @@ impl RefinementActionProvider {
                 ));
             }
         }
-        if refactor
-            && on_header
-            && let Component::Machine(machine) = component
+        if let Component::Machine(machine) = component
+            && (!unrefined.is_empty() || refactor && on_header)
         {
-            actions.extend(self.refine_unrefined_action(
+            let action = self.refine_unrefined_action(
                 &loader,
                 &params.text_document.uri,
                 text,
                 machine,
                 printer,
-            ));
+            );
+            // With a warning to answer it is that warning's quick fix, and
+            // not offered a second time as a refactor.
+            actions.extend(action.map(|action| {
+                if unrefined.is_empty() {
+                    action
+                } else {
+                    CodeAction {
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        diagnostics: Some(unrefined),
+                        is_preferred: Some(true),
+                        ..action
+                    }
+                }
+            }));
         }
         actions
     }
@@ -463,10 +494,11 @@ impl RefinementActionProvider {
     }
 
     /// Refine the events of `machine`'s abstraction that no event of it
-    /// refines, with the extended events a refinement starts from: Rodin
-    /// warns about an abstract event left unrefined. They go after the last
-    /// event, or into a new EVENTS clause before the machine's END. An event
-    /// whose extension would inherit a variable `machine` drops is left out.
+    /// refines and no guard disables, with the extended events a refinement
+    /// starts from: these are the events the check reports (EB036). They go
+    /// after the last event, or into a new EVENTS clause before the machine's
+    /// END. An event whose extension would inherit a variable `machine`
+    /// drops is left out.
     fn refine_unrefined_action(
         &self,
         loader: &ComponentLoader,
@@ -488,6 +520,21 @@ impl RefinementActionProvider {
         if machine.initialisation.is_some() {
             stubs.initialisation = None;
         }
+        // An abstract event with a guard that is literally `⊥`, inherited or
+        // its own, can never happen: leaving it out loses nothing, and the
+        // check (EB036) does not ask for it.
+        stubs.events.retain(|event| {
+            !extended_chain(loader, machine, event).is_some_and(|chain| {
+                chain.iter().any(|(_, e)| {
+                    e.guards.iter().any(|guard| {
+                        matches!(
+                            guard.predicate.kind(),
+                            PredicateKind::Literal(LiteralPredOp::BFalse)
+                        )
+                    })
+                })
+            })
+        });
         // An extended event inherits every guard and action of the events it
         // extends. One reading or assigning a variable this machine drops
         // would bring back what the machine no longer has, and how to refine
