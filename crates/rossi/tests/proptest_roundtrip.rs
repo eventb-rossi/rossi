@@ -259,6 +259,10 @@ fn arb_bool_free_leaf_expression() -> impl Strategy<Value = Expression> {
     ]
 }
 
+/// Boxed, like `arb_leaf_predicate` and the event, initialisation, context
+/// and machine strategies: a strategy composed from an unboxed one embeds
+/// its whole combinator type, and without the boxes those type names alone
+/// grow this test's debug binary past 800 MB.
 fn arb_leaf_expression() -> impl Strategy<Value = Expression> {
     prop_oneof![
         8 => arb_bool_free_leaf_expression(),
@@ -275,6 +279,7 @@ fn arb_leaf_expression() -> impl Strategy<Value = Expression> {
         ]
         .prop_map(|pred| ff().bool_expression(pred, None)),
     ]
+    .boxed()
 }
 
 fn arb_leaf_predicate() -> impl Strategy<Value = Predicate> {
@@ -288,6 +293,7 @@ fn arb_leaf_predicate() -> impl Strategy<Value = Predicate> {
         )
             .prop_map(|(op, left, right)| ff().relational_predicate(op, left, right, None)),
     ]
+    .boxed()
 }
 
 fn arb_expression_impl(depth: u32, desired_size: u32) -> impl Strategy<Value = Expression> {
@@ -635,6 +641,7 @@ fn arb_event() -> impl Strategy<Value = Event> {
                 event
             },
         )
+        .boxed()
 }
 
 fn arb_initialisation() -> impl Strategy<Value = InitialisationEvent> {
@@ -652,6 +659,7 @@ fn arb_initialisation() -> impl Strategy<Value = InitialisationEvent> {
             span: None,
             name_span: None,
         })
+        .boxed()
 }
 
 fn arb_context() -> impl Strategy<Value = Component> {
@@ -669,6 +677,7 @@ fn arb_context() -> impl Strategy<Value = Component> {
             ctx.axioms = axioms;
             Component::Context(ctx)
         })
+        .boxed()
 }
 
 fn arb_machine() -> impl Strategy<Value = Component> {
@@ -737,6 +746,7 @@ fn arb_machine() -> impl Strategy<Value = Component> {
                 Component::Machine(machine)
             },
         )
+        .boxed()
 }
 
 // =============================================================================
