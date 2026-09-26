@@ -1,0 +1,29 @@
+[
+    {
+        "caption": "Rossi: Open in Rodin",
+        "command": "lsp_execute",
+        "args": {
+            "session_name": "eventb-language-server",
+            "command_name": "rossi.rodin.open",
+            "command_args": ["$file_uri"]
+        }
+    },
+    {
+        "caption": "Rossi: Model-check Current Machine",
+        "command": "lsp_execute",
+        "args": {
+            "session_name": "eventb-language-server",
+            "command_name": "rossi.animate.check",
+            "command_args": ["$file_uri", "$position"]
+        }
+    },
+    {
+        "caption": "Rossi: Disprove Current Machine POs",
+        "command": "lsp_execute",
+        "args": {
+            "session_name": "eventb-language-server",
+            "command_name": "rossi.animate.po",
+            "command_args": ["$file_uri", "$position"]
+        }
+    }
+]

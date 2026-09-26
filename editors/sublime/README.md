@@ -18,12 +18,13 @@ pager). The last two do not support the Rossi language server, only syntax highl
 ### Installation
 
 Copy the entire `EventB/` directory into Sublime Text's `Packages/` folder
-(`Preferences → Browse Packages…`). You need all three files in one directory:
+(`Preferences → Browse Packages…`). Keep its files together:
 
 ```
 Packages/
 └── EventB/
     ├── .python-version         ← tells ST4 to use Python 3.8
+    ├── Default.sublime-commands ← LSP actions in the Command Palette
     ├── EventB.sublime-syntax   ← syntax highlighting
     ├── EventB.py               ← input method plugin (requires ST4)
     └── operators.py            ← generated operator table (loaded by EventB.py)
@@ -96,6 +97,14 @@ while edits saved in Rodin flow back into the `.eventb` sources automatically
 lines). Set
 `rossi.rodin.path` in the `settings` block above if Rodin is not at the
 platform default location (`/Applications/Rodin.app`, `rodin.exe`, `rodin`).
+
+The Command Palette also offers **Rossi: Open in Rodin**, **Rossi: Model-check
+Current Machine**, and **Rossi: Disprove Current Machine POs**. These run the
+same actions without moving to a header; the animate actions use the machine
+under the cursor. They need the LSP session name `eventb-language-server` used
+in the configuration above. No shortcuts are assigned. To add one, open
+**Preferences: Key Bindings** and copy the command and args for that action
+from `Default.sublime-commands` into your user keymap with a `keys` entry.
 
 ### The Rodin math font
 
