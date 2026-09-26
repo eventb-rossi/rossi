@@ -1048,6 +1048,98 @@ mod animate_lens {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_command_accepts_a_cursor_inside_the_current_machine() {
+        // A real executable path gets past the preflight; the selected
+        // machine's missing context stops the flow before it is invoked.
+        let executable = std::env::current_exe().unwrap();
+        let (mut service, mut messages) = initialized_service(executable.to_str().unwrap()).await;
+        let source = "CONTEXT C\nEND\n\nMACHINE first\n// 😀\nEND\n\nMACHINE target\nSEES missing_ctx\nEND\n";
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": URI, "version": 2 },
+                    "contentChanges": [{ "text": source }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let execute = Request::build("workspace/executeCommand")
+            .id(3)
+            .params(json!({
+                "command": "rossi.animate.check",
+                "arguments": [URI, { "line": 8, "character": 2 }]
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(execute)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, result) = response.into_parts();
+        assert_eq!(result.unwrap(), Value::Null);
+
+        let message = next_show_message(&mut messages, Duration::from_secs(10))
+            .await
+            .expect("the selected machine's missing context is reported");
+        assert!(
+            message["message"].as_str().unwrap().contains("missing_ctx"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_command_rejects_a_cursor_outside_a_machine() {
+        let (mut service, _messages) = initialized_service("/nonexistent/eventb-animate").await;
+        service
+            .ready()
+            .await
+            .unwrap()
+            .call(notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": URI, "version": 2 },
+                    "contentChanges": [{ "text": "CONTEXT C\nEND\n\nMACHINE animate_m\nEND\n" }]
+                }),
+            ))
+            .await
+            .unwrap();
+        for position in [
+            json!({ "line": 10, "character": 0 }),
+            json!({ "line": 0, "character": 0 }),
+            json!({ "line": 0 }),
+        ] {
+            let execute = Request::build("workspace/executeCommand")
+                .id(3)
+                .params(json!({
+                    "command": "rossi.animate.po",
+                    "arguments": [URI, position]
+                }))
+                .finish();
+            let response = service
+                .ready()
+                .await
+                .unwrap()
+                .call(execute)
+                .await
+                .unwrap()
+                .unwrap();
+            let (_, result) = response.into_parts();
+            assert!(
+                result.is_err(),
+                "a cursor outside a machine must be rejected"
+            );
+        }
+    }
+
     /// The next diagnostics published for `uri`.
     async fn next_diagnostics_for(
         messages: &mut (impl StreamExt<Item = Request> + Unpin),

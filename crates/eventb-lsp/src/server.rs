@@ -1272,9 +1272,9 @@ impl RossiLanguageServer {
         Ok(None)
     }
 
-    /// An eventb-animate lens command ([`crate::animate::COMMAND_CHECK`] /
-    /// [`crate::animate::COMMAND_PO`]): validate the `[uri, machine]`
-    /// arguments, refuse a concurrent run, and spawn the flow.
+    /// An eventb-animate command ([`crate::animate::COMMAND_CHECK`] /
+    /// [`crate::animate::COMMAND_PO`]): accept a lens's `[uri, machine]` or
+    /// an editor command's `[uri, position]`, then spawn the flow.
     async fn execute_animate(
         &self,
         mode: crate::animate::AnimateMode,
@@ -1283,18 +1283,41 @@ impl RossiLanguageServer {
         use std::sync::atomic::Ordering;
 
         let uri = file_uri_argument(&params)?;
-        let machine = params
-            .arguments
-            .get(1)
-            .and_then(|value| value.as_str())
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| {
-                Error::invalid_params(format!(
-                    "{} expects a machine name argument",
+        let machine = match params.arguments.get(1) {
+            Some(serde_json::Value::String(name)) if !name.is_empty() => name.clone(),
+            Some(value) if value.is_object() => {
+                let position: Position = serde_json::from_value(value.clone()).map_err(|_| {
+                    Error::invalid_params(format!(
+                        "{} needs a valid cursor position",
+                        params.command
+                    ))
+                })?;
+                let doc = self
+                    .document_manager
+                    .parse_result_for_request(&uri)
+                    .ok_or_else(|| Error::invalid_params("the document is not open"))?;
+                let offset = crate::position::position_to_offset(doc.text(), position)
+                    .ok_or_else(|| Error::invalid_params("the cursor position is out of bounds"))?;
+                doc.components()
+                    .iter()
+                    .find(|component| {
+                        component
+                            .span()
+                            .is_some_and(|span| span.contains(offset) || span.end == offset)
+                    })
+                    .and_then(|component| match component {
+                        rossi::Component::Machine(_) => Some(component.name().to_string()),
+                        rossi::Component::Context(_) => None,
+                    })
+                    .ok_or_else(|| Error::invalid_params("the cursor is not inside a machine"))?
+            }
+            _ => {
+                return Err(Error::invalid_params(format!(
+                    "{} expects a machine name or cursor position argument",
                     params.command
-                ))
-            })?
-            .to_string();
+                )));
+            }
+        };
 
         let Some(reset) = self.animate_in_flight.try_begin() else {
             self.client
