@@ -83,6 +83,16 @@ rossi-build = { version = "0.2.3", path = "crates/rossi-build" }
 rossi-prove = { version = "0.2.3", path = "crates/rossi-prove" }
 eventb-lsp = { version = "0.2.3", path = "crates/eventb-lsp" }
 
+# Keep debug info out of the linked executables. Every test binary links the
+# workspace and its dependencies statically, so with the DWARF embedded each
+# of the ~100 of them carried its own copy and one `cargo test --workspace`
+# build took 14 GB. Unpacked, it stays once per compilation unit in `.dwo`
+# files beside the objects (7 GB), and gdb and panic backtraces still
+# resolve it. Cargo omits the option on targets that lack it (Windows MSVC);
+# it is already Cargo's default on macOS.
+[profile.dev]
+split-debuginfo = "unpacked"
+
 [profile.release]
 opt-level = 3
 lto = true
