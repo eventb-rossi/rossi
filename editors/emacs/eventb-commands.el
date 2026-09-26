@@ -329,6 +329,45 @@ convention); falls back to (1 . 1) for diagnostics with no source position
                                          ".checked.zip"))))
     (eventb--run-tool "build" input output "Built checked Rodin ZIP")))
 
+;;; Language server actions
+
+(declare-function lsp-workspaces "lsp-mode")
+(declare-function lsp-text-document-identifier "lsp-mode")
+(declare-function lsp-point-to-position "lsp-mode")
+(declare-function lsp-send-execute-command "lsp-mode")
+
+(defun eventb--run-server-action (command)
+  "Run Rossi language server COMMAND for the current Event-B buffer."
+  (unless (derived-mode-p 'eventb-mode)
+    (user-error "Open or select an Event-B file first"))
+  (eventb--buffer-file)
+  (unless (and (bound-and-true-p lsp-mode) (lsp-workspaces))
+    (user-error "The Rossi language server is not active"))
+  (let ((uri (plist-get (lsp-text-document-identifier) :uri)))
+    (lsp-send-execute-command
+     command
+     (if (equal command "rossi.rodin.open")
+         (vector uri)
+       (vector uri (lsp-point-to-position (point)))))))
+
+;;;###autoload
+(defun eventb-open-in-rodin ()
+  "Open the current Event-B file in Rodin."
+  (interactive)
+  (eventb--run-server-action "rossi.rodin.open"))
+
+;;;###autoload
+(defun eventb-model-check ()
+  "Model-check the machine under point."
+  (interactive)
+  (eventb--run-server-action "rossi.animate.check"))
+
+;;;###autoload
+(defun eventb-disprove-pos ()
+  "Disprove proof obligations in the machine under point."
+  (interactive)
+  (eventb--run-server-action "rossi.animate.po"))
+
 (provide 'eventb-commands)
 
 ;;; eventb-commands.el ends here

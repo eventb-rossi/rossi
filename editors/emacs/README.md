@@ -237,6 +237,7 @@ sources automatically (three-way merge, git-style conflict markers if both
 sides changed the same lines).
 With `lsp-extend-selection`, `M-x lsp-extend-selection` grows the active region
 to the next syntactic scope (and `lsp-shrink-selection` reverses it).
+`M-x eventb-open-in-rodin` runs the same action without moving to the header.
 
 ### Custom Server Path
 
@@ -417,8 +418,8 @@ server, so editor input and `rossi/operatorTable` can never disagree.
 
 ### Commands
 
-Beyond the LSP code actions, `eventb-mode` provides commands that drive the
-Rossi CLI:
+Beyond the LSP code actions, `eventb-mode` provides these CLI and language
+server commands:
 
 | Command | Action |
 |---------|--------|
@@ -429,12 +430,18 @@ Rossi CLI:
 | `M-x eventb-import` | Import a Rodin project into `.eventb` files |
 | `M-x eventb-export` | Export the current file to a Rodin ZIP |
 | `M-x eventb-build` | Build a checked Rodin ZIP |
+| `M-x eventb-open-in-rodin` | Open the current file in Rodin |
+| `M-x eventb-model-check` | Model-check the machine under point |
+| `M-x eventb-disprove-pos` | Disprove POs in the machine under point |
 | `M-x eventb-toggle-input-method` (`C-c C-i`) | Toggle the backslash-leader Unicode input |
 
 The conversion, validation, import, export, and build commands shell out to the
 `rossi` CLI; ensure it is on your `PATH` or set `rossi-tool-path` to its
 location. Set `eventb-validate-runtime` to pass `--runtime` to both validate
 commands, adding the EB1xx runtime-translation suitability checks.
+
+The Rodin and animate commands use the attached language server and have no
+default keybindings.
 
 ```elisp
 (setq rossi-tool-path "~/.cargo/bin/rossi")  ; defaults to "rossi" on exec-path
@@ -449,7 +456,10 @@ Suggested keybindings:
   :bind (:map eventb-mode-map
          ("C-c C-u" . eventb-convert-to-unicode)
          ("C-c C-d" . eventb-convert-to-ascii)
-         ("C-c C-v" . eventb-validate))
+         ("C-c C-v" . eventb-validate)
+         ("C-c r o" . eventb-open-in-rodin)
+         ("C-c r m" . eventb-model-check)
+         ("C-c r p" . eventb-disprove-pos))
   :hook (eventb-mode . lsp-deferred))
 ```
 
