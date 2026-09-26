@@ -5277,9 +5277,15 @@ fn recovered_event_regions(
             .map(|(name, span)| (name.to_string(), span));
         let name_end = header_name.as_ref().map_or(kw_end, |(_, span)| span.end);
         let is_initialisation = strip_keyword_prefix(header_line.trim_start(), init_kw).is_some();
-        let header_target = (!is_initialisation)
-            .then(|| event_header_target(text, name_end, to))
-            .flatten();
+        // `extends INITIALISATION` names a keyword, not an event: an extended
+        // INITIALISATION has no target to record, only that it extends.
+        let header_target = if is_initialisation {
+            header_keyword(text, name_end, to)
+                .is_some_and(|(keyword, _)| keyword == KeywordId::Extends)
+                .then(|| (Vec::new(), true))
+        } else {
+            event_header_target(text, name_end, to)
+        };
         let body_start = header_target
             .as_ref()
             .and_then(|(targets, _)| targets.last())
@@ -5417,15 +5423,20 @@ fn recover_common_event_clauses(
     }
 }
 
+/// The keyword an event header continues with after its name, which ends at
+/// `name_end`, when the next word before `end` is one.
+fn header_keyword(text: &RecoveryText, name_end: usize, end: usize) -> Option<(KeywordId, Span)> {
+    let (word, span) = first_identifier_candidate(text.masked.get(name_end..end)?, name_end)?;
+    Some((crate::keywords::lookup(word)?.id, span))
+}
+
 /// Optional `REFINES`/`EXTENDS` target immediately after a named event.
 fn event_header_target(
     text: &RecoveryText,
     name_end: usize,
     next_header: usize,
 ) -> Option<(Vec<(String, Span)>, bool)> {
-    let header_tail = text.masked.get(name_end..next_header)?;
-    let (keyword, keyword_span) = first_identifier_candidate(header_tail, name_end)?;
-    let keyword = crate::keywords::lookup(keyword)?.id;
+    let (keyword, keyword_span) = header_keyword(text, name_end, next_header)?;
     if !matches!(keyword, KeywordId::Extends | KeywordId::Refines) {
         return None;
     }
@@ -5490,7 +5501,7 @@ fn recover_events(
             let mut init = InitialisationEvent {
                 actions: Vec::new(),
                 comment: None,
-                extended: false,
+                extended: header_target.is_some_and(|(_, extended)| extended),
                 with: Vec::new(),
                 witnesses: Vec::new(),
                 span: Some(span),
@@ -6345,6 +6356,32 @@ mod tests {
             span.start > event.name_span.expect("name span").end,
             "the shifted target span follows the event's own name span"
         );
+    }
+
+    /// Recovery reads `extends` after an INITIALISATION as the strict parse
+    /// does, though its target is the INITIALISATION keyword and not a name.
+    #[test]
+    fn recovery_keeps_an_extended_initialisation_extended() {
+        // The unlabeled action forces the recovery path.
+        for (header, extended) in [
+            ("EVENT INITIALISATION extends INITIALISATION", true),
+            ("event initialisation EXTENDS initialisation", true),
+            ("EVENT INITIALISATION", false),
+        ] {
+            let source = format!(
+                "MACHINE m\nREFINES n\nEVENTS\n    {header}\n    THEN\n        x ≔ 0\n    END\nEND"
+            );
+            let result = parse_with_recovery(&source);
+            assert!(
+                !result.errors.is_empty(),
+                "recovery must run for:\n{source}"
+            );
+            let Some(Component::Machine(machine)) = result.component else {
+                panic!("expected a machine");
+            };
+            let init = machine.initialisation.expect("initialisation recovered");
+            assert_eq!(init.extended, extended, "{header}");
+        }
     }
 
     /// Clause regions are recorded for every clause in source order, each
