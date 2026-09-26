@@ -1314,20 +1314,20 @@ mod tests {
     }
 
     #[test]
-    fn loose_lint_diagnostic_is_positioned() {
+    fn loose_keyword_lint_diagnostic_is_positioned() {
         // The reported bug: a lint diagnostic must land on the declaration
         // line, not line 1. Validating the source directly resolves the span
         // the lint attached.
-        let source = "CONTEXT C\nSETS\n    UNION\nEND\n";
+        let source = "CONTEXT C\nSETS\n    end\nEND\n";
         let components = rossi::parse_components(source).unwrap();
         let diag = rossi_build::lint::run_component(&components[0])
             .into_iter()
-            .find(|d| d.rule_id == Some(RuleId::ShadowedName))
-            .expect("UNION shadows the quantified-union token");
+            .find(|d| d.rule_id == Some(RuleId::KeywordName))
+            .expect("end collides with the structural keyword");
         let result = fold_diagnostic(Input::file(Path::new("c.eventb")), diag, None, Some(source));
         let region = result.region.expect("region resolved from the lint span");
         assert_eq!((region.start_line, region.start_column), (3, 5));
-        assert_eq!((region.end_line, region.end_column), (3, 10));
+        assert_eq!((region.end_line, region.end_column), (3, 8));
     }
 
     #[test]

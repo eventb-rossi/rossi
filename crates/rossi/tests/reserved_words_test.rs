@@ -116,6 +116,29 @@ fn reserved_words_rejected_in_declarations() {
 }
 
 #[test]
+fn ascii_aliases_rejected_as_declared_names() {
+    for word in [
+        "NAT", "NAT1", "INT", "UNION", "INTER", "true", "false", "circ", "not", "oftype", "or",
+        "POW", "POW1",
+    ] {
+        assert_reserved(parse, &format!("machine M variables {word} end"), word);
+    }
+    assert_reserved(parse, "context C sets NAT end", "NAT");
+    assert_reserved(parse, "context C constants POW end", "POW");
+    assert_reserved(parse, "machine M events event e any INT end end", "INT");
+    assert_reserved(parse_predicate_str, "∀ NAT · NAT = NAT", "NAT");
+    assert_reserved(parse_action_str, "NAT ≔ 0", "NAT");
+    assert_reserved(parse_action_str, "POW(x) ≔ 0", "POW");
+
+    for word in ["Nat", "nat", "Int", "OR", "Circ", "pow", "NOT"] {
+        parse(&format!("machine M variables {word} end"))
+            .unwrap_or_else(|error| panic!("{word} should remain a usable name: {error}"));
+    }
+    parse("machine NAT events event POW end end")
+        .expect("component and event names are not mathematical identifiers");
+}
+
+#[test]
 fn reserved_words_rejected_as_binders() {
     assert_reserved(parse_predicate_str, "∀ dom · dom ∈ ℕ", "dom");
     assert_reserved(parse_predicate_str, "∃ x, max · x = max", "max");
@@ -406,6 +429,17 @@ fn recovery_does_not_readmit_reserved_declarations() {
 }
 
 #[test]
+fn recovery_does_not_readmit_ascii_aliases() {
+    let result = rossi::parse_with_recovery("machine M\nvariables\n  NAT\n  x\nend");
+    assert!(!result.errors.is_empty());
+    let Some(rossi::ast::Component::Machine(machine)) = result.component else {
+        panic!("recovery must still produce a machine");
+    };
+    let names: Vec<_> = machine.variables.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["x"]);
+}
+
+#[test]
 fn xml_import_rejects_reserved_declared_names() {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
@@ -418,4 +452,16 @@ fn xml_import_rejects_reserved_declared_names() {
         }
         other => panic!("expected UnsupportedIdentifier for constant `dom`, got {other:?}"),
     }
+}
+
+#[test]
+fn xml_import_rejects_ascii_aliases() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.machineFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
+  <org.eventb.core.variable name="v1" org.eventb.core.identifier="NAT"/>
+</org.eventb.core.machineFile>"#;
+    assert!(matches!(
+        rossi::xml::parse_xml(xml),
+        Err(ParseError::UnsupportedIdentifier { name, .. }) if name == "NAT"
+    ));
 }

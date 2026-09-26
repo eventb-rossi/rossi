@@ -2,11 +2,11 @@
 //!
 //! This is the single source of truth for the identifier-shaped vocabulary of
 //! the mathematical language: the kernel_lang §2.2 reserved words
-//! ([`RESERVED_OPERATOR_WORDS`] / [`RESERVED_ATOM_WORDS`], exact-case, used by
-//! the parser to reject them as user identifiers) and the case-folded
-//! [`BUILTIN_WORDS`] vocabulary consumed by the editor-grammar generator.
+//! ([`RESERVED_OPERATOR_WORDS`] / [`RESERVED_ATOM_WORDS`], exact-case) and
+//! the case-folded [`BUILTIN_WORDS`] vocabulary consumed by the editor-grammar
+//! generator.
 //! [`is_reserved_name`] composes the per-word case rules into the blocklist
-//! tools use when *introducing* a name (rename).
+//! the parser and tools use when *introducing* a name.
 //!
 //! The non-ASCII symbol atoms (`ℕ ℕ1 ℙ ℙ1 ℤ`) are operator spellings handled
 //! by [`crate::operators`]; they appear here only as [`RESERVED_GLYPH_WORDS`],
@@ -111,8 +111,8 @@ pub const RESERVED_ATOM_WORDS: &[&str] = &[
 /// identifier), but the whole image is the token, so none of them can name a
 /// user identifier (`isValidIdentifierName` rejects them). The text grammar
 /// never lexes them as identifiers (`reserved_glyph`); this list covers the
-/// XML door and the rename blocklist. Their ASCII spellings stay usable as
-/// names like every other rossi-only spelling.
+/// XML door and the rename blocklist. Their ASCII spellings are also reserved
+/// by [`is_reserved_name`].
 pub const RESERVED_GLYPH_WORDS: &[&str] = &["ℕ", "ℕ1", "ℤ", "ℙ", "ℙ1"];
 
 /// Whether `word` is in the full kernel_lang §2.2 reserved list (exact case).
@@ -146,17 +146,16 @@ const KEYWORD_TOKEN_WORDS: &[&str] = &[
 
 /// ASCII operator spellings that are tokens only in rossi's *textual syntax*
 /// (its documented ASCII extension); the official language is Unicode-only
-/// (`∨ ¬ ∘ ⦂ ℙ`), so Rodin accepts these words as ordinary identifiers and
-/// rossi's parser does too. Bare uses even round-trip — but in applied or
-/// operator position the spelling lexes as the operator and the formula
-/// *silently changes meaning*: a user function `POW` applied as `POW(S)`
-/// parses as the powerset `ℙ(S)`, `not(x) = 1` as `¬(x = 1)`. Exact-case,
-/// like the tokens: `OR`, `Circ`, `pow` are unaffected identifiers.
+/// (`∨ ¬ ∘ ⦂ ℙ`), so Rodin accepts these words as ordinary identifiers.
+/// Rossi rejects them as declared names because applied or operator uses
+/// silently change meaning: `POW(S)` parses as `ℙ(S)` and `not(x) = 1` as
+/// `¬(x = 1)`. Exact-case, like the tokens: `OR`, `Circ`, `pow` are unaffected
+/// identifiers.
 const ASCII_OPERATOR_WORDS: &[&str] = &["circ", "not", "oftype", "or", "POW", "POW1"];
 
 /// Whether `word` cannot (or cannot safely) *name* a user identifier in
-/// rossi's textual syntax — the blocklist for tools that introduce names,
-/// e.g. rename. Every word is matched exact-case, matching its grammar token:
+/// rossi's textual syntax — the blocklist for parsing and tools that introduce
+/// names. Every word is matched exact-case, matching its grammar token:
 /// - kernel_lang §2.2 reserved words ([`is_reserved_word`]; `Dom`, `Card` stay
 ///   usable, matching the parser);
 /// - grammar keyword tokens (`KEYWORD_TOKEN_WORDS`; `Nat`, `pow` stay usable);

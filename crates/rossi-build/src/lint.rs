@@ -433,13 +433,9 @@ fn lint_new_event_assigns_inherited(m: &Machine, inherited: &BTreeSet<&str>) -> 
     diags
 }
 
-/// EB023: a declared name that rossi's *textual* syntax can re-lex as a
-/// token. The parser hard-rejects the kernel_lang §2.2 reserved words
-/// ([`rossi::builtins::is_reserved_word`]) but deliberately accepts the rest
-/// — Rodin allows them as identifiers, so imported models must load. The
-/// trap is silent: a constant `POW` declares fine and `POW = f` works, but
-/// `POW(f)` parses as the powerset `ℙ(f)`; a constant `NAT` can never be
-/// referenced at all (`NAT` lexes as `ℕ`). Warn at the declaration.
+/// EB023: a manually constructed AST may still contain a name that re-lexes
+/// as a textual token. The text parser and XML importer reject such names;
+/// this diagnostic retains coverage for ASTs built through the public API.
 fn shadowed_name_diag(
     component: &str,
     kind: &str,
@@ -1230,10 +1226,8 @@ mod tests {
 
     #[test]
     fn shadowed_names_are_flagged() {
-        // `POW` (exact ASCII operator spelling) and `NAT` (the exact-case ℕ
-        // token) warn; `Dom`, `pow`, `Nat`, `OR` are ordinary identifiers and
-        // stay silent. The §2.2 reserved words never reach the lint — the
-        // parser rejects their declarations outright.
+        // Hand-built ASTs can contain `POW` and `NAT`; ordinary names such as
+        // `Dom`, `pow`, `Nat`, and `OR` stay silent.
         let mut c = Context::new("C".into());
         c.constants = vec![
             nv("POW"),

@@ -1019,14 +1019,14 @@ mod tests {
     }
 
     #[test]
-    fn shadowed_name_is_eb023_warning() {
-        // `NAT` is a valid identifier (not a reserved word, so it parses) but
-        // re-lexes as ℕ — a shadowed name (EB023), reported as a Warning.
+    fn reserved_ascii_name_is_a_parse_error() {
         let text = "CONTEXT c\nCONSTANTS\n    NAT\nAXIOMS\n    @axm1 1 = 1\nEND\n";
-        let diags = lint_for(text);
+        let diags = document_diagnostics(&doc_of(text));
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(code_of(&diags[0]), Some("EB023"));
-        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(diags[0].message.contains("reserved word `NAT`"));
+        assert_eq!(diags[0].range.start, Position::new(2, 4));
+        assert_eq!(diags[0].range.end, Position::new(2, 7));
     }
 
     #[test]

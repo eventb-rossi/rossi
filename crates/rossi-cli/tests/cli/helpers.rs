@@ -103,6 +103,8 @@ pub fn wd_fixture_dir(prefix: &str) -> PathBuf {
 
 pub const ASCII_CONTEXT: &str = "CONTEXT c\nCONSTANTS\n    x\nAXIOMS\n    @axm1 x : NAT\nEND\n";
 
+pub const RESERVED_NAT_MACHINE: &str = "machine M\nvariables NAT\ninvariants\n  @inv1 NAT ∈ 0 ‥ 5\nevents\n  event INITIALISATION\n  then\n    @act1 NAT ≔ 0\n  end\n  event inc\n  where\n    @grd1 NAT < 5\n  then\n    @act1 NAT ≔ NAT + 1\n  end\nend\n";
+
 pub const DUP_VARIABLE_MACHINE: &str = "MACHINE M\nVARIABLES\n    x x\nINVARIANTS\n    @inv1 x >= 0\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x := 0\n    END\nEND\n";
 
 pub const MINIMAL_BUILD_CONTEXT_XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\

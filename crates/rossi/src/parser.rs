@@ -86,15 +86,14 @@ fn scoped_factory() -> FormulaFactory {
 }
 
 /// Whether `word` can never *name* a user identifier in the enclosing
-/// [`with_factory`] scope: a kernel_lang §2.2 reserved word
-/// ([`crate::builtins::is_reserved_word`]) or an operator symbol of the
-/// factory in use, which is a token to Rodin's lexer exactly like the builtin
-/// words. Every door that admits a declared name (the text grammar, error
-/// recovery, XML import) asks this one question. The scope is peeked rather
-/// than cloned out: this runs for every declared name, and the default
+/// [`with_factory`] scope: a reserved mathematical name
+/// ([`crate::builtins::is_reserved_name`]) or an operator symbol of the
+/// factory in use. Every door that admits a declared name (the text grammar,
+/// error recovery, XML import) asks this one question. The scope is peeked
+/// rather than cloned out: this runs for every declared name, and the default
 /// factory has no symbols at all.
 pub(crate) fn is_reserved_declared_name(word: &str) -> bool {
-    crate::builtins::is_reserved_word(word)
+    crate::builtins::is_reserved_name(word)
         || FACTORY.with(|slot| {
             slot.borrow()
                 .as_ref()
@@ -3846,7 +3845,7 @@ fn clause_region(
 
 /// Whether `name` is acceptable as a declared identifier (parameter,
 /// variable, constant, set carrier) in error-recovery output. Rejects
-/// kernel_lang reserved words, matching [`declared_name`]. Structural keywords
+/// reserved names, matching [`declared_name`]. Structural keywords
 /// remain valid when the grammar consumes them in an identifier position.
 fn accepts_declared_name(name: &str) -> bool {
     crate::names::is_valid_math_identifier(name) && !is_reserved_declared_name(name)

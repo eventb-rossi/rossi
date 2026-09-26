@@ -3,9 +3,9 @@
 use std::io::Read;
 
 use crate::helpers::{
-    ASCII_CONTEXT, MINIMAL_BUILD_CONTEXT_XML, assert_cli_ok, dir_has_ext, extract_zip_to,
-    project_descriptor, rossi_command, run_cli, run_cli_with_stdin, tempdir_unique, write_zip,
-    zip_entry_bytes, zip_entry_names,
+    ASCII_CONTEXT, MINIMAL_BUILD_CONTEXT_XML, RESERVED_NAT_MACHINE, assert_cli_ok, dir_has_ext,
+    extract_zip_to, project_descriptor, rossi_command, run_cli, run_cli_with_stdin, tempdir_unique,
+    write_zip, zip_entry_bytes, zip_entry_names,
 };
 
 #[test]
@@ -459,6 +459,19 @@ fn export_stdin_to_zip() {
         "expected a .buc/.bum entry in the exported zip"
     );
 
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn export_rejects_reserved_name_without_writing_xml() {
+    let tmp = tempdir_unique("rossi-cli-export-reserved-name");
+    let out_zip = tmp.join("out.zip");
+    let output = run_cli_with_stdin(
+        &["export", "-", "-o", out_zip.to_str().unwrap()],
+        RESERVED_NAT_MACHINE,
+    );
+    assert!(!output.status.success());
+    assert!(!out_zip.exists());
     std::fs::remove_dir_all(&tmp).ok();
 }
 

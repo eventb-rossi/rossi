@@ -131,6 +131,8 @@
   "card"
   "max"
   "min"
+  "union"
+  "inter"
 ] @function.builtin
 
 [

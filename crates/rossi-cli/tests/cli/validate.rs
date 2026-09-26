@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use crate::helpers::{
-    DUP_VARIABLE_MACHINE, lint_fixture_dir, lint_fixture_zip, project_descriptor, rossi_command,
-    run_cli_with_stdin, runtime_fixture_dir, tempdir_unique, wd_fixture_dir, write_zip,
+    DUP_VARIABLE_MACHINE, RESERVED_NAT_MACHINE, lint_fixture_dir, lint_fixture_zip,
+    project_descriptor, rossi_command, run_cli_with_stdin, runtime_fixture_dir, tempdir_unique,
+    wd_fixture_dir, write_zip,
 };
 
 #[test]
@@ -1928,6 +1929,17 @@ fn validate_stdin_camille_error_reports_eb004() {
         stdout.contains("\"rule_id\": \"EB004\""),
         "expected EB004 in JSON: {stdout}"
     );
+}
+
+#[test]
+fn validate_rejects_ascii_builtin_name_before_lint() {
+    let output = run_cli_with_stdin(&["validate", "--format", "json", "-"], RESERVED_NAT_MACHINE);
+    assert!(!output.status.success());
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let failure = &rows[0];
+    assert_eq!(failure["rule_id"], "EB004");
+    assert_eq!(failure["region"]["start_line"], 2);
+    assert_eq!(failure["region"]["start_column"], 11);
 }
 
 #[test]
