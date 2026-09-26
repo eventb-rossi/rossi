@@ -563,22 +563,12 @@ impl RefinementActionProvider {
                     .is_some_and(|chain| chain.iter().any(|(_, e)| touches(&e.guards, &e.actions)))
             });
             // INITIALISATION inherits up the chain as far as it is extended.
-            let mut visited = HashSet::new();
-            let mut level = stubs.initialisation.is_some().then(|| abstraction.clone());
-            while let Some(parent) = level.take().filter(|p| visited.insert(p.name.clone())) {
-                let Some(init) = &parent.initialisation else {
-                    break;
-                };
-                if touches(&[], &init.actions) {
-                    stubs.initialisation = None;
-                    break;
-                }
-                if init.extended {
-                    level = parent
-                        .refines
-                        .as_deref()
-                        .and_then(|p| load_machine(loader, p));
-                }
+            if stubs.initialisation.is_some()
+                && extended_init_chain(loader, abstraction.clone())
+                    .iter()
+                    .any(|init| touches(&[], &init.actions))
+            {
+                stubs.initialisation = None;
             }
         }
         let count = stubs.events.len() + usize::from(stubs.initialisation.is_some());
@@ -690,6 +680,82 @@ fn load_machine(loader: &ComponentLoader, name: &str) -> Option<Machine> {
         Component::Machine(machine) => Some(machine.clone()),
         Component::Context(_) => None,
     }
+}
+
+/// The guard and action labels an event inherits by extension, root first.
+/// They share its label namespace without being written in its file.
+#[derive(Default)]
+pub(crate) struct InheritedLabels {
+    pub(crate) guards: Vec<String>,
+    pub(crate) actions: Vec<String>,
+}
+
+/// The labels the event of `components` holding byte `offset` inherits: an
+/// extended event's from the events it extends, an extended INITIALISATION's
+/// from the abstract machines' INITIALISATIONs. None without a `loader` to
+/// read the abstractions with, or when the item is in no extended event.
+pub(crate) fn inherited_labels(
+    loader: Option<&ComponentLoader>,
+    components: &[Component],
+    offset: usize,
+) -> InheritedLabels {
+    let mut inherited = InheritedLabels::default();
+    let (Some(loader), Some(Component::Machine(machine))) = (
+        loader,
+        crate::component_util::component_at_offset(components, offset),
+    ) else {
+        return inherited;
+    };
+    if let Some(event) = crate::symbols::event_at_offset(machine, offset) {
+        if event.extended {
+            for (_, ancestor) in extended_chain(loader, machine, event).unwrap_or_default() {
+                inherited
+                    .guards
+                    .extend(ancestor.guards.into_iter().filter_map(|g| g.label));
+                inherited
+                    .actions
+                    .extend(ancestor.actions.into_iter().filter_map(|a| a.label));
+            }
+        }
+    } else if machine.initialisation.as_ref().is_some_and(|init| {
+        init.extended
+            && init
+                .span
+                .is_some_and(|span| crate::component_util::covers(span, offset))
+    }) && let Some(abstraction) = machine
+        .refines
+        .as_deref()
+        .and_then(|name| load_machine(loader, name))
+    {
+        for init in extended_init_chain(loader, abstraction) {
+            inherited
+                .actions
+                .extend(init.actions.into_iter().filter_map(|a| a.label));
+        }
+    }
+    inherited
+}
+
+/// The INITIALISATIONs an extended INITIALISATION of a refinement of
+/// `abstraction` inherits, root first: `abstraction`'s own, and while the
+/// last one found is extended, the one it extends.
+fn extended_init_chain(loader: &ComponentLoader, abstraction: Machine) -> Vec<InitialisationEvent> {
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+    let mut level = Some(abstraction);
+    while let Some(parent) = level.take().filter(|p| visited.insert(p.name.clone()))
+        && let Some(init) = parent.initialisation
+    {
+        if init.extended {
+            level = parent
+                .refines
+                .as_deref()
+                .and_then(|name| load_machine(loader, name));
+        }
+        chain.push(init);
+    }
+    chain.reverse();
+    chain
 }
 
 /// The events `event` of `machine` extends, root first, each with the

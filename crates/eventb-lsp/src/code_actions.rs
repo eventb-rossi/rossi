@@ -10,6 +10,7 @@ use crate::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
 };
+use crate::refinement::{InheritedLabels, inherited_labels};
 use crate::text_utils::{line_keyword, line_keyword_is, line_tight_end};
 use crate::workspace::WorkspaceSymbolProvider;
 use rossi::Component;
@@ -280,11 +281,11 @@ fn enclosing_event_range(masked: &str, offset: usize) -> std::ops::Range<usize> 
             .split_whitespace()
             .any(|word| line_keyword(word) == Some(KeywordId::Event));
         if opens_event {
-            if at <= offset {
-                start = at;
-            } else {
-                end = end.min(at);
+            if at > offset {
+                end = at;
+                break;
             }
+            start = at;
         }
         at += line.len();
     }
@@ -491,39 +492,100 @@ pub(crate) fn parameter_insert(
     )
 }
 
-/// A label for the item at byte `item` that no other label in its scope
-/// takes, nor any of `also_taken`. `masked` is `text` with its comment bytes
-/// blanked, so byte offsets agree between the two.
+/// A label for the item at byte `item` of `clause` ([`enclosing_clause`])
+/// that no other label in its scope takes, nor any label its event has
+/// `inherited`, which is asked for only in a guard or action clause. `masked`
+/// is `text` with its comment bytes blanked, so byte offsets agree between
+/// the two.
 ///
-/// The stem follows Rodin's own naming for the enclosing clause
-/// ([`label_stem`]), whose keyword is the last one written before the item:
-/// on the item's own line for an inline `EVENT e THEN x ≔ 1 END`, on a line
-/// above it for the indented form. A guard, witness or action label is unique
-/// within its event, an axiom, invariant or theorem within the component, and
-/// Rodin numbers each event's items from 1, so the first free number is looked
-/// for in the scope a clash would be found in.
+/// The label continues the nearest one before the item in its clause that
+/// ends in a number, as modellers number their lists: `inv5` gives `inv6`,
+/// `SAF2` `SAF3`, `inv1_3` `inv1_4` and `grd09` `grd10`. An extended event's
+/// inherited guards or actions come before its own. With no such label, the
+/// stem is Rodin's own for the clause ([`label_stem`]) and the count starts
+/// at 1. The number then rises past every label taken in the scope a clash
+/// would be found in: a guard, witness or action label is unique within its
+/// event, an axiom, invariant or theorem within the component.
 fn free_label(
     text: &str,
     lexical: &rossi::comments::LexicalSpans,
     masked: &str,
     item: usize,
-    also_taken: &HashSet<String>,
+    (clause, stem): (usize, &'static str),
+    inherited: impl FnOnce() -> InheritedLabels,
 ) -> Option<String> {
-    let stem = masked[..item]
+    // The span covers `@name`; only the leading sigil is syntax.
+    let written = |span: &rossi::ast::Span| &text[span.start + 1..span.end];
+    let inherited = match stem {
+        "grd" | "act" => inherited(),
+        _ => InheritedLabels::default(),
+    };
+    // A label written at `item` itself is the one being chosen.
+    let taken: HashSet<&str> = labels_in(lexical, label_scope(stem, masked, item))
+        .iter()
+        .filter(|span| span.start != item)
+        .map(written)
+        .chain(inherited.guards.iter().map(String::as_str))
+        .chain(inherited.actions.iter().map(String::as_str))
+        .collect();
+    let inherited_first = match stem {
+        "grd" => inherited.guards.as_slice(),
+        "act" => inherited.actions.as_slice(),
+        _ => &[],
+    };
+    let (prefix, width, mut number) = inherited_first
+        .iter()
+        .map(String::as_str)
+        .chain(labels_in(lexical, clause..item).iter().map(written))
+        .rev()
+        .find_map(numbered)
+        .unwrap_or((stem, 0, 0));
+    loop {
+        number = number.checked_add(1)?;
+        let label = format!("{prefix}{number:0width$}");
+        if !taken.contains(label.as_str()) {
+            return Some(label);
+        }
+    }
+}
+
+/// `label` split at its trailing decimal number: the text before it, the
+/// number's width in digits, which a leading zero keeps for the next one,
+/// and its value. `None` when the label does not end in a number `u64` holds.
+fn numbered(label: &str) -> Option<(&str, usize, u64)> {
+    let prefix = label.trim_end_matches(|c: char| c.is_ascii_digit());
+    let digits = &label[prefix.len()..];
+    Some((prefix, digits.len(), digits.parse().ok()?))
+}
+
+/// The labels of `lexical` starting in `range`: a run of its sorted list.
+fn labels_in(
+    lexical: &rossi::comments::LexicalSpans,
+    range: std::ops::Range<usize>,
+) -> &[rossi::ast::Span] {
+    let start = lexical
+        .labels
+        .partition_point(|span| span.start < range.start);
+    let end = lexical
+        .labels
+        .partition_point(|span| span.start < range.end);
+    &lexical.labels[start..end]
+}
+
+/// The clause holding byte `item` of `masked`: the offset just past the
+/// nearest clause keyword written before it, on the item's own line for an
+/// inline `EVENT e THEN x ≔ 1 END` or on a line above, and that clause's
+/// label stem. `None` when that keyword opens no labeled items, as after
+/// `EVENT e` or `VARIANT`. `STATUS`, commonly a set or constant name, is
+/// passed over ([`crate::text_utils::is_declaration_scan_boundary`]).
+fn enclosing_clause(masked: &str, item: usize) -> Option<(usize, &'static str)> {
+    let head = &masked[..item];
+    let keyword = head
         .split_whitespace()
         .rev()
-        .find_map(label_stem)?;
-    let scope = label_scope(stem, masked, item);
-    let taken: HashSet<&str> = lexical
-        .labels
-        .iter()
-        .filter(|span| scope.contains(&span.start))
-        // The span covers `@name`; only the leading sigil is syntax.
-        .map(|span| &text[span.start + 1..span.end])
-        .collect();
-    (1..)
-        .map(|n| format!("{stem}{n}"))
-        .find(|label| !taken.contains(label.as_str()) && !also_taken.contains(label))
+        .find(|word| crate::text_utils::is_declaration_scan_boundary(word))?;
+    let end = keyword.as_ptr() as usize - head.as_ptr() as usize + keyword.len();
+    Some((end, label_stem(keyword)?))
 }
 
 /// The byte range a label with `stem` must be unique in: its event for a
@@ -988,6 +1050,13 @@ impl CodeActionProvider {
             }
         }
 
+        // One loader serves the request's label fixes, which read what an
+        // extended event inherits, so each abstraction is read once.
+        let loader = crate::component_loader::ComponentLoader::optional(
+            self.cross_ref_manager.as_deref(),
+            self.document_manager.as_deref(),
+        );
+
         // Write the label an item is missing (EB032).
         for diagnostic in params
             .context
@@ -995,9 +1064,13 @@ impl CodeActionProvider {
             .iter()
             .filter(|d| diagnostic_code_is(d, RuleId::MissingLabel.code()))
         {
-            if let Some(action) =
-                self.create_insert_label_action(&params.text_document.uri, diagnostic, text)
-            {
+            if let Some(action) = self.create_insert_label_action(
+                &params.text_document.uri,
+                diagnostic,
+                text,
+                components,
+                loader.as_ref(),
+            ) {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
         }
@@ -1060,14 +1133,10 @@ impl CodeActionProvider {
             );
         }
 
-        // Some fixes below read the checked model, which is computed at most
-        // once, and only when such a fix has a diagnostic to fix.
-        let model = std::cell::OnceCell::new();
-
         // Relabel an item whose label another one takes (EB022).
         for diagnostic in with_code(RuleId::DuplicateLabel) {
             actions.extend(
-                self.create_relabel_action(uri, diagnostic, text, components, &model)
+                self.create_relabel_action(uri, diagnostic, text, components, loader.as_ref())
                     .map(CodeActionOrCommand::CodeAction),
             );
         }
@@ -1098,6 +1167,10 @@ impl CodeActionProvider {
                     .map(CodeActionOrCommand::CodeAction),
             );
         }
+
+        // Some fixes below read the checked model, which is computed at most
+        // once, and only when such a fix has a diagnostic to fix.
+        let model = std::cell::OnceCell::new();
 
         // A name nothing resolves (EB018) or a component or abstract event
         // nothing declares (EB009) may be a misspelling of one in scope.
@@ -1251,15 +1324,14 @@ impl CodeActionProvider {
     /// item a free label. Of two items sharing a label, the finding marks the
     /// first; the one written last is relabeled, so the label an existing
     /// proof is filed under stays where it was. A label clashing with one an
-    /// extended event inherits is relabeled clear of the inherited labels,
-    /// which the checked model knows.
+    /// extended event inherits is relabeled clear of the inherited labels.
     fn create_relabel_action(
         &self,
         uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
         components: &[Component],
-        model: &std::cell::OnceCell<Option<rossi_build::sc_model::ScModel>>,
+        loader: Option<&crate::component_loader::ComponentLoader>,
     ) -> Option<CodeAction> {
         let lexical = rossi::comments::lexical_spans(text);
         let masked = lexical.mask_comments(text);
@@ -1270,10 +1342,7 @@ impl CodeActionProvider {
             .iter()
             .find(|span| (start..end.max(start + 1)).contains(&span.start))?;
         let old = &text[marked.start + 1..marked.end];
-        let stem = masked[..marked.start]
-            .split_whitespace()
-            .rev()
-            .find_map(label_stem)?;
+        let (_, stem) = enclosing_clause(&masked, marked.start)?;
         let scope = label_scope(stem, &masked, marked.start);
         let same: Vec<_> = lexical
             .labels
@@ -1282,26 +1351,14 @@ impl CodeActionProvider {
             .collect();
         let target = **same.last()?;
 
-        // The labels an extended event inherits share its guards' and
-        // actions' namespace without being written in this document.
-        let mut inherited = HashSet::new();
-        if matches!(stem, "grd" | "act")
-            && let Some(Component::Machine(machine)) =
-                crate::component_util::component_at_offset(components, target.start)
-            && let Some(event) = crate::symbols::event_at_offset(machine, target.start)
-            && event.extended
-            && let Some(decl) = model
-                .get_or_init(|| self.checked_model(uri))
-                .as_ref()
-                .and_then(|model| model.machines.get(&machine.name))
-                .and_then(|checked| checked.events_by_label.get(&event.name))
-        {
-            for ancestor in decl.chain_root_first() {
-                inherited.extend(ancestor.guards.iter().map(|g| g.label.clone()));
-                inherited.extend(ancestor.own_actions().iter().map(|a| a.label.clone()));
-            }
-        }
-        let label = free_label(text, &lexical, &masked, target.start, &inherited)?;
+        let label = free_label(
+            text,
+            &lexical,
+            &masked,
+            target.start,
+            enclosing_clause(&masked, target.start)?,
+            || inherited_labels(loader, components, target.start),
+        )?;
         let title = if same.len() > 1 {
             format!("Relabel the last @{old} as @{label}")
         } else {
@@ -1701,21 +1758,30 @@ impl CodeActionProvider {
 
     /// Quick fix for EB032 (an item with no label): write one in front of it.
     ///
-    /// The stem follows Rodin's own naming for the enclosing clause
-    /// ([`label_stem`]) and the number is the first free one in the scope the
-    /// label has to be unique in (EB022), so the fix reads like the labels
-    /// around it and cannot collide with one.
+    /// The label continues the numbering of the labels before the item
+    /// ([`free_label`]) and is free in the scope it has to be unique in
+    /// (EB022), so the fix reads like the labels around it and cannot collide
+    /// with one.
     fn create_insert_label_action(
         &self,
         uri: &Uri,
         diagnostic: &crate::lsp_types::Diagnostic,
         text: &str,
+        components: &[Component],
+        loader: Option<&crate::component_loader::ComponentLoader>,
     ) -> Option<CodeAction> {
         // One lexical scan serves both the mask and the labels already written.
         let lexical = rossi::comments::lexical_spans(text);
         let masked = lexical.mask_comments(text);
         let item = crate::position::position_to_offset(text, diagnostic.range.start)?;
-        let label = free_label(text, &lexical, &masked, item, &HashSet::new())?;
+        let label = free_label(
+            text,
+            &lexical,
+            &masked,
+            item,
+            enclosing_clause(&masked, item)?,
+            || inherited_labels(loader, components, item),
+        )?;
         Some(CodeAction {
             title: format!("Insert label @{label}"),
             kind: Some(CodeActionKind::QUICKFIX),
@@ -2105,5 +2171,104 @@ mod tests {
         assert!(!has_keyword_line("context c\nend", KeywordId::Machine));
         // First-token precision: a keyword embedded in an identifier never matches.
         assert!(!has_keyword_line("    machinery\n", KeywordId::Machine));
+    }
+
+    /// The label [`free_label`] gives the item at the `|` in `marked`, with
+    /// nothing inherited.
+    fn next_label(marked: &str) -> Option<String> {
+        let item = marked.find('|').expect("a `|` marks the item");
+        let text = marked.replacen('|', "", 1);
+        let lexical = rossi::comments::lexical_spans(&text);
+        let masked = lexical.mask_comments(&text);
+        let clause = enclosing_clause(&masked, item)?;
+        free_label(
+            &text,
+            &lexical,
+            &masked,
+            item,
+            clause,
+            InheritedLabels::default,
+        )
+    }
+
+    #[test]
+    fn free_label_continues_the_label_before_the_item() {
+        for (marked, expected) in [
+            (
+                "machine m\ninvariants\n  @inv1 a\n  @inv2 b\n  |c\nend\n",
+                "inv3",
+            ),
+            // Written further down, the next number is taken: past it.
+            (
+                "machine m\ninvariants\n  @inv1 a\n  @inv2 b\n  |c\n  @inv3 d\nend\n",
+                "inv4",
+            ),
+            // The modeller's own stem, not Rodin's.
+            ("context c\naxioms\n  @SAF2 a\n  |b\nend\n", "SAF3"),
+            // A leading zero keeps its width.
+            (
+                "machine m\nevents\n  event e\n  where\n    @grd09 a\n    |b\n  end\nend\n",
+                "grd10",
+            ),
+            ("context c\naxioms\n  @axm01 a\n  |b\nend\n", "axm02"),
+            // Only the last number counts.
+            ("machine m\ninvariants\n  @inv1_3 a\n  |b\nend\n", "inv1_4"),
+            // A label with no number is passed over.
+            (
+                "machine m\ninvariants\n  @inv2 a\n  @typing b\n  |c\nend\n",
+                "inv3",
+            ),
+            // So is one whose number `u64` cannot hold.
+            (
+                "machine m\ninvariants\n  @inv99999999999999999999 a\n  |b\nend\n",
+                "inv1",
+            ),
+            (
+                "machine m\ninvariants\n  @thm1 theorem a\n  |b\nend\n",
+                "thm2",
+            ),
+        ] {
+            assert_eq!(next_label(marked).as_deref(), Some(expected), "{marked}");
+        }
+    }
+
+    #[test]
+    fn free_label_starts_from_the_clause_stem() {
+        for (marked, expected) in [
+            ("machine m\ninvariants\n  |a\nend\n", "inv1"),
+            ("machine m\ninvariants\n  @typing a\n  |b\nend\n", "inv1"),
+            // Another clause's labels are not continued...
+            (
+                "machine m\nevents\n  event e\n  where\n    @g7 a\n  then\n    |x ≔ 1\n  end\nend\n",
+                "act1",
+            ),
+            // ...nor another event's, which do not clash either.
+            (
+                "machine m\nevents\n  event e\n  where\n    @grd1 a\n  end\n  event f\n  where\n    |b\n  end\nend\n",
+                "grd1",
+            ),
+            // Guards and actions share one namespace per event.
+            (
+                "machine m\nevents\n  event e\n  where\n    @act1 a\n  then\n    |x ≔ 1\n  end\nend\n",
+                "act2",
+            ),
+            // `STATUS` is a common constant name, not a clause here.
+            ("context c\naxioms\n  @axm1 x ∈ STATUS\n  |b\nend\n", "axm2"),
+        ] {
+            assert_eq!(next_label(marked).as_deref(), Some(expected), "{marked}");
+        }
+    }
+
+    #[test]
+    fn free_label_needs_a_labeled_clause() {
+        // The nearest keyword opens no labeled items, though an earlier
+        // clause does.
+        for marked in [
+            "machine m\nevents\n  event e\n  then\n    @act1 x ≔ 1\n  end\n  event f\n  |\nend\n",
+            "machine m\nevents\n  event e\n  then\n    @act1 x ≔ 1\n  end\n  |\nend\n",
+            "machine m\ninvariants\n  @inv1 a\nevents\n  |\nend\n",
+        ] {
+            assert_eq!(next_label(marked), None, "{marked}");
+        }
     }
 }

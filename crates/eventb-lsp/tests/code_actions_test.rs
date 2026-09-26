@@ -1609,7 +1609,7 @@ fn eb022_relabels_past_a_comment_holding_wide_characters() {
     let fix = eb022_fix(&CodeActionProvider::new(), uri, text, first);
     assert_eq!(
         applied(text, uri, &fix),
-        text.replace("  @a1 d ∈ ℕ", "  @axm1 d ∈ ℕ")
+        text.replace("  @a1 d ∈ ℕ", "  @a2 d ∈ ℕ")
     );
 }
 
@@ -1668,6 +1668,33 @@ fn eb022_relabels_clear_of_the_inherited_labels() {
         applied(machine, uri, &fix),
         machine.replace("@grd1 3 = 3", "@grd3 3 = 3")
     );
+}
+
+#[test]
+fn eb032_numbers_past_the_inherited_labels() {
+    // An extended event's inherited guards come before its own, so the
+    // numbering continues theirs; an extended INITIALISATION's actions
+    // likewise continue the abstract ones, through every level extended.
+    let root = "machine r\nvariables x\nevents\n  event INITIALISATION\n    then\n      @init1 x ≔ 0\n  end\nend\n";
+    let abstraction = "machine a\nrefines r\nvariables x\nevents\n  event INITIALISATION extends INITIALISATION\n    then\n      @init2 x ≔ 0\n  end\n  event e\n    where\n      @op1 1 = 1\n      @op2 2 = 2\n  end\nend\n";
+    let machine = "machine m\nrefines a\nvariables x\nevents\n  event INITIALISATION extends INITIALISATION\n    then\n      x ≔ 0\n  end\n  event e extends e\n    where\n      3 = 3\n  end\nend\n";
+    let uri = "file:///m.eventb";
+    let provider = workspace_provider(&[
+        ("file:///r.eventb", root),
+        ("file:///a.eventb", abstraction),
+        (uri, machine),
+    ]);
+    for (line, word, title) in [
+        (6, "x", "Insert label @init3"),
+        (10, "3", "Insert label @op3"),
+    ] {
+        let params = diagnostic_params(uri, word_on_line(machine, line, word), "EB032");
+        let actions = provider
+            .provide_code_actions(&params, machine, true, false)
+            .unwrap_or_default();
+        let fix = action_titled(&actions, "Insert label").expect("an Insert quick fix");
+        assert_eq!(fix.title, title);
+    }
 }
 
 #[test]
