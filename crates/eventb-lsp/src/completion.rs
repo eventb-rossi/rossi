@@ -12,11 +12,13 @@ use crate::lsp_types::{
 };
 use rossi::{Component, keywords, operators};
 
+use crate::code_actions::{enclosing_clause, free_label, line_start};
 use crate::component_loader::ComponentLoader;
 use crate::component_util::{component_at_offset, component_reference_clause};
 use crate::config::{CompletionConfig, FormatConfig};
 use crate::identifier_utils::position_to_offset;
-use crate::position::{line_run_to_range, utf16_to_byte, utf16_to_char_col};
+use crate::position::{line_run_to_range, utf16_len, utf16_to_byte, utf16_to_char_col};
+use crate::refinement::{InheritedLabels, inherited_labels};
 use crate::resolved_environment::ResolvedEnvironments;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -171,15 +173,12 @@ impl CompletionProvider {
 
         // No completions inside a comment — it's prose, not Event-B.
         let lexical = rossi::comments::lexical_spans(text);
-        if let Some(offset) = position_to_offset(text, position)
+        let offset = position_to_offset(text, position);
+        if let Some(offset) = offset
             && rossi::comments::span_containing(&lexical.comments, offset).is_some()
         {
             return None;
         }
-        // Structural context detection scans the comment-masked line, so an
-        // `EVENT` mentioned in a trailing comment cannot change the scope.
-        let masked = lexical.mask_comments_chars(text);
-        let line_text = get_line_text(&masked, position);
 
         // Get completion context from the component under the cursor in the
         // document's shared parse (the single source of truth maintained by the
@@ -196,6 +195,43 @@ impl CompletionProvider {
             self.cross_ref_manager.as_deref(),
             self.document_manager.as_deref(),
         );
+        // The stored parse's spans index the handler text only when the two
+        // are one snapshot.
+        let same_snapshot = parsed
+            .as_deref()
+            .is_some_and(|parsed| parsed.text() == text);
+        let components = parsed
+            .as_deref()
+            .filter(|_| same_snapshot)
+            .map_or(&[][..], |parsed| parsed.components());
+        // Where the cursor's line holds byte `from` when the cursor is at
+        // byte `to`: a line-local count, not a scan from the document start.
+        let back_to = |from: usize, to: usize| {
+            Position::new(
+                position.line,
+                position.character - utf16_len(&text[from..to]),
+            )
+        };
+        // A label is opaque text: typing one, after its `@`, the clause's
+        // next label is the one thing to offer.
+        if let Some(offset) = offset
+            && let Some(label) = lexical.labels.iter().find(|span| span.end == offset)
+        {
+            return next_label(text, &lexical, label.start, || {
+                inherited_labels(loader.as_ref(), components, label.start)
+            })
+            .map(|next| {
+                CompletionResponse::Array(vec![next_label_item(
+                    next.clone(),
+                    next,
+                    Range::new(back_to(label.start + 1, offset), position),
+                )])
+            });
+        }
+        // Structural context detection scans the comment-masked line, so an
+        // `EVENT` mentioned in a trailing comment cannot change the scope.
+        let masked = lexical.mask_comments_chars(text);
+        let line_text = get_line_text(&masked, position);
         // Select the cursor's component against the stored parse's own text, so
         // the offset and the component spans index one snapshot — the handler
         // `text` is a separate copy a concurrent edit can desync from the parse.
@@ -208,13 +244,13 @@ impl CompletionProvider {
                 // against the same snapshot the component was parsed from. When
                 // it matches the handler text (the common case), reuse its mask.
                 let reparsed_mask;
-                let scope_masked = if parsed.text() == text {
+                let scope_masked = if same_snapshot {
                     masked.as_str()
                 } else {
                     reparsed_mask = rossi::comments::mask_comments_chars(parsed.text());
                     &reparsed_mask
                 };
-                let scope_line = if parsed.text() == text {
+                let scope_line = if same_snapshot {
                     line_text
                 } else {
                     get_line_text(scope_masked, position)
@@ -272,6 +308,28 @@ impl CompletionProvider {
 
         // Add built-in type completions
         items.extend(self.get_builtin_completions(&word_at_cursor));
+
+        // On a line holding no more than the start of a word, the clause's
+        // next label heads the list, written in front of the item.
+        if let Some(offset) = offset {
+            let word = text[line_start(text, offset)..offset].trim_start();
+            let item = offset - word.len();
+            if word.chars().all(keywords::is_word_char)
+                && let Some(next) = next_label(text, &lexical, item, || {
+                    inherited_labels(loader.as_ref(), components, item)
+                })
+            {
+                let mut label = next_label_item(
+                    format!("@{next}"),
+                    format!("@{next} "),
+                    Range::new(back_to(item, offset), position),
+                );
+                label.filter_text = Some(next);
+                // Before every other item, whose sort key is its label.
+                label.sort_text = Some(" ".to_string());
+                items.insert(0, label);
+            }
+        }
 
         if items.is_empty() {
             None
@@ -582,6 +640,36 @@ fn create_builtin_item(name: &str, description: &str) -> CompletionItem {
         kind: Some(CompletionItemKind::CONSTANT),
         detail: Some("Built-in".to_string()),
         documentation: Some(Documentation::String(description.to_string())),
+        ..Default::default()
+    }
+}
+
+/// The next label of the clause holding byte `item` of `text`
+/// ([`free_label`]). `None` in a WITH or WITNESS clause, whose labels are
+/// not counted: a witness is labeled with the name it witnesses.
+fn next_label(
+    text: &str,
+    lexical: &rossi::comments::LexicalSpans,
+    item: usize,
+    inherited: impl FnOnce() -> InheritedLabels,
+) -> Option<String> {
+    let masked = lexical.mask_comments(text);
+    let clause = enclosing_clause(&masked, item)?;
+    if clause.1 == "wit" {
+        return None;
+    }
+    free_label(text, lexical, &masked, item, clause, inherited)
+}
+
+/// The item offering a next label, as `label` in the list, that writes
+/// `new_text` over `range`.
+fn next_label_item(label: String, new_text: String, range: Range) -> CompletionItem {
+    CompletionItem {
+        label,
+        kind: Some(CompletionItemKind::PROPERTY),
+        detail: Some("Next label".to_string()),
+        preselect: Some(true),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
         ..Default::default()
     }
 }
@@ -1429,10 +1517,27 @@ mod tests {
     /// the `(label, detail)` of every produced item — the same path an editor
     /// drives, so the scope wiring (not just the helpers) is exercised.
     fn complete_labels(source: &str, position: Position) -> Vec<(String, Option<String>)> {
+        complete_items(&[], source, position)
+            .into_iter()
+            .map(|i| (i.label, i.detail))
+            .collect()
+    }
+
+    /// Every item the full completion pipeline produces at `position` of
+    /// `source`, open as `file:///m.eventb` beside the open `others`.
+    fn complete_items(
+        others: &[(&str, &str)],
+        source: &str,
+        position: Position,
+    ) -> Vec<CompletionItem> {
         use crate::lsp_types::Uri;
 
         let crm = Arc::new(CrossReferenceManager::new());
         let dm = Arc::new(DocumentManager::new());
+        for (uri, text) in others {
+            crm.update_component((*uri).to_owned(), text);
+            dm.open(uri.parse::<Uri>().unwrap(), 1, (*text).to_string());
+        }
         let url = ("file:///m.eventb").parse::<Uri>().unwrap();
         crm.update_component(url.as_str().to_owned(), source);
         dm.open(url.clone(), 1, source.to_string());
@@ -1457,16 +1562,14 @@ mod tests {
             &CompletionConfig::default(),
             &FormatConfig::default(),
         ) {
-            Some(CompletionResponse::Array(items)) => {
-                items.into_iter().map(|i| (i.label, i.detail)).collect()
-            }
+            Some(CompletionResponse::Array(items)) => items,
             _ => Vec::new(),
         }
     }
 
-    /// Run completion at the `|` marker after removing it from the source, so
+    /// [`complete_items`] at the `|` marker, removed from the source, so
     /// scope tests stay readable while the parser sees only Event-B text.
-    fn complete_labels_at_marker(source: &str) -> Vec<(String, Option<String>)> {
+    fn complete_items_at_marker(others: &[(&str, &str)], source: &str) -> Vec<CompletionItem> {
         let marker = source
             .find('|')
             .expect("source must contain a cursor marker");
@@ -1478,7 +1581,23 @@ mod tests {
         let mut source = source.to_string();
         source.remove(marker);
         let position = crate::position::offset_to_position(&source, marker);
-        complete_labels(&source, position)
+        complete_items(others, &source, position)
+    }
+
+    /// The text edit of a next-label item.
+    fn edit_of(item: &CompletionItem) -> (Range, &str) {
+        match &item.text_edit {
+            Some(CompletionTextEdit::Edit(edit)) => (edit.range, edit.new_text.as_str()),
+            other => panic!("expected a plain text edit, got {other:?}"),
+        }
+    }
+
+    /// The `(label, detail)` of every item [`complete_items_at_marker`] gives.
+    fn complete_labels_at_marker(source: &str) -> Vec<(String, Option<String>)> {
+        complete_items_at_marker(&[], source)
+            .into_iter()
+            .map(|i| (i.label, i.detail))
+            .collect()
     }
 
     fn has_label(labels: &[(String, Option<String>)], expected: &str) -> bool {
@@ -1827,5 +1946,98 @@ mod tests {
                 .any(|(label, detail)| label == "x" && detail.as_deref() == Some("Variable")),
             "existing general suggestions must remain, got {labels:?}"
         );
+    }
+
+    const LABELED: &str =
+        "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\n    @inv2 x ≥ 0\n";
+
+    #[test]
+    fn after_at_only_the_next_label_is_offered() {
+        let items = complete_items_at_marker(&[], &format!("{LABELED}    @|\nEND\n"));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].label, "inv3");
+        assert_eq!(items[0].preselect, Some(true));
+        let at = Position::new(6, 5);
+        assert_eq!(edit_of(&items[0]), (Range::new(at, at), "inv3"));
+
+        // What is typed after `@` is replaced, and the `@` kept.
+        let items = complete_items_at_marker(&[], &format!("{LABELED}    @in|\nEND\n"));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(
+            edit_of(&items[0]),
+            (Range::new(Position::new(6, 5), Position::new(6, 7)), "inv3")
+        );
+    }
+
+    #[test]
+    fn after_at_in_a_witness_nothing_is_offered() {
+        // A witness is labeled with the name it witnesses, not a count; the
+        // rest of the list has no place in a label either.
+        let marked = "MACHINE m\nREFINES a\nVARIABLES\n    x\nEVENTS\n    EVENT e REFINES e\n    WITH\n        @|\n    THEN\n        @act1 x ≔ 1\n    END\nEND\n";
+        assert_eq!(complete_items_at_marker(&[], marked), Vec::new());
+    }
+
+    #[test]
+    fn after_at_the_inherited_labels_are_continued() {
+        let abstraction = "MACHINE a\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x ≔ 0\n    END\n    EVENT e\n    WHERE\n        @grd1 x > 0\n        @grd2 x < 9\n    END\nEND\n";
+        let others = [("file:///a.eventb", abstraction)];
+        for (marked, expected) in [
+            (
+                "MACHINE m\nREFINES a\nVARIABLES\n    x\nEVENTS\n    EVENT e EXTENDS e\n    WHERE\n        @|\n    END\nEND\n",
+                "grd3",
+            ),
+            (
+                "MACHINE m\nREFINES a\nVARIABLES\n    x\nEVENTS\n    EVENT INITIALISATION EXTENDS INITIALISATION\n    THEN\n        @|\n    END\nEND\n",
+                "act2",
+            ),
+        ] {
+            let items = complete_items_at_marker(&others, marked);
+            let labels: Vec<_> = items.iter().map(|item| item.label.as_str()).collect();
+            assert_eq!(labels, [expected], "{marked}");
+        }
+    }
+
+    #[test]
+    fn a_blank_line_offers_the_next_label_first() {
+        let items = complete_items_at_marker(&[], &format!("{LABELED}    |\nEND\n"));
+        let first = items.first().expect("items");
+        assert_eq!(first.label, "@inv3");
+        assert_eq!(first.filter_text.as_deref(), Some("inv3"));
+        let at = Position::new(6, 4);
+        assert_eq!(edit_of(first), (Range::new(at, at), "@inv3 "));
+        // The line may as well open the next section.
+        assert!(items.iter().any(|item| item.label == "EVENTS"), "{items:?}");
+        let mut sorted = items.clone();
+        sorted.sort_by(|a, b| {
+            let key = |item: &CompletionItem| item.sort_text.clone().unwrap_or(item.label.clone());
+            key(a).cmp(&key(b))
+        });
+        assert_eq!(sorted[0].label, "@inv3", "sorts before every other item");
+
+        // A word begun on the line is written over.
+        let items = complete_items_at_marker(&[], &format!("{LABELED}    in|\nEND\n"));
+        assert_eq!(
+            edit_of(&items[0]),
+            (
+                Range::new(Position::new(6, 4), Position::new(6, 6)),
+                "@inv3 "
+            )
+        );
+    }
+
+    #[test]
+    fn a_blank_line_outside_a_labeled_clause_offers_no_label() {
+        for marked in [
+            "MACHINE m\nVARIABLES\n    x\nEVENTS\n    EVENT e\n    THEN\n        @act1 x ≔ 1\n    END\n    EVENT f\n    |\n    END\nEND\n",
+            &format!("{LABELED}EVENTS\n    |\nEND\n"),
+            // Nor where the line already holds more than a word.
+            &format!("{LABELED}    x ≥ |\nEND\n"),
+        ] {
+            let items = complete_items_at_marker(&[], marked);
+            assert!(
+                items.iter().all(|item| !item.label.starts_with('@')),
+                "{marked}\n{items:?}"
+            );
+        }
     }
 }

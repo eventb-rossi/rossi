@@ -1846,6 +1846,7 @@ impl LanguageServer for RossiLanguageServer {
                         "/".to_string(),
                         "!".to_string(),
                         "#".to_string(),
+                        "@".to_string(),
                     ]),
                     all_commit_characters: None,
                     work_done_progress_options: WorkDoneProgressOptions::default(),

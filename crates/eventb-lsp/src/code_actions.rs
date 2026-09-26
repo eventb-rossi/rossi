@@ -506,7 +506,7 @@ pub(crate) fn parameter_insert(
 /// at 1. The number then rises past every label taken in the scope a clash
 /// would be found in: a guard, witness or action label is unique within its
 /// event, an axiom, invariant or theorem within the component.
-fn free_label(
+pub(crate) fn free_label(
     text: &str,
     lexical: &rossi::comments::LexicalSpans,
     masked: &str,
@@ -578,7 +578,7 @@ fn labels_in(
 /// label stem. `None` when that keyword opens no labeled items, as after
 /// `EVENT e` or `VARIANT`. `STATUS`, commonly a set or constant name, is
 /// passed over ([`crate::text_utils::is_declaration_scan_boundary`]).
-fn enclosing_clause(masked: &str, item: usize) -> Option<(usize, &'static str)> {
+pub(crate) fn enclosing_clause(masked: &str, item: usize) -> Option<(usize, &'static str)> {
     let head = &masked[..item];
     let keyword = head
         .split_whitespace()

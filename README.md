@@ -528,7 +528,8 @@ The `eventb-lsp` Language Server Protocol implementation provides modern
 IDE features for Event-B development:
 
 - **Real-time diagnostics** — syntax and semantic errors with error recovery
-- **Completion & hover** — context-aware keywords, operators, identifiers, snippets
+- **Completion & hover** — context-aware keywords, operators, identifiers,
+  snippets, and the next label of a clause (`@inv3` after `@inv2`)
 - **Navigation** — go-to-definition, find references, and document/workspace symbols
 - **Rename refactoring** — safe identifier renaming with validation
 - **Formatting & semantic highlighting** — Unicode/ASCII operators, AST-based tokens
