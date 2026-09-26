@@ -287,6 +287,44 @@ fn export_eventb_to_rodin_directory_includes_project_descriptor() {
 }
 
 #[test]
+fn export_attaches_standalone_comment_to_following_axiom() {
+    let tmp = tempdir_unique("rossi-cli-export-leading-comment");
+    let source = tmp.join("C.eventb");
+    let out_dir = tmp.join("out");
+    std::fs::write(
+        &source,
+        "context C\nconstants z\naxioms\n  @cx1 z ∈ ℕ\n  /* about cx2 */\n  @cx2 z > 1 // trailing on cx2\nend\n",
+    )
+    .unwrap();
+
+    let output = rossi_command()
+        .args([
+            "export",
+            "-o",
+            out_dir.to_str().unwrap(),
+            source.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "export failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let xml = std::fs::read_to_string(out_dir.join("C.buc")).unwrap();
+    let rossi::Component::Context(ctx) = rossi::parse_xml(&xml).unwrap() else {
+        panic!("expected context");
+    };
+    assert_eq!(ctx.axioms[0].comment, None);
+    assert_eq!(
+        ctx.axioms[1].comment.as_deref(),
+        Some("about cx2\ntrailing on cx2")
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
 fn export_directory_of_subprojects_to_multi_project_zip() {
     // A directory whose Event-B text lives only under immediate subdirectories
     // exports as one Rodin project per subdirectory (the inverse of a

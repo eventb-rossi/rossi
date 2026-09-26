@@ -1,10 +1,10 @@
 //! Comment round-trip tests (issue #31).
 //!
-//! The textual parser attaches `//` and `/* */` comments to the element they
-//! follow; the pretty printer emits them back (trailing `//` for one-liners,
-//! a Camille-style `/* */` block for multiline comments). These tests pin
-//! the attachment rules, the emission layout, formatting idempotence, and
-//! Rodin-XML → text → Rodin-XML comment fidelity.
+//! The textual parser attaches `//` and `/* */` comments after code to that
+//! element and standalone comments to the next one. The pretty printer emits
+//! them back (trailing `//` for one-liners, leading `/* */` for multiline
+//! comments). These tests pin the attachment rules, the emission layout,
+//! formatting idempotence, and Rodin-XML → text → Rodin-XML comment fidelity.
 
 mod common;
 
@@ -26,19 +26,79 @@ fn trailing_comment_attaches_to_axiom() {
 }
 
 #[test]
-fn standalone_comment_attaches_to_preceding_element() {
-    // The issue's repro: a comment on its own line documents the element it
-    // follows — here the context header.
+fn standalone_comment_attaches_to_following_element() {
     let src = "CONTEXT c\n// important: do not change\nAXIOMS\n    @axm1 1 = 1\nEND\n";
     let ctx = parse_context(src);
-    assert_eq!(ctx.comment.as_deref(), Some("important: do not change"));
-    assert_eq!(ctx.axioms[0].comment, None);
+    assert_eq!(ctx.comment, None);
+    assert_eq!(
+        ctx.axioms[0].comment.as_deref(),
+        Some("important: do not change")
+    );
+}
+
+#[test]
+fn standalone_axiom_comment_exports_on_following_axiom() {
+    for intro in ["/* about cx2 */", "// about cx2"] {
+        let src = format!(
+            "context C\nconstants z\naxioms\n  @cx1 z ∈ ℕ\n  {intro}\n  @cx2 z > 1 // trailing on cx2\nend\n"
+        );
+        let ctx = parse_context(&src);
+        assert_eq!(ctx.axioms[0].comment, None);
+        assert_eq!(
+            ctx.axioms[1].comment.as_deref(),
+            Some("about cx2\ntrailing on cx2")
+        );
+        assert_roundtrip(&src);
+
+        let xml = to_xml(&Component::Context(ctx));
+        let Component::Context(reparsed) = parse_xml(&xml).unwrap() else {
+            panic!("expected context");
+        };
+        assert_eq!(reparsed.axioms[0].comment, None);
+        assert_eq!(
+            reparsed.axioms[1].comment.as_deref(),
+            Some("about cx2\ntrailing on cx2")
+        );
+    }
 }
 
 #[test]
 fn comment_before_header_attaches_to_component() {
     let ctx = parse_context("// file header\nCONTEXT c\nAXIOMS\n    @axm1 1 = 1\nEND\n");
     assert_eq!(ctx.comment.as_deref(), Some("file header"));
+}
+
+#[test]
+fn standalone_comment_before_end_stays_in_its_component() {
+    let src = "CONTEXT c\nAXIOMS\n    @axm1 1 = 1\n    // closing note\nEND\n\nMACHINE m\nEND\n";
+    let components = parse_components(src).unwrap();
+    let Component::Context(ctx) = &components[0] else {
+        panic!("expected context");
+    };
+    let Component::Machine(machine) = &components[1] else {
+        panic!("expected machine");
+    };
+    assert_eq!(ctx.axioms[0].comment.as_deref(), Some("closing note"));
+    assert_eq!(machine.comment, None);
+}
+
+#[test]
+fn standalone_comments_respect_event_end() {
+    let src = "MACHINE m\nEVENTS\n    EVENT first\n    THEN\n        @act1 x ≔ 0\n        // closing note\n    END\n\n    // about second\n    EVENT second\n    THEN\n        @act2 x ≔ 1\n    END\nEND\n";
+    let machine = parse_machine(src);
+    assert_eq!(
+        machine.events[0].actions[0].comment.as_deref(),
+        Some("closing note")
+    );
+    assert_eq!(machine.events[1].comment.as_deref(), Some("about second"));
+}
+
+#[test]
+fn comment_inside_formula_stays_on_its_axiom() {
+    let src = "CONTEXT c\nAXIOMS\n    @axm1 1 =\n        /* inside formula */\n        1\n    @axm2 2 = 2\nEND\n";
+    let ctx = parse_context(src);
+    assert_eq!(ctx.axioms[0].comment.as_deref(), Some("inside formula"));
+    assert_eq!(ctx.axioms[1].comment, None);
 }
 
 #[test]
@@ -180,7 +240,7 @@ fn single_line_comment_prints_trailing() {
 }
 
 #[test]
-fn multiline_comment_prints_camille_block() {
+fn multiline_comment_prints_before_element() {
     let mut ctx = rossi::Context::new("c".to_string());
     ctx.axioms.push(rossi::LabeledPredicate {
         label: Some("axm1".to_string()),
@@ -192,8 +252,25 @@ fn multiline_comment_prints_camille_block() {
     let printed = to_string(&Component::Context(ctx));
     assert_eq!(
         printed,
-        "context c\n\naxioms\n  @axm1 1 = 1\n    /* why: invariant base\n       second line */\nend\n"
+        "context c\n\naxioms\n  /* why: invariant base\n     second line */\n  @axm1 1 = 1\nend\n"
     );
+}
+
+#[test]
+fn multiline_comment_on_later_inline_name_roundtrips() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<org.eventb.core.contextFile version="3">
+    <org.eventb.core.carrierSet identifier="A"/>
+    <org.eventb.core.carrierSet identifier="B" org.eventb.core.comment="first&#10;second"/>
+</org.eventb.core.contextFile>"#;
+    let component = parse_xml(xml).unwrap();
+    let printed = to_string(&component);
+    let reparsed = parse(&printed).unwrap();
+    let Component::Context(ctx) = reparsed else {
+        panic!("expected context");
+    };
+    assert_eq!(ctx.sets[0].comment, None);
+    assert_eq!(ctx.sets[1].comment.as_deref(), Some("first\nsecond"));
 }
 
 #[test]

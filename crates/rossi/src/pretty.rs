@@ -480,11 +480,11 @@ impl PrettyPrinter {
     /// Which comment depends on the carrier. Formatting text replays the
     /// source's own placements for `anchor` — the comments written above the
     /// line, then the one trailing it, each in the marker it was written in.
-    /// Everything else renders the element's `comment` attribute Camille style:
-    /// a single-line comment trails the element (`line // text`) and a
-    /// multiline one becomes a `/* ... */` block on the following lines, one
-    /// level deeper. Attribute comments are normalized first, so a blank one
-    /// emits nothing and parse → print is idempotent.
+    /// Everything else renders the element's `comment` attribute: a
+    /// single-line comment trails the element (`line // text`) and a
+    /// multiline one becomes a `/* ... */` block above it. Attribute comments
+    /// are normalized first, so a blank one emits nothing and parse → print
+    /// is idempotent.
     ///
     /// `line` is the complete element line without the trailing newline and
     /// `indent` is the element's own indentation.
@@ -515,11 +515,10 @@ impl PrettyPrinter {
             writeln!(output, "{line} // {text}").unwrap();
             return;
         }
-        writeln!(output, "{line}").unwrap();
-        let block_indent = format!("{indent}{}", self.indent);
         let out = output.buf();
-        comment_place::write_block(out, &text, &block_indent, &block_indent);
+        comment_place::write_block(out, &text, indent, indent);
         out.push('\n');
+        writeln!(output, "{line}").unwrap();
     }
 
     /// Whether `variant` shares its line with the first variant expression.
@@ -622,10 +621,9 @@ impl PrettyPrinter {
 
     /// Print an identifier list inline on the keyword line, Camille style:
     /// names space-separated, continuation lines hanging-aligned under the
-    /// first name (in characters, like Camille). A commented name always
-    /// ends its physical line, so its trailing `//` (or following block)
-    /// re-attaches to that name on reparse; the remaining names continue
-    /// on the next hanging line.
+    /// first name (in characters, like Camille). A commented name ends its
+    /// physical line; a multiline comment also starts one, so it introduces
+    /// that name on reparse.
     fn print_inline_name_list(
         &self,
         output: &mut Sink<'_>,
@@ -666,6 +664,18 @@ impl PrettyPrinter {
                     comment_indent = &hang;
                 }
                 placements.write_above(output.buf(), anchor, comment_indent);
+            }
+            if pending
+                && output.placements.is_none()
+                && item
+                    .comment
+                    .as_deref()
+                    .and_then(comments::normalize_comment)
+                    .is_some_and(|text| text.contains('\n'))
+            {
+                break_line(output, &mut line, &hang);
+                pending = false;
+                comment_indent = &hang;
             }
             // Wrap to the hanging column when the next name would exceed
             // the width — but never break between the keyword (or a fresh

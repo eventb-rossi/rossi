@@ -35,10 +35,14 @@ use std::borrow::Cow;
 use std::io::Read as IoRead;
 
 /// Decode XML entities in a string
-/// Format an optional comment as an XML attribute string (with leading space)
+/// Format an optional comment as an XML attribute string (with leading space).
+/// Character references keep newlines from normalizing to spaces on XML read.
 fn format_comment_attr(comment: Option<&str>) -> String {
     match comment {
-        Some(c) => format!(" org.eventb.core.comment=\"{}\"", escape_xml(c)),
+        Some(c) => format!(
+            " org.eventb.core.comment=\"{}\"",
+            escape_xml(c).replace('\n', "&#10;")
+        ),
         None => String::new(),
     }
 }
@@ -397,11 +401,7 @@ fn write_labeled_predicates_xml(
         } else {
             String::new()
         };
-        let comment_attr = if let Some(comment) = &item.comment {
-            format!(" org.eventb.core.comment=\"{}\"", escape_xml(comment))
-        } else {
-            String::new()
-        };
+        let comment_attr = format_comment_attr(item.comment.as_deref());
         xml.push_str(&format!(
             "{}<{} name=\"{}\"{} org.eventb.core.predicate=\"{}\" org.eventb.core.theorem=\"{}\"{}/>\n",
             indent,
