@@ -310,8 +310,17 @@ Open the Command Palette and run:
 - `Rossi: Convert Current File to ASCII`
 - `Rossi: Check Toolchain`
 - `Rossi: Install the Rodin Math Font`
+- `Rossi: Open in Rodin`
+- `Rossi: Model-check Current Machine`
+- `Rossi: Disprove Current Machine POs`
 
-Rodin and conversion commands shell out to the configured `rossi.tool.path`.
+The last three run the same actions as the CodeLenses without scrolling to a
+header. Model checking and PO disproving use the machine under the cursor.
+To assign a shortcut, open **Keyboard Shortcuts** and search for the command
+name; none is assigned by default.
+
+Import, export, build, and conversion commands use the configured
+`rossi.tool.path`.
 `Install the Rodin Math Font` needs no toolchain: it copies the bundled Brave
 Sans Mono Roman into your own font directory (no administrator rights on any
 platform), then offers to list it as a fallback for Event-B files, so

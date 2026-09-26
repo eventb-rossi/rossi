@@ -44,6 +44,9 @@
     "onCommand:rossi.newProject",
     "onCommand:rossi.installMathFont",
     "onCommand:rossi.proofObligations.showState",
+    "onCommand:rossi.openInRodin",
+    "onCommand:rossi.modelCheck",
+    "onCommand:rossi.disprovePOs",
     "onView:rossi.proofObligations"
   ],
   "main": "./dist/extension.js",
@@ -137,6 +140,21 @@
       {
         "command": "rossi.proofObligations.showState",
         "title": "Show Proof Obligation Sequent",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.openInRodin",
+        "title": "Open in Rodin",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.modelCheck",
+        "title": "Model-check Current Machine",
+        "category": "Rossi"
+      },
+      {
+        "command": "rossi.disprovePOs",
+        "title": "Disprove Current Machine POs",
         "category": "Rossi"
       },
       {

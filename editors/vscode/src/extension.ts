@@ -1,4 +1,4 @@
-import { workspace, ExtensionContext, window, languages } from 'vscode';
+import { workspace, ExtensionContext, window, languages, commands } from 'vscode';
 import {
     LanguageClient,
     LanguageClientOptions,
@@ -172,6 +172,30 @@ export async function activate(context: ExtensionContext) {
     });
     languageServerReady.catch(() => undefined);
     registerRossiCommands(context, diagnostics, output, binaries.cli, () => languageServerReady);
+
+    const runMachineAction = async (command: string) => {
+        const editor = window.activeTextEditor;
+        if (!editor || editor.document.languageId !== 'eventb' || editor.document.uri.scheme !== 'file') {
+            void window.showErrorMessage('Open or select an Event-B file first.');
+            return;
+        }
+        const args: (string | { line: number; character: number })[] = [editor.document.uri.toString()];
+        if (command !== 'rossi.rodin.open') {
+            const { line, character } = editor.selection.active;
+            args.push({ line, character });
+        }
+        try {
+            await languageServerReady;
+            await client.sendRequest('workspace/executeCommand', { command, arguments: args });
+        } catch (error) {
+            void window.showErrorMessage(`Rossi: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+    context.subscriptions.push(
+        commands.registerCommand('rossi.openInRodin', () => runMachineAction('rossi.rodin.open')),
+        commands.registerCommand('rossi.modelCheck', () => runMachineAction('rossi.animate.check')),
+        commands.registerCommand('rossi.disprovePOs', () => runMachineAction('rossi.animate.po'))
+    );
 
     // Editor-side ASCII -> Unicode input method (type `=>`, `\and`, ...).
     registerSymbolInput(context, client, languageServerReady, output);
