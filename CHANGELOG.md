@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.3.0](https://github.com/eventb-rossi/rossi/compare/v0.2.3...v0.3.0) - 2026-09-26
+
+### Added
+- *(parse)* Say which groupings resolve incompatible operators
+- *(build)* Warn about an abstract event the refinement leaves out
+- *(build)* Give the missing witness warning a rule code
+- *(lsp)* Refine the flagged abstract events as a quick fix
+- *(lsp)* Let a refining event extend the event it repeats
+- *(lsp)* Inline what an extended event inherits
+- *(lsp)* Refine the abstract events a machine leaves unrefined
+- *(lsp)* Create an extension of a context
+- *(lsp)* Create a refinement of a machine
+- *(lsp)* Replace a separator Camille cannot read with a space
+- *(lsp)* Parenthesize operators mixed without parentheses
+- *(lsp)* Move the typing predicate above the one reading its name
+- *(lsp)* Relabel an item whose label is already taken
+- *(lsp)* Keep a disappeared variable a refinement still uses
+- *(lsp)* Offer names spelled alike for an unknown name
+- *(lsp)* Declare an undeclared name where it is used
+- *(lsp)* See or extend the context declaring an undeclared name
+- *(lsp)* Rename a parameter along its refinement chain
+- *(lsp)* Rename an event along its refinement chain
+- *(lsp)* Rename a variable along its refinement chain
+
+### Changed
+- *(lsp)* Measure the edit distance with strsim
+- *(lsp)* Load each abstraction once per refactor request
+- *(lsp)* Build code action edits from shared helpers
+- *(lsp)* Answer code actions from the document's own parse
+- *(lsp)* Drop the sort action and the disabled stubs
+- *(lsp)* Count sweep cache inputs at the index write
+
+### Fixed
+- *(parse)* Reject reserved ASCII identifiers
+- *(parse)* Attach standalone comments to following elements
+- *(parse)* Drop the skip action, which Rodin does not have
+- *(parse)* Read and write the witnesses of INITIALISATION
+- *(lsp)* Refuse a rename the resolver cannot place
+- *(build)* Report incompatible operators as a formula parse error
+- *(build)* Anchor a disappeared variable at its use
+- *(build)* Anchor an unknown abstract event at the refines target
+- *(build)* Anchor an undeclared identifier in an action at its use
+- *(lsp)* Read a keyword past a separator wider than one byte
+- *(lsp)* Keep a STATUS clause written before a block REFINES
+- *(lsp)* Write a new name before a comment trailing its list
+- *(lsp)* Anchor an unknown SEES, REFINES or EXTENDS target at its name
+- *(lsp)* Report an event refining an unknown abstract event
+- *(lsp)* Offer the missing END only at an end-of-input parse error
+- *(lsp)* Drop the add-missing-clause action
+- *(lsp)* Name the Rodin projects a moved folder left behind
+- *(lsp)* Retract the workspace report of a file that is gone
+- *(lsp)* Follow a source folder that is moved or deleted
+- *(lsp)* Refuse a rename to a name already in use
+- *(lsp)* Rename constants and carrier sets across contexts and machines
+- *(lsp)* Rename an event parameter within its own event
+- *(lsp)* Drop model-check results once their model is saved
+- *(vscode)* Make Refresh Proof Obligations recompute
+- *(lsp)* Recompute proof obligations when Rodin saves a proof
+- *(lsp)* Reuse a closed file's sweep report until its inputs change
+- *(lsp)* Report a duplicate or primed name once
+- *(lsp)* Leave open documents to pushed diagnostics
+
+### Documentation
+- *(lsp)* List every quick fix the server offers
+
 ## [0.2.3](https://github.com/eventb-rossi/rossi/compare/v0.2.2...v0.2.3) - 2026-09-22
 
 ### Added
