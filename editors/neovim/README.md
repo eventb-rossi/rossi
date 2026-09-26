@@ -436,6 +436,12 @@ The plugin exposes these `:Rossi*` user commands:
 - `:RossiImport` — import a Rodin project into Event-B text
 - `:RossiExport` — export Event-B text to a Rodin ZIP
 - `:RossiBuild` — build a checked Rodin ZIP
+- `:RossiOpenInRodin` — run the Open in Rodin action from the current file
+- `:RossiModelCheck` — model-check the machine under the cursor
+- `:RossiDisprovePOs` — disprove POs in the machine under the cursor
+
+The last three use the attached Rossi language server and work without moving
+to the machine header. They have no default keymaps.
 
 Set `vim.g.rossi_validate_runtime = true` to have both validate commands pass
 `--runtime`, adding the EB1xx runtime-translation suitability checks over the
@@ -449,6 +455,9 @@ local opts = { noremap = true, silent = true, buffer = bufnr }
 vim.keymap.set('n', '<leader>pu', '<Cmd>RossiConvertUnicode<CR>', opts)
 vim.keymap.set('n', '<leader>pa', '<Cmd>RossiConvertAscii<CR>', opts)
 vim.keymap.set('n', '<leader>pv', '<Cmd>RossiValidate<CR>', opts)
+vim.keymap.set('n', '<leader>pr', '<Cmd>RossiOpenInRodin<CR>', opts)
+vim.keymap.set('n', '<leader>pm', '<Cmd>RossiModelCheck<CR>', opts)
+vim.keymap.set('n', '<leader>pp', '<Cmd>RossiDisprovePOs<CR>', opts)
 ```
 
 ## Recommended Plugins

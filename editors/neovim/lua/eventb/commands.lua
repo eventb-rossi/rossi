@@ -312,6 +312,29 @@ local function run_io(subcommand, input_label, default_input, out_label)
   })
 end
 
+-- Run a Rodin or eventb-animate action for the active Event-B buffer.
+local function run_server_action(command)
+  local bufnr = vim.api.nvim_get_current_buf()
+  if vim.bo[bufnr].filetype ~= "eventb" or vim.api.nvim_buf_get_name(bufnr) == "" then
+    vim.notify("Open or select an Event-B file first.", vim.log.levels.ERROR)
+    return
+  end
+  local client = vim.lsp.get_clients({ bufnr = bufnr, name = "eventb" })[1]
+  if not client then
+    vim.notify("The Rossi language server is not attached.", vim.log.levels.ERROR)
+    return
+  end
+  local args = { vim.uri_from_bufnr(bufnr) }
+  if command ~= "rossi.rodin.open" then
+    table.insert(args, vim.lsp.util.make_position_params(0, client.offset_encoding).position)
+  end
+  client.request("workspace/executeCommand", { command = command, arguments = args }, function(err)
+    if err then
+      vim.notify("Rossi: " .. err.message, vim.log.levels.ERROR)
+    end
+  end, bufnr)
+end
+
 -- Create every :Rossi* user command. Safe to call more than once.
 function M.setup()
   local cmd = vim.api.nvim_create_user_command
@@ -341,6 +364,18 @@ function M.setup()
     local default = vim.api.nvim_buf_get_name(0)
     run_io("build", "Input to build: ", default, "Output checked Rodin ZIP: ")
   end, { desc = "Build a checked Rodin ZIP" })
+
+  cmd("RossiOpenInRodin", function()
+    run_server_action("rossi.rodin.open")
+  end, { desc = "Open the current Event-B file in Rodin" })
+
+  cmd("RossiModelCheck", function()
+    run_server_action("rossi.animate.check")
+  end, { desc = "Model-check the machine under the cursor" })
+
+  cmd("RossiDisprovePOs", function()
+    run_server_action("rossi.animate.po")
+  end, { desc = "Disprove proof obligations in the machine under the cursor" })
 end
 
 -- Exposed for the headless spec (editors/neovim/test/validate_spec.lua).
