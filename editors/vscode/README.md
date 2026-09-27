@@ -413,6 +413,12 @@ read-only Event-B document with the typed identifiers and hypotheses in
 comments, one hypothesis per line, a `⊢` line, then the goal, printed in your
 configured operator style. `Rossi: Show Proof Obligation Sequent` offers the
 same as a quick pick, obligations on the cursor's line first.
+The **Prove in Rodin** action on a row opens that obligation in Rodin's
+interactive prover. It is available for every status except discharged,
+including reviewed proofs. A source Code Action offers the same action for
+each open or broken obligation on its diagnostic. Rodin is launched if needed;
+selecting a proof requires the current rossi-bridge plug-in, so neither is
+offered while `rossi.rodin.bridge` is off.
 
 The gutter shows the status beside the source, the way the Dafny and Lean
 extensions draw verification status. Every event and every invariants,

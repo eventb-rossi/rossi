@@ -11,6 +11,7 @@ import {
     GutterCell,
     Obligation,
     ProofStatus,
+    canProve,
     groupObligations,
     gutterCells,
     lineMarks,
@@ -70,6 +71,8 @@ const summary = summarize([
     obligation('d/WD', 'broken'),
 ]);
 check('closed counts discharged and reviewed', summary.closed === 2 && summary.total === 4);
+check('only discharged proofs cannot be reopened',
+    !canProve('discharged') && canProve('reviewed') && canProve('broken') && canProve('pending'));
 
 // A line's mark: broken wins, then open, closed only when every one is.
 check('all closed marks closed', markFor(['discharged', 'reviewed']) === 'closed');

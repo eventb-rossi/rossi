@@ -56,6 +56,7 @@ import {
     ProofState,
     ProofStatus,
     ProofStatusParams,
+    canProve,
     groupObligations,
     gutterCells,
     lineMarks,
@@ -130,7 +131,7 @@ class ObligationTree implements TreeDataProvider<Node> {
                     obligation.accurate ? '' : ' (inaccurate: some hypotheses were dropped)'
                 }`;
                 item.iconPath = statusIcon(obligation.status);
-                item.contextValue = 'obligation';
+                item.contextValue = canProve(obligation.status) ? 'obligationProve' : 'obligation';
                 item.command = {
                     command: 'rossi.proofObligations.reveal',
                     title: 'Reveal',
@@ -431,6 +432,22 @@ export function registerProofObligations(
                 await showState(uri, obligation);
             }
         ),
+        commands.registerCommand('rossi.proofObligations.prove', async (node: Node) => {
+            if (node?.kind !== 'obligation') {
+                return;
+            }
+            try {
+                await ready;
+                await client.sendRequest('workspace/executeCommand', {
+                    command: 'rossi.rodin.prove',
+                    arguments: [node.uri, node.obligation.component, node.obligation.name],
+                });
+            } catch (error) {
+                void window.showErrorMessage(
+                    `Rossi: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }),
         commands.registerCommand('rossi.proofObligations.showState', async () => {
             const editor = window.activeTextEditor;
             if (!isEventB(editor)) {

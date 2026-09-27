@@ -44,6 +44,7 @@
     "onCommand:rossi.newProject",
     "onCommand:rossi.installMathFont",
     "onCommand:rossi.proofObligations.showState",
+    "onCommand:rossi.proofObligations.prove",
     "onCommand:rossi.openInRodin",
     "onCommand:rossi.modelCheck",
     "onCommand:rossi.disprovePOs",
@@ -167,6 +168,11 @@
         "command": "rossi.proofObligations.reveal",
         "title": "Reveal Proof Obligation",
         "category": "Rossi"
+      },
+      {
+        "command": "rossi.proofObligations.prove",
+        "title": "Prove in Rodin",
+        "category": "Rossi"
       }
     ],
     "viewsContainers": {
@@ -288,6 +294,17 @@
         {
           "command": "rossi.proofObligations.reveal",
           "when": "false"
+        },
+        {
+          "command": "rossi.proofObligations.prove",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "rossi.proofObligations.prove",
+          "when": "view == rossi.proofObligations && viewItem == obligationProve && config.rossi.rodin.bridge",
+          "group": "navigation"
         }
       ],
       "view/title": [

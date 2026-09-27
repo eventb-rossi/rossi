@@ -75,6 +75,11 @@ function isClosed(status: ProofStatus): boolean {
     return status === 'discharged' || status === 'reviewed';
 }
 
+/** Reviewed proofs may still be resumed in Rodin; only discharged ones cannot. */
+export function canProve(status: ProofStatus): boolean {
+    return status !== 'discharged';
+}
+
 /** The marker a line gets when several obligations anchor on it. */
 export type LineMark = 'closed' | 'open' | 'broken';
 
