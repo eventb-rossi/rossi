@@ -94,6 +94,9 @@ pub const DIRTY: &str = "model/dirty";
 /// Switch the running workbench to a perspective.
 pub const PERSPECTIVE: &str = "ui/perspective";
 
+/// Open one proof obligation in Rodin's interactive prover.
+pub const PROVE: &str = "proof/reveal";
+
 /// A message the plug-in sent without being asked.
 #[derive(Debug, Clone)]
 pub struct Notification {
@@ -221,6 +224,22 @@ impl Bridge {
     pub async fn show_perspective(&self, id: &str) -> Result<(), String> {
         self.transport
             .request(PERSPECTIVE, json!({ "id": id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Open an undischarged obligation of `component` in `project`.
+    pub async fn prove(
+        &self,
+        project: &str,
+        component: &str,
+        obligation: &str,
+    ) -> Result<(), String> {
+        self.transport
+            .request(
+                PROVE,
+                json!({ "project": project, "component": component, "obligation": obligation }),
+            )
             .await
             .map(|_| ())
     }
@@ -726,6 +745,68 @@ mod tests {
             seen.lock().await.last().unwrap()["params"]["id"],
             json!("org.eventb.ui.perspective.proving")
         );
+    }
+
+    #[tokio::test]
+    async fn opens_a_named_proof_obligation() {
+        let (port, seen) = fake_bridge(greeting(json!([PROVE]), |message| {
+            Some(ok(message, json!({})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-proof", port);
+
+        let bridge = Bridge::connect(dir.path()).await.unwrap();
+        assert!(bridge.supports(PROVE));
+        bridge.prove("proj", "M0", "evt/inv1/INV").await.unwrap();
+
+        assert_eq!(methods(&seen).await, ["bridge/hello", PROVE]);
+        assert_eq!(
+            seen.lock().await.last().unwrap()["params"],
+            json!({"project": "proj", "component": "M0", "obligation": "evt/inv1/INV"})
+        );
+    }
+
+    #[tokio::test]
+    async fn booted_rodin_registers_before_revealing_a_proof() {
+        let (port, seen) = fake_bridge(greeting(json!([REGISTER, PROVE]), |message| {
+            Some(ok(message, json!({"project": "registered"})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-boot-proof", port);
+        let proof = super::super::ProofTarget {
+            component: "M0".to_string(),
+            obligation: "evt/inv1/INV".to_string(),
+        };
+
+        super::super::greet_booted_rodin(dir.path(), "proj", &[], true, Some(&proof))
+            .await
+            .unwrap();
+
+        assert_eq!(methods(&seen).await, ["bridge/hello", REGISTER, PROVE]);
+        assert_eq!(
+            seen.lock().await.last().unwrap()["params"]["project"],
+            "registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn booted_rodin_reports_an_outdated_bridge() {
+        let (port, seen) = fake_bridge(greeting(json!([REGISTER]), |message| {
+            Some(ok(message, json!({"project": "proj"})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-old-proof", port);
+        let proof = super::super::ProofTarget {
+            component: "M0".to_string(),
+            obligation: "evt/inv1/INV".to_string(),
+        };
+
+        let error = super::super::greet_booted_rodin(dir.path(), "proj", &[], true, Some(&proof))
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("update rossi-bridge"), "{error}");
+        assert_eq!(methods(&seen).await, ["bridge/hello", REGISTER]);
     }
 
     #[tokio::test]

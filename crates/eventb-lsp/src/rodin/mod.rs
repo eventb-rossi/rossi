@@ -29,6 +29,15 @@ use tower_lsp_server::Client;
 /// The `workspace/executeCommand` command behind the code lens.
 pub const COMMAND_OPEN: &str = "rossi.rodin.open";
 
+/// The command behind proof-obligation Code Actions and the VS Code view.
+pub const COMMAND_PROVE: &str = "rossi.rodin.prove";
+
+/// The obligation to select after the project is ready in Rodin.
+pub struct ProofTarget {
+    pub component: String,
+    pub obligation: String,
+}
+
 /// How every "Rodin is already running" message opens.
 const ALREADY_RUNNING: &str = "Rodin is already running on this workspace:";
 
@@ -117,6 +126,8 @@ pub struct OpenRequest {
     /// workspace Rodin has opened before answers to. That second half rides
     /// the bridge and so needs [`Self::bridge`].
     pub proving_perspective: bool,
+    /// A selected proof to open after the build and Rodin startup.
+    pub proof: Option<ProofTarget>,
     /// Slot for the per-workspace Rodin session stop monitor.
     pub(crate) session_monitor: proof_mirror::SessionMonitorSlot,
     /// Analysis handles, for refreshing the proof-status overlay after the
@@ -344,12 +355,22 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
                 &request.written,
             );
         }
+        if let Some(proof) = &request.proof {
+            let result = match &bridged {
+                Some((bridge, registered, _)) => reveal_proof(bridge, registered, proof).await,
+                None => Err(
+                    "a running Rodin needs the updated rossi-bridge to open a proof".to_string(),
+                ),
+            };
+            let (level, text) = proof_outcome(proof, result);
+            return progress.finish(level, text).await;
+        }
         // A project that was never registered cannot be, while Rodin holds
         // the workspace: the headless registration needs the same Eclipse
         // workspace. Say so instead of promising an automatic pickup that
         // will never happen.
         let (level, text) = match bridged {
-            Some((registered, reloaded)) => (
+            Some((_, registered, reloaded)) => (
                 MessageType::INFO,
                 format!(
                     "{ALREADY_RUNNING} project '{registered}' was rebuilt and \
@@ -380,6 +401,16 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             ),
         };
         return progress.finish(level, text).await;
+    }
+
+    if request.proof.is_some() && lock_state != lock::LockState::Free {
+        return progress
+            .finish(
+                MessageType::ERROR,
+                "Prove in Rodin: no compatible bridge answered from the running workspace."
+                    .to_string(),
+            )
+            .await;
     }
 
     let rodin_path = launch::effective_rodin_path(&request.configured_rodin_path, platform);
@@ -442,23 +473,43 @@ pub async fn open_in_rodin(client: Client, request: OpenRequest) {
             )
             .await;
     }
-    // Spawned: waiting for the bridge to appear must not extend the
-    // single-flight guard the lens is held by.
-    if request.bridge {
-        let workspace_dir = request.workspace_dir.clone();
-        let name = project_name.clone();
-        let proving_perspective = request.proving_perspective;
-        tokio::spawn(async move {
-            greet_booted_rodin(&workspace_dir, &name, &components, proving_perspective).await;
-        });
-    }
-
-    progress
-        .finish(
-            MessageType::INFO,
-            format!("Opened {project_name} in Rodin."),
+    // An ordinary open greets Rodin in the background; a targeted proof
+    // waits for the bridge so its result can be reported to the user.
+    if let Some(proof) = &request.proof {
+        progress.report("waiting for Rodin's prover").await;
+        let result = greet_booted_rodin(
+            &request.workspace_dir,
+            &project_name,
+            &components,
+            request.proving_perspective,
+            Some(proof),
         )
         .await;
+        let (level, text) = proof_outcome(proof, result);
+        progress.finish(level, text).await;
+    } else {
+        if request.bridge {
+            let workspace_dir = request.workspace_dir.clone();
+            let name = project_name.clone();
+            let proving_perspective = request.proving_perspective;
+            tokio::spawn(async move {
+                let _ = greet_booted_rodin(
+                    &workspace_dir,
+                    &name,
+                    &components,
+                    proving_perspective,
+                    None,
+                )
+                .await;
+            });
+        }
+        progress
+            .finish(
+                MessageType::INFO,
+                format!("Opened {project_name} in Rodin."),
+            )
+            .await;
+    }
 
     // The caller's single-flight guard lives for this future: keep it held
     // until the launched Rodin actually takes the workspace lock. Between
@@ -548,9 +599,9 @@ async fn reload_through(bridge: &bridge::Bridge, project_name: &str, files: &[St
 }
 
 /// Register and reveal the project through a running Rodin's bridge plug-in,
-/// answering the name the workspace registered it under together with whether
-/// the editors open on `files` were reloaded, and switch that Rodin to the
-/// Proving perspective when `proving_perspective` asks for it.
+/// answering the connection, the name the workspace registered it under, and
+/// whether the editors open on `files` were reloaded, and switch that Rodin to
+/// the Proving perspective when `proving_perspective` asks for it.
 ///
 /// The switch rides this connection rather than making its own: the workspace
 /// this Rodin restored decided its perspective, so the preference
@@ -568,7 +619,7 @@ async fn register_through_bridge(
     project_name: &str,
     files: &[String],
     proving_perspective: bool,
-) -> Option<(String, bool)> {
+) -> Option<(bridge::Bridge, String, bool)> {
     let bridge = match bridge::Bridge::connect(workspace_dir).await {
         Ok(bridge) => bridge,
         Err(message) => {
@@ -617,7 +668,7 @@ async fn register_through_bridge(
     {
         tracing::info!("the Rodin bridge could not switch the perspective: {message}");
     }
-    Some((registered, reloaded))
+    Some((bridge, registered, reloaded))
 }
 
 /// Wait for a Rodin that is still booting to publish its bridge, then do what
@@ -636,8 +687,9 @@ async fn register_through_bridge(
 /// [`launch::seed_workspace_prefs`] writes decides only how a workspace with
 /// no saved perspective state comes up; every later launch restores the
 /// perspective that was last active there, and nothing outside the process
-/// can override that. Best effort throughout, exactly like the reveal: stock
-/// Rodin publishes no bridge, and an older plug-in offers neither method.
+/// can override that. Ordinary opens remain best effort when stock Rodin
+/// publishes no bridge. Selecting a proof needs the bridge and reports an
+/// error if it cannot reach the selected obligation.
 ///
 /// A Rodin that is already up is served by [`register_through_bridge`]
 /// instead, on the connection it already holds.
@@ -646,7 +698,8 @@ async fn greet_booted_rodin(
     project_name: &str,
     files: &[String],
     proving_perspective: bool,
-) {
+    proof: Option<&ProofTarget>,
+) -> Result<(), String> {
     // The same window the launch gives Rodin to take the workspace lock: the
     // bridge comes later than the lock, but both are waits on one boot, and
     // `ensure_rodin_live` already retries its own connect against this one.
@@ -657,15 +710,24 @@ async fn greet_booted_rodin(
             Err(message) => {
                 if tokio::time::Instant::now() >= deadline {
                     tracing::info!("no Rodin bridge after the launch: {message}");
-                    return;
+                    return Err(format!(
+                        "Rodin opened, but its bridge did not answer: {message}"
+                    ));
                 }
                 tokio::time::sleep(POLL).await;
             }
         }
     };
     reload_through(&bridge, project_name, files).await;
+    if let Some(proof) = proof {
+        let registered = bridge
+            .register_project(&workspace_dir.join(project_name))
+            .await?
+            .unwrap_or_else(|| project_name.to_string());
+        return reveal_proof(&bridge, &registered, proof).await;
+    }
     if !proving_perspective {
-        return;
+        return Ok(());
     }
     if !bridge.supports(bridge::PERSPECTIVE) {
         tracing::info!(
@@ -673,7 +735,7 @@ async fn greet_booted_rodin(
             bridge.rodin_version(),
             bridge::PERSPECTIVE
         );
-        return;
+        return Ok(());
     }
     match bridge
         .show_perspective(launch::PROVING_PERSPECTIVE_ID)
@@ -684,6 +746,38 @@ async fn greet_booted_rodin(
             tracing::info!("the Rodin bridge could not switch the perspective: {message}")
         }
     }
+    Ok(())
+}
+
+/// What a Prove in Rodin flow tells the user once the reveal was attempted.
+fn proof_outcome(proof: &ProofTarget, result: Result<(), String>) -> (MessageType, String) {
+    match result {
+        Ok(()) => (
+            MessageType::INFO,
+            format!(
+                "Opening {} in Rodin's interactive prover.",
+                proof.obligation
+            ),
+        ),
+        Err(message) => (MessageType::ERROR, format!("Prove in Rodin: {message}")),
+    }
+}
+
+async fn reveal_proof(
+    bridge: &bridge::Bridge,
+    project: &str,
+    proof: &ProofTarget,
+) -> Result<(), String> {
+    if !bridge.supports(bridge::PROVE) {
+        return Err(format!(
+            "the Rodin {} bridge does not offer {}; update rossi-bridge",
+            bridge.rodin_version(),
+            bridge::PROVE
+        ));
+    }
+    bridge
+        .prove(project, &proof.component, &proof.obligation)
+        .await
 }
 
 /// How long a just-launched Rodin gets to take the workspace lock before

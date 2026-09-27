@@ -548,6 +548,7 @@ mod rodin_lens {
             capabilities["executeCommandProvider"]["commands"],
             json!([
                 "rossi.rodin.open",
+                "rossi.rodin.prove",
                 "rossi.animate.check",
                 "rossi.animate.po"
             ])
@@ -2553,10 +2554,134 @@ mod proof_obligations {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn proof_hints_offer_one_rodin_action_per_obligation() {
+        let (mut service, _messages, hints) = open_hints(json!({})).await;
+        let hint = two_open(&hints);
+        assert_eq!(
+            hint["data"]["rossiProofObligations"],
+            json!([
+                {"component": "m", "name": "INITIALISATION/inv1/INV"},
+                {"component": "m", "name": "bump/inv1/INV"},
+            ])
+        );
+        let actions = code_actions(&mut service, 2, "quickfix", hint.clone()).await;
+        let prove: Vec<_> = actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["command"]["command"] == json!("rossi.rodin.prove"))
+            .collect();
+        assert_eq!(prove.len(), 2, "got {actions}");
+        assert_eq!(
+            prove[0]["command"]["arguments"],
+            json!([URI, "m", "INITIALISATION/inv1/INV"])
+        );
+        assert_eq!(
+            prove[1]["command"]["arguments"],
+            json!([URI, "m", "bump/inv1/INV"])
+        );
+
+        let actions = code_actions(&mut service, 3, "refactor", hint.clone()).await;
+        assert!(!actions.to_string().contains("rossi.rodin.prove"));
+
+        let mut stale = hint;
+        stale["data"]["rossiProofObligations"][0]["name"] = json!("missing/INV");
+        let actions = code_actions(&mut service, 4, "quickfix", stale).await;
+        assert!(!actions.to_string().contains("rossi.rodin.prove"));
+    }
+
+    /// The command refuses to run without the bridge, so the Quick Fix that
+    /// leads to it is not offered either.
+    #[tokio::test(flavor = "current_thread")]
+    async fn proof_hints_offer_no_rodin_action_without_the_bridge() {
+        let (mut service, _messages, hints) = open_hints(json!({"rodin": {"bridge": false}})).await;
+        let actions = code_actions(&mut service, 2, "quickfix", two_open(&hints)).await;
+        assert!(
+            !actions.to_string().contains("rossi.rodin.prove"),
+            "got {actions}"
+        );
+    }
+
+    /// The hint naming the two obligations of `SOURCE`'s first invariant.
+    fn two_open(hints: &[Value]) -> Value {
+        hints
+            .iter()
+            .find(|d| {
+                d["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("2 open proof"))
+            })
+            .expect("the hint on the first invariant")
+            .clone()
+    }
+
+    /// The code actions the server offers for `diagnostic`, restricted to
+    /// the `only` kind.
+    async fn code_actions(
+        service: &mut LspService<RossiLanguageServer>,
+        id: i64,
+        only: &str,
+        diagnostic: Value,
+    ) -> Value {
+        let request = Request::build("textDocument/codeAction")
+            .id(id)
+            .params(json!({
+                "textDocument": {"uri": URI},
+                "range": diagnostic["range"],
+                "context": {"diagnostics": [diagnostic], "only": [only]},
+            }))
+            .finish();
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request)
+            .await
+            .unwrap()
+            .unwrap();
+        response.into_parts().1.unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn prove_command_rejects_missing_or_stale_obligations() {
+        let (mut service, mut messages) = open_service(json!({})).await;
+        next_message(
+            &mut messages,
+            eventb_lsp::proof::NOTIFICATION_STATUS,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .expect("proof report");
+        for arguments in [json!([URI]), json!([URI, "m", "missing/INV"])] {
+            let response = service
+                .ready()
+                .await
+                .unwrap()
+                .call(
+                    Request::build("workspace/executeCommand")
+                        .id(5)
+                        .params(json!({"command": "rossi.rodin.prove", "arguments": arguments}))
+                        .finish(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let (_, result) = response.into_parts();
+            assert!(result.is_err(), "invalid request must fail: {arguments}");
+        }
+    }
+
     /// The severity-4 rows of the open-time publish, after letting the
     /// push through so the socket is not left holding it.
-    async fn open_hints(options: Value) -> Vec<Value> {
-        let (_service, mut messages) = open_service(options).await;
+    async fn open_hints(
+        options: Value,
+    ) -> (
+        LspService<RossiLanguageServer>,
+        tower_lsp_server::ClientSocket,
+        Vec<Value>,
+    ) {
+        let (service, mut messages) = open_service(options).await;
         let params = next_message(
             &mut messages,
             "textDocument/publishDiagnostics",
@@ -2571,18 +2696,20 @@ mod proof_obligations {
         )
         .await
         .expect("the open-time push");
-        params["diagnostics"]
+        let hints = params["diagnostics"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|d| d["severity"] == json!(4))
             .cloned()
-            .collect()
+            .collect();
+        (service, messages, hints)
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn element_diagnostics_underline_the_whole_element() {
-        let hints = open_hints(json!({ "proofObligations": { "diagnostics": "elements" } })).await;
+        let (_service, _messages, hints) =
+            open_hints(json!({ "proofObligations": { "diagnostics": "elements" } })).await;
         assert_eq!(hints.len(), 2, "got {hints:?}");
         // The element's own span, which stops at its last character rather
         // than running into the next line's indentation.
@@ -2594,7 +2721,8 @@ mod proof_obligations {
 
     #[tokio::test(flavor = "current_thread")]
     async fn proof_diagnostics_can_be_turned_off() {
-        let hints = open_hints(json!({ "proofObligations": { "diagnostics": "off" } })).await;
+        let (_service, _messages, hints) =
+            open_hints(json!({ "proofObligations": { "diagnostics": "off" } })).await;
         assert!(hints.is_empty(), "got {hints:?}");
     }
 

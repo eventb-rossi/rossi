@@ -360,7 +360,7 @@ pub(crate) fn diagnostics(
         return Vec::new();
     }
     // Keyed by position so the output is ordered; `Range` itself is not `Ord`.
-    type Grouped<'a> = BTreeMap<(u32, u32, u32, u32), (Range, Vec<&'a str>)>;
+    type Grouped<'a> = BTreeMap<(u32, u32, u32, u32), (Range, Vec<&'a Obligation>)>;
     let mut broken: Grouped = BTreeMap::new();
     let mut open: Grouped = BTreeMap::new();
     for obligation in obligations {
@@ -380,7 +380,7 @@ pub(crate) fn diagnostics(
             .entry(key)
             .or_insert_with(|| (range, Vec::new()))
             .1
-            .push(&obligation.name);
+            .push(obligation);
     }
     if broken.is_empty() && open.is_empty() {
         return Vec::new();
@@ -396,28 +396,116 @@ pub(crate) fn diagnostics(
     };
 
     let mut diagnostics = Vec::new();
-    for (range, names) in broken.values() {
-        diagnostics.push(crate::diagnostics::lsp_diagnostic(
-            narrow(*range),
-            DiagnosticSeverity::WARNING,
-            None,
-            format!("stored proof no longer applies to {}", names.join(", ")),
-        ));
+    for (range, obligations) in broken.values() {
+        let names: Vec<_> = obligations.iter().map(|o| o.name.as_str()).collect();
+        diagnostics.push(Diagnostic {
+            data: Some(obligation_data(obligations)),
+            ..crate::diagnostics::lsp_diagnostic(
+                narrow(*range),
+                DiagnosticSeverity::WARNING,
+                None,
+                format!("stored proof no longer applies to {}", names.join(", ")),
+            )
+        });
     }
-    for (range, names) in open.values() {
+    for (range, obligations) in open.values() {
+        let names: Vec<_> = obligations.iter().map(|o| o.name.as_str()).collect();
         let noun = if names.len() == 1 {
             "open proof obligation"
         } else {
             "open proof obligations"
         };
-        diagnostics.push(crate::diagnostics::lsp_diagnostic(
-            narrow(*range),
-            DiagnosticSeverity::HINT,
-            None,
-            format!("{} {noun}: {}", names.len(), names.join(", ")),
-        ));
+        diagnostics.push(Diagnostic {
+            data: Some(obligation_data(obligations)),
+            ..crate::diagnostics::lsp_diagnostic(
+                narrow(*range),
+                DiagnosticSeverity::HINT,
+                None,
+                format!("{} {noun}: {}", names.len(), names.join(", ")),
+            )
+        });
     }
     diagnostics
+}
+
+/// The `data` key under which a proof diagnostic names its obligations.
+const OBLIGATIONS_KEY: &str = "rossiProofObligations";
+
+fn obligation_data(obligations: &[&Obligation]) -> serde_json::Value {
+    serde_json::json!({
+        OBLIGATIONS_KEY: obligations
+            .iter()
+            .map(|o| serde_json::json!({ "component": o.component, "name": o.name }))
+            .collect::<Vec<_>>()
+    })
+}
+
+/// One command action per named obligation on a current proof diagnostic.
+///
+/// Editors ask for code actions on every cursor move, so `obligations` is
+/// only computed for a quick-fix request that carries a proof diagnostic.
+pub(crate) fn code_actions(
+    params: &CodeActionParams,
+    obligations: impl FnOnce() -> Vec<Obligation>,
+    mode: ProofDiagnostics,
+    text: &str,
+) -> Vec<CodeAction> {
+    let names_obligations = |diagnostic: &Diagnostic| {
+        diagnostic
+            .data
+            .as_ref()
+            .is_some_and(|data| data.get(OBLIGATIONS_KEY).is_some())
+    };
+    if !crate::code_actions::kind_requested(params, &CodeActionKind::QUICKFIX)
+        || !params.context.diagnostics.iter().any(names_obligations)
+    {
+        return Vec::new();
+    }
+    // Only a diagnostic the current report would publish, `data` included,
+    // is acted on: its obligations exist and none is discharged.
+    let current = diagnostics(&obligations(), mode, text);
+    let mut actions = Vec::new();
+    for diagnostic in params
+        .context
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| current.contains(diagnostic))
+    {
+        let Some(identities) = diagnostic
+            .data
+            .as_ref()
+            .and_then(|data| data.get(OBLIGATIONS_KEY))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for identity in identities {
+            let (Some(component), Some(name)) = (
+                identity
+                    .get("component")
+                    .and_then(serde_json::Value::as_str),
+                identity.get("name").and_then(serde_json::Value::as_str),
+            ) else {
+                continue;
+            };
+            actions.push(CodeAction {
+                title: format!("Prove {component}/{name} in Rodin"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                command: Some(Command {
+                    title: "Prove in Rodin".to_string(),
+                    command: crate::rodin::COMMAND_PROVE.to_string(),
+                    arguments: Some(vec![
+                        serde_json::json!(params.text_document.uri.as_str()),
+                        serde_json::json!(component),
+                        serde_json::json!(name),
+                    ]),
+                }),
+                ..Default::default()
+            });
+        }
+    }
+    actions
 }
 
 /// The label token of the element `range` covers, for underlining it
@@ -638,6 +726,45 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
         assert_eq!(diags[0].range.start.line, 3);
+    }
+
+    #[test]
+    fn broken_proof_warning_offers_a_rodin_quick_fix() {
+        let report = report_of(vec![
+            obligation("inv1/WD", 3, ProofStatus::Broken),
+            obligation("inv2/WD", 4, ProofStatus::Reviewed),
+            obligation("inv3/WD", 5, ProofStatus::Discharged),
+        ]);
+        let diags = diagnostics(&report.obligations, ProofDiagnostics::Elements, "");
+        assert_eq!(diags.len(), 1);
+        let params: CodeActionParams = serde_json::from_value(serde_json::json!({
+            "textDocument": {"uri": "file:///m.eventb"},
+            "range": diags[0].range,
+            "context": {"diagnostics": diags, "only": ["quickfix"]}
+        }))
+        .unwrap();
+        let actions = code_actions(
+            &params,
+            || report.obligations,
+            ProofDiagnostics::Elements,
+            "",
+        );
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(
+            actions[0]
+                .command
+                .as_ref()
+                .unwrap()
+                .arguments
+                .as_ref()
+                .unwrap(),
+            &vec![
+                serde_json::json!("file:///m.eventb"),
+                serde_json::json!("m"),
+                serde_json::json!("inv1/WD")
+            ]
+        );
     }
 
     #[test]

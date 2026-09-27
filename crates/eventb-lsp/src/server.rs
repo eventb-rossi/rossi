@@ -1212,9 +1212,73 @@ impl RossiLanguageServer {
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
+        self.execute_rodin_request(file_uri_argument(&params)?, None)
+            .await
+    }
+
+    async fn execute_rodin_prove(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> Result<Option<serde_json::Value>> {
+        let uri = file_uri_argument(&params)?;
+        let argument = |index: usize, what: &str| {
+            params
+                .arguments
+                .get(index)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| Error::invalid_params(format!("rossi.rodin.prove needs {what}")))
+        };
+        let component = argument(1, "a component")?;
+        let name = argument(2, "an obligation")?;
+        if !self.config_manager.get().rodin.bridge {
+            return Err(Error::invalid_params(
+                "Prove in Rodin needs rossi.rodin.bridge enabled",
+            ));
+        }
+        let doc = self
+            .document_manager
+            .parse_result(&uri)
+            .ok_or_else(|| Error::invalid_params("the Event-B document is not open"))?;
+        if !doc.parse().errors.is_empty() {
+            return Err(Error::invalid_params(
+                "fix syntax errors before proving this obligation",
+            ));
+        }
+        let report = self
+            .proof_obligations(crate::proof::ProofObligationsParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                refresh: true,
+            })
+            .await?;
+        let obligation = report
+            .obligations
+            .iter()
+            .find(|obligation| obligation.component == component && obligation.name == name)
+            .ok_or_else(|| Error::invalid_params("the proof obligation no longer exists"))?;
+        if obligation.status == crate::proof::ProofStatus::Discharged {
+            return Err(Error::invalid_params(
+                "the proof obligation is already discharged",
+            ));
+        }
+        self.execute_rodin_request(
+            uri,
+            Some(crate::rodin::ProofTarget {
+                component: component.to_string(),
+                obligation: name.to_string(),
+            }),
+        )
+        .await
+    }
+
+    /// Build and open the shared Rodin project, optionally selecting a proof.
+    async fn execute_rodin_request(
+        &self,
+        uri: Uri,
+        proof: Option<crate::rodin::ProofTarget>,
+    ) -> Result<Option<serde_json::Value>> {
         use std::sync::atomic::Ordering;
 
-        let uri = file_uri_argument(&params)?;
         let path = uri
             .to_file_path()
             .expect("file_uri_argument checked the scheme");
@@ -1260,6 +1324,7 @@ impl RossiLanguageServer {
             mirror_proofs: config.rodin.mirror_proofs,
             bridge: config.rodin.bridge,
             proving_perspective: config.rodin.proving_perspective,
+            proof,
             session_monitor: Arc::clone(&self.rodin_session_monitor),
             analyzer: self.analyzer.clone(),
         };
@@ -1936,6 +2001,7 @@ impl LanguageServer for RossiLanguageServer {
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         crate::rodin::COMMAND_OPEN.to_string(),
+                        crate::rodin::COMMAND_PROVE.to_string(),
                         crate::animate::COMMAND_CHECK.to_string(),
                         crate::animate::COMMAND_PO.to_string(),
                     ],
@@ -3111,6 +3177,11 @@ impl LanguageServer for RossiLanguageServer {
         let manager = Arc::clone(&self.document_manager);
         let provider = Arc::clone(&self.code_actions_provider);
         let refinements = Arc::clone(&self.refinement_actions_provider);
+        let analyzer = self.analyzer.clone();
+        let config = self.config_manager.get();
+        let proof_diagnostics = config.proof_obligations.diagnostics;
+        // `rossi.rodin.prove` refuses to run without the bridge.
+        let rodin_bridge = config.rodin.bridge;
         let response = run_blocking(move || {
             let Some(doc) = manager.parse_result_for_request(&params.text_document.uri) else {
                 debug!("Document not found: {}", params.text_document.uri.as_str());
@@ -3137,6 +3208,22 @@ impl LanguageServer for RossiLanguageServer {
                     .into_iter()
                     .map(CodeActionOrCommand::CodeAction),
             );
+            if rodin_bridge {
+                actions.extend(
+                    crate::proof::code_actions(
+                        &params,
+                        || {
+                            analyzer
+                                .proof_report_for(&params.text_document.uri, &doc)
+                                .obligations
+                        },
+                        proof_diagnostics,
+                        doc.text(),
+                    )
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction),
+                );
+            }
             (!actions.is_empty()).then_some(actions)
         })
         .await?;
@@ -3176,6 +3263,7 @@ impl LanguageServer for RossiLanguageServer {
     ) -> Result<Option<serde_json::Value>> {
         match params.command.as_str() {
             crate::rodin::COMMAND_OPEN => self.execute_rodin_open(params).await,
+            crate::rodin::COMMAND_PROVE => self.execute_rodin_prove(params).await,
             crate::animate::COMMAND_CHECK => {
                 self.execute_animate(crate::animate::AnimateMode::Check, params)
                     .await

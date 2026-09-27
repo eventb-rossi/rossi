@@ -525,6 +525,10 @@ open), and a broken proof as a warning. By default a diagnostic underlines
 only the element's `@label`; `rossi.proofObligations.diagnostics` widens it
 to the whole element (`elements`) or drops the diagnostics (`off`).
 `rossi.proofObligations.enabled` turns the whole surface off.
+Each open or broken diagnostic also offers a `Prove in Rodin` Quick Fix per
+obligation. It builds the current model, launches Rodin if needed, and selects
+that exact obligation in the interactive prover through rossi-bridge, so it is
+not offered while `rossi.rodin.bridge` is off.
 
 The Rodin and animate flows report through `$/progress` and honour
 `window/workDoneProgress/cancel`: cancelling the progress stops the flow at
@@ -532,10 +536,10 @@ its next step, and kills a running eventb-animate outright. The framework has
 no hook for that notification, so the server registers it as a custom
 notification of its own.
 
-Three `workspace/executeCommand` commands are also registered —
-`rossi.rodin.open`, `rossi.animate.check` and `rossi.animate.po`. They drive
-external tools and are meant for the bundled extensions rather than for
-general integration.
+Four `workspace/executeCommand` commands are also registered —
+`rossi.rodin.open`, `rossi.rodin.prove`, `rossi.animate.check` and
+`rossi.animate.po`. `rossi.rodin.prove` takes `[fileUri, component,
+obligation]`; the named obligation must exist and not be discharged.
 
 ## Semantic Analysis Reuse
 
