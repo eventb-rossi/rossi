@@ -21,6 +21,8 @@ mod commands {
     pub mod export;
     pub mod fmt;
     pub mod import;
+    #[cfg(feature = "mcp")]
+    pub mod mcp;
     pub mod proofs;
     pub mod prove;
     pub mod report;
@@ -68,6 +70,10 @@ enum Command {
     /// obligations.
     #[command(about = "Check stored proofs against their proof obligations")]
     Prove(commands::prove::ProveArgs),
+    /// Serve the Model Context Protocol tools of a project over stdio.
+    #[cfg(feature = "mcp")]
+    #[command(about = "Serve the Model Context Protocol tools of a project over stdio")]
+    Mcp(commands::mcp::McpArgs),
     /// Generate a shell completion script (bash, zsh, fish, …).
     #[command(about = "Generate a shell completion script")]
     Completions(commands::completions::CompletionsArgs),
@@ -83,6 +89,8 @@ fn main() -> ExitCode {
         Command::Dump(args) => commands::dump::run(args),
         Command::Clean(args) => commands::clean::run(args),
         Command::Prove(args) => commands::prove::run(args),
+        #[cfg(feature = "mcp")]
+        Command::Mcp(args) => commands::mcp::run(args),
         // Derive the completion script from the same clap command tree the CLI
         // parses with, so it can never drift from the real interface.
         Command::Completions(args) => commands::completions::run(args, &mut Cli::command()),

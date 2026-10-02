@@ -182,6 +182,33 @@ fn same_names(old_rows: &[StatusRow], new_rows: &[StatusRow]) -> bool {
     old == new
 }
 
+/// Replace every status row of every `.bpo`/`.bps` pair in `files`
+/// with a fresh unattempted one, each carrying its obligation's stamp.
+///
+/// A caller that must not see recorded verdicts asks for this: an
+/// independent check of the model is not independent if a discharged
+/// obligation lets the checker skip the property it discharged. The
+/// stamps come from the obligations, so the pair stays self-consistent
+/// and a later reader cannot mistake the result for stale state.
+///
+/// The sibling [`reset_stale_statuses`] resets only the rows whose
+/// stamp no longer matches; the persistent writers reset nothing.
+pub fn reset_all_statuses(files: &mut [ScFile]) {
+    for (i, j) in bpo_bps_pairs(files) {
+        let stamps = sequent_stamps(&files[i].contents);
+        let rows: BTreeSet<String> = parse_status_rows(&files[j].contents)
+            .into_iter()
+            .map(|row| row.name)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        if let Ok(reset) = reset_status_rows(&files[j].contents, &rows, &stamps) {
+            files[j].contents = reset;
+        }
+    }
+}
+
 /// Reset stale proof statuses after [`reconcile_build_files`]: a `.bps`
 /// row whose recorded `poStamp` differs from its sequent's stamp in the
 /// sibling `.bpo` records a proof of an obligation that has since
