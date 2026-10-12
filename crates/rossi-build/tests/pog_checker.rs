@@ -55,15 +55,15 @@ fn checker_reads_back_generated_obligations() {
         eprintln!("SKIP pog_checker: no corpus (set EVENTB_CORPUS_DIR)");
         return;
     };
-    if let (Some(have), Some(want)) = (checker_version(&checker), baseline_version(&corpus)) {
-        if have < want {
-            eprintln!(
-                "SKIP pog_checker: eventb-checker {}.{} is older than the corpus baseline \
+    if let (Some(have), Some(want)) = (checker_version(&checker), baseline_version(&corpus))
+        && have < want
+    {
+        eprintln!(
+            "SKIP pog_checker: eventb-checker {}.{} is older than the corpus baseline \
                  {}.{} (see CHECKER.md); refusing to compare status counts.",
-                have.0, have.1, want.0, want.1
-            );
-            return;
-        }
+            have.0, have.1, want.0, want.1
+        );
+        return;
     }
     let flags = load_flags(&corpus.join("model_flags.tsv")).unwrap_or_default();
     let baselines = load_po_baseline(&corpus);

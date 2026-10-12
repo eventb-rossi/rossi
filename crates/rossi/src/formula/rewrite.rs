@@ -301,11 +301,12 @@ pub(super) fn rewrite_expr(e: &Expression, rw: &mut dyn FormulaRewriter) -> Expr
         }
         ExpressionKind::Unary { op, child } => {
             let c2 = rewrite_expr(child, rw);
-            if rw.auto_flattening() && *op == UnaryExprOp::UnMinus {
-                if let ExpressionKind::IntegerLiteral(value) = c2.kind() {
-                    let negated = ff.integer_literal(-value.clone(), e.span());
-                    return rw.rewrite_expression(&negated);
-                }
+            if rw.auto_flattening()
+                && *op == UnaryExprOp::UnMinus
+                && let ExpressionKind::IntegerLiteral(value) = c2.kind()
+            {
+                let negated = ff.integer_literal(-value.clone(), e.span());
+                return rw.rewrite_expression(&negated);
             }
             if same_expr(&c2, child) {
                 e.clone()

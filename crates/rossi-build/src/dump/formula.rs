@@ -19,8 +19,9 @@ use rossi::formula::{
     PredicateKind, Type, fresh, tag,
 };
 
-use super::location::{LineIndex, SpanDump};
+use super::location::SpanDump;
 use super::opname;
+use rossi::ast::LineIndex;
 
 /// A type as a tree, mirroring Rodin's type objects.
 ///
@@ -237,7 +238,7 @@ impl<'a> Ctx<'a> {
     /// which the consumer never sees; emitting those would be worse than
     /// emitting nothing.
     fn span(&self, span: Option<Span>) -> Option<SpanDump> {
-        Some(self.lines?.span(span?, self.file.clone()))
+        Some(SpanDump::of(self.lines?, span?, self.file.clone()))
     }
 
     /// Record a type and return its canonical string, which is its key in the

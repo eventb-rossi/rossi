@@ -1,0 +1,28 @@
+[package]
+name = "eventb-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model Context Protocol server for the Rossi Event-B toolchain: validation, build, proof obligations, proof status and model checking as agent tools."
+keywords = ["mcp", "event-b", "formal-methods", "verification"]
+categories = ["development-tools"]
+
+[dependencies]
+rmcp = { version = "=3.3.0", features = ["server", "transport-io"] }
+schemars = "1.0"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rossi = { workspace = true, features = ["serde"] }
+rossi-build = { workspace = true, features = ["serde"] }
+rossi-prove.workspace = true
+eventb-animate-driver.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+# An in-process client drives the server over a duplex pipe in the tests.
+rmcp = { version = "=3.3.0", features = ["client"] }

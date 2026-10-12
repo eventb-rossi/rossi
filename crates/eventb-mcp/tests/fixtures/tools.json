@@ -1,0 +1,1915 @@
+[
+  {
+    "name": "build",
+    "description": "Static-check the model, generate its proof obligations, reconcile their recorded proof status with the previous build, and write the checked files (.bcc/.bcm) and proof files (.bpo/.bps) under the output directory. Reports the files, the findings, the obligation counts by nature, and the proof status summary.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "write": {
+          "default": true,
+          "description": "Write the checked and proof files under the output directory\n(default `true`); `false` only reports what a build produces.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "DiagnosticRecord": {
+          "description": "One finding about the project.",
+          "properties": {
+            "component": {
+              "description": "The component the finding is about, when it is about one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "element": {
+              "description": "The element inside the component (`inv1`, `evt/grd1`), when the\nfinding names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file": {
+              "description": "The source file, relative to the root, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Region"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in `file` the finding is, when the source text is known."
+            },
+            "rule_id": {
+              "description": "The stable `EBnnn` rule code, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "severity": {
+              "description": "`error`, `warning` or `info`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "message"
+          ],
+          "type": "object"
+        },
+        "FileRecord": {
+          "description": "One file a build wrote or would write.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element in the file passed its checks.",
+              "type": "boolean"
+            },
+            "filename": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "accurate"
+          ],
+          "type": "object"
+        },
+        "ObligationCounts": {
+          "description": "How many obligations a build generated.",
+          "properties": {
+            "by_nature": {
+              "additionalProperties": {
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "description": "Obligations per nature, keyed by the nature's name\n(`InvariantPreservation`, `GuardStrengtheningSplit`, ...).",
+              "type": "object"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "by_nature"
+          ],
+          "type": "object"
+        },
+        "ProofSummary": {
+          "description": "The recorded status of the obligations, as buckets.",
+          "properties": {
+            "broken": {
+              "description": "Obligations whose stored proof no longer applies; counted in the\nbucket their capped confidence puts them in as well.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "discharged": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reviewed": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unattempted": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "discharged",
+            "reviewed",
+            "pending",
+            "unattempted",
+            "broken"
+          ],
+          "type": "object"
+        },
+        "Region": {
+          "description": "A 1-indexed position range in a source file, in characters.",
+          "properties": {
+            "end_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "end_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticRecord"
+          },
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileRecord"
+          },
+          "type": "array"
+        },
+        "obligations": {
+          "$ref": "#/$defs/ObligationCounts"
+        },
+        "output_dir": {
+          "description": "Where the files went, or would go.",
+          "type": "string"
+        },
+        "proofs": {
+          "$ref": "#/$defs/ProofSummary"
+        },
+        "written": {
+          "description": "Whether the files were written by this call.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output_dir",
+        "written",
+        "files",
+        "diagnostics",
+        "counts",
+        "obligations",
+        "proofs"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "check_invariants_cbc",
+    "description": "Check invariant preservation event by event with ProB's constraint solver, without exploring the state space: for each event, search for a state satisfying the invariant (reachable or not) from which one step violates it. A hit is a two-step counterexample; no hit is a preservation proof for the event (initialisation is not checked).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bounds": {
+          "default": [],
+          "description": "Predicates over the constants the run is constrained by.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deadlock": {
+          "default": false,
+          "description": "Also search for a deadlocking state that satisfies the invariant.",
+          "type": "boolean"
+        },
+        "events": {
+          "default": [],
+          "description": "Only these events (default: every event).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "machine": {
+          "default": null,
+          "description": "The machine to check (default: the most refined one, when the\nproject has exactly one).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prefs": {
+          "default": [],
+          "description": "ProB preferences, as `KEY=VALUE`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "set_size": {
+          "default": null,
+          "description": "ProB's default size for the carrier sets (default 4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BindingRecord": {
+          "description": "One identifier of a state with the tool's rendering of its value.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        "CheckRecord": {
+          "description": "One check of a run: an event's preservation, an obligation, the\nwell-definedness gate.",
+          "properties": {
+            "bindings": {
+              "description": "The counterexample state, when the check found one.",
+              "items": {
+                "$ref": "#/$defs/BindingRecord"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "outcome": {
+              "description": "`passed`, `failed`, `error` or `skipped`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "outcome",
+            "bindings"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bounds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckRecord"
+          },
+          "type": "array"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "machine": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "description": "The tool's status: `ok`, `violation`, `incomplete` or `error`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine",
+        "bounds",
+        "status",
+        "message",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "check_wd",
+    "description": "Ask ProB's well-definedness prover to discharge the machine's well-definedness obligations (partial function applications, divisions, minimum and maximum of sets); reports how many it discharged. An undischarged obligation is unproven, not disproven.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "machine": {
+          "default": null,
+          "description": "The machine whose obligations to check (default: the most refined\none, when the project has exactly one).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prefs": {
+          "default": [],
+          "description": "ProB preferences, as `KEY=VALUE`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "set_size": {
+          "default": null,
+          "description": "ProB's default size for the carrier sets (default 4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BindingRecord": {
+          "description": "One identifier of a state with the tool's rendering of its value.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        "CheckRecord": {
+          "description": "One check of a run: an event's preservation, an obligation, the\nwell-definedness gate.",
+          "properties": {
+            "bindings": {
+              "description": "The counterexample state, when the check found one.",
+              "items": {
+                "$ref": "#/$defs/BindingRecord"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "outcome": {
+              "description": "`passed`, `failed`, `error` or `skipped`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "outcome",
+            "bindings"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bounds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckRecord"
+          },
+          "type": "array"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "machine": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "description": "The tool's status: `ok`, `violation`, `incomplete` or `error`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine",
+        "bounds",
+        "status",
+        "message",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "disprove_po",
+    "description": "Run ProB's constraint solver against each open proof obligation of the machine's refinement chain, looking for a counterexample to its sequent. A counterexample is a definite refutation (the obligation cannot be proved as the model stands); an obligation the solver proves passes; a timeout keeps it open.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "disprove_timeout_ms": {
+          "default": null,
+          "description": "Solver time per obligation, in milliseconds (default 1000).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "filter": {
+          "default": null,
+          "description": "Only the obligations whose qualified name matches this glob\n(`M1/*`, `*/INV`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine": {
+          "default": null,
+          "description": "The machine whose refinement chain to look at (default: the most\nrefined one, when the project has exactly one).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "names": {
+          "default": [],
+          "description": "Only these obligations, by qualified name\n(`<component>/<obligation>`, e.g. `M1/evt/inv1/INV`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prefs": {
+          "default": [],
+          "description": "ProB preferences, as `KEY=VALUE`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "set_size": {
+          "default": null,
+          "description": "ProB's default size for the carrier sets (default 4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BindingRecord": {
+          "description": "One identifier of a state with the tool's rendering of its value.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        "CheckRecord": {
+          "description": "One check of a run: an event's preservation, an obligation, the\nwell-definedness gate.",
+          "properties": {
+            "bindings": {
+              "description": "The counterexample state, when the check found one.",
+              "items": {
+                "$ref": "#/$defs/BindingRecord"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "outcome": {
+              "description": "`passed`, `failed`, `error` or `skipped`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "outcome",
+            "bindings"
+          ],
+          "type": "object"
+        },
+        "DisproofRecord": {
+          "description": "One obligation the disprover refuted.",
+          "properties": {
+            "bindings": {
+              "items": {
+                "$ref": "#/$defs/BindingRecord"
+              },
+              "type": "array"
+            },
+            "message": {
+              "type": "string"
+            },
+            "name": {
+              "description": "The qualified name, `<component>/<obligation>`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "message",
+            "bindings"
+          ],
+          "type": "object"
+        },
+        "DisproveVerdict": {
+          "description": "What a disprover run concluded.",
+          "properties": {
+            "disproved": {
+              "items": {
+                "$ref": "#/$defs/DisproofRecord"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "description": "`disproved`, `no_counterexample`, `ok` or `error`.",
+              "type": "string"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "open": {
+              "description": "Obligations still open after the run.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "spurious": {
+              "description": "Counterexamples under the selected hypotheses only, which may be\nspurious.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "description": "Obligations the run looked at.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "disproved",
+            "open",
+            "total",
+            "spurious"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckRecord"
+          },
+          "type": "array"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "machine": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/DisproveVerdict"
+        }
+      },
+      "required": [
+        "machine",
+        "status",
+        "message",
+        "verdict",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "get_po",
+    "description": "Show one proof obligation as the prover sees it: the typed identifiers in scope, the hypotheses (marked when the obligation's hints select them), and the goal, in Event-B notation, with the obligation's nature, sources and status.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "description": "The component whose obligation file holds the obligation.",
+          "type": "string"
+        },
+        "max_hypotheses": {
+          "default": 200,
+          "description": "At most this many hypotheses (default 200); the document says how\nmany there are in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "name"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "HypothesisRecord": {
+          "description": "One hypothesis of a sequent.",
+          "properties": {
+            "index": {
+              "description": "The hypothesis's position among all of the sequent's hypotheses.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "selected": {
+              "description": "Whether the obligation's selection hints select it for the prover.",
+              "type": "boolean"
+            },
+            "text": {
+              "description": "The predicate, in Event-B notation.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "index",
+            "text",
+            "selected"
+          ],
+          "type": "object"
+        },
+        "ObligationRecord": {
+          "description": "One proof obligation.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element the obligation depends on passed its checks.",
+              "type": "boolean"
+            },
+            "component": {
+              "type": "string"
+            },
+            "description": {
+              "description": "The human description (`Invariant  preservation`).",
+              "type": "string"
+            },
+            "name": {
+              "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+              "type": "string"
+            },
+            "nature": {
+              "description": "The nature's name (`InvariantPreservation`, `GuardStrengtheningSplit`,\n...), or the description verbatim when it is not one of the generator's.",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/SourceRecord"
+              },
+              "type": "array"
+            },
+            "stamp": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "component",
+            "name",
+            "nature",
+            "description",
+            "accurate",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "SourceRecord": {
+          "description": "One element an obligation traces back to.",
+          "properties": {
+            "component": {
+              "description": "The component that declares the element.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event a guard, action, parameter or witness belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`invariant`, `guard`, `action`, `event`, `axiom`, ...",
+              "type": "string"
+            },
+            "name": {
+              "description": "The element's label, identifier or target.",
+              "type": "string"
+            },
+            "role": {
+              "description": "`DEFAULT`, `ABSTRACT` or `CONCRETE`: the part the element plays.",
+              "type": "string"
+            },
+            "theorem": {
+              "description": "Whether a labelled predicate is a theorem.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "role",
+            "component",
+            "kind",
+            "name",
+            "theorem"
+          ],
+          "type": "object"
+        },
+        "StatusRecord": {
+          "description": "The recorded proof status of one obligation.",
+          "properties": {
+            "broken": {
+              "description": "Whether the stored proof no longer applies to the obligation.",
+              "type": "boolean"
+            },
+            "bucket": {
+              "description": "`discharged`, `reviewed`, `pending` or `unattempted`.",
+              "type": "string"
+            },
+            "confidence": {
+              "description": "The recorded confidence, when the row carries one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "manual": {
+              "description": "Whether the proof is marked as made by hand.",
+              "type": "boolean"
+            },
+            "stale": {
+              "description": "Whether the verdict is due for recomputation.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "bucket",
+            "broken",
+            "manual",
+            "stale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "goal": {
+          "description": "The goal, in Event-B notation.",
+          "type": "string"
+        },
+        "hypotheses": {
+          "description": "The hypotheses, up to the requested cap, with the well-definedness\nconjuncts the prover adds.",
+          "items": {
+            "$ref": "#/$defs/HypothesisRecord"
+          },
+          "type": "array"
+        },
+        "hypotheses_total": {
+          "description": "How many hypotheses the sequent has in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "identifiers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The typed identifiers in scope, name to type.",
+          "type": "object"
+        },
+        "obligation": {
+          "$ref": "#/$defs/ObligationRecord"
+        },
+        "truncated": {
+          "description": "Whether `hypotheses` stops short of `hypotheses_total`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "obligation",
+        "identifiers",
+        "hypotheses",
+        "hypotheses_total",
+        "truncated",
+        "goal"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "list_pos",
+    "description": "List the proof obligations, one page at a time: each with its nature, the elements it traces back to (invariant, guard, action, event, axiom, ...), and its recorded proof status. Filter by component, nature, status bucket (or `open`) and element.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Only the obligations of this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "default": null,
+          "description": "Only the obligations that trace back to this element: a label or\nidentifier (`inv1`, `evt`), or `event/label` for an element of an\nevent (`evt/grd1`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 100,
+          "description": "The page size (default 100).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nature": {
+          "default": null,
+          "description": "Only the obligations of this nature, by name\n(`InvariantPreservation`, `GuardStrengtheningSplit`, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "offset": {
+          "default": 0,
+          "description": "The first obligation of the page (default 0).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "default": null,
+          "description": "Only the obligations in this status bucket (`discharged`,\n`reviewed`, `pending`, `unattempted`), or `open` for every bucket\nbut `discharged`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ObligationRecord": {
+          "description": "One proof obligation.",
+          "properties": {
+            "accurate": {
+              "description": "Whether every element the obligation depends on passed its checks.",
+              "type": "boolean"
+            },
+            "component": {
+              "type": "string"
+            },
+            "description": {
+              "description": "The human description (`Invariant  preservation`).",
+              "type": "string"
+            },
+            "name": {
+              "description": "The obligation's name, e.g. `evt/inv1/INV`.",
+              "type": "string"
+            },
+            "nature": {
+              "description": "The nature's name (`InvariantPreservation`, `GuardStrengtheningSplit`,\n...), or the description verbatim when it is not one of the generator's.",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/SourceRecord"
+              },
+              "type": "array"
+            },
+            "stamp": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "component",
+            "name",
+            "nature",
+            "description",
+            "accurate",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "SourceRecord": {
+          "description": "One element an obligation traces back to.",
+          "properties": {
+            "component": {
+              "description": "The component that declares the element.",
+              "type": "string"
+            },
+            "event": {
+              "description": "The event a guard, action, parameter or witness belongs to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`invariant`, `guard`, `action`, `event`, `axiom`, ...",
+              "type": "string"
+            },
+            "name": {
+              "description": "The element's label, identifier or target.",
+              "type": "string"
+            },
+            "role": {
+              "description": "`DEFAULT`, `ABSTRACT` or `CONCRETE`: the part the element plays.",
+              "type": "string"
+            },
+            "theorem": {
+              "description": "Whether a labelled predicate is a theorem.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "role",
+            "component",
+            "kind",
+            "name",
+            "theorem"
+          ],
+          "type": "object"
+        },
+        "StatusRecord": {
+          "description": "The recorded proof status of one obligation.",
+          "properties": {
+            "broken": {
+              "description": "Whether the stored proof no longer applies to the obligation.",
+              "type": "boolean"
+            },
+            "bucket": {
+              "description": "`discharged`, `reviewed`, `pending` or `unattempted`.",
+              "type": "string"
+            },
+            "confidence": {
+              "description": "The recorded confidence, when the row carries one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "manual": {
+              "description": "Whether the proof is marked as made by hand.",
+              "type": "boolean"
+            },
+            "stale": {
+              "description": "Whether the verdict is due for recomputation.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "bucket",
+            "broken",
+            "manual",
+            "stale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "next_offset": {
+          "description": "The offset of the next page, when there is one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "obligations": {
+          "items": {
+            "$ref": "#/$defs/ObligationRecord"
+          },
+          "type": "array"
+        },
+        "offset": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "description": "How many obligations match the filters in all.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "obligations",
+        "total",
+        "offset"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "model_check",
+    "description": "Model-check a machine with ProB: explore its reachable states for invariant violations and deadlocks (and a goal state or theorem violations when asked) under a time limit, and report the verdict with the counterexample trace, the violating state and the violated invariants mapped back to their labels.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "assertions": {
+          "default": false,
+          "description": "Also check the theorems.",
+          "type": "boolean"
+        },
+        "bounds": {
+          "default": [],
+          "description": "Predicates over the constants (`n < 5`) the run is constrained by;\nthey become axioms of a scratch context the machine sees instead\nof its own, so the model is not changed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal": {
+          "default": null,
+          "description": "Also search for a reachable state satisfying this predicate; a\nhit is reported as a finding.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine": {
+          "default": null,
+          "description": "The machine to check (default: the most refined one, when the\nproject has exactly one).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "no_deadlock": {
+          "default": false,
+          "description": "Do not search for deadlocks.",
+          "type": "boolean"
+        },
+        "no_invariant": {
+          "default": false,
+          "description": "Do not search for invariant violations.",
+          "type": "boolean"
+        },
+        "prefs": {
+          "default": [],
+          "description": "ProB preferences, as `KEY=VALUE`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "set_size": {
+          "default": null,
+          "description": "ProB's default size for the carrier sets (default 4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "states": {
+          "default": null,
+          "description": "Stop after this many explored states.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "time_limit_secs": {
+          "default": null,
+          "description": "Wall-clock limit of the search, in seconds (default 30).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BindingRecord": {
+          "description": "One identifier of a state with the tool's rendering of its value.",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        "CounterexampleRecord": {
+          "description": "The trace to a violating state.",
+          "properties": {
+            "bindings": {
+              "description": "The violating state, one binding per variable.",
+              "items": {
+                "$ref": "#/$defs/BindingRecord"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "description": "How many transitions the trace has.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transitions": {
+              "description": "The events fired, the constants setup and INITIALISATION first.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "violated_invariants": {
+              "items": {
+                "$ref": "#/$defs/ViolatedInvariant"
+              },
+              "type": "array"
+            },
+            "violating_state": {
+              "description": "The violating state as the tool printed it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transitions",
+            "violating_state",
+            "violated_invariants",
+            "bindings",
+            "steps"
+          ],
+          "type": "object"
+        },
+        "VerdictRecord": {
+          "description": "What a model check concluded.",
+          "properties": {
+            "category": {
+              "description": "The tool's finding category for `finding`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`ok`, `incomplete`, `invariant_violation`, `deadlock`, `finding`,\n`load_error` or `engine_error`.",
+              "type": "string"
+            },
+            "message": {
+              "description": "The tool's message for a finding or an error.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Why the search ended (`exhaustive`, `state_limit`, `time_limit`, ...)\nfor `ok` and `incomplete`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "states": {
+              "description": "How many states an `ok` search explored.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        "ViolatedInvariant": {
+          "description": "An invariant the model checker found violated, mapped back to its\ndeclaration when the rendering or the label matched one.",
+          "properties": {
+            "component": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "description": "The predicate as the tool printed it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bounds": {
+          "description": "The bounds the run was constrained by.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "counterexample": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CounterexampleRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit_code": {
+          "description": "The tool's exit code; absent when a signal killed it.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "machine": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "description": "The tool's status: `ok`, `violation`, `incomplete` or `error`.",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerdictRecord"
+        }
+      },
+      "required": [
+        "machine",
+        "bounds",
+        "status",
+        "message",
+        "verdict"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "project",
+    "description": "Describe the Event-B project under the root: its components, the files they come from, their SEES/EXTENDS/REFINES edges, and how many findings it has.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ComponentRecord": {
+          "description": "One component of the project.",
+          "properties": {
+            "file": {
+              "description": "The source file, relative to the root.",
+              "type": "string"
+            },
+            "kind": {
+              "description": "`context` or `machine`.",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "file"
+          ],
+          "type": "object"
+        },
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "EdgeRecord": {
+          "description": "One dependency between components.",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "`sees`, `extends` or `refines`.",
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "kind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentRecord"
+          },
+          "type": "array"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/EdgeRecord"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "description": "`text` for a folder of `.eventb` files, `rodin` for a folder of\n`.bum`/`.buc` files.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The project name every handle starts with.",
+          "type": "string"
+        },
+        "output_dir": {
+          "description": "Where builds write their checked and proof files.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The root directory the server reads.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "name",
+        "kind",
+        "output_dir",
+        "components",
+        "edges",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "proof_status",
+    "description": "Sum up the recorded proof status of the obligations: how many are discharged, reviewed, pending, unattempted or broken, in all and per component.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Only this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ComponentProofs": {
+          "description": "The status summary of one component.",
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/$defs/ProofSummary"
+            }
+          },
+          "required": [
+            "component",
+            "summary"
+          ],
+          "type": "object"
+        },
+        "ProofSummary": {
+          "description": "The recorded status of the obligations, as buckets.",
+          "properties": {
+            "broken": {
+              "description": "Obligations whose stored proof no longer applies; counted in the\nbucket their capped confidence puts them in as well.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "discharged": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reviewed": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unattempted": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "discharged",
+            "reviewed",
+            "pending",
+            "unattempted",
+            "broken"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentProofs"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/ProofSummary"
+        }
+      },
+      "required": [
+        "summary",
+        "components"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  },
+  {
+    "name": "validate",
+    "description": "Check the model and report its findings: parse errors, undeclared identifiers, type errors, broken cross-references, refinement errors, and advisory lints, each with its EBnnn rule code, the component and element it is about, and its source region.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "component": {
+          "default": null,
+          "description": "Report only the findings about this component.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "include_wd": {
+          "default": false,
+          "description": "Also report the non-trivial well-definedness conditions (rule\nEB010, severity `info`).",
+          "type": "boolean"
+        },
+        "severity": {
+          "default": null,
+          "description": "The least severity to report: `error`, `warning` or `info`\n(default `warning`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "DiagnosticCounts": {
+          "description": "How many findings of each severity a document carries.",
+          "properties": {
+            "errors": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "infos": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warnings": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "infos"
+          ],
+          "type": "object"
+        },
+        "DiagnosticRecord": {
+          "description": "One finding about the project.",
+          "properties": {
+            "component": {
+              "description": "The component the finding is about, when it is about one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "element": {
+              "description": "The element inside the component (`inv1`, `evt/grd1`), when the\nfinding names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file": {
+              "description": "The source file, relative to the root, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Region"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where in `file` the finding is, when the source text is known."
+            },
+            "rule_id": {
+              "description": "The stable `EBnnn` rule code, when the finding has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "severity": {
+              "description": "`error`, `warning` or `info`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "severity",
+            "message"
+          ],
+          "type": "object"
+        },
+        "Region": {
+          "description": "A 1-indexed position range in a source file, in characters.",
+          "properties": {
+            "end_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "end_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_column": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_line": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/DiagnosticCounts"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/DiagnosticRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "diagnostics",
+        "counts"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true
+    }
+  }
+]

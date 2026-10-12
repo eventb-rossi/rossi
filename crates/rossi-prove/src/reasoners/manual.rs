@@ -1726,13 +1726,13 @@ impl Reasoner for LocalEq {
                 return Err("Cannot proceed re-writing with the given hypotheses".into());
             }
         };
-        if let Some(hyp) = &target_hyp {
-            if !seq.contains_hypothesis(hyp) {
-                return Err(format!(
-                    "{} is not a hypothesis of the given sequent",
-                    display_pred(hyp)
-                ));
-            }
+        if let Some(hyp) = &target_hyp
+            && !seq.contains_hypothesis(hyp)
+        {
+            return Err(format!(
+                "{} is not a hypothesis of the given sequent",
+                display_pred(hyp)
+            ));
         }
         let target = target_hyp.clone().unwrap_or_else(|| seq.goal().clone());
         if !seq.contains_hypothesis(&equality) {

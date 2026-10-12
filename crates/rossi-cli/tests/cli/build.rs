@@ -598,3 +598,85 @@ fn nested_rodin_xml_does_not_route_a_text_directory_to_the_project_loader() {
     );
     assert!(out_zip.exists(), "an output archive must be written");
 }
+
+#[test]
+fn build_json_reports_written_files_and_diagnostics() {
+    let tmp = tempdir_unique("rossi-cli-build-json");
+    let out_zip = tmp.join("out.zip");
+    let output = rossi_command()
+        .args([
+            "build",
+            "--format",
+            "json",
+            "../rossi/examples/traffic-light.zip",
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+    assert!(
+        report["output"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("out.zip")),
+        "{report}"
+    );
+    assert!(out_zip.exists(), "the archive is written");
+    assert_eq!(report["errors"], 0, "{report}");
+    let files = report["projects"][0]["files"]
+        .as_array()
+        .expect("files array");
+    assert!(
+        files.iter().any(|f| {
+            f["filename"]
+                .as_str()
+                .is_some_and(|name| name.ends_with(".bcm"))
+                && f["accurate"] == true
+        }),
+        "{report}"
+    );
+    assert!(
+        files.iter().all(|f| f.get("contents").is_none()),
+        "file contents stay out of the report: {report}"
+    );
+}
+
+#[test]
+fn build_json_reports_a_failed_project_without_writing() {
+    let tmp = tempdir_unique("rossi-cli-build-json-dup-names");
+    std::fs::write(tmp.join("a.eventb"), "MACHINE M\nEND\n").unwrap();
+    std::fs::write(tmp.join("b.eventb"), "MACHINE M\nEND\n").unwrap();
+    let out_zip = tmp.join("out.zip");
+    let output = rossi_command()
+        .args([
+            "build",
+            "--format",
+            "json",
+            tmp.to_str().unwrap(),
+            "--output",
+            out_zip.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(
+        !output.status.success(),
+        "duplicate component names fail the build"
+    );
+    assert!(!out_zip.exists(), "no output may be written");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+    assert!(report["output"].is_null(), "{report}");
+    let diagnostics = report["projects"][0]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["rule_id"] == "EB019" && d["severity"] == "error"),
+        "{report}"
+    );
+}

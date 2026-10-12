@@ -788,7 +788,7 @@ pub(crate) fn diagnostic(
     let span = origins.get(diagnostic.component()).and_then(|c| {
         let lines = c.lines.as_ref()?;
         let span = diagnostic.span?;
-        Some(lines.span(span, Some(c.source_id.clone())))
+        Some(SpanDump::of(lines, span, Some(c.source_id.clone())))
     });
 
     DiagnosticDump {

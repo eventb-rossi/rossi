@@ -544,26 +544,25 @@ impl NodeRewriter for EqualitySubst<'_> {
                 children: from_children,
             },
         ) = (expr.kind(), self.from.kind())
+            && op == from_op
         {
-            if op == from_op {
-                // Splice the first run of `from`'s children; a full
-                // match reduces to `to` through the single-child path.
-                let window = from_children.len();
-                let start = children.iter().position(|c| c == &from_children[0])?;
-                if start + window > children.len()
-                    || (1..window).any(|k| children[start + k] != from_children[k])
-                {
-                    return None;
-                }
-                let mut new_children: Vec<Expression> = children[..start].to_vec();
-                new_children.push(self.to.clone());
-                new_children.extend(children[start + window..].iter().cloned());
-                let flat = driver::flatten_once(*op, new_children);
-                if flat.len() == 1 {
-                    return Some(flat.into_iter().next().unwrap());
-                }
-                return Some(expr.factory().associative_expression(*op, flat, None));
+            // Splice the first run of `from`'s children; a full
+            // match reduces to `to` through the single-child path.
+            let window = from_children.len();
+            let start = children.iter().position(|c| c == &from_children[0])?;
+            if start + window > children.len()
+                || (1..window).any(|k| children[start + k] != from_children[k])
+            {
+                return None;
             }
+            let mut new_children: Vec<Expression> = children[..start].to_vec();
+            new_children.push(self.to.clone());
+            new_children.extend(children[start + window..].iter().cloned());
+            let flat = driver::flatten_once(*op, new_children);
+            if flat.len() == 1 {
+                return Some(flat.into_iter().next().unwrap());
+            }
+            return Some(expr.factory().associative_expression(*op, flat, None));
         }
         (expr == self.from).then(|| self.to.clone())
     }
@@ -581,17 +580,17 @@ fn parse_normal(pred: &Predicate) -> Predicate {
     struct MergeAssoc;
     impl rossi::formula::FormulaRewriter for MergeAssoc {
         fn rewrite_expression(&mut self, expr: &Expression) -> Expression {
-            if let ExpressionKind::Associative { op, children } = expr.kind() {
-                if children.iter().any(|c| {
+            if let ExpressionKind::Associative { op, children } = expr.kind()
+                && children.iter().any(|c| {
                     matches!(c.kind(),
                         ExpressionKind::Associative { op: inner, .. } if inner == op)
-                }) {
-                    return expr.factory().associative_expression(
-                        *op,
-                        driver::flatten_once(*op, children.clone()),
-                        None,
-                    );
-                }
+                })
+            {
+                return expr.factory().associative_expression(
+                    *op,
+                    driver::flatten_once(*op, children.clone()),
+                    None,
+                );
             }
             expr.clone()
         }
@@ -674,17 +673,17 @@ fn eq_he_rule(
     // hide it, or only deselect it when the identifier still occurs in
     // the unselected visible hypotheses; keep it when the replacement
     // still mentions it.
-    if let ExpressionKind::FreeIdentifier(name) = from.kind() {
-        if !to_free_idents_contain(to, name) {
-            let in_default = seq
-                .visible_hyp_iter()
-                .filter(|visible| !seq.is_selected(visible))
-                .any(|pred| pred.free_identifiers().iter().any(|ident| ident == name));
-            if in_default {
-                actions.push(HypAction::Deselect(vec![hyp.clone()]));
-            } else {
-                actions.push(HypAction::Hide(vec![hyp.clone()]));
-            }
+    if let ExpressionKind::FreeIdentifier(name) = from.kind()
+        && !to_free_idents_contain(to, name)
+    {
+        let in_default = seq
+            .visible_hyp_iter()
+            .filter(|visible| !seq.is_selected(visible))
+            .any(|pred| pred.free_identifiers().iter().any(|ident| ident == name));
+        if in_default {
+            actions.push(HypAction::Deselect(vec![hyp.clone()]));
+        } else {
+            actions.push(HypAction::Hide(vec![hyp.clone()]));
         }
     }
 

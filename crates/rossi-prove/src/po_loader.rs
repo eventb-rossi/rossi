@@ -39,6 +39,11 @@ const PARENT_SET: &str = "org.eventb.core.parentSet";
 const PREDICATE: &str = "org.eventb.core.predicate";
 const TYPE: &str = "org.eventb.core.type";
 const PO_STAMP: &str = "org.eventb.core.poStamp";
+const PO_DESC: &str = "org.eventb.core.poDesc";
+const ACCURATE: &str = "org.eventb.core.accurate";
+const PO_SOURCE: &str = "org.eventb.core.poSource";
+const PO_ROLE: &str = "org.eventb.core.poRole";
+const SOURCE: &str = "org.eventb.core.source";
 const SEL_HINT_FST: &str = "org.eventb.core.poSelHintFst";
 const SEL_HINT_SND: &str = "org.eventb.core.poSelHintSnd";
 
@@ -108,6 +113,15 @@ pub struct PoSequentEntry {
     pub name: String,
     /// The obligation's stamp, the signal status rows are keyed on.
     pub stamp: Option<String>,
+    /// What the obligation asks to prove, as the generator worded it
+    /// (`poDesc`).
+    pub description: String,
+    /// Whether every element the obligation depends on passed its
+    /// checks.
+    pub accurate: bool,
+    /// The elements the obligation traces back to: `(role, handle)`
+    /// rows in document order, the handles as the file spells them.
+    pub sources: Vec<(String, String)>,
     local: PoSet,
     goal: Option<String>,
     hints: Vec<Hint>,
@@ -443,6 +457,9 @@ fn read_bpo(reader: impl BufRead) -> Result<PoFile, PoError> {
                     Ctx::Sequent(PoSequentEntry {
                         name: get(&attrs, NAME).unwrap_or_default().to_string(),
                         stamp: get(&attrs, PO_STAMP).map(str::to_string),
+                        description: get(&attrs, PO_DESC).unwrap_or_default().to_string(),
+                        accurate: get(&attrs, ACCURATE) == Some("true"),
+                        sources: Vec::new(),
                         local: PoSet::default(),
                         goal: None,
                         hints: Vec::new(),
@@ -471,7 +488,18 @@ fn read_bpo(reader: impl BufRead) -> Result<PoFile, PoError> {
                     }
                     Ctx::Other
                 } else {
-                    // poSource and anything else: irrelevant to loading.
+                    // A source names an element the obligation came
+                    // from. Loading does not need it, but a report
+                    // about the obligation does, and reading it here
+                    // saves that reader a second parse of the file.
+                    if name == PO_SOURCE.as_bytes()
+                        && let Some(handle) = get(&attrs, SOURCE)
+                    {
+                        entry.sources.push((
+                            get(&attrs, PO_ROLE).unwrap_or_default().to_string(),
+                            handle.to_string(),
+                        ));
+                    }
                     Ctx::Other
                 }
             }

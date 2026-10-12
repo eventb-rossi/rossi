@@ -2145,11 +2145,10 @@ fn collapse_run(operands: &mut Vec<Expression>, run_op: &mut Option<AssocExprOp>
             op: first_op,
             children: inner,
         } = children[0].kind()
+            && *first_op == op
         {
-            if *first_op == op {
-                let inner = inner.clone();
-                children.splice(0..1, inner);
-            }
+            let inner = inner.clone();
+            children.splice(0..1, inner);
         }
         operands.push(fx.ff.associative_expression(op, children, span));
     }
@@ -3305,11 +3304,10 @@ fn collapse_pred_run(operands: &mut Vec<Predicate>, run_op: &mut Option<AssocPre
             op: first_op,
             children: inner,
         } = children[0].kind()
+            && *first_op == op
         {
-            if *first_op == op {
-                let inner = inner.clone();
-                children.splice(0..1, inner);
-            }
+            let inner = inner.clone();
+            children.splice(0..1, inner);
         }
         operands.push(fx.ff.associative_predicate(op, children, span));
     }

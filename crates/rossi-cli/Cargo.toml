@@ -16,10 +16,14 @@ path = "src/main.rs"
 doc = false
 
 [features]
-default = ["mimalloc"]
+default = ["mimalloc", "mcp"]
 # Allocate through mimalloc instead of the system allocator; see
 # the `#[global_allocator]` in src/main.rs.
 mimalloc = ["dep:mimalloc"]
+# The `rossi mcp` subcommand: the Model Context Protocol server for LLM
+# hosts. Brings an async runtime into the binary; a packager who does not
+# want it builds without the feature.
+mcp = ["dep:eventb-mcp", "dep:eventb-animate-driver", "dep:tokio", "dep:tracing-subscriber"]
 
 [dependencies]
 rossi.workspace = true
@@ -32,3 +36,7 @@ serde = { workspace = true }
 serde_json.workspace = true
 zip.workspace = true
 mimalloc = { workspace = true, optional = true }
+eventb-mcp = { workspace = true, optional = true }
+eventb-animate-driver = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }

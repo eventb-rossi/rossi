@@ -11,8 +11,10 @@ mod event;
 mod hyp;
 mod machine;
 mod model;
-mod natures;
+pub mod natures;
+pub mod obligations;
 pub mod reconcile;
+pub mod sources;
 pub mod status;
 mod tables;
 
@@ -21,6 +23,24 @@ use rossi::Component;
 use crate::ScFile;
 use crate::project::Project;
 use crate::sc::ScModel;
+
+/// The number of proof obligations generated for `component`.
+///
+/// Counted by scanning start tags rather than parsing: the emitter
+/// always writes `name` as a sequent's first attribute, so the
+/// space-terminated prefix is guaranteed — the same invariant
+/// [`reconcile`] relies on. A caller that wants the obligations
+/// themselves wants [`obligations::Obligations`] instead.
+#[must_use]
+pub fn sequent_count(files: &[ScFile], component: &str) -> usize {
+    let filename = format!("{component}.bpo");
+    files
+        .iter()
+        .find(|file| file.filename == filename)
+        .map_or(0, |file| {
+            file.contents.matches("<org.eventb.core.poSequent ").count()
+        })
+}
 
 /// Generate the proof-obligation files of every successfully-checked
 /// component, in project order.

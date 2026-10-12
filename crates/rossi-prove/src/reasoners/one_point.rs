@@ -238,13 +238,12 @@ pub(crate) fn rewrite_in_compset(pred: &Predicate) -> Option<Predicate> {
     } else {
         ff.associative_predicate(AssocPredOp::LAnd, predicates, None)
     };
-    if replacements.available() {
-        if let Some(result) =
+    if replacements.available()
+        && let Some(result) =
             instantiate_partial(QuantPredOp::Exists, decls, &body, &replacements.slots)
-        {
-            // SIMP_IN_COMPSET_ONEPOINT
-            return Some(result);
-        }
+    {
+        // SIMP_IN_COMPSET_ONEPOINT
+        return Some(result);
     }
     // SIMP_IN_COMPSET
     Some(ff.quantified_predicate(QuantPredOp::Exists, decls.clone(), body, None))
