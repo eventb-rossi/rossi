@@ -119,11 +119,12 @@ pub fn bpo_entries(zip_bytes: &[u8]) -> Result<BTreeMap<String, String>, String>
     let mut out = BTreeMap::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("zip: {e}"))?;
-        if entry.name().ends_with(".bpo") {
+        let name = entry.name().map_err(|e| format!("zip: {e}"))?.into_owned();
+        if name.ends_with(".bpo") {
             let mut contents = String::new();
             std::io::Read::read_to_string(&mut entry, &mut contents)
                 .map_err(|e| format!("zip read: {e}"))?;
-            out.insert(entry.name().to_string(), contents);
+            out.insert(name, contents);
         }
     }
     Ok(out)
@@ -585,6 +586,7 @@ impl PoArchive {
         let mut archive = zip::ZipArchive::new(file).map_err(|err| err.to_string())?;
         let mut stems: Vec<String> = archive
             .file_names()
+            .filter_map(Result::ok)
             .filter(|name| name.ends_with(".bpo"))
             .map(|name| name.trim_end_matches(".bpo").to_string())
             .collect();

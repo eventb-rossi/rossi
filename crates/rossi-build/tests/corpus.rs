@@ -129,7 +129,7 @@ fn process_zip(path: &std::path::Path) -> Result<Vec<Row>, Box<dyn std::error::E
         std::collections::BTreeMap::new();
     for i in 0..archive.len() {
         let mut e = archive.by_index(i)?;
-        let n = e.name().to_string();
+        let n = e.name()?.to_string();
         if n.ends_with(".bcc") || n.ends_with(".bcm") {
             let base = basename(&n).to_string();
             let mut s = String::new();

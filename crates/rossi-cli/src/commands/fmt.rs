@@ -310,8 +310,8 @@ fn normalize_zip(bytes: &[u8]) -> CmdResult<(Vec<u8>, bool)> {
         writer.set_raw_comment(archive_comment.into_boxed_slice())?;
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
-            if is_component_entry(entry.name()) {
-                let name = entry.name().to_string();
+            let name = entry.name()?.to_string();
+            if is_component_entry(&name) {
                 let mut xml = String::new();
                 entry.read_to_string(&mut xml)?;
                 let component = parse_xml(&xml).map_err(|e| format!("{name}: {e}"))?;
@@ -321,7 +321,6 @@ fn normalize_zip(bytes: &[u8]) -> CmdResult<(Vec<u8>, bool)> {
                 writer.write_all(canonical.as_bytes())?;
             } else if entry.is_dir() {
                 // raw_copy_file marks directory Unix modes as regular files.
-                let name = entry.name().to_string();
                 let mut options = zip::write::SimpleFileOptions::default()
                     .unix_permissions(entry.unix_mode().unwrap_or(0o755));
                 if let Some(last_modified) = entry.last_modified().filter(zip::DateTime::is_valid) {

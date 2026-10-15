@@ -134,10 +134,13 @@ fn scan_zip(path: &PathBuf, tally: &mut Tally) -> Result<(), String> {
         let entry = archive
             .by_index(index)
             .map_err(|err| format!("{}: {err}", path.display()))?;
-        if !entry.name().ends_with(".bpr") {
+        let entry_name = entry
+            .name()
+            .map_err(|err| format!("{}: {err}", path.display()))?
+            .into_owned();
+        if !entry_name.ends_with(".bpr") {
             continue;
         }
-        let entry_name = entry.name().to_string();
         tally.files += 1;
         match read_bpr(BufReader::new(entry), |_| Keep::Full) {
             Ok(proofs) => {

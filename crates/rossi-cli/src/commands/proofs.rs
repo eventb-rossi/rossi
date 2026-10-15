@@ -401,7 +401,7 @@ pub(crate) fn visit_zip_proofs(
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if !is_proof_file_name(&name) {
             continue;
         }

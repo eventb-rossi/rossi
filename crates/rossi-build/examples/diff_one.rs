@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rodin = std::collections::HashMap::new();
     for i in 0..archive.len() {
         let mut e = archive.by_index(i)?;
-        let n = e.name().to_string();
+        let n = e.name()?.to_string();
         if n.ends_with(".bcc") || n.ends_with(".bcm") {
             let base = n
                 .rsplit_once('/')

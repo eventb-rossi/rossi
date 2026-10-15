@@ -180,7 +180,7 @@ impl Project {
         let mut components = Vec::new();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
-            let filename = entry.name().to_string();
+            let filename = entry.name()?.to_string();
             if !is_xml_input(&filename) {
                 continue;
             }
@@ -401,7 +401,7 @@ pub fn discover_projects(zip_bytes: &[u8], fallback_name: &str) -> Result<Vec<Di
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         let Some(entry_kind) = classify_project_discovery_entry(&name) else {
             continue;
         };
@@ -863,7 +863,7 @@ mod tests {
     fn entry_names(bytes: &[u8]) -> Vec<String> {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
             .collect()
     }
 

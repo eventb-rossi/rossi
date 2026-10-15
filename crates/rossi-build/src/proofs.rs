@@ -123,7 +123,7 @@ fn check_zip_archive<R: Read + Seek>(reader: R) -> Result<ProofReport> {
     // ordering, but without re-scanning the whole archive once per kind.
     let mut by_kind: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     for i in 0..archive.len() {
-        let name = archive.by_index(i)?.name().to_string();
+        let name = archive.by_index(i)?.name()?.to_string();
         if let Some(kind) = FileKind::of(&name) {
             by_kind[kind as usize].push(i);
         }
@@ -132,7 +132,7 @@ fn check_zip_archive<R: Read + Seek>(reader: R) -> Result<ProofReport> {
     for kind in [FileKind::Proof, FileKind::Obligations, FileKind::Status] {
         for &i in &by_kind[kind as usize] {
             let entry = archive.by_index(i)?;
-            let entry_path = entry.name().to_string();
+            let entry_path = entry.name()?.to_string();
             data.ingest(kind, &entry_path, std::io::BufReader::new(entry));
         }
     }

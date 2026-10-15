@@ -334,7 +334,7 @@ fn extract_archive_to_dir(bytes: &[u8], out_dir: &Path) -> CmdResult<()> {
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if !name.split('/').all(is_normal_path_component) {
             return Err(format!("unsafe archive entry name {name:?}").into());
         }

@@ -421,7 +421,9 @@ fn inspect_accuracy(zip: &Path) -> Accuracy {
         let Ok(mut entry) = archive.by_index(i) else {
             continue;
         };
-        let name = entry.name().to_string();
+        let Ok(name) = entry.name().map(String::from) else {
+            continue;
+        };
         if let Some(stem) = name.strip_suffix(".buc") {
             owed.insert(format!("{stem}.bcc"));
         } else if let Some(stem) = name.strip_suffix(".bum") {

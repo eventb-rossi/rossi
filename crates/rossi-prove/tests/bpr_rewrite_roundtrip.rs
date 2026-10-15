@@ -114,10 +114,11 @@ fn scan_zip(path: &Path, tally: &mut Tally) {
     let mut archive = zip::ZipArchive::new(BufReader::new(file)).expect("readable archive");
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).expect("readable entry");
-        if !entry.name().ends_with(".bpr") {
+        let name = entry.name().expect("readable entry name").into_owned();
+        if !name.ends_with(".bpr") {
             continue;
         }
-        let label = format!("{}!{}", path.display(), entry.name());
+        let label = format!("{}!{name}", path.display());
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         entry.read_to_end(&mut bytes).expect("readable entry");
         check(&label, &bytes, tally);
