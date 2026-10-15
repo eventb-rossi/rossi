@@ -45,7 +45,9 @@ quick-xml = "0.41"
 # feature set would link every other decompressor (zstd, bzip2, lzma, ppmd,
 # deflate64, AES) into the shipped binaries because the reader dispatches on
 # compression method at runtime, so LTO cannot dead-strip them.
-zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# `unreserved` lets raw_copy_file carry extra fields zip does not model, such
+# as the Info-ZIP Unix UID/GID field (0x7875), instead of failing on them.
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs", "unreserved"] }
 
 # LSP dependencies
 # Protocol types are re-exported from eventb-lsp as `crate::lsp_types` so they
