@@ -52,7 +52,10 @@ fn archive_proof_files(model: &str) -> (BTreeMap<String, String>, BTreeMap<Strin
         .join(format!("{model}.zip"));
     let file = std::fs::File::open(&zip).unwrap_or_else(|e| panic!("open {}: {e}", zip.display()));
     let mut archive = zip::ZipArchive::new(file).expect("zip");
-    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.expect("entry name").into_owned())
+        .collect();
     let mut bpos = BTreeMap::new();
     let mut bprs = BTreeMap::new();
     for name in names {

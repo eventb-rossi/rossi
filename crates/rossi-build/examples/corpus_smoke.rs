@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&data))?;
             for i in 0..archive.len() {
                 let mut e = archive.by_index(i)?;
-                let n = e.name().to_string();
+                let n = e.name()?.to_string();
                 if n.ends_with(".bcc") || n.ends_with(".bcm") {
                     let basename = n.rsplit_once('/').map(|(_, b)| b).unwrap_or(&n).to_string();
                     let mut s = String::new();

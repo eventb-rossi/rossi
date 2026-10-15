@@ -350,7 +350,7 @@ fn fmt_normalizes_rodin_zip() {
 
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
         .collect();
     assert!(
         names.iter().any(|n| n.ends_with(".buc")) && names.iter().any(|n| n.ends_with(".bum")),
@@ -403,7 +403,7 @@ fn fmt_preserves_multi_project_archive_structure() {
     let entry_names = |path: &std::path::Path| -> Vec<String> {
         let mut a = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
         let mut names: Vec<String> = (0..a.len())
-            .map(|i| a.by_index(i).unwrap().name().to_string())
+            .map(|i| a.by_index(i).unwrap().name().unwrap().to_string())
             .collect();
         names.sort();
         names

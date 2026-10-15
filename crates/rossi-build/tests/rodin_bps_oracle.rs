@@ -229,14 +229,18 @@ fn has_source(zip_bytes: &[u8], bps_name: &str) -> bool {
     let stem = bps_name.trim_end_matches(".bps");
     archive
         .file_names()
-        .any(|n| n == format!("{stem}.bum") || n == format!("{stem}.buc"))
+        .any(|n| n.is_ok_and(|n| n == format!("{stem}.bum") || n == format!("{stem}.buc")))
 }
 
 /// The archive's proof state, keyed by `.bps` entry path.
 fn proof_state(zip_bytes: &[u8]) -> Result<BTreeMap<String, ComponentState>, String> {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).map_err(|e| format!("zip: {e}"))?;
-    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.map(String::from))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("zip: {e}"))?;
     let mut out = BTreeMap::new();
     for name in names {
         let Some(stem) = name.strip_suffix(".bps") else {
@@ -324,13 +328,14 @@ fn strip_bps(zip_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let mut writer = zip::ZipWriter::new(&mut out);
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(|e| format!("zip: {e}"))?;
-        if entry.name().ends_with(".bps") {
+        let name = entry.name().map_err(|e| format!("zip: {e}"))?.into_owned();
+        if name.ends_with(".bps") {
             continue;
         }
         if entry.is_dir() {
             let options = zip::write::SimpleFileOptions::default();
             writer
-                .add_directory(entry.name(), options)
+                .add_directory(name, options)
                 .map_err(|e| format!("zip: {e}"))?;
             continue;
         }

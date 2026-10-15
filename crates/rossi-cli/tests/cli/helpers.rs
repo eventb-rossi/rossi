@@ -212,7 +212,7 @@ pub fn extract_zip_to(zip_path: &PathBuf, dest: &std::path::Path) {
         if entry.is_dir() {
             continue;
         }
-        let out = dest.join(entry.name());
+        let out = dest.join(&*entry.name().unwrap());
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -233,7 +233,7 @@ pub fn zip_entry_bytes(zip_path: &std::path::Path, name: &str) -> Vec<u8> {
 pub fn zip_entry_names(zip_path: &std::path::Path) -> Vec<String> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_path).unwrap()).unwrap();
     (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
         .collect()
 }
 
@@ -252,7 +252,7 @@ pub fn rewrite_zip_entry(
     let options = zip::write::SimpleFileOptions::default();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().to_string();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
         if name == entry_name {

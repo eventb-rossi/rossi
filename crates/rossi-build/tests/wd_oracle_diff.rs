@@ -264,8 +264,8 @@ fn archive_source_paths(bytes: &[u8]) -> Result<Vec<String>, String> {
         let entry = archive
             .by_index(index)
             .map_err(|e| format!("rossi load: {e}"))?;
-        let path = entry.name();
-        if Path::new(path)
+        let path = entry.name().map_err(|e| format!("rossi load: {e}"))?;
+        if Path::new(&*path)
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| matches!(extension, "buc" | "bum"))

@@ -359,7 +359,7 @@ fn export_directory_of_subprojects_to_multi_project_zip() {
 
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
         .collect();
     // The colliding `shared` component is kept apart under each project prefix.
     for expected in [
@@ -417,7 +417,7 @@ fn export_stray_top_level_txt_still_splits_subprojects() {
 
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&out_zip).unwrap()).unwrap();
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
         .collect();
     // Both subdirectories became their own project despite the stray README.txt.
     assert!(

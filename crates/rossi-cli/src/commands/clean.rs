@@ -504,7 +504,7 @@ fn rebuild_zip(bytes: &[u8], bpr: &Rewritten, bps: &FileMap) -> CmdResult<Vec<u8
         writer.set_raw_comment(comment.into_boxed_slice())?;
         for i in 0..archive.len() {
             let entry = archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.to_string();
             let rewritten = match name.rsplit_once('.') {
                 Some((stem, "bpr")) => match bpr.get(stem) {
                     // The entry is dropped along with the file.

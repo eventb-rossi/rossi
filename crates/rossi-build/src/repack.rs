@@ -106,8 +106,9 @@ fn repackage_archive<'a, R: Read + Seek>(
 
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(zip_to_io)?;
-        if entry.name().ends_with(".bpr") {
-            proof_index.insert(entry.name().to_string(), i);
+        let name = entry.name().map_err(zip_to_io)?;
+        if name.ends_with(".bpr") {
+            proof_index.insert(name.into_owned(), i);
         }
     }
 
@@ -128,8 +129,8 @@ fn repackage_archive<'a, R: Read + Seek>(
     };
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(zip_to_io)?;
-        if replaced(entry.name()) {
-            let name = entry.name().to_string();
+        let name = entry.name().map_err(zip_to_io)?.into_owned();
+        if replaced(&name) {
             let mut text = String::new();
             if entry.read_to_string(&mut text).is_ok() {
                 previous.insert(name, text);
@@ -138,7 +139,6 @@ fn repackage_archive<'a, R: Read + Seek>(
         }
         // raw_copy_file marks directory Unix modes as regular files.
         if entry.is_dir() {
-            let name = entry.name().to_string();
             let mut options =
                 SimpleFileOptions::default().unix_permissions(entry.unix_mode().unwrap_or(0o755));
             if let Some(last_modified) = entry.last_modified().filter(zip::DateTime::is_valid) {
@@ -194,7 +194,7 @@ pub fn repackage_zip_file<P: AsRef<std::path::Path>>(
 fn detect_top_level_prefix<R: Read + Seek>(archive: &mut ZipArchive<R>) -> std::io::Result<String> {
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(zip_to_io)?;
-        let name = entry.name();
+        let name = entry.name().map_err(zip_to_io)?;
         if let Some(slash) = name.find('/') {
             return Ok(name[..=slash].to_string());
         }
@@ -229,7 +229,7 @@ mod tests {
     fn list(bytes: &[u8]) -> Vec<String> {
         let mut a = ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
         (0..a.len())
-            .map(|i| a.by_index(i).unwrap().name().to_string())
+            .map(|i| a.by_index(i).unwrap().name().unwrap().to_string())
             .collect()
     }
 

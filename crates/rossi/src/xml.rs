@@ -1128,6 +1128,7 @@ where
         .file_names()
         .enumerate()
         .filter_map(|(index, path)| {
+            let path = path.ok()?;
             let filename = path.split('/').next_back().unwrap_or("");
             let kind = ZipComponentKind::from_filename(filename)?;
             Some(ZipComponentEntry { index, kind })
@@ -1146,7 +1147,8 @@ where
     let ZipComponentEntry { index, kind } = entry;
     let filename = archive
         .name_for_index(index)
-        .unwrap_or("")
+        .and_then(|name| name.ok())
+        .unwrap_or_default()
         .split('/')
         .next_back()
         .unwrap_or("")
@@ -3296,7 +3298,7 @@ mod tests {
     fn entry_names(zip_data: &[u8]) -> Vec<String> {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data)).unwrap();
         (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
             .collect()
     }
 
