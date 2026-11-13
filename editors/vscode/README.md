@@ -112,6 +112,10 @@ editor features and the `rossi` CLI for the Rodin import/export/build/validation
 commands. **It downloads both for you on first activation** (see
 [Installation](#installation)), so usually nothing else is required. `Open in
 Rodin` additionally requires the Rodin IDE executable or macOS `.app` bundle.
+`Model-check` and `Disprove POs` additionally require
+[`eventb-animate`](https://github.com/eventb-rossi/eventb-animate), which the
+extension does not download: install it so that it is on `PATH`, or point
+`rossi.animate.path` at it.
 
 ### Installing the binaries yourself
 
