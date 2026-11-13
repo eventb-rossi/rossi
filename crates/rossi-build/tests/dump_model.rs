@@ -543,9 +543,9 @@ fn compare_arity(formula: FormulaRef<'_>, node: &Node) {
         "{} reports a different number of children",
         node.op
     );
-    for index in 0..formula.child_count() {
+    for (index, expected) in node.children.iter().enumerate() {
         let child = formula.child(index).expect("the child exists");
-        compare_arity(child, &node.children[index]);
+        compare_arity(child, expected);
     }
 }
 
