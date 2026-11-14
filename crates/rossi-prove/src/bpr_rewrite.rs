@@ -165,6 +165,26 @@ pub fn rewrite_bpr(
     Ok(stats)
 }
 
+/// A new `.bpr` document holding the emptied form of an entry for each
+/// of `names`, in order, laid out as Rodin writes the file: what Rodin's
+/// proof-status updater leaves for an obligation it has no stored proof
+/// for (`PSUpdater.updateStatus` creates the element and commits nothing
+/// to it). Without that element, Rodin's prover logs an error each time
+/// it opens the obligation.
+pub fn unattempted_bpr<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
+    let mut doc = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n<{PR_FILE} version=\"1\">\n"
+    );
+    for name in names {
+        doc.push_str(&format!(
+            "    <{PR_PROOF} {NAME}=\"{}\"/>\n",
+            quick_xml::escape::escape(name)
+        ));
+    }
+    doc.push_str(&format!("</{PR_FILE}>\n"));
+    doc
+}
+
 /// Handles one start tag, `empty` for the self-closing form.
 fn open<W: Write>(
     e: &BytesStart<'_>,
@@ -515,5 +535,24 @@ mod tests {
         )
         .expect_err("truncated");
         assert!(matches!(err, BprError::Truncated), "{err:?}");
+    }
+
+    #[test]
+    fn a_new_file_holds_one_emptied_entry_per_obligation() {
+        let doc = unattempted_bpr(["evt/inv1/INV", "a<b&c"]);
+        assert_eq!(
+            doc,
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<org.eventb.core.prFile version="1">
+    <org.eventb.core.prProof name="evt/inv1/INV"/>
+    <org.eventb.core.prProof name="a&lt;b&amp;c"/>
+</org.eventb.core.prFile>
+"#
+        );
+        let entries =
+            crate::bpr::read_bpr(doc.as_bytes(), |_| crate::bpr::Keep::Deps).expect("readable");
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["evt/inv1/INV", "a<b&c"]);
+        assert!(entries.iter().all(|e| e.confidence.is_none() && !e.manual));
     }
 }

@@ -6,7 +6,9 @@
 //! on-disk sources, and the destination is a *persistent* Rodin project the
 //! user proves in — so generated `.bpo`/`.bps` reconcile against whatever is
 //! on disk there (Rodin's own stamps and statuses carry over for unchanged
-//! obligations) and `.bpr` proof files are never written, pruned, or touched.
+//! obligations) and an existing `.bpr` proof file is never rewritten, pruned,
+//! or touched. A missing one is created with empty proofs, as Rodin's builder
+//! would.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +17,8 @@ use rossi::{NamedComponent, parse_named_components, write_project_directory};
 use rossi_build::pog::reconcile::reconcile_build_files;
 use rossi_build::project::{duplicate_component_name, project_from_text_components};
 use rossi_build::{Severity, build, is_normal_path_component};
+use rossi_prove::bpr_rewrite::unattempted_bpr;
+use rossi_prove::bps::read_bps;
 
 /// What a project build left behind, for user-facing reporting.
 #[derive(Debug)]
@@ -152,6 +156,26 @@ pub fn build_rodin_project(
             .map_err(|e| format!("cannot write {}: {e}", f.filename))?;
         written.push((path, super::sync::content_hash(f.contents.as_bytes())));
     }
+    // Rodin's proof-status updater pairs every new status with an empty
+    // stored proof, and its prover logs an error opening an obligation
+    // that has none. A component with no proof file yet gets those; an
+    // existing one is the user's, or a running Rodin's, and stays as is.
+    for f in files.iter().filter(|f| f.filename.ends_with(".bps")) {
+        let path = project_dir.join(&f.filename).with_extension("bpr");
+        if path.exists() {
+            continue;
+        }
+        let Ok(rows) = read_bps(f.contents.as_bytes()) else {
+            continue;
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        let contents = unattempted_bpr(rows.iter().map(|row| row.name.as_str()));
+        std::fs::write(&path, &contents)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        written.push((path, super::sync::content_hash(contents.as_bytes())));
+    }
 
     // The previous build's manifest (read before `write_base` replaces it)
     // is the record of which files *we* derived from sources — the only
@@ -205,7 +229,7 @@ pub fn build_rodin_project(
 /// *previous manifest* attributes to our own sources are candidates — a
 /// component the user created inside Rodin (never in any manifest) is
 /// Rodin's data and must never be deleted, and `.bpr` proofs are never
-/// touched regardless. Without a previous manifest nothing is pruned.
+/// pruned regardless. Without a previous manifest nothing is pruned.
 /// Best effort.
 fn prune_stale_generated_files(
     project_dir: &Path,
@@ -336,6 +360,35 @@ mod tests {
                 "{expected} missing from {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_component_without_proofs_gets_the_empty_ones_rodin_expects() {
+        const MACHINE: &str = "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n    @inv1 x ∈ ℕ\n\
+                               EVENTS\n    EVENT INITIALISATION\n    THEN\n        @act1 x := 0\n    END\n\
+                               \n    EVENT inc\n    THEN\n        @act1 x := x + 1\n    END\nEND\n";
+        let root = TempDir::new("rossi-rodin-bpr-test");
+        let src = root.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("m.eventb"), MACHINE).unwrap();
+        std::fs::write(src.join("base_ctx.eventb"), CTX).unwrap();
+        let project = root.path().join("ws").join("src");
+
+        let outcome = build_rodin_project(&src, &Overlay::new(), &project, "src").unwrap();
+
+        let bpr = project.join("m.bpr");
+        assert_eq!(
+            std::fs::read_to_string(&bpr).unwrap(),
+            rossi_prove::bpr_rewrite::unattempted_bpr(["INITIALISATION/inv1/INV", "inc/inv1/INV"])
+        );
+        assert!(outcome.written.iter().any(|(path, _)| *path == bpr));
+        // A context with no obligations has nothing to prove.
+        assert!(!project.join("base_ctx.bpr").exists());
+
+        // A proof file that exists is the user's, and a rebuild leaves it.
+        std::fs::write(&bpr, "PROOFS").unwrap();
+        build_rodin_project(&src, &Overlay::new(), &project, "src").unwrap();
+        assert_eq!(std::fs::read_to_string(&bpr).unwrap(), "PROOFS");
     }
 
     #[test]
