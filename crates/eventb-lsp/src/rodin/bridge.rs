@@ -81,6 +81,9 @@ pub const REGISTER: &str = "project/register";
 /// Bring Rodin forward and select the project.
 const REVEAL: &str = "project/reveal";
 
+/// Schedule a build of a project.
+pub const BUILD: &str = "workspace/build";
+
 /// Ask to be sent `model/dirty` for this connection.
 pub const SUBSCRIBE: &str = "model/subscribe";
 
@@ -212,6 +215,14 @@ impl Bridge {
     pub async fn reveal_project(&self, project_name: &str) -> Result<(), String> {
         self.transport
             .request(REVEAL, json!({ "project": project_name }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Schedule a build of `project_name` in the running workspace.
+    pub async fn build(&self, project_name: &str) -> Result<(), String> {
+        self.transport
+            .request(BUILD, json!({ "project": project_name }))
             .await
             .map(|_| ())
     }
@@ -786,6 +797,25 @@ mod tests {
         assert_eq!(
             seen.lock().await.last().unwrap()["params"]["project"],
             "registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn booted_rodin_is_asked_to_build_the_project() {
+        let (port, seen) = fake_bridge(greeting(json!([BUILD]), |message| {
+            Some(ok(message, json!({"buildScheduled": true})))
+        }))
+        .await;
+        let dir = workspace_for("rossi-bridge-boot-build", port);
+
+        super::super::greet_booted_rodin(dir.path(), "proj", &[], false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(methods(&seen).await, ["bridge/hello", BUILD]);
+        assert_eq!(
+            seen.lock().await.last().unwrap()["params"],
+            json!({"project": "proj"})
         );
     }
 

@@ -719,6 +719,15 @@ async fn greet_booted_rodin(
         }
     };
     reload_through(&bridge, project_name, files).await;
+    // The launch registered the project headlessly, where nothing builds, and
+    // a Rodin booting onto files it already knows has no change to build for.
+    // Unasked, its builder would first run at the next save, and until then
+    // no new obligation is auto-proved and no stale status rechecked.
+    if bridge.supports(bridge::BUILD)
+        && let Err(message) = bridge.build(project_name).await
+    {
+        tracing::info!("the Rodin bridge could not build {project_name}: {message}");
+    }
     if let Some(proof) = proof {
         let registered = bridge
             .register_project(&workspace_dir.join(project_name))
