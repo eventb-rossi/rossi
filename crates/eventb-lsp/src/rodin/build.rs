@@ -6,15 +6,16 @@
 //! on-disk sources, and the destination is a *persistent* Rodin project the
 //! user proves in — so generated `.bpo`/`.bps` reconcile against whatever is
 //! on disk there (Rodin's own stamps and statuses carry over for unchanged
-//! obligations) and an existing `.bpr` proof file is never rewritten, pruned,
-//! or touched. A missing one is created with empty proofs, as Rodin's builder
-//! would.
+//! obligations, and a new obligation's status goes unstamped for Rodin to
+//! update and auto-prove) and an existing `.bpr` proof file is never
+//! rewritten, pruned, or touched. A missing one is created with empty proofs,
+//! as Rodin's builder would.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rossi::{NamedComponent, parse_named_components, write_project_directory};
-use rossi_build::pog::reconcile::reconcile_build_files;
+use rossi_build::pog::reconcile::{reconcile_build_files, unstamp_statuses};
 use rossi_build::project::{duplicate_component_name, project_from_text_components};
 use rossi_build::{Severity, build, is_normal_path_component};
 use rossi_prove::bpr_rewrite::unattempted_bpr;
@@ -142,10 +143,14 @@ pub fn build_rodin_project(
     // moment these files land. Recomputing here would duplicate that work
     // inside the save loop — minutes on the largest models — and race
     // its own `.bps` writes. The stale stamps left by reconciliation
-    // are exactly the signal its updater keys on.
-    reconcile_build_files(&mut files, |name| {
+    // are exactly the signal its updater keys on. New obligations get the
+    // same signal: their rows go without a stamp, so the updater pairs
+    // each with an empty proof and hands it to the auto-prover, as it
+    // does for its own.
+    let new = reconcile_build_files(&mut files, |name| {
         std::fs::read_to_string(project_dir.join(name)).ok()
     });
+    unstamp_statuses(&mut files, &new);
     // Hash generated files from the in-memory contents as they are written;
     // only the exporter-written files (whose bytes the exporter kept to
     // itself) are read back below.
@@ -389,6 +394,52 @@ mod tests {
         std::fs::write(&bpr, "PROOFS").unwrap();
         build_rodin_project(&src, &Overlay::new(), &project, "src").unwrap();
         assert_eq!(std::fs::read_to_string(&bpr).unwrap(), "PROOFS");
+    }
+
+    #[test]
+    fn new_obligations_are_left_unstamped_for_rodin_to_auto_prove() {
+        use rossi_build::pog::reconcile::{assemble_status, fresh_status_row, sequent_stamps};
+
+        let machine = |invariants: &str| {
+            format!(
+                "MACHINE m\nVARIABLES\n    x\nINVARIANTS\n{invariants}EVENTS\n    \
+                 EVENT INITIALISATION\n    THEN\n        @act1 x := 0\n    END\n\n    \
+                 EVENT inc\n    THEN\n        @act1 x := x + 1\n    END\nEND\n"
+            )
+        };
+        let root = TempDir::new("rossi-rodin-unstamped-test");
+        let src = root.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("m.eventb"), machine("    @inv1 x ∈ ℕ\n")).unwrap();
+        let project = root.path().join("ws").join("src");
+        let bps = project.join("m.bps");
+
+        build_rodin_project(&src, &Overlay::new(), &project, "src").unwrap();
+        let rows = read_bps(std::fs::read(&bps).unwrap().as_slice()).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.po_stamp.is_none()), "{rows:?}");
+
+        // Rodin's status updater stamps every row it processes.
+        let stamps = sequent_stamps(&std::fs::read_to_string(project.join("m.bpo")).unwrap());
+        let stamped: Vec<String> = rows
+            .iter()
+            .map(|row| fresh_status_row(&row.name, &stamps[&row.name]))
+            .collect();
+        std::fs::write(&bps, assemble_status(&stamped)).unwrap();
+
+        std::fs::write(
+            src.join("m.eventb"),
+            machine("    @inv1 x ∈ ℕ\n    @inv2 x ≥ 0\n"),
+        )
+        .unwrap();
+        build_rodin_project(&src, &Overlay::new(), &project, "src").unwrap();
+        let rebuilt = std::fs::read_to_string(&bps).unwrap();
+        for row in &stamped {
+            assert!(rebuilt.contains(row), "{row} not carried in {rebuilt}");
+        }
+        for row in read_bps(rebuilt.as_bytes()).unwrap() {
+            assert_eq!(row.po_stamp.is_none(), row.name.contains("inv2"), "{row:?}");
+        }
     }
 
     #[test]

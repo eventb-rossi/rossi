@@ -247,6 +247,38 @@ pub fn reset_stale_statuses(files: &mut [ScFile]) -> Vec<(String, usize)> {
     counts
 }
 
+/// Drop the stamp of the status rows `new` names (keyed by `.bps`
+/// filename, the return of [`reconcile_build_files`]), for a project a
+/// running Rodin builds.
+///
+/// Rodin's status updater skips a row whose stamp matches its sequent's,
+/// and only the rows it updates reach the auto-prover. A fresh row stamped
+/// at build time therefore reads as already updated, and its obligation is
+/// never auto-proved. A row without a stamp is one the updater has not seen,
+/// so it treats the obligation as new: it pairs it with an empty stored
+/// proof (or checks the one there), stamps the row and auto-proves it, as it
+/// does for obligations its own generator produced. Every other row keeps
+/// its bytes.
+pub fn unstamp_statuses(files: &mut [ScFile], new: &HashMap<String, HashSet<String>>) {
+    for file in files.iter_mut() {
+        let Some(names) = new.get(&file.filename).filter(|names| !names.is_empty()) else {
+            continue;
+        };
+        let rows: Vec<String> = parse_status_rows(&file.contents)
+            .into_iter()
+            .map(|row| match &row.stamp {
+                // Stamps are numbers, so the raw attribute is the parsed one.
+                Some(stamp) if names.contains(&row.name) => {
+                    row.row
+                        .replacen(&format!(" {}=\"{stamp}\"", attr::PO_STAMP), "", 1)
+                }
+                _ => row.row,
+            })
+            .collect();
+        file.contents = assemble_status(&rows);
+    }
+}
+
 /// The `name → poStamp` of every sequent in a `.bpo`, by attribute scan —
 /// no formula parsing, unlike [`PoView`], so a Rodin-written predicate our
 /// parser cannot reparse never voids the stamps (which would reset every

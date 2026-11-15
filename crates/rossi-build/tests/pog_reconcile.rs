@@ -6,7 +6,7 @@ mod common;
 
 use rossi_build::po_view::PoView;
 use rossi_build::pog::reconcile::{
-    HASH_ORDERED, reconcile_build_files, reconcile_pair, reset_stale_statuses,
+    HASH_ORDERED, reconcile_build_files, reconcile_pair, reset_stale_statuses, unstamp_statuses,
 };
 use rossi_build::{Project, ScFile};
 
@@ -425,6 +425,54 @@ fn pair_files(bpo: String, bps: String) -> Vec<ScFile> {
             accurate: true,
         },
     ]
+}
+
+#[test]
+fn unstamping_drops_only_the_stamps_of_new_rows() {
+    let (old_bpo, old_bps) = base();
+    let old_bps = old_bps.replace(
+        r#"org.eventb.core.confidence="-99""#,
+        r#"org.eventb.core.confidence="1000""#,
+    );
+    let (new_bpo, new_bps) = generate(&machine("a &lt; 10", EVT2));
+    let mut files = pair_files(new_bpo, new_bps);
+    let new = reconcile_build_files(&mut files, |name| match name {
+        "M0.bpo" => Some(old_bpo.clone()),
+        "M0.bps" => Some(old_bps.clone()),
+        _ => None,
+    });
+    let reconciled = files.clone();
+
+    unstamp_statuses(&mut files, &new);
+
+    let stamped =
+        r#"name="evt2/inv1/INV" org.eventb.core.confidence="-99" org.eventb.core.poStamp="1""#;
+    assert!(reconciled[1].contents.contains(stamped));
+    assert_eq!(
+        files[1].contents,
+        reconciled[1].contents.replace(
+            stamped,
+            r#"name="evt2/inv1/INV" org.eventb.core.confidence="-99""#
+        ),
+        "the carried rows keep their bytes"
+    );
+    assert_eq!(files[0].contents, reconciled[0].contents);
+}
+
+#[test]
+fn unstamping_a_new_component_drops_every_stamp() {
+    let (bpo, bps) = base();
+    let mut files = pair_files(bpo.clone(), bps.clone());
+    let new = reconcile_build_files(&mut files, |_| None);
+
+    unstamp_statuses(&mut files, &new);
+
+    assert_eq!(files[0].contents, bpo);
+    assert!(bps.contains(r#" org.eventb.core.poStamp="0""#));
+    assert_eq!(
+        files[1].contents,
+        bps.replace(r#" org.eventb.core.poStamp="0""#, "")
+    );
 }
 
 #[test]

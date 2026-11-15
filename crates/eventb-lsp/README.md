@@ -528,7 +528,10 @@ to the whole element (`elements`) or drops the diagnostics (`off`).
 Each open or broken diagnostic also offers a `Prove in Rodin` Quick Fix per
 obligation. It builds the current model, launches Rodin if needed, and selects
 that exact obligation in the interactive prover through rossi-bridge, so it is
-not offered while `rossi.rodin.bridge` is off.
+not offered while `rossi.rodin.bridge` is off. The build leaves each new
+obligation's status unstamped, so Rodin's auto-prover runs on it as on the
+obligations Rodin generates itself, and what it proves shows up here once
+Rodin saves it.
 
 The Rodin and animate flows report through `$/progress` and honour
 `window/workDoneProgress/cancel`: cancelling the progress stops the flow at
