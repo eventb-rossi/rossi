@@ -454,7 +454,7 @@
       "span": {
         "file": "bank_account.bum",
         "start": 0,
-        "end": 2138,
+        "end": 2172,
         "line": 1,
         "col": 1,
         "end_line": 82,
@@ -2983,7 +2983,7 @@
           "span": {
             "file": "bank_account.bum",
             "start": 1383,
-            "end": 1917,
+            "end": 1951,
             "line": 56,
             "col": 5,
             "end_line": 71,
@@ -3501,23 +3501,23 @@
               "span": {
                 "file": "bank_account.bum",
                 "start": 1776,
-                "end": 1841,
+                "end": 1943,
                 "line": 69,
                 "col": 9,
-                "end_line": 69,
-                "end_col": 72
+                "end_line": 70,
+                "end_col": 83
               },
-              "text": "balances ≔ balances{from_account ↦ balances(from_account) − amount}",
+              "text": "balances ≔ balances{from_account ↦ balances(from_account) − amount,to_account ↦ balances(to_account)+amount}",
               "assignment": {
                 "tag": 6,
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
                   "start": 1782,
-                  "end": 1841,
+                  "end": 1943,
                   "line": 69,
                   "col": 15,
-                  "end_line": 69,
-                  "end_col": 72
+                  "end_line": 70,
+                  "end_col": 83
                 },
                 "idents": [
                   {
@@ -3540,34 +3540,66 @@
                     "tag": 305,
                     "op": "OVR",
                     "type": "ℙ(ACCOUNTS×ℤ)",
+                    "span": {
+                      "start": 1794,
+                      "end": 1943,
+                      "line": 69,
+                      "col": 27,
+                      "end_line": 70,
+                      "end_col": 83
+                    },
                     "children": [
                       {
                         "tag": 1,
                         "op": "FREE_IDENT",
                         "type": "ℙ(ACCOUNTS×ℤ)",
+                        "span": {
+                          "start": 1794,
+                          "end": 1802,
+                          "line": 69,
+                          "col": 27,
+                          "end_line": 69,
+                          "end_col": 35
+                        },
                         "name": "balances"
                       },
                       {
                         "tag": 5,
                         "op": "SETEXT",
                         "type": "ℙ(ACCOUNTS×ℤ)",
+                        "span": {
+                          "start": 1806,
+                          "end": 1943,
+                          "line": 69,
+                          "col": 39,
+                          "end_line": 70,
+                          "end_col": 83
+                        },
                         "children": [
                           {
                             "tag": 201,
                             "op": "MAPSTO",
                             "type": "ACCOUNTS×ℤ",
+                            "span": {
+                              "start": 1807,
+                              "end": 1857,
+                              "line": 69,
+                              "col": 40,
+                              "end_line": 69,
+                              "end_col": 86
+                            },
                             "children": [
                               {
                                 "tag": 1,
                                 "op": "FREE_IDENT",
                                 "type": "ACCOUNTS",
                                 "span": {
-                                  "start": 1791,
-                                  "end": 1803,
+                                  "start": 1807,
+                                  "end": 1819,
                                   "line": 69,
-                                  "col": 24,
+                                  "col": 40,
                                   "end_line": 69,
-                                  "end_col": 36
+                                  "end_col": 52
                                 },
                                 "name": "from_account"
                               },
@@ -3576,12 +3608,12 @@
                                 "op": "MINUS",
                                 "type": "ℤ",
                                 "span": {
-                                  "start": 1808,
-                                  "end": 1841,
+                                  "start": 1824,
+                                  "end": 1857,
                                   "line": 69,
-                                  "col": 41,
+                                  "col": 55,
                                   "end_line": 69,
-                                  "end_col": 72
+                                  "end_col": 86
                                 },
                                 "children": [
                                   {
@@ -3589,12 +3621,12 @@
                                     "op": "FUNIMAGE",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1808,
-                                      "end": 1830,
+                                      "start": 1824,
+                                      "end": 1846,
                                       "line": 69,
-                                      "col": 41,
+                                      "col": 55,
                                       "end_line": 69,
-                                      "end_col": 63
+                                      "end_col": 77
                                     },
                                     "children": [
                                       {
@@ -3602,12 +3634,12 @@
                                         "op": "FREE_IDENT",
                                         "type": "ℙ(ACCOUNTS×ℤ)",
                                         "span": {
-                                          "start": 1808,
-                                          "end": 1816,
+                                          "start": 1824,
+                                          "end": 1832,
                                           "line": 69,
-                                          "col": 41,
+                                          "col": 55,
                                           "end_line": 69,
-                                          "end_col": 49
+                                          "end_col": 63
                                         },
                                         "name": "balances"
                                       },
@@ -3616,12 +3648,12 @@
                                         "op": "FREE_IDENT",
                                         "type": "ACCOUNTS",
                                         "span": {
-                                          "start": 1817,
-                                          "end": 1829,
+                                          "start": 1833,
+                                          "end": 1845,
                                           "line": 69,
-                                          "col": 50,
+                                          "col": 64,
                                           "end_line": 69,
-                                          "end_col": 62
+                                          "end_col": 76
                                         },
                                         "name": "from_account"
                                       }
@@ -3632,12 +3664,113 @@
                                     "op": "FREE_IDENT",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1835,
-                                      "end": 1841,
+                                      "start": 1851,
+                                      "end": 1857,
                                       "line": 69,
-                                      "col": 66,
+                                      "col": 80,
                                       "end_line": 69,
-                                      "end_col": 72
+                                      "end_col": 86
+                                    },
+                                    "name": "amount"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "tag": 201,
+                            "op": "MAPSTO",
+                            "type": "ACCOUNTS×ℤ",
+                            "span": {
+                              "start": 1898,
+                              "end": 1942,
+                              "line": 70,
+                              "col": 40,
+                              "end_line": 70,
+                              "end_col": 82
+                            },
+                            "children": [
+                              {
+                                "tag": 1,
+                                "op": "FREE_IDENT",
+                                "type": "ACCOUNTS",
+                                "span": {
+                                  "start": 1898,
+                                  "end": 1908,
+                                  "line": 70,
+                                  "col": 40,
+                                  "end_line": 70,
+                                  "end_col": 50
+                                },
+                                "name": "to_account"
+                              },
+                              {
+                                "tag": 306,
+                                "op": "PLUS",
+                                "type": "ℤ",
+                                "span": {
+                                  "start": 1913,
+                                  "end": 1942,
+                                  "line": 70,
+                                  "col": 53,
+                                  "end_line": 70,
+                                  "end_col": 82
+                                },
+                                "children": [
+                                  {
+                                    "tag": 226,
+                                    "op": "FUNIMAGE",
+                                    "type": "ℤ",
+                                    "span": {
+                                      "start": 1913,
+                                      "end": 1933,
+                                      "line": 70,
+                                      "col": 53,
+                                      "end_line": 70,
+                                      "end_col": 73
+                                    },
+                                    "children": [
+                                      {
+                                        "tag": 1,
+                                        "op": "FREE_IDENT",
+                                        "type": "ℙ(ACCOUNTS×ℤ)",
+                                        "span": {
+                                          "start": 1913,
+                                          "end": 1921,
+                                          "line": 70,
+                                          "col": 53,
+                                          "end_line": 70,
+                                          "end_col": 61
+                                        },
+                                        "name": "balances"
+                                      },
+                                      {
+                                        "tag": 1,
+                                        "op": "FREE_IDENT",
+                                        "type": "ACCOUNTS",
+                                        "span": {
+                                          "start": 1922,
+                                          "end": 1932,
+                                          "line": 70,
+                                          "col": 62,
+                                          "end_line": 70,
+                                          "end_col": 72
+                                        },
+                                        "name": "to_account"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "tag": 1,
+                                    "op": "FREE_IDENT",
+                                    "type": "ℤ",
+                                    "span": {
+                                      "start": 1936,
+                                      "end": 1942,
+                                      "line": 70,
+                                      "col": 76,
+                                      "end_line": 70,
+                                      "end_col": 82
                                     },
                                     "name": "amount"
                                   }
@@ -3664,206 +3797,81 @@
                   {
                     "tag": 305,
                     "op": "OVR",
-                    "type": "ℙ(ACCOUNTS×ℤ)",
-                    "children": [
-                      {
-                        "tag": 1,
-                        "op": "FREE_IDENT",
-                        "type": "ℙ(ACCOUNTS×ℤ)",
-                        "name": "balances"
-                      },
-                      {
-                        "tag": 5,
-                        "op": "SETEXT",
-                        "type": "ℙ(ACCOUNTS×ℤ)",
-                        "children": [
-                          {
-                            "tag": 201,
-                            "op": "MAPSTO",
-                            "type": "ACCOUNTS×ℤ",
-                            "children": [
-                              {
-                                "tag": 1,
-                                "op": "FREE_IDENT",
-                                "type": "ACCOUNTS",
-                                "span": {
-                                  "start": 1791,
-                                  "end": 1803,
-                                  "line": 69,
-                                  "col": 24,
-                                  "end_line": 69,
-                                  "end_col": 36
-                                },
-                                "name": "from_account"
-                              },
-                              {
-                                "tag": 222,
-                                "op": "MINUS",
-                                "type": "ℤ",
-                                "span": {
-                                  "start": 1808,
-                                  "end": 1841,
-                                  "line": 69,
-                                  "col": 41,
-                                  "end_line": 69,
-                                  "end_col": 72
-                                },
-                                "children": [
-                                  {
-                                    "tag": 226,
-                                    "op": "FUNIMAGE",
-                                    "type": "ℤ",
-                                    "span": {
-                                      "start": 1808,
-                                      "end": 1830,
-                                      "line": 69,
-                                      "col": 41,
-                                      "end_line": 69,
-                                      "end_col": 63
-                                    },
-                                    "children": [
-                                      {
-                                        "tag": 1,
-                                        "op": "FREE_IDENT",
-                                        "type": "ℙ(ACCOUNTS×ℤ)",
-                                        "span": {
-                                          "start": 1808,
-                                          "end": 1816,
-                                          "line": 69,
-                                          "col": 41,
-                                          "end_line": 69,
-                                          "end_col": 49
-                                        },
-                                        "name": "balances"
-                                      },
-                                      {
-                                        "tag": 1,
-                                        "op": "FREE_IDENT",
-                                        "type": "ACCOUNTS",
-                                        "span": {
-                                          "start": 1817,
-                                          "end": 1829,
-                                          "line": 69,
-                                          "col": 50,
-                                          "end_line": 69,
-                                          "end_col": 62
-                                        },
-                                        "name": "from_account"
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "tag": 1,
-                                    "op": "FREE_IDENT",
-                                    "type": "ℤ",
-                                    "span": {
-                                      "start": 1835,
-                                      "end": 1841,
-                                      "line": 69,
-                                      "col": 66,
-                                      "end_line": 69,
-                                      "end_col": 72
-                                    },
-                                    "name": "amount"
-                                  }
-                                ]
-                              }
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "label": "act2",
-              "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#transfer|org.eventb.core.action#act2",
-              "span": {
-                "file": "bank_account.bum",
-                "start": 1850,
-                "end": 1909,
-                "line": 70,
-                "col": 9,
-                "end_line": 70,
-                "end_col": 68
-              },
-              "text": "balances ≔ balances{to_account ↦ balances(to_account)+amount}",
-              "assignment": {
-                "tag": 6,
-                "op": "BECOMES_EQUAL_TO",
-                "span": {
-                  "start": 1856,
-                  "end": 1909,
-                  "line": 70,
-                  "col": 15,
-                  "end_line": 70,
-                  "end_col": 68
-                },
-                "idents": [
-                  {
-                    "tag": 1,
-                    "op": "FREE_IDENT",
                     "type": "ℙ(ACCOUNTS×ℤ)",
                     "span": {
-                      "start": 1856,
-                      "end": 1864,
-                      "line": 70,
-                      "col": 15,
+                      "start": 1794,
+                      "end": 1943,
+                      "line": 69,
+                      "col": 27,
                       "end_line": 70,
-                      "end_col": 23
+                      "end_col": 83
                     },
-                    "name": "balances"
-                  }
-                ],
-                "values": [
-                  {
-                    "tag": 305,
-                    "op": "OVR",
-                    "type": "ℙ(ACCOUNTS×ℤ)",
                     "children": [
                       {
                         "tag": 1,
                         "op": "FREE_IDENT",
                         "type": "ℙ(ACCOUNTS×ℤ)",
+                        "span": {
+                          "start": 1794,
+                          "end": 1802,
+                          "line": 69,
+                          "col": 27,
+                          "end_line": 69,
+                          "end_col": 35
+                        },
                         "name": "balances"
                       },
                       {
                         "tag": 5,
                         "op": "SETEXT",
                         "type": "ℙ(ACCOUNTS×ℤ)",
+                        "span": {
+                          "start": 1806,
+                          "end": 1943,
+                          "line": 69,
+                          "col": 39,
+                          "end_line": 70,
+                          "end_col": 83
+                        },
                         "children": [
                           {
                             "tag": 201,
                             "op": "MAPSTO",
                             "type": "ACCOUNTS×ℤ",
+                            "span": {
+                              "start": 1807,
+                              "end": 1857,
+                              "line": 69,
+                              "col": 40,
+                              "end_line": 69,
+                              "end_col": 86
+                            },
                             "children": [
                               {
                                 "tag": 1,
                                 "op": "FREE_IDENT",
                                 "type": "ACCOUNTS",
                                 "span": {
-                                  "start": 1865,
-                                  "end": 1875,
-                                  "line": 70,
-                                  "col": 24,
-                                  "end_line": 70,
-                                  "end_col": 34
+                                  "start": 1807,
+                                  "end": 1819,
+                                  "line": 69,
+                                  "col": 40,
+                                  "end_line": 69,
+                                  "end_col": 52
                                 },
-                                "name": "to_account"
+                                "name": "from_account"
                               },
                               {
-                                "tag": 306,
-                                "op": "PLUS",
+                                "tag": 222,
+                                "op": "MINUS",
                                 "type": "ℤ",
                                 "span": {
-                                  "start": 1880,
-                                  "end": 1909,
-                                  "line": 70,
-                                  "col": 39,
-                                  "end_line": 70,
-                                  "end_col": 68
+                                  "start": 1824,
+                                  "end": 1857,
+                                  "line": 69,
+                                  "col": 55,
+                                  "end_line": 69,
+                                  "end_col": 86
                                 },
                                 "children": [
                                   {
@@ -3871,12 +3879,12 @@
                                     "op": "FUNIMAGE",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1880,
-                                      "end": 1900,
-                                      "line": 70,
-                                      "col": 39,
-                                      "end_line": 70,
-                                      "end_col": 59
+                                      "start": 1824,
+                                      "end": 1846,
+                                      "line": 69,
+                                      "col": 55,
+                                      "end_line": 69,
+                                      "end_col": 77
                                     },
                                     "children": [
                                       {
@@ -3884,12 +3892,12 @@
                                         "op": "FREE_IDENT",
                                         "type": "ℙ(ACCOUNTS×ℤ)",
                                         "span": {
-                                          "start": 1880,
-                                          "end": 1888,
-                                          "line": 70,
-                                          "col": 39,
-                                          "end_line": 70,
-                                          "end_col": 47
+                                          "start": 1824,
+                                          "end": 1832,
+                                          "line": 69,
+                                          "col": 55,
+                                          "end_line": 69,
+                                          "end_col": 63
                                         },
                                         "name": "balances"
                                       },
@@ -3898,14 +3906,14 @@
                                         "op": "FREE_IDENT",
                                         "type": "ACCOUNTS",
                                         "span": {
-                                          "start": 1889,
-                                          "end": 1899,
-                                          "line": 70,
-                                          "col": 48,
-                                          "end_line": 70,
-                                          "end_col": 58
+                                          "start": 1833,
+                                          "end": 1845,
+                                          "line": 69,
+                                          "col": 64,
+                                          "end_line": 69,
+                                          "end_col": 76
                                         },
-                                        "name": "to_account"
+                                        "name": "from_account"
                                       }
                                     ]
                                   },
@@ -3914,67 +3922,43 @@
                                     "op": "FREE_IDENT",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1903,
-                                      "end": 1909,
-                                      "line": 70,
-                                      "col": 62,
-                                      "end_line": 70,
-                                      "end_col": 68
+                                      "start": 1851,
+                                      "end": 1857,
+                                      "line": 69,
+                                      "col": 80,
+                                      "end_line": 69,
+                                      "end_col": 86
                                     },
                                     "name": "amount"
                                   }
                                 ]
                               }
                             ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              },
-              "ba": {
-                "tag": 101,
-                "op": "EQUAL",
-                "children": [
-                  {
-                    "tag": 1,
-                    "op": "FREE_IDENT",
-                    "type": "ℙ(ACCOUNTS×ℤ)",
-                    "name": "balances'"
-                  },
-                  {
-                    "tag": 305,
-                    "op": "OVR",
-                    "type": "ℙ(ACCOUNTS×ℤ)",
-                    "children": [
-                      {
-                        "tag": 1,
-                        "op": "FREE_IDENT",
-                        "type": "ℙ(ACCOUNTS×ℤ)",
-                        "name": "balances"
-                      },
-                      {
-                        "tag": 5,
-                        "op": "SETEXT",
-                        "type": "ℙ(ACCOUNTS×ℤ)",
-                        "children": [
+                          },
                           {
                             "tag": 201,
                             "op": "MAPSTO",
                             "type": "ACCOUNTS×ℤ",
+                            "span": {
+                              "start": 1898,
+                              "end": 1942,
+                              "line": 70,
+                              "col": 40,
+                              "end_line": 70,
+                              "end_col": 82
+                            },
                             "children": [
                               {
                                 "tag": 1,
                                 "op": "FREE_IDENT",
                                 "type": "ACCOUNTS",
                                 "span": {
-                                  "start": 1865,
-                                  "end": 1875,
+                                  "start": 1898,
+                                  "end": 1908,
                                   "line": 70,
-                                  "col": 24,
+                                  "col": 40,
                                   "end_line": 70,
-                                  "end_col": 34
+                                  "end_col": 50
                                 },
                                 "name": "to_account"
                               },
@@ -3983,12 +3967,12 @@
                                 "op": "PLUS",
                                 "type": "ℤ",
                                 "span": {
-                                  "start": 1880,
-                                  "end": 1909,
+                                  "start": 1913,
+                                  "end": 1942,
                                   "line": 70,
-                                  "col": 39,
+                                  "col": 53,
                                   "end_line": 70,
-                                  "end_col": 68
+                                  "end_col": 82
                                 },
                                 "children": [
                                   {
@@ -3996,12 +3980,12 @@
                                     "op": "FUNIMAGE",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1880,
-                                      "end": 1900,
+                                      "start": 1913,
+                                      "end": 1933,
                                       "line": 70,
-                                      "col": 39,
+                                      "col": 53,
                                       "end_line": 70,
-                                      "end_col": 59
+                                      "end_col": 73
                                     },
                                     "children": [
                                       {
@@ -4009,12 +3993,12 @@
                                         "op": "FREE_IDENT",
                                         "type": "ℙ(ACCOUNTS×ℤ)",
                                         "span": {
-                                          "start": 1880,
-                                          "end": 1888,
+                                          "start": 1913,
+                                          "end": 1921,
                                           "line": 70,
-                                          "col": 39,
+                                          "col": 53,
                                           "end_line": 70,
-                                          "end_col": 47
+                                          "end_col": 61
                                         },
                                         "name": "balances"
                                       },
@@ -4023,12 +4007,12 @@
                                         "op": "FREE_IDENT",
                                         "type": "ACCOUNTS",
                                         "span": {
-                                          "start": 1889,
-                                          "end": 1899,
+                                          "start": 1922,
+                                          "end": 1932,
                                           "line": 70,
-                                          "col": 48,
+                                          "col": 62,
                                           "end_line": 70,
-                                          "end_col": 58
+                                          "end_col": 72
                                         },
                                         "name": "to_account"
                                       }
@@ -4039,12 +4023,12 @@
                                     "op": "FREE_IDENT",
                                     "type": "ℤ",
                                     "span": {
-                                      "start": 1903,
-                                      "end": 1909,
+                                      "start": 1936,
+                                      "end": 1942,
                                       "line": 70,
-                                      "col": 62,
+                                      "col": 76,
                                       "end_line": 70,
-                                      "end_col": 68
+                                      "end_col": 82
                                     },
                                     "name": "amount"
                                   }
@@ -4069,8 +4053,8 @@
           "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#close_account",
           "span": {
             "file": "bank_account.bum",
-            "start": 1923,
-            "end": 2134,
+            "start": 1957,
+            "end": 2168,
             "line": 73,
             "col": 5,
             "end_line": 81,
@@ -4084,8 +4068,8 @@
               "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#close_account|org.eventb.core.parameter#account",
               "span": {
                 "file": "bank_account.bum",
-                "start": 1959,
-                "end": 1966,
+                "start": 1993,
+                "end": 2000,
                 "line": 75,
                 "col": 9,
                 "end_line": 75,
@@ -4100,8 +4084,8 @@
               "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#close_account|org.eventb.core.guard#grd1",
               "span": {
                 "file": "bank_account.bum",
-                "start": 1985,
-                "end": 2018,
+                "start": 2019,
+                "end": 2052,
                 "line": 77,
                 "col": 9,
                 "end_line": 77,
@@ -4112,8 +4096,8 @@
                 "tag": 107,
                 "op": "IN",
                 "span": {
-                  "start": 1991,
-                  "end": 2018,
+                  "start": 2025,
+                  "end": 2052,
                   "line": 77,
                   "col": 15,
                   "end_line": 77,
@@ -4125,8 +4109,8 @@
                     "op": "FREE_IDENT",
                     "type": "ACCOUNTS",
                     "span": {
-                      "start": 1991,
-                      "end": 1998,
+                      "start": 2025,
+                      "end": 2032,
                       "line": 77,
                       "col": 15,
                       "end_line": 77,
@@ -4139,8 +4123,8 @@
                     "op": "FREE_IDENT",
                     "type": "ℙ(ACCOUNTS)",
                     "span": {
-                      "start": 2003,
-                      "end": 2018,
+                      "start": 2037,
+                      "end": 2052,
                       "line": 77,
                       "col": 25,
                       "end_line": 77,
@@ -4157,8 +4141,8 @@
               "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#close_account|org.eventb.core.guard#grd2",
               "span": {
                 "file": "bank_account.bum",
-                "start": 2027,
-                "end": 2054,
+                "start": 2061,
+                "end": 2088,
                 "line": 78,
                 "col": 9,
                 "end_line": 78,
@@ -4169,8 +4153,8 @@
                 "tag": 101,
                 "op": "EQUAL",
                 "span": {
-                  "start": 2033,
-                  "end": 2054,
+                  "start": 2067,
+                  "end": 2088,
                   "line": 78,
                   "col": 15,
                   "end_line": 78,
@@ -4182,8 +4166,8 @@
                     "op": "FUNIMAGE",
                     "type": "ℤ",
                     "span": {
-                      "start": 2033,
-                      "end": 2050,
+                      "start": 2067,
+                      "end": 2084,
                       "line": 78,
                       "col": 15,
                       "end_line": 78,
@@ -4195,8 +4179,8 @@
                         "op": "FREE_IDENT",
                         "type": "ℙ(ACCOUNTS×ℤ)",
                         "span": {
-                          "start": 2033,
-                          "end": 2041,
+                          "start": 2067,
+                          "end": 2075,
                           "line": 78,
                           "col": 15,
                           "end_line": 78,
@@ -4209,8 +4193,8 @@
                         "op": "FREE_IDENT",
                         "type": "ACCOUNTS",
                         "span": {
-                          "start": 2042,
-                          "end": 2049,
+                          "start": 2076,
+                          "end": 2083,
                           "line": 78,
                           "col": 24,
                           "end_line": 78,
@@ -4225,8 +4209,8 @@
                     "op": "INTLIT",
                     "type": "ℤ",
                     "span": {
-                      "start": 2053,
-                      "end": 2054,
+                      "start": 2087,
+                      "end": 2088,
                       "line": 78,
                       "col": 35,
                       "end_line": 78,
@@ -4245,8 +4229,8 @@
               "source": "/bank_account/bank_account.bum|org.eventb.core.machineFile#bank_account|org.eventb.core.event#close_account|org.eventb.core.action#act1",
               "span": {
                 "file": "bank_account.bum",
-                "start": 2072,
-                "end": 2126,
+                "start": 2106,
+                "end": 2160,
                 "line": 80,
                 "col": 9,
                 "end_line": 80,
@@ -4257,8 +4241,8 @@
                 "tag": 6,
                 "op": "BECOMES_EQUAL_TO",
                 "span": {
-                  "start": 2078,
-                  "end": 2126,
+                  "start": 2112,
+                  "end": 2160,
                   "line": 80,
                   "col": 15,
                   "end_line": 80,
@@ -4270,8 +4254,8 @@
                     "op": "FREE_IDENT",
                     "type": "ℙ(ACCOUNTS)",
                     "span": {
-                      "start": 2078,
-                      "end": 2093,
+                      "start": 2112,
+                      "end": 2127,
                       "line": 80,
                       "col": 15,
                       "end_line": 80,
@@ -4286,8 +4270,8 @@
                     "op": "SETMINUS",
                     "type": "ℙ(ACCOUNTS)",
                     "span": {
-                      "start": 2097,
-                      "end": 2126,
+                      "start": 2131,
+                      "end": 2160,
                       "line": 80,
                       "col": 34,
                       "end_line": 80,
@@ -4299,8 +4283,8 @@
                         "op": "FREE_IDENT",
                         "type": "ℙ(ACCOUNTS)",
                         "span": {
-                          "start": 2097,
-                          "end": 2112,
+                          "start": 2131,
+                          "end": 2146,
                           "line": 80,
                           "col": 34,
                           "end_line": 80,
@@ -4313,8 +4297,8 @@
                         "op": "SETEXT",
                         "type": "ℙ(ACCOUNTS)",
                         "span": {
-                          "start": 2117,
-                          "end": 2126,
+                          "start": 2151,
+                          "end": 2160,
                           "line": 80,
                           "col": 52,
                           "end_line": 80,
@@ -4326,8 +4310,8 @@
                             "op": "FREE_IDENT",
                             "type": "ACCOUNTS",
                             "span": {
-                              "start": 2118,
-                              "end": 2125,
+                              "start": 2152,
+                              "end": 2159,
                               "line": 80,
                               "col": 53,
                               "end_line": 80,
@@ -4356,8 +4340,8 @@
                     "op": "SETMINUS",
                     "type": "ℙ(ACCOUNTS)",
                     "span": {
-                      "start": 2097,
-                      "end": 2126,
+                      "start": 2131,
+                      "end": 2160,
                       "line": 80,
                       "col": 34,
                       "end_line": 80,
@@ -4369,8 +4353,8 @@
                         "op": "FREE_IDENT",
                         "type": "ℙ(ACCOUNTS)",
                         "span": {
-                          "start": 2097,
-                          "end": 2112,
+                          "start": 2131,
+                          "end": 2146,
                           "line": 80,
                           "col": 34,
                           "end_line": 80,
@@ -4383,8 +4367,8 @@
                         "op": "SETEXT",
                         "type": "ℙ(ACCOUNTS)",
                         "span": {
-                          "start": 2117,
-                          "end": 2126,
+                          "start": 2151,
+                          "end": 2160,
                           "line": 80,
                           "col": 52,
                           "end_line": 80,
@@ -4396,8 +4380,8 @@
                             "op": "FREE_IDENT",
                             "type": "ACCOUNTS",
                             "span": {
-                              "start": 2118,
-                              "end": 2125,
+                              "start": 2152,
+                              "end": 2159,
                               "line": 80,
                               "col": 53,
                               "end_line": 80,
