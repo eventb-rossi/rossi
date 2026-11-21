@@ -858,7 +858,7 @@ pub(super) fn build_event_decl(
         &invalid_parameter_names,
     );
 
-    let (buckets, buckets_accurate) = build_event_buckets(
+    let (mut buckets, buckets_accurate) = build_event_buckets(
         &mut context,
         &scope,
         &rejected_guards,
@@ -866,6 +866,12 @@ pub(super) fn build_event_decl(
         &event_dups,
         &invalid_parameter_names,
     );
+    // Unlike the drops in `build_event_buckets`, this one leaves the event
+    // accurate: Rodin's `issueLHSProblemMarkers` marks the actions in error
+    // without calling `setNotAccurate`, and its checked event says
+    // `accurate="true"`.
+    let (conflicting_assignments, conflicting_actions) =
+        drop_conflicting_actions(&mut context, &inherited, &mut buckets.actions);
 
     let mut refines_decls: Vec<RefinesEventDecl> = Vec::new();
     if let Some(parent_cm) = context.machine.parent {
@@ -951,23 +957,30 @@ pub(super) fn build_event_decl(
     // initialised, so any concrete, typed variable that no action (inherited
     // or own) assigns is given a default `becomesSuchThat ⊤`. All such
     // variables are gathered into one combined action and the event (not the
-    // machine) is marked inaccurate.
+    // machine) is marked inaccurate. A variable in an EB037 conflict counts as
+    // unassigned, as in Rodin, even when the inherited action that won the
+    // conflict still assigns it. The actions EB037 dropped still count
+    // otherwise, as in Rodin: a variable one of them alone assigns is not
+    // repaired, and their labels are taken.
     if matches!(context.kind, EventKind::Init(_)) {
         let unassigned: Vec<String> = {
             let assigned: std::collections::HashSet<&str> = actions
                 .iter()
+                .chain(&conflicting_actions)
                 .flat_map(|a| lhs_variables(&a.action))
                 .collect();
             context
                 .machine
                 .concrete_vars
                 .iter()
-                .filter(|v| !assigned.contains(v.as_str()))
+                .filter(|v| {
+                    !assigned.contains(v.as_str()) || conflicting_assignments.contains(v.as_str())
+                })
                 .cloned()
                 .collect()
         };
         if !unassigned.is_empty() {
-            let repair_label = fresh_gen_label(&actions);
+            let repair_label = fresh_gen_label(actions.iter().chain(&conflicting_actions));
             actions.push(build_repair_action(
                 repair_label,
                 &source,
@@ -998,8 +1011,8 @@ pub(super) fn build_event_decl(
 /// `GEN1`, `GEN12`, and so on — each collision appends the running index to
 /// the label until it is free among the event's existing actions. The append
 /// form only triggers when the model already declares an action named `GEN`.
-fn fresh_gen_label(actions: &[ActionDecl]) -> String {
-    let used: std::collections::HashSet<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+fn fresh_gen_label<'a>(actions: impl Iterator<Item = &'a ActionDecl>) -> String {
+    let used: std::collections::HashSet<&str> = actions.map(|a| a.label.as_str()).collect();
     let mut label = "GEN".to_string();
     let mut index = 1;
     while used.contains(label.as_str()) {
@@ -1033,9 +1046,10 @@ fn build_repair_action(
     let checked = check_action(&action, env);
     ActionDecl {
         label,
-        // ActionDecl.source_index is never read for actions; a generated
-        // action has no source clause, so use the same 0 placeholder as
-        // other synthetic decls.
+        // A generated action has no source clause, so use the same 0
+        // placeholder as other synthetic decls. Neither reader of an
+        // action's source_index sees it: the EB037 pass runs before this
+        // action exists, and the dump skips synthesized actions.
         source_index: 0,
         action: checked.action,
         typed: checked.typed,
@@ -1366,6 +1380,149 @@ fn build_event_buckets(
         },
         accurate,
     )
+}
+
+/// An action that assigns a variable, for EB037: `None` for an inherited
+/// action, or `Some(i)` for the own action with `source_index` i, then its
+/// label.
+type Assigner<'a> = (Option<usize>, &'a str);
+
+/// EB037: drop every own action that assigns a variable another action of
+/// the event also assigns. This is Rodin's `ActionDisjointLHSError`
+/// (`MachineEventActionModule.getAssignedByActionMap`), judged over the
+/// actions that survived the checks of [`build_event_buckets`]. The actions
+/// an extended event inherits take part and win: an own action that assigns
+/// one of their variables is dropped, the inherited action kept. Rodin adds a
+/// warning on the refines clause for that case; as with inherited label
+/// conflicts, only the error on the own action is reported. Returns the
+/// variables in conflict, which INITIALISATION counts as unassigned, and the
+/// dropped actions.
+fn drop_conflicting_actions(
+    context: &mut EventCheckContext<'_, '_, '_>,
+    inherited: &InheritedEvent<'_>,
+    actions: &mut Vec<ActionDecl>,
+) -> (BTreeSet<String>, Vec<ActionDecl>) {
+    let machine_name = context.machine.machine_name;
+    let event_label = context.label();
+    let sources = context.kind.actions();
+    let inherited_actions = inherited.decl.map_or(&[][..], |d| d.actions.as_slice());
+    let mut assigners: BTreeMap<&str, Vec<Assigner<'_>>> = BTreeMap::new();
+    for a in inherited_actions {
+        for v in lhs_variables(&a.action) {
+            assigners.entry(v).or_default().push((None, &a.label));
+        }
+    }
+    for a in actions.iter() {
+        for v in lhs_variables(&a.action) {
+            assigners
+                .entry(v)
+                .or_default()
+                .push((Some(a.source_index), &a.label));
+        }
+    }
+    if assigners.values().all(|all| all.len() < 2) {
+        return Default::default();
+    }
+
+    let mut conflicting = BTreeSet::new();
+    let mut dropped = BTreeSet::new();
+    for a in actions.iter() {
+        // The variables in conflict, grouped by the other actions that assign
+        // them, so that the message names an action only with the variables
+        // it assigns.
+        let mut variables: Vec<&str> = Vec::new();
+        let mut groups: Vec<(Vec<Assigner<'_>>, Vec<&str>)> = Vec::new();
+        for v in lhs_variables(&a.action) {
+            let all = &assigners[v];
+            if all.len() < 2 || variables.contains(&v) {
+                continue;
+            }
+            variables.push(v);
+            let mut others = Vec::new();
+            for &other in all {
+                if other.0 != Some(a.source_index) && !others.contains(&other) {
+                    others.push(other);
+                }
+            }
+            match groups
+                .iter_mut()
+                .find(|(group_others, _)| *group_others == others)
+            {
+                Some((_, group)) => group.push(v),
+                None => groups.push((others, vec![v])),
+            }
+        }
+        let Some(first) = variables.first() else {
+            continue;
+        };
+        // Own actions index the raw event's actions; inherited ones never
+        // reach here.
+        let source = &sources[a.source_index];
+        let shared: Vec<String> = groups
+            .iter()
+            .map(|(others, group)| shared_with(group, others))
+            .collect();
+        // Each part but the last ends in a clause, so a comma precedes `and`.
+        let shared = match shared.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{}, and {last}", rest.join(", ")),
+            _ => shared.concat(),
+        };
+        context.diagnostics.push(Diagnostic {
+            severity: crate::RuleId::ConflictingAssignments.default_severity(),
+            origin: clause_origin(machine_name, event_label, Some(&a.label), "act"),
+            message: format!(
+                "action `{}` assigns {shared}; the actions of an event must assign disjoint sets \
+                 of variables, so this action was dropped",
+                a.label,
+            ),
+            rule_id: Some(crate::RuleId::ConflictingAssignments),
+            span: crate::sc::identifier_walker::usage_span_in_action(&source.action, first)
+                .or(source.span),
+        });
+        conflicting.extend(variables.iter().map(|v| v.to_string()));
+        dropped.insert(a.source_index);
+    }
+
+    let (dropped_actions, kept) = std::mem::take(actions)
+        .into_iter()
+        .partition(|a| dropped.contains(&a.source_index));
+    *actions = kept;
+    (conflicting, dropped_actions)
+}
+
+/// One part of an EB037 message: `` `v` and `w`, which action `b` also
+/// assigns `` for variables that the actions `others` also assign. With no
+/// other action, the action names the variables twice itself
+/// (`x, x ≔ 1, 2`), which Rodin rejects the same way: `` `x` more than once ``.
+fn shared_with(variables: &[&str], others: &[Assigner<'_>]) -> String {
+    let variables = and_list(variables.iter().map(|v| format!("`{v}`")));
+    if others.is_empty() {
+        return format!("{variables} more than once");
+    }
+    let verb = if others.len() == 1 {
+        "assigns"
+    } else {
+        "assign"
+    };
+    let (inherited, own): (Vec<_>, Vec<_>) = others.iter().partition(|(owner, _)| owner.is_none());
+    let nouns = [("inherited action", inherited), ("action", own)]
+        .into_iter()
+        .filter(|(_, labels)| !labels.is_empty())
+        .map(|(noun, labels)| {
+            let plural = if labels.len() == 1 { "" } else { "s" };
+            let labels = and_list(labels.iter().map(|(_, l)| format!("`{l}`")));
+            format!("{noun}{plural} {labels}")
+        });
+    format!("{variables}, which {} also {verb}", and_list(nouns))
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: impl Iterator<Item = String>) -> String {
+    let items: Vec<String> = items.collect();
+    match items.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => items.concat(),
+    }
 }
 
 /// Build the `source=` URI for an event child element (guard, parameter,
