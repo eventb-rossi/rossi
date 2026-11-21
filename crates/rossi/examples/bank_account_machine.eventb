@@ -66,8 +66,8 @@ EVENTS
         @grd5 balances(from_account) − amount ≥ min_balance
         @grd6 balances(to_account) + amount ≤ max_balance
     THEN
-        @act1 balances(from_account) := balances(from_account) − amount
-        @act2 balances(to_account) := balances(to_account) + amount
+        @act1 balances := balances <+ {from_account ↦ balances(from_account) − amount,
+                                       to_account ↦ balances(to_account) + amount}
     END
 
     EVENT close_account
