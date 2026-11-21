@@ -145,7 +145,15 @@ fn inherited_guards_and_actions_share_the_namespace_with_local_clauses() {
     let guard_labels: Vec<&str> = evt.guards.values().map(|g| g.label.as_str()).collect();
     let action_labels: Vec<&str> = evt.actions.values().map(|a| a.label.as_str()).collect();
     assert_eq!(guard_labels, ["grd1", "grd2"]);
-    assert_eq!(action_labels, ["act1", "act2"]);
+    // `act2` passes the label checks, but it assigns `x`, which the
+    // inherited `act1` already assigns, so EB037 drops it as Rodin does.
+    assert_eq!(action_labels, ["act1"]);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.rule_id == Some(RuleId::ConflictingAssignments) && d.origin == "M1.evt.act2")
+    );
     assert!(!evt.accurate);
 }
 
