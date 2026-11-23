@@ -961,7 +961,9 @@ pub(super) fn build_event_decl(
     // unassigned, as in Rodin, even when the inherited action that won the
     // conflict still assigns it. The actions EB037 dropped still count
     // otherwise, as in Rodin: a variable one of them alone assigns is not
-    // repaired, and their labels are taken.
+    // repaired. The repair action's label avoids the label of every own
+    // action, kept or dropped, since Rodin enters each in the event's label
+    // table before it checks the action.
     if matches!(context.kind, EventKind::Init(_)) {
         let unassigned: Vec<String> = {
             let assigned: std::collections::HashSet<&str> = actions
@@ -980,7 +982,13 @@ pub(super) fn build_event_decl(
                 .collect()
         };
         if !unassigned.is_empty() {
-            let repair_label = fresh_gen_label(actions.iter().chain(&conflicting_actions));
+            let own_labels = context
+                .kind
+                .actions()
+                .iter()
+                .filter_map(|a| a.label.as_deref());
+            let repair_label =
+                fresh_gen_label(actions.iter().map(|a| a.label.as_str()).chain(own_labels));
             actions.push(build_repair_action(
                 repair_label,
                 &source,
@@ -1008,11 +1016,11 @@ pub(super) fn build_event_decl(
 }
 
 /// Fresh label for the synthetic INITIALISATION-repair action: `GEN`, then
-/// `GEN1`, `GEN12`, and so on — each collision appends the running index to
-/// the label until it is free among the event's existing actions. The append
-/// form only triggers when the model already declares an action named `GEN`.
-fn fresh_gen_label<'a>(actions: impl Iterator<Item = &'a ActionDecl>) -> String {
-    let used: std::collections::HashSet<&str> = actions.map(|a| a.label.as_str()).collect();
+/// `GEN1`, `GEN12`, and so on: each collision appends the running index to
+/// the label until it is not among `taken`. The append form only triggers
+/// when the model already declares an action named `GEN`.
+fn fresh_gen_label<'a>(taken: impl Iterator<Item = &'a str>) -> String {
+    let used: std::collections::HashSet<&str> = taken.collect();
     let mut label = "GEN".to_string();
     let mut index = 1;
     while used.contains(label.as_str()) {

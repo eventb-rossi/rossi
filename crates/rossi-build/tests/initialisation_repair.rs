@@ -71,6 +71,22 @@ const REF_BUM: &str = r#"<?xml version="1.0"?>
 </org.eventb.core.machineFile>
 "#;
 
+// --- standalone machine, INITIALISATION drops two of its actions ----
+// `GEN` is ill-typed and `GEN1` reads an undeclared `z`.
+const DROPPED_BUM: &str = r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+<org.eventb.core.variable name="_w" org.eventb.core.identifier="w"/>
+<org.eventb.core.variable name="_x" org.eventb.core.identifier="x"/>
+<org.eventb.core.variable name="_y" org.eventb.core.identifier="y"/>
+<org.eventb.core.invariant name="_i" org.eventb.core.label="I" org.eventb.core.predicate="w ∈ ℤ ∧ x ∈ ℤ ∧ y ∈ ℤ"/>
+<org.eventb.core.event name="_init" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="INITIALISATION">
+<org.eventb.core.action name="_a1" org.eventb.core.assignment="x ≔ TRUE" org.eventb.core.label="GEN"/>
+<org.eventb.core.action name="_a2" org.eventb.core.assignment="y ≔ z" org.eventb.core.label="GEN1"/>
+<org.eventb.core.action name="_a3" org.eventb.core.assignment="w ≔ 0" org.eventb.core.label="a"/>
+</org.eventb.core.event>
+</org.eventb.core.machineFile>
+"#;
+
 fn one_var() -> Project {
     Project::new(
         "r",
@@ -89,6 +105,13 @@ fn empty_two() -> Project {
     Project::new(
         "r",
         vec![ProjectComponent::from_xml("M.bum", EMPTY_TWO_BUM).unwrap()],
+    )
+}
+
+fn dropped() -> Project {
+    Project::new(
+        "r",
+        vec![ProjectComponent::from_xml("M.bum", DROPPED_BUM).unwrap()],
     )
 }
 
@@ -141,6 +164,25 @@ fn empty_init_combines_unassigned_variables_into_one_action() {
         bcm.matches("<org.eventb.core.scAction ").count(),
         1,
         "all unassigned variables must share one GEN action:\n{bcm}"
+    );
+}
+
+#[test]
+fn dropped_actions_keep_their_labels_taken() {
+    let r = build(&dropped());
+    let bcm = &r.file("M.bcm").unwrap().contents;
+    // Rodin enters each action's label in the event's label table before it
+    // checks the assignment, so a dropped action's label stays taken: the
+    // repair of `x` and `y` skips `GEN` and `GEN1`. This matches what Rodin
+    // 3.10 builds from the same machine.
+    assert!(
+        bcm.contains(r#"org.eventb.core.assignment="x,y :∣ ⊤" org.eventb.core.label="GEN12""#),
+        "{bcm}"
+    );
+    assert_eq!(
+        bcm.matches("<org.eventb.core.scAction ").count(),
+        2,
+        "{bcm}"
     );
 }
 
