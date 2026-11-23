@@ -172,7 +172,7 @@ mod tests {
         env.insert("y", Type::pow(Type::Given("ITEMS".into())));
         assert_eq!(
             canonical_typed_from_str("x, y ≔ ∅, ∅", &env),
-            "x,y ≔ ∅ ⦂ ℙ(USERS),∅ ⦂ ℙ(ITEMS)"
+            "x,y ≔ ∅ ⦂ ℙ(USERS), ∅ ⦂ ℙ(ITEMS)"
         );
     }
 

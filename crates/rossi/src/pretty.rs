@@ -2280,11 +2280,13 @@ impl PrettyPrinter {
                     .iter()
                     .map(|value| Self::guard_action_part(self.fm_expr(value, context, &mut names)))
                     .collect();
+                // Rodin's `BecomesEqualToParser` spaces the values in every
+                // form (`x,y ≔ y, x`), though not the identifiers.
                 format!(
                     "{} {} {}",
                     targets(idents),
                     self.op(OperatorId::Assignment),
-                    rendered.join(self.comma_separator())
+                    rendered.join(", ")
                 )
             }
             K::BecomesMemberOf { idents, set } => {

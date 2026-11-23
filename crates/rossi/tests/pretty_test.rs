@@ -334,7 +334,13 @@ fn rodin_canonical_tightens_comma_separated_formula_lists() {
         printer.print_formula_predicate(&predicate),
         "∀x⦂ℤ,y⦂ℤ·p(x,y)"
     );
-    assert_eq!(printer.print_formula_assignment(&action), "x,y ≔ 1,2");
+    // The one spaced list: Rodin's `BecomesEqualToParser` prints the values
+    // of an assignment with its spaced list printer.
+    assert_eq!(printer.print_formula_assignment(&action), "x,y ≔ 1, 2");
+    assert_eq!(
+        PrettyPrinter::rodin_formula_string().print_formula_assignment(&action),
+        "x,y ≔ 1, 2"
+    );
 
     assert_eq!(
         PrettyPrinter::new().print_formula_expression(&expression),
