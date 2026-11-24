@@ -360,7 +360,7 @@ export class RossiCommandController {
     // argument so the CLI loads it as one project and runs the static checker
     // and the project lints across the components. The language server runs the
     // same static check, so what this adds is the project lints
-    // (EB011/EB012/EB014/EB024), every component's proof status and, when
+    // (EB011/EB012/EB024), every component's proof status and, when
     // enabled, the runtime checks; `applyValidationDiagnostics` skips what the
     // server already shows. (A bare file argument, or a list of files, only
     // gets the component-local lints the server already provides.) Scoping to

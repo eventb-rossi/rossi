@@ -349,6 +349,7 @@ pub fn check_machine(
         variant_usable,
         concrete_vars: &concrete_typed_vars,
         machine_name: &machine.name,
+        variables: &machine.variables,
     };
 
     // Events — build typed decls; insert each into the per-label map
@@ -379,6 +380,21 @@ pub fn check_machine(
             Rc::clone(&rc),
         );
         event_decls.push(rc);
+    } else {
+        // No INITIALISATION reaches the checked machine, so nothing
+        // initialises its variables.
+        let reason = if machine.initialisation.is_none() {
+            " (no INITIALISATION event)"
+        } else {
+            " (INITIALISATION was dropped)"
+        };
+        for name in &concrete_typed_vars {
+            diags.push(events::incomplete_initialisation(
+                event_context,
+                name,
+                reason,
+            ));
+        }
     }
     for event in &machine.events {
         if dup_event_labels.contains(&event.name) {

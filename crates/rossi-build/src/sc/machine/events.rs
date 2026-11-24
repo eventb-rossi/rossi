@@ -123,6 +123,8 @@ pub(super) struct MachineCheckContext<'a> {
     pub(super) variant_usable: bool,
     pub(super) concrete_vars: &'a [String],
     pub(super) machine_name: &'a str,
+    /// The machine's declared variables, for anchoring at a declaration.
+    pub(super) variables: &'a [NamedElement],
 }
 
 /// State shared by the helper passes for one event.
@@ -963,7 +965,8 @@ pub(super) fn build_event_decl(
     // otherwise, as in Rodin: a variable one of them alone assigns is not
     // repaired. The repair action's label avoids the label of every own
     // action, kept or dropped, since Rodin enters each in the event's label
-    // table before it checks the action.
+    // table before it checks the action. Each repaired variable draws EB014,
+    // Rodin's `InitialisationIncompleteWarning`.
     if matches!(context.kind, EventKind::Init(_)) {
         let unassigned: Vec<String> = {
             let assigned: std::collections::HashSet<&str> = actions
@@ -989,6 +992,14 @@ pub(super) fn build_event_decl(
                 .filter_map(|a| a.label.as_deref());
             let repair_label =
                 fresh_gen_label(actions.iter().map(|a| a.label.as_str()).chain(own_labels));
+            let rest = format!(
+                ", so the generated action `{repair_label}` gives it an arbitrary initial value"
+            );
+            for name in &unassigned {
+                context
+                    .diagnostics
+                    .push(incomplete_initialisation(context.machine, name, &rest));
+            }
             actions.push(build_repair_action(
                 repair_label,
                 &source,
@@ -1028,6 +1039,26 @@ fn fresh_gen_label<'a>(taken: impl Iterator<Item = &'a str>) -> String {
         index += 1;
     }
     label
+}
+
+/// EB014 for a concrete variable that INITIALISATION does not assign; `rest`
+/// says what becomes of it. Anchored at the variable's declaration.
+pub(super) fn incomplete_initialisation(
+    machine: MachineCheckContext<'_>,
+    variable: &str,
+    rest: &str,
+) -> Diagnostic {
+    Diagnostic {
+        severity: crate::RuleId::IncompleteInitialisation.default_severity(),
+        origin: format!(
+            "{}.{}",
+            machine.machine_name,
+            crate::sc::initialisation_label()
+        ),
+        message: format!("variable `{variable}` is not assigned by INITIALISATION{rest}"),
+        rule_id: Some(crate::RuleId::IncompleteInitialisation),
+        span: crate::ast_util::named_element_span(machine.variables, variable),
+    }
 }
 
 /// Build the synthetic `<vars> :∣ ⊤` repair action. The assignment is
