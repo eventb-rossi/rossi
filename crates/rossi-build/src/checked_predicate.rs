@@ -131,6 +131,23 @@ pub(crate) fn undeclared_identifier(
     }
 }
 
+/// The EB032 diagnostic for an element a Rodin file stores without a label,
+/// or with a blank one. Rodin reports it (`LabelUndefError`,
+/// `EmptyLabelError`) and drops the element without checking its formula.
+/// Such an element comes from XML and has no span of its own, so `position`,
+/// its 1-based place among the `kind_name` elements of the container
+/// `origin`, tells it apart.
+#[must_use]
+pub(crate) fn missing_label(kind_name: &str, position: usize, origin: String) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        origin,
+        message: format!("the {kind_name} at position {position} has no label, so it was dropped"),
+        rule_id: Some(crate::RuleId::MissingLabel),
+        span: None,
+    }
+}
+
 /// The EB020 diagnostic for a predicate that reads declared names before
 /// the predicate that types them. `default_label`, `kind_name` and
 /// `origin` are as for [`check_labeled_predicate`]; the kind also names
@@ -168,8 +185,9 @@ pub(crate) fn unknown_type(
 ///
 /// This is the shared shape of axiom / invariant / guard checking:
 ///
-/// - `default_label` is what we substitute when the source had no
-///   label (Rodin uses `axm` / `inv` / `grd`; we follow suit).
+/// - `default_label` names the element in `origin` when the source had
+///   no label. The callers drop an unlabeled element first (EB032), as
+///   Rodin does, so this is only a fallback.
 /// - `kind_name` is the human-readable element type used in the
 ///   diagnostic message (e.g. `"axiom"` → "unknown identifier 'x' in
 ///   axiom predicate").

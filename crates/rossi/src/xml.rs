@@ -216,17 +216,6 @@ fn non_empty_trimmed(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// Rodin's internal element `name`, the stand-in for a label the file does not
-/// carry. The label attribute is optional in the database and undefined to the
-/// static checker when absent, and the text format cannot spell an item with no
-/// label at all, so the name — always written, and unique within the file —
-/// takes its place. `event_name_attr` above applies the same rule to events.
-fn internal_name(e: &quick_xml::events::BytesStart) -> Result<Option<String>> {
-    Ok(get_xml_attr(e, b"name")?
-        .as_deref()
-        .and_then(non_empty_trimmed))
-}
-
 /// Format a source label like "S1.bum" or "XML input" for error messages.
 fn source_label(source_file: Option<&str>) -> String {
     source_file.unwrap_or("XML input").to_string()
@@ -346,11 +335,8 @@ fn parse_xml_labeled_predicate(
         return Ok(None);
     }
 
-    let label = match label {
-        Some(label) => Some(label),
-        None => internal_name(e)?,
-    };
-
+    // A missing or blank label stays absent: Rodin's static checker reports
+    // it and drops the element, and so does rossi's.
     let predicate = parse_predicate_attr(
         &predicate_str,
         origin,
@@ -846,20 +832,20 @@ fn parse_machine_xml_with_name(
                             // A witness label is an identifier position: it names
                             // the witnessed abstract parameter or variable (e.g.
                             // `x'`), so it must stay consistent with the trimmed
-                            // declarations.
-                            let label = match get_xml_attr(&e, b"label")? {
-                                Some(l) => Some(validate_math_identifier(
-                                    &l,
-                                    &format!(
-                                        "witness label in event {:?} of {}",
-                                        event.name, origin
-                                    ),
-                                )?),
-                                // A witness label is validated as an
-                                // identifier; the `internal_name` fallback is
-                                // not one, so it is taken as written.
-                                None => internal_name(&e)?,
-                            };
+                            // declarations. A missing or blank one stays absent,
+                            // as for the other labeled elements.
+                            let label = get_xml_attr(&e, b"label")?
+                                .filter(|l| !l.trim().is_empty())
+                                .map(|l| {
+                                    validate_math_identifier(
+                                        &l,
+                                        &format!(
+                                            "witness label in event {:?} of {}",
+                                            event.name, origin
+                                        ),
+                                    )
+                                })
+                                .transpose()?;
                             let predicate_str = get_xml_attr(&e, b"predicate")?.unwrap_or_default();
                             let kind = get_xml_attr(&e, b"rossi.kind")?;
                             let comment = get_xml_attr(&e, b"comment")?;
@@ -928,13 +914,9 @@ fn parse_machine_xml_with_name(
                     }
                     "org.eventb.core.action" => {
                         if let Some(ref mut event) = current_event {
-                            let label = match get_xml_attr(&e, b"label")?
+                            let label = get_xml_attr(&e, b"label")?
                                 .as_deref()
-                                .and_then(non_empty_trimmed)
-                            {
-                                Some(label) => Some(label),
-                                None => internal_name(&e)?,
-                            };
+                                .and_then(non_empty_trimmed);
                             let assignment_str =
                                 get_xml_attr(&e, b"assignment")?.unwrap_or_default();
                             let comment = get_xml_attr(&e, b"comment")?;

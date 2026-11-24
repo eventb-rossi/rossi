@@ -194,30 +194,47 @@ fn test_parse_machine_with_labeled_variants_xml() {
 }
 
 #[test]
-fn an_element_without_a_label_is_named_by_its_element_name() {
-    // A label is mandatory in the text format and undefined to Rodin's static
-    // checker when absent, so an element that carries none is read under its
-    // internal name. Printing it must produce text that parses again.
+fn an_element_without_a_label_stays_unlabeled() {
+    // Rodin's static checker reports a missing or blank label and drops the
+    // element, so the import keeps the label absent rather than inventing
+    // one. The text format has no spelling for such an item, so the printed
+    // text reports the same missing label.
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <org.eventb.core.machineFile version="5">
     <org.eventb.core.variable org.eventb.core.identifier="n"/>
     <org.eventb.core.invariant name="_0" org.eventb.core.predicate="n ∈ ℕ"/>
     <org.eventb.core.event name="_1" org.eventb.core.convergence="0" org.eventb.core.extended="false" org.eventb.core.label="e">
-        <org.eventb.core.witness name="_3" org.eventb.core.predicate="n = 0"/>
+        <org.eventb.core.guard name="_4" org.eventb.core.label="  " org.eventb.core.predicate="n ≥ 0"/>
+        <org.eventb.core.witness name="_3" org.eventb.core.label="" org.eventb.core.predicate="n = 0"/>
         <org.eventb.core.action name="_2" org.eventb.core.assignment="n ≔ 0"/>
     </org.eventb.core.event>
 </org.eventb.core.machineFile>"#;
 
-    let component = parse_xml(xml).expect("parse");
-    let Component::Machine(m) = &component else {
-        panic!("Expected Machine component");
+    let labels = |component: &Component| {
+        let Component::Machine(m) = component else {
+            panic!("Expected Machine component");
+        };
+        let event = &m.events[0];
+        [
+            m.invariants[0].label.clone(),
+            event.guards[0].label.clone(),
+            event.with[0].label.clone(),
+            event.actions[0].label.clone(),
+        ]
     };
-    assert_eq!(m.invariants[0].label.as_deref(), Some("_0"));
-    assert_eq!(m.events[0].with[0].label.as_deref(), Some("_3"));
-    assert_eq!(m.events[0].actions[0].label.as_deref(), Some("_2"));
+    let component = parse_xml(xml).expect("parse");
+    assert_eq!(labels(&component), [None, None, None, None]);
+
+    // Writing the machine back keeps the labels absent.
+    let written = rossi::xml::to_xml(&component);
+    let again = parse_xml(&written).expect("reparse");
+    assert_eq!(labels(&again), [None, None, None, None]);
 
     let printed = rossi::to_string(&component);
-    rossi::parse(&printed).unwrap_or_else(|e| panic!("must reparse: {e}\n{printed}"));
+    assert!(
+        matches!(rossi::parse(&printed), Err(ParseError::MissingLabel { .. })),
+        "{printed}"
+    );
 }
 
 #[test]

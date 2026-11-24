@@ -18,7 +18,8 @@ use crate::Severity;
 /// extensions; EB025 is a refinement
 /// static-check emitted by `crate::build`; EB029, EB030 and EB032 are
 /// structural parse errors raised by the Camille grammar
-/// (`rossi::ParseError`), not by a check.
+/// (`rossi::ParseError`), not by a check, except that `crate::build` also
+/// raises EB032 for an element a Rodin file stores without a label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleId {
     /// EB001 — XML parse error (corrupt Rodin archive, malformed `.buc`/`.bum`).
@@ -105,7 +106,8 @@ pub enum RuleId {
     /// that Rodin's math lexer accepts but stock Camille cannot read.
     /// (rossi-only.)
     NonPortableWhitespace,
-    /// EB032 — A predicate or action is written with no `@label`.
+    /// EB032 — A predicate or action is written with no `@label`, or a Rodin
+    /// file stores one without a label.
     MissingLabel,
     /// EB033 — A declared name carries the after-state prime (`c'`), which
     /// only a witness label may.
@@ -381,7 +383,7 @@ impl RuleId {
                 "Two names in a structural position (a component header, or an `EXTENDS` / `SETS` / `CONSTANTS` / `REFINES` / `SEES` / `VARIABLES` / `ANY` list) are separated by a Unicode space outside Camille's `layout_char` set. Rodin's math lexer treats these as whitespace and so does rossi, but stock Camille answers \"Unknown token\" and cannot open the file, so the model does not round-trip through Rodin's text editor. Run `rossi fmt -i` to rewrite the separators. The same code points inside a formula are folded into the formula text and handed to Rodin, so they are portable there and are not reported."
             }
             RuleId::MissingLabel => {
-                "An axiom, invariant, guard, witness or action is written with no `@label`. Rodin's textual grammar requires one on every item and its static checker reports a missing one as an error, so the model does not round-trip through the toolchain. Write a label before the formula; only the first `VARIANT` item may go without."
+                "An axiom, invariant, guard, witness or action is written with no `@label`. Rodin's textual grammar requires one on every item and its static checker reports a missing one as an error, so the model does not round-trip through the toolchain. Write a label before the formula; only the first `VARIANT` item may go without. An element a Rodin file stores with no label, or a blank one, is reported by the static checker and dropped, as Rodin does."
             }
             RuleId::PrimedDeclaredName => {
                 "A carrier set, constant, variable or event parameter is declared with the after-state prime (`c'`). The prime names the post-value of an assigned variable, so it belongs to a formula and never to a declaration: Rodin parses every declaration with primes disallowed and reports `InvalidIdentifierError`, dropping the name from the checked model. Only a witness label may be primed. Rename the declaration without the prime."
