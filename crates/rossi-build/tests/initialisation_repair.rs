@@ -1,9 +1,33 @@
 //! INITIALISATION repair: a concrete, typed variable that no action
 //! assigns gets a synthetic `becomesSuchThat ⊤` default, all such
 //! variables gathered into one `GEN` action, and the event (not the
-//! machine) is marked inaccurate.
+//! machine) is marked inaccurate. Each repaired variable draws an EB014
+//! warning, Rodin's `InitialisationIncompleteWarning`.
 
-use rossi_build::{Project, ProjectComponent, build, sc_view::ScView};
+mod common;
+
+use rossi_build::{
+    BuildResult, Project, ProjectComponent, RuleId, Severity, build, sc_view::ScView,
+};
+
+/// The EB014 messages on `machine`'s INITIALISATION, in report order.
+fn eb014<'a>(result: &'a BuildResult, machine: &str) -> Vec<&'a str> {
+    let origin = format!("{machine}.INITIALISATION");
+    result
+        .diagnostics
+        .iter()
+        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation) && d.origin == origin)
+        .map(|d| d.message.as_str())
+        .collect()
+}
+
+/// The EB014 message for variable `var`, initialised by the action `label`.
+fn repaired(var: &str, label: &str) -> String {
+    format!(
+        "variable `{var}` is not assigned by INITIALISATION, so the generated action `{label}` \
+         gives it an arbitrary initial value"
+    )
+}
 
 // --- standalone machine, INITIALISATION has no actions ---------------
 const ONE_VAR_BUM: &str = r#"<?xml version="1.0"?>
@@ -130,6 +154,13 @@ fn standalone_empty_init_repairs_single_variable_byte_exact() {
     let r = build(&one_var());
     let bcm = r.file("M.bcm").expect("M.bcm");
     assert_eq!(bcm.contents.trim_end(), ONE_VAR_BCM.trim_end());
+    assert_eq!(eb014(&r, "M"), [repaired("v", "GEN")]);
+    let warning = r
+        .diagnostics
+        .iter()
+        .find(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
+        .unwrap();
+    assert_eq!(warning.severity, Severity::Warning);
 }
 
 #[test]
@@ -146,6 +177,7 @@ fn partial_init_repairs_only_the_unassigned_variable() {
     let v = ScView::from_xml(bcm).unwrap();
     assert!(v.accurate);
     assert!(!v.events["INITIALISATION"].accurate);
+    assert_eq!(eb014(&r, "M"), [repaired("b", "GEN")]);
 }
 
 #[test]
@@ -165,6 +197,8 @@ fn empty_init_combines_unassigned_variables_into_one_action() {
         1,
         "all unassigned variables must share one GEN action:\n{bcm}"
     );
+    // One warning per variable, in the action's (alphabetical) order.
+    assert_eq!(eb014(&r, "M"), [repaired("a", "GEN"), repaired("b", "GEN")]);
 }
 
 #[test]
@@ -183,6 +217,11 @@ fn dropped_actions_keep_their_labels_taken() {
         bcm.matches("<org.eventb.core.scAction ").count(),
         2,
         "{bcm}"
+    );
+    // The source text assigns both, but the checker initialises them.
+    assert_eq!(
+        eb014(&r, "M"),
+        [repaired("x", "GEN12"), repaired("y", "GEN12")]
     );
 }
 
@@ -205,4 +244,146 @@ fn extended_init_inherits_repair_and_adds_fresh_label() {
     let init = &v.events["INITIALISATION"];
     assert!(!init.accurate);
     assert_eq!(init.actions.len(), 2, "inherited x plus generated y");
+
+    // Each machine warns about the variable it initialises itself: `Ref`
+    // inherits the repair of `x` and does not repeat its warning.
+    assert_eq!(eb014(&r, "Abs"), [repaired("x", "GEN")]);
+    assert_eq!(eb014(&r, "Ref"), [repaired("y", "GEN1")]);
+}
+
+/// A machine whose INITIALISATION assigns its one variable `v`.
+const M0_TEXT: &str = "\
+machine M0
+variables v
+invariants
+  @t v ∈ ℤ
+events
+  event INITIALISATION
+    then
+      @a v ≔ 0
+  end
+end
+";
+
+#[test]
+fn a_fully_assigned_extended_chain_draws_no_warning() {
+    let r = build(&common::text_project(
+        "p",
+        &[
+            ("M0", M0_TEXT),
+            (
+                "M1",
+                "\
+machine M1 refines M0
+variables v w
+invariants
+  @t w ∈ ℤ
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @b w ≔ 0
+  end
+end
+",
+            ),
+            (
+                "M2",
+                "\
+machine M2 refines M1
+variables v w u
+invariants
+  @t u ∈ ℤ
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @c u ≔ 0
+  end
+end
+",
+            ),
+        ],
+    ));
+    for machine in ["M0", "M1", "M2"] {
+        assert!(eb014(&r, machine).is_empty(), "{:?}", r.diagnostics);
+    }
+}
+
+#[test]
+fn a_machine_without_initialisation_warns_for_each_variable() {
+    let text = "\
+machine m
+variables b a c
+invariants
+  @t a ∈ ℤ ∧ b ∈ ℤ ∧ c ∈ ℤ
+end
+";
+    let r = build(&common::text_project("p", &[("m", text)]));
+
+    let warnings: Vec<_> = r
+        .diagnostics
+        .iter()
+        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
+        .collect();
+    let messages: Vec<&str> = warnings.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["a", "b", "c"].map(|v| format!(
+            "variable `{v}` is not assigned by INITIALISATION (no INITIALISATION event)"
+        )),
+        "{:?}",
+        r.diagnostics
+    );
+    // Each warning points at the variable's declaration.
+    for (warning, name) in warnings.iter().zip(["a", "b", "c"]) {
+        let span = warning.span.expect("anchored");
+        assert_eq!(&text[span.start..span.end], name);
+    }
+}
+
+#[test]
+fn a_dropped_initialisation_warns_for_each_variable() {
+    // `M1` drops `v`, which the INITIALISATION it extends assigns, so the
+    // checker leaves INITIALISATION out and nothing initialises `w`.
+    let r = build(&common::text_project(
+        "p",
+        &[
+            ("M0", M0_TEXT),
+            (
+                "M1",
+                "\
+machine M1 refines M0
+variables w
+invariants
+  @t w ∈ ℤ
+events
+  event INITIALISATION extends INITIALISATION
+    then
+      @b w ≔ 0
+  end
+end
+",
+            ),
+        ],
+    ));
+
+    let m1 = ScView::from_xml(&r.file("M1.bcm").unwrap().contents).unwrap();
+    assert!(!m1.events.contains_key("INITIALISATION"));
+    assert_eq!(
+        eb014(&r, "M1"),
+        ["variable `w` is not assigned by INITIALISATION (INITIALISATION was dropped)"]
+    );
+}
+
+#[test]
+fn build_reports_incomplete_initialisation_and_lint_does_not() {
+    // `rossi validate` folds `build()` diagnostics and `lint::run`, so EB014
+    // must come from exactly one of them.
+    let project = partial();
+    assert_eq!(eb014(&build(&project), "M").len(), 1);
+    let lint = rossi_build::lint::run(&project);
+    assert!(
+        lint.iter()
+            .all(|d| d.rule_id != Some(RuleId::IncompleteInitialisation)),
+        "{lint:?}"
+    );
 }

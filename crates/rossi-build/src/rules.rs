@@ -47,7 +47,8 @@ pub enum RuleId {
     /// EB012 — Variable never assigned outside INITIALISATION: a
     /// constant in disguise.
     UnmodifiedVariable,
-    /// EB014 — INITIALISATION leaves one or more variables unassigned.
+    /// EB014 — INITIALISATION leaves one or more variables unassigned, so the
+    /// checker initialises them to an arbitrary value.
     IncompleteInitialisation,
     /// EB015 — Proof obligation not fully discharged (pending, reviewed, or
     /// unattempted).
@@ -326,7 +327,7 @@ impl RuleId {
                 "A machine variable is assigned by INITIALISATION and never modified by any event, here or in any refinement — a constant in disguise; consider a CONSTANT with the initialisation as an axiom."
             }
             RuleId::IncompleteInitialisation => {
-                "INITIALISATION leaves one or more machine variables unassigned."
+                "INITIALISATION leaves a machine variable unassigned, either because no action assigns it or because the actions that do were dropped for an error. Rodin's static checker then initialises it with a generated action `x :∣ ⊤`, so it starts with an arbitrary value, and marks INITIALISATION inaccurate; rossi does the same. Assign every variable in INITIALISATION."
             }
             RuleId::UndischargedProof => {
                 "A proof obligation has not been fully discharged (it is pending, reviewed, or unattempted)."

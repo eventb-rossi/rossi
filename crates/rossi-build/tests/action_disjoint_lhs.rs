@@ -30,6 +30,16 @@ fn origins<'a>(findings: &[&'a Diagnostic]) -> Vec<&'a str> {
     findings.iter().map(|d| d.origin.as_str()).collect()
 }
 
+/// The EB014 messages: the variables INITIALISATION's repair initialises.
+fn eb014(result: &BuildResult) -> Vec<&str> {
+    result
+        .diagnostics
+        .iter()
+        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
+        .map(|d| d.message.as_str())
+        .collect()
+}
+
 /// The checked event `event` of machine `machine`.
 fn checked_event(result: &BuildResult, machine: &str, event: &str) -> EventRow {
     let file = result
@@ -270,6 +280,13 @@ end
         actions(&init),
         ["GEN: x :∣ ⊤", "init3: y ≔ 0", "init: x ≔ 0"]
     );
+    assert_eq!(
+        eb014(&result),
+        [
+            "variable `x` is not assigned by INITIALISATION, so the generated action `GEN` gives it \
+          an arbitrary initial value"
+        ]
+    );
 }
 
 #[test]
@@ -304,6 +321,13 @@ end
     let init = checked_event(&result, "m", "INITIALISATION");
     assert!(!init.accurate);
     assert_eq!(actions(&init), ["GEN1: y :∣ ⊤", "c: z ≔ 0"]);
+    assert_eq!(
+        eb014(&result),
+        [
+            "variable `y` is not assigned by INITIALISATION, so the generated action `GEN1` gives it \
+          an arbitrary initial value"
+        ]
+    );
 }
 
 #[test]

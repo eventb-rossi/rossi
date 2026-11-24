@@ -13,8 +13,7 @@ checked output.
 - Well-formedness checks for guards, actions, invariants, and axioms.
 - Cross-reference resolution across `SEES` / `EXTENDS` / `REFINES`, with
   circular-dependency detection.
-- `EB0xx` diagnostics plus advisory lints (dead or unmodified variables,
-  incomplete `INITIALISATION`, …).
+- `EB0xx` diagnostics plus advisory lints (dead or unmodified variables, …).
 - Reads Rodin `.buc` / `.bum` projects and emits Rodin-compatible `.bcc` /
   `.bcm` checked XML, so text-authored models round-trip through the Rodin
   toolchain.

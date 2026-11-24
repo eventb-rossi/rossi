@@ -41,7 +41,7 @@ Rossi covers the full author-to-Rodin path:
 - Type inference with unification (integers, booleans, given sets, power sets, products)
 - Well-formedness checks for guards, actions, invariants, and axioms
 - Cross-reference resolution across SEES / EXTENDS / REFINES, with circular-dependency detection
-- `EB0xx` diagnostics plus advisory lints (dead or unmodified variables, incomplete INITIALISATION, …)
+- `EB0xx` diagnostics plus advisory lints (dead or unmodified variables, …)
 - Rodin-compatible `.bcc` / `.bcm` checked output
 
 **Proof checking**

@@ -826,7 +826,10 @@ mod operator_convention {
     use tower_lsp_server::LspService;
     use tower_lsp_server::jsonrpc::Request;
 
-    const SOURCE: &str = "MACHINE m\nVARIABLES x\nINVARIANTS\n    @inv1 x : NAT\nEND\n";
+    // A context, so the ASCII `:` and `NAT` are the only findings: a machine
+    // variable would need an INITIALISATION (EB014) and bring a proof
+    // obligation with it.
+    const SOURCE: &str = "CONTEXT c\nCONSTANTS k\nAXIOMS\n    @axm1 k : NAT\nEND\n";
 
     /// The `(code, message)` pairs of the next published diagnostics batch.
     async fn next_diagnostics(
