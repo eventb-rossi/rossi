@@ -85,13 +85,14 @@ pub fn check_context(
     }
 
     // Dropped 2nd+ occurrences of a duplicated axiom label must not
-    // contribute typing either; the kept first occurrence still types.
+    // contribute typing either; the kept first occurrence still types. Nor
+    // does an unlabeled axiom, which Rodin drops unchecked.
     let mut typing_kept = crate::duplicates::FirstKept::new(&dup_axiom_labels);
     let axiom_preds: Vec<_> = ctx
         .axioms
         .iter()
         .enumerate()
-        .filter(|(_, ax)| !typing_kept.drops(ax.label.as_deref()))
+        .filter(|(_, ax)| ax.label.is_some() && !typing_kept.drops(ax.label.as_deref()))
         .map(|(i, ax)| (i, &ax.predicate))
         .collect();
     // Duplicated constants are dropped, not typed — they are EB021 errors,
@@ -129,6 +130,15 @@ pub fn check_context(
     let mut axioms: Vec<AxiomDecl> = Vec::with_capacity(ctx.axioms.len());
     let mut emit_kept = crate::duplicates::FirstKept::new(&dup_axiom_labels);
     for (i, ax) in ctx.axioms.iter().enumerate() {
+        if ax.label.is_none() {
+            diags.push(crate::checked_predicate::missing_label(
+                "axiom",
+                i + 1,
+                ctx.name.clone(),
+            ));
+            accurate = false;
+            continue;
+        }
         // 2nd+ use of a duplicated axiom label: Rodin keeps the first
         // occurrence, drops the rest, and marks the context inaccurate (the
         // EB022 error is already reported).

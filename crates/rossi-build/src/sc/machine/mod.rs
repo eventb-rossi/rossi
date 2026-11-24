@@ -186,13 +186,14 @@ pub fn check_machine(
         .map(|v| v.name.clone())
         .collect();
     // Dropped 2nd+ occurrences of a duplicated invariant label must not
-    // contribute typing either; the kept first occurrence still types.
+    // contribute typing either; the kept first occurrence still types. Nor
+    // does an unlabeled invariant, which Rodin drops unchecked.
     let mut typing_kept = crate::duplicates::FirstKept::new(&dup_inv_labels);
     let invariant_preds: Vec<_> = machine
         .invariants
         .iter()
         .enumerate()
-        .filter(|(_, inv)| !typing_kept.drops(inv.label.as_deref()))
+        .filter(|(_, inv)| inv.label.is_some() && !typing_kept.drops(inv.label.as_deref()))
         .map(|(i, inv)| (i, &inv.predicate))
         .collect();
     let typing = resolve_identifier_types(&mut env, &variable_names, &invariant_preds);
@@ -241,6 +242,15 @@ pub fn check_machine(
     let mut invariant_decls: Vec<InvariantDecl> = Vec::with_capacity(machine.invariants.len());
     let mut emit_kept = crate::duplicates::FirstKept::new(&dup_inv_labels);
     for (i, inv) in machine.invariants.iter().enumerate() {
+        if inv.label.is_none() {
+            diags.push(crate::checked_predicate::missing_label(
+                "invariant",
+                i + 1,
+                machine.name.clone(),
+            ));
+            accurate = false;
+            continue;
+        }
         // 2nd+ use of a duplicated invariant label: Rodin keeps the first
         // occurrence, drops the rest, and marks the file inaccurate (the
         // EB022 error is already reported).

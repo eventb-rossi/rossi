@@ -381,7 +381,8 @@ fn witness_scope(
 ///
 /// A provided WITNESS/WITH clause is *permissible* — kept and emitted — only
 /// when its label is a required name and its predicate type-checks; every
-/// other provided witness (not required, ill-typed, or unlabelled) is dropped.
+/// other provided witness (not required, ill-typed, or unlabelled) is dropped;
+/// an unlabelled one is reported by [`build_event_decl`].
 /// Each remaining unmet requirement gets a synthesized `⊤` placeholder sourced
 /// on the event element, and the event is marked inaccurate (with a warning
 /// per unmet name).
@@ -566,6 +567,28 @@ pub(super) fn build_event_decl(
     // name — a witness's label is its required name), so the event is no
     // longer a lossless reflection of the source.
     let witness_dup_accurate = event_dups.witness_labels.names.is_empty();
+    // `resolve_witnesses` drops a witness with no label silently, and only
+    // runs where witnesses are needed. Rodin reports one wherever it is and
+    // marks the event inaccurate, as for the other clauses.
+    let mut witness_label_accurate = true;
+    for (i, w) in context
+        .kind
+        .witnesses_primary()
+        .iter()
+        .chain(context.kind.witnesses_with())
+        .enumerate()
+    {
+        if w.label.is_none() {
+            context
+                .diagnostics
+                .push(crate::checked_predicate::missing_label(
+                    "witness",
+                    i + 1,
+                    format!("{}.{label}", context.machine.machine_name),
+                ));
+            witness_label_accurate = false;
+        }
+    }
 
     // -----------------------------------------------------------------
     // Refinement targets. The declared list is filtered first: an
@@ -953,6 +976,7 @@ pub(super) fn build_event_decl(
         && convergence_accurate
         && witness_accurate
         && witness_dup_accurate
+        && witness_label_accurate
         && merge_accurate;
 
     // INITIALISATION repair: in Event-B every concrete variable must be
@@ -1131,10 +1155,11 @@ fn build_event_scope(
     let mut axioms: Vec<(usize, &rossi::Predicate)> = Vec::new();
     // 2nd+ occurrences of a duplicated guard label are dropped from the
     // event (see `build_event_buckets`), so they must not contribute typing
-    // either; the kept first occurrence still types its parameters.
+    // either; the kept first occurrence still types its parameters. Nor does
+    // an unlabeled guard, which Rodin drops unchecked.
     let mut typing_kept = crate::duplicates::FirstKept::new(&dups.guard_action_labels.names);
     for (i, g) in kind.guards().iter().enumerate() {
-        if inherited.contains_label(g.label.as_deref()) {
+        if g.label.is_none() || inherited.contains_label(g.label.as_deref()) {
             continue;
         }
         if typing_kept.drops(g.label.as_deref()) {
@@ -1202,6 +1227,19 @@ fn build_event_buckets(
 
     let mut guards: Vec<GuardDecl> = Vec::with_capacity(kind.guards().len());
     for (i, g) in kind.guards().iter().enumerate() {
+        // A clause with no label is dropped before any other check, as in
+        // Rodin, which never reads its formula.
+        if g.label.is_none() {
+            context
+                .diagnostics
+                .push(crate::checked_predicate::missing_label(
+                    "guard",
+                    i + 1,
+                    format!("{}.{label}", machine.machine_name),
+                ));
+            accurate = false;
+            continue;
+        }
         // Imported labels are installed before concrete clauses in Rodin's
         // event label table. The inherited guard/action therefore wins and
         // every colliding concrete clause is dropped.
@@ -1306,6 +1344,17 @@ fn build_event_buckets(
     // We mirror that.
     let mut actions: Vec<ActionDecl> = Vec::with_capacity(kind.actions().len());
     for (i, act) in kind.actions().iter().enumerate() {
+        if act.label.is_none() {
+            context
+                .diagnostics
+                .push(crate::checked_predicate::missing_label(
+                    "action",
+                    i + 1,
+                    format!("{}.{label}", machine.machine_name),
+                ));
+            accurate = false;
+            continue;
+        }
         if inherited.contains_label(act.label.as_deref()) {
             accurate = false;
             continue;
