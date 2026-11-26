@@ -6,6 +6,7 @@
 
 mod common;
 
+use common::diags_with_rule;
 use rossi_build::{
     BuildResult, Project, ProjectComponent, RuleId, Severity, build, sc_view::ScView,
 };
@@ -13,10 +14,9 @@ use rossi_build::{
 /// The EB014 messages on `machine`'s INITIALISATION, in report order.
 fn eb014<'a>(result: &'a BuildResult, machine: &str) -> Vec<&'a str> {
     let origin = format!("{machine}.INITIALISATION");
-    result
-        .diagnostics
-        .iter()
-        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation) && d.origin == origin)
+    diags_with_rule(&result.diagnostics, RuleId::IncompleteInitialisation)
+        .into_iter()
+        .filter(|d| d.origin == origin)
         .map(|d| d.message.as_str())
         .collect()
 }
@@ -155,12 +155,8 @@ fn standalone_empty_init_repairs_single_variable_byte_exact() {
     let bcm = r.file("M.bcm").expect("M.bcm");
     assert_eq!(bcm.contents.trim_end(), ONE_VAR_BCM.trim_end());
     assert_eq!(eb014(&r, "M"), [repaired("v", "GEN")]);
-    let warning = r
-        .diagnostics
-        .iter()
-        .find(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
-        .unwrap();
-    assert_eq!(warning.severity, Severity::Warning);
+    let warnings = diags_with_rule(&r.diagnostics, RuleId::IncompleteInitialisation);
+    assert_eq!(warnings[0].severity, Severity::Warning);
 }
 
 #[test]
@@ -319,11 +315,7 @@ end
 ";
     let r = build(&common::text_project("p", &[("m", text)]));
 
-    let warnings: Vec<_> = r
-        .diagnostics
-        .iter()
-        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
-        .collect();
+    let warnings = diags_with_rule(&r.diagnostics, RuleId::IncompleteInitialisation);
     let messages: Vec<&str> = warnings.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(
         messages,
@@ -382,8 +374,7 @@ fn build_reports_incomplete_initialisation_and_lint_does_not() {
     assert_eq!(eb014(&build(&project), "M").len(), 1);
     let lint = rossi_build::lint::run(&project);
     assert!(
-        lint.iter()
-            .all(|d| d.rule_id != Some(RuleId::IncompleteInitialisation)),
+        diags_with_rule(&lint, RuleId::IncompleteInitialisation).is_empty(),
         "{lint:?}"
     );
 }
