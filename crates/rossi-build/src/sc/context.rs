@@ -130,15 +130,6 @@ pub fn check_context(
     let mut axioms: Vec<AxiomDecl> = Vec::with_capacity(ctx.axioms.len());
     let mut emit_kept = crate::duplicates::FirstKept::new(&dup_axiom_labels);
     for (i, ax) in ctx.axioms.iter().enumerate() {
-        if ax.label.is_none() {
-            diags.push(crate::checked_predicate::missing_label(
-                "axiom",
-                i + 1,
-                ctx.name.clone(),
-            ));
-            accurate = false;
-            continue;
-        }
         // 2nd+ use of a duplicated axiom label: Rodin keeps the first
         // occurrence, drops the rest, and marks the context inaccurate (the
         // EB022 error is already reported).
@@ -324,6 +315,7 @@ fn build_constant_decl(
 
 /// `unknown` holds the constants the axiom reads before the axioms that
 /// type them (EB020): Rodin drops it, so it fails like any other error.
+/// An axiom with no label fails first (EB032), unchecked, as in Rodin.
 fn build_axiom_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
@@ -333,14 +325,21 @@ fn build_axiom_decl(
     env: &TypeEnv,
     ctx_name: &str,
 ) -> std::result::Result<AxiomDecl, Diagnostic> {
-    let origin = |lbl: &str| format!("{ctx_name}.{lbl}");
+    let Some(label) = ax.label.as_deref() else {
+        return Err(crate::checked_predicate::missing_label(
+            "axiom",
+            source_index + 1,
+            ctx_name.to_string(),
+        ));
+    };
+    let origin = || format!("{ctx_name}.{label}");
     if let Some(names) = unknown {
-        return Err(unknown_type(ax, "axm", "axiom", names, origin));
+        return Err(unknown_type(ax, "axiom", names, origin));
     }
-    let (label, pc) = check_labeled_predicate(ax, env, "axm", "axiom", origin)?;
-    let source = crate::sc::file_child_source(ids, file_root, Kind::Axiom, in_tag::AXIOM, &label);
+    let pc = check_labeled_predicate(ax, env, "axiom", origin)?;
+    let source = crate::sc::file_child_source(ids, file_root, Kind::Axiom, in_tag::AXIOM, label);
     Ok(AxiomDecl {
-        label,
+        label: label.to_string(),
         source_index,
         typed: pc.typed.expect("checked by check_labeled_predicate"),
         predicate: pc.predicate,

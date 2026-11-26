@@ -230,7 +230,7 @@ fn report_inherited_label_conflicts(
         }
         context.diagnostics.push(Diagnostic {
             severity: crate::RuleId::DuplicateLabel.default_severity(),
-            origin: clause_origin(machine_name, event_label, Some(label), local_kind.noun()),
+            origin: clause_origin(machine_name, event_label, label),
             message: format!(
                 "{} label `{label}` conflicts with inherited {} label in extended event `{}`",
                 local_kind.noun(),
@@ -1197,10 +1197,9 @@ struct EventBuckets {
     actions: Vec<ActionDecl>,
 }
 
-/// `machine.event.clause` origin for a per-clause diagnostic, falling back to
-/// `fallback` (e.g. `"grd"` / `"act"`) when the clause carries no label.
-fn clause_origin(machine: &str, event: &str, clause_label: Option<&str>, fallback: &str) -> String {
-    format!("{machine}.{event}.{}", clause_label.unwrap_or(fallback))
+/// `machine.event.clause` origin for a per-clause diagnostic.
+fn clause_origin(machine: &str, event: &str, clause_label: &str) -> String {
+    format!("{machine}.{event}.{clause_label}")
 }
 
 /// Build the three per-event decl buckets (guards, parameters, actions),
@@ -1229,7 +1228,7 @@ fn build_event_buckets(
     for (i, g) in kind.guards().iter().enumerate() {
         // A clause with no label is dropped before any other check, as in
         // Rodin, which never reads its formula.
-        if g.label.is_none() {
+        let Some(guard_label) = g.label.as_deref() else {
             context
                 .diagnostics
                 .push(crate::checked_predicate::missing_label(
@@ -1239,18 +1238,18 @@ fn build_event_buckets(
                 ));
             accurate = false;
             continue;
-        }
+        };
         // Imported labels are installed before concrete clauses in Rodin's
         // event label table. The inherited guard/action therefore wins and
         // every colliding concrete clause is dropped.
-        if inherited.contains_label(g.label.as_deref()) {
+        if inherited.contains_label(Some(guard_label)) {
             accurate = false;
             continue;
         }
         // 2nd+ use of a duplicated guard/action label: Rodin keeps the first
         // occurrence, drops the rest, and marks the event inaccurate (the
         // EB022 error is already reported).
-        if label_kept.drops(g.label.as_deref()) {
+        if label_kept.drops(Some(guard_label)) {
             accurate = false;
             continue;
         }
@@ -1282,7 +1281,7 @@ fn build_event_buckets(
             if theorem_kept {
                 context.diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
-                    origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
+                    origin: clause_origin(machine.machine_name, label, guard_label),
                     message: format!("theorem guard references abstract-only variable '{bad}'"),
                     rule_id: Some(crate::RuleId::UndeclaredIdentifier),
                     span,
@@ -1290,7 +1289,7 @@ fn build_event_buckets(
             } else {
                 context.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
-                    origin: clause_origin(machine.machine_name, label, g.label.as_deref(), "grd"),
+                    origin: clause_origin(machine.machine_name, label, guard_label),
                     message: format!(
                         "guard references variable '{bad}', which has disappeared in this \
                          refinement (declared in an abstract machine but not kept here)"
@@ -1305,6 +1304,7 @@ fn build_event_buckets(
         match build_guard_decl(
             &machine,
             label,
+            guard_label,
             i,
             g,
             rejected_guards.get(&i).map(Vec::as_slice),
@@ -1344,7 +1344,7 @@ fn build_event_buckets(
     // We mirror that.
     let mut actions: Vec<ActionDecl> = Vec::with_capacity(kind.actions().len());
     for (i, act) in kind.actions().iter().enumerate() {
-        if act.label.is_none() {
+        let Some(action_label) = act.label.as_deref() else {
             context
                 .diagnostics
                 .push(crate::checked_predicate::missing_label(
@@ -1354,14 +1354,14 @@ fn build_event_buckets(
                 ));
             accurate = false;
             continue;
-        }
-        if inherited.contains_label(act.label.as_deref()) {
+        };
+        if inherited.contains_label(Some(action_label)) {
             accurate = false;
             continue;
         }
         // Same first-kept rule as the guards loop, over the shared
         // guard+action label namespace.
-        if label_kept.drops(act.label.as_deref()) {
+        if label_kept.drops(Some(action_label)) {
             accurate = false;
             continue;
         }
@@ -1372,7 +1372,7 @@ fn build_event_buckets(
         if let Some(bad) = bad_lhs {
             context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, action_label),
                 message: format!("LHS variable '{bad}' is not declared"),
                 rule_id: Some(crate::RuleId::UndeclaredIdentifier),
                 span: crate::sc::identifier_walker::usage_span_in_action(&act.action, &bad)
@@ -1407,7 +1407,7 @@ fn build_event_buckets(
         if let Some((bad, verb)) = disappeared {
             context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, action_label),
                 message: format!(
                     "action {verb} variable '{bad}', which has disappeared in this \
                      refinement (declared in an abstract machine but not kept here)"
@@ -1426,7 +1426,7 @@ fn build_event_buckets(
                 .push(crate::checked_predicate::undeclared_identifier(
                     bad,
                     "action",
-                    clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
+                    clause_origin(machine.machine_name, label, action_label),
                     crate::sc::identifier_walker::usage_span_in_action(&act.action, bad)
                         .or(act.span),
                 ));
@@ -1442,7 +1442,7 @@ fn build_event_buckets(
         if checked.typed.is_none() {
             context.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                origin: clause_origin(machine.machine_name, label, act.label.as_deref(), "act"),
+                origin: clause_origin(machine.machine_name, label, action_label),
                 message: "action is ill-typed".to_string(),
                 rule_id: Some(crate::RuleId::TypeError),
                 span: act.span,
@@ -1454,8 +1454,8 @@ fn build_event_buckets(
             machine.ids,
             machine.file_root,
             label,
+            action_label,
             i,
-            act,
             checked,
         ));
     }
@@ -1557,7 +1557,7 @@ fn drop_conflicting_actions(
         };
         context.diagnostics.push(Diagnostic {
             severity: crate::RuleId::ConflictingAssignments.default_severity(),
-            origin: clause_origin(machine_name, event_label, Some(&a.label), "act"),
+            origin: clause_origin(machine_name, event_label, &a.label),
             message: format!(
                 "action `{}` assigns {shared}; the actions of an event must assign disjoint sets \
                  of variables, so this action was dropped",
@@ -1642,27 +1642,27 @@ fn build_event_child_source(
 fn build_guard_decl(
     machine: &MachineCheckContext<'_>,
     event_label: &str,
+    label: &str,
     source_index: usize,
     g: &LabeledPredicate,
     unknown: Option<&[String]>,
     env: &TypeEnv,
 ) -> std::result::Result<GuardDecl, Diagnostic> {
-    let machine_name = machine.machine_name;
-    let origin = |lbl: &str| format!("{machine_name}.{event_label}.{lbl}");
+    let origin = || clause_origin(machine.machine_name, event_label, label);
     if let Some(names) = unknown {
-        return Err(unknown_type(g, "grd", "guard", names, origin));
+        return Err(unknown_type(g, "guard", names, origin));
     }
-    let (label, pc) = check_labeled_predicate(g, env, "grd", "guard", origin)?;
+    let pc = check_labeled_predicate(g, env, "guard", origin)?;
     let source = build_event_child_source(
         machine.ids,
         machine.file_root,
         event_label,
         Kind::Guard,
         in_tag::GUARD,
-        &label,
+        label,
     );
     Ok(GuardDecl {
-        label,
+        label: label.to_string(),
         source_index,
         typed: pc.typed.expect("checked by check_labeled_predicate"),
         predicate: pc.predicate,
@@ -1698,21 +1698,20 @@ fn build_action_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
     event_label: &str,
+    label: &str,
     source_index: usize,
-    act: &LabeledAction,
     checked: ActionCheck,
 ) -> ActionDecl {
-    let label = act.label.clone().unwrap_or_else(|| "act".to_string());
     let source = build_event_child_source(
         ids,
         file_root,
         event_label,
         Kind::Action,
         in_tag::ACTION,
-        &label,
+        label,
     );
     ActionDecl {
-        label,
+        label: label.to_string(),
         source_index,
         action: checked.action,
         typed: checked.typed,
