@@ -9,7 +9,7 @@
 
 mod common;
 
-use rossi_build::normalize::canonical_action;
+use common::{actions, diags_with_rule, origins};
 use rossi_build::sc_view::{EventRow, ScView};
 use rossi_build::{BuildResult, Diagnostic, RuleId, Severity, build};
 
@@ -19,23 +19,13 @@ fn build_text(files: &[(&str, &str)]) -> BuildResult {
 
 /// The EB037 findings, by origin.
 fn eb037(result: &BuildResult) -> Vec<&Diagnostic> {
-    result
-        .diagnostics
-        .iter()
-        .filter(|d| d.rule_id == Some(RuleId::ConflictingAssignments))
-        .collect()
-}
-
-fn origins<'a>(findings: &[&'a Diagnostic]) -> Vec<&'a str> {
-    findings.iter().map(|d| d.origin.as_str()).collect()
+    diags_with_rule(&result.diagnostics, RuleId::ConflictingAssignments)
 }
 
 /// The EB014 messages: the variables INITIALISATION's repair initialises.
 fn eb014(result: &BuildResult) -> Vec<&str> {
-    result
-        .diagnostics
-        .iter()
-        .filter(|d| d.rule_id == Some(RuleId::IncompleteInitialisation))
+    diags_with_rule(&result.diagnostics, RuleId::IncompleteInitialisation)
+        .into_iter()
         .map(|d| d.message.as_str())
         .collect()
 }
@@ -49,17 +39,6 @@ fn checked_event(result: &BuildResult, machine: &str, event: &str) -> EventRow {
     view.events
         .remove(event)
         .unwrap_or_else(|| panic!("missing {event} in {machine}.bcm"))
-}
-
-/// The checked event's actions as `label: assignment`, sorted by label.
-fn actions(event: &EventRow) -> Vec<String> {
-    let mut actions: Vec<String> = event
-        .actions
-        .values()
-        .map(|a| format!("{}: {}", a.label, canonical_action(&a.action)))
-        .collect();
-    actions.sort();
-    actions
 }
 
 #[test]

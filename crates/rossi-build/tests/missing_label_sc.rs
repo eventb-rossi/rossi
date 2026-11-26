@@ -5,34 +5,11 @@
 //! and drops it, marking its container inaccurate: the context for an axiom,
 //! the machine for an invariant, the event for the rest.
 
+mod common;
+
+use common::{actions, context, machine, origins};
 use rossi_build::sc_view::ScView;
 use rossi_build::{BuildResult, Diagnostic, Project, ProjectComponent, RuleId, Severity, build};
-
-fn machine(filename: &str, body: &str) -> ProjectComponent {
-    ProjectComponent::from_xml(
-        filename,
-        &format!(
-            r#"<?xml version="1.0"?>
-<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
-{body}
-</org.eventb.core.machineFile>"#
-        ),
-    )
-    .unwrap()
-}
-
-fn context(filename: &str, body: &str) -> ProjectComponent {
-    ProjectComponent::from_xml(
-        filename,
-        &format!(
-            r#"<?xml version="1.0"?>
-<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
-{body}
-</org.eventb.core.contextFile>"#
-        ),
-    )
-    .unwrap()
-}
 
 fn build_all(components: Vec<ProjectComponent>) -> BuildResult {
     build(&Project::new("p", components))
@@ -47,11 +24,7 @@ fn errors(result: &BuildResult) -> Vec<&Diagnostic> {
 }
 
 fn with_rule(result: &BuildResult, rule: RuleId) -> Vec<&Diagnostic> {
-    result
-        .diagnostics
-        .iter()
-        .filter(|d| d.rule_id == Some(rule))
-        .collect()
+    common::diags_with_rule(&result.diagnostics, rule)
 }
 
 fn view(result: &BuildResult, file: &str) -> ScView {
@@ -121,34 +94,19 @@ fn an_unlabeled_initialisation_action_leaves_its_variable_to_the_repair() {
     );
     let result = build_all(vec![m]);
 
-    let origins = |rule| {
-        with_rule(&result, rule)
-            .iter()
-            .map(|d| d.origin.as_str())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(origins(RuleId::MissingLabel), ["M.INITIALISATION"]);
     assert_eq!(
-        origins(RuleId::IncompleteInitialisation),
+        origins(&with_rule(&result, RuleId::MissingLabel)),
+        ["M.INITIALISATION"]
+    );
+    assert_eq!(
+        origins(&with_rule(&result, RuleId::IncompleteInitialisation)),
         ["M.INITIALISATION"]
     );
 
     // The unlabeled action takes no label, so the repair is `GEN`.
     let init = &view(&result, "M.bcm").events["INITIALISATION"];
     assert!(!init.accurate);
-    let mut actions: Vec<String> = init
-        .actions
-        .values()
-        .map(|a| {
-            format!(
-                "{}: {}",
-                a.label,
-                rossi_build::normalize::canonical_action(&a.action)
-            )
-        })
-        .collect();
-    actions.sort();
-    assert_eq!(actions, ["GEN: x :∣ ⊤", "act2: y ≔ 0"]);
+    assert_eq!(actions(init), ["GEN: x :∣ ⊤", "act2: y ≔ 0"]);
 }
 
 #[test]

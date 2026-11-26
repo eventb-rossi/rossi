@@ -336,6 +336,62 @@ pub fn xml(filename: &str, body: &str) -> rossi_build::ProjectComponent {
     rossi_build::ProjectComponent::from_xml(filename, body).unwrap()
 }
 
+/// A `.bum` machine whose root element holds the XML `body`.
+pub fn machine(filename: &str, body: &str) -> rossi_build::ProjectComponent {
+    xml(
+        filename,
+        &format!(
+            r#"<?xml version="1.0"?>
+<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
+{body}
+</org.eventb.core.machineFile>"#
+        ),
+    )
+}
+
+/// A `.buc` context whose root element holds the XML `body`.
+pub fn context(filename: &str, body: &str) -> rossi_build::ProjectComponent {
+    xml(
+        filename,
+        &format!(
+            r#"<?xml version="1.0"?>
+<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
+{body}
+</org.eventb.core.contextFile>"#
+        ),
+    )
+}
+
+/// The diagnostics reporting `rule`, in report order.
+pub fn diags_with_rule(
+    diags: &[rossi_build::Diagnostic],
+    rule: rossi_build::RuleId,
+) -> Vec<&rossi_build::Diagnostic> {
+    diags.iter().filter(|d| d.rule_id == Some(rule)).collect()
+}
+
+/// The origins of `findings`, in order.
+pub fn origins<'a>(findings: &[&'a rossi_build::Diagnostic]) -> Vec<&'a str> {
+    findings.iter().map(|d| d.origin.as_str()).collect()
+}
+
+/// A checked event's actions as `label: assignment`, sorted.
+pub fn actions(event: &rossi_build::sc_view::EventRow) -> Vec<String> {
+    let mut actions: Vec<String> = event
+        .actions
+        .values()
+        .map(|a| {
+            format!(
+                "{}: {}",
+                a.label,
+                rossi_build::normalize::canonical_action(&a.action)
+            )
+        })
+        .collect();
+    actions.sort();
+    actions
+}
+
 /// Build the components and generate their proof-obligation files,
 /// asserting the build itself is clean.
 pub fn generate(

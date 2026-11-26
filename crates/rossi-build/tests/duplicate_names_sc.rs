@@ -6,38 +6,11 @@
 //! container inaccurate. Identifier and event-label drops don't flip file
 //! accuracy directly: dependent formulas fail their own checks and cascade.
 
+mod common;
+
+use common::{context, diags_with_rule, machine};
 use rossi_build::sc_view::ScView;
-use rossi_build::{Diagnostic, Project, ProjectComponent, RuleId, Severity, build};
-
-fn machine(filename: &str, body: &str) -> ProjectComponent {
-    ProjectComponent::from_xml(
-        filename,
-        &format!(
-            r#"<?xml version="1.0"?>
-<org.eventb.core.machineFile version="5" org.eventb.core.configuration="org.eventb.core.fwd">
-{body}
-</org.eventb.core.machineFile>"#
-        ),
-    )
-    .unwrap()
-}
-
-fn context(filename: &str, body: &str) -> ProjectComponent {
-    ProjectComponent::from_xml(
-        filename,
-        &format!(
-            r#"<?xml version="1.0"?>
-<org.eventb.core.contextFile version="3" org.eventb.core.configuration="org.eventb.core.fwd">
-{body}
-</org.eventb.core.contextFile>"#
-        ),
-    )
-    .unwrap()
-}
-
-fn diags_with_rule(diags: &[Diagnostic], rule: RuleId) -> Vec<&Diagnostic> {
-    diags.iter().filter(|d| d.rule_id == Some(rule)).collect()
-}
+use rossi_build::{Project, ProjectComponent, RuleId, Severity, build};
 
 /// Build a single-component project (the common shape here).
 fn build_one(component: ProjectComponent) -> rossi_build::BuildResult {
