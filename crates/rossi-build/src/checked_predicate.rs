@@ -149,17 +149,16 @@ pub(crate) fn missing_label(kind_name: &str, position: usize, origin: String) ->
 }
 
 /// The EB020 diagnostic for a predicate that reads declared names before
-/// the predicate that types them. `default_label`, `kind_name` and
-/// `origin` are as for [`check_labeled_predicate`]; the kind also names
-/// what should have typed `names`, the still-untyped identifiers.
-/// Anchored on the first of them, falling back to the predicate's span.
+/// the predicate that types them. `kind_name` and `origin` are as for
+/// [`check_labeled_predicate`]; the kind also names what should have typed
+/// `names`, the still-untyped identifiers. Anchored on the first of them,
+/// falling back to the predicate's span.
 #[must_use]
 pub(crate) fn unknown_type(
     raw: &LabeledPredicate,
-    default_label: &str,
     kind_name: &str,
     names: &[String],
-    origin: impl FnOnce(&str) -> String,
+    origin: impl FnOnce() -> String,
 ) -> Diagnostic {
     let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
     let span = names
@@ -168,7 +167,7 @@ pub(crate) fn unknown_type(
         .or(raw.span);
     Diagnostic {
         severity: Severity::Error,
-        origin: origin(raw.label.as_deref().unwrap_or(default_label)),
+        origin: origin(),
         message: format!(
             "{kind_name} predicate reads {} before any {kind_name} types {}",
             quoted.join(", "),
@@ -179,36 +178,29 @@ pub(crate) fn unknown_type(
     }
 }
 
-/// Resolve a labeled predicate against `env` and produce the effective
-/// label plus the full [`PredicateCheck`], or a [`Diagnostic`] if the
-/// predicate references an unknown identifier.
+/// Resolve a labeled predicate against `env` and produce the full
+/// [`PredicateCheck`], or a [`Diagnostic`] if the predicate references an
+/// unknown identifier or is ill-typed.
 ///
 /// This is the shared shape of axiom / invariant / guard checking:
 ///
-/// - `default_label` names the element in `origin` when the source had
-///   no label. The callers drop an unlabeled element first (EB032), as
-///   Rodin does, so this is only a fallback.
 /// - `kind_name` is the human-readable element type used in the
 ///   diagnostic message (e.g. `"axiom"` → "unknown identifier 'x' in
 ///   axiom predicate").
-/// - `origin` builds the dotted origin string from the *effective*
-///   label (`{ctx}.{lbl}`, `{mach}.{lbl}`, `{mach}.{event}.{lbl}`
-///   are the three current shapes).
+/// - `origin` builds the dotted origin string from the element's label
+///   (`{ctx}.{lbl}`, `{mach}.{lbl}`, `{mach}.{event}.{lbl}` are the three
+///   current shapes). An element with no label never gets here: the
+///   callers drop it first (EB032), as Rodin does.
 ///
 /// The caller does its own URI minting and decl construction — this
 /// helper owns only the bits that are common to all three sites.
 pub fn check_labeled_predicate(
     raw: &LabeledPredicate,
     env: &TypeEnv,
-    default_label: &str,
     kind_name: &str,
-    origin: impl FnOnce(&str) -> String,
-) -> std::result::Result<(String, PredicateCheck), Diagnostic> {
+    origin: impl FnOnce() -> String,
+) -> std::result::Result<PredicateCheck, Diagnostic> {
     let pc = check_predicate(&raw.predicate, env);
-    let label = raw
-        .label
-        .clone()
-        .unwrap_or_else(|| default_label.to_string());
     if let Some(bad) = &pc.free_identifier {
         // Anchor on the offending identifier; fall back to the labeled
         // predicate's own span.
@@ -216,20 +208,20 @@ pub fn check_labeled_predicate(
         return Err(undeclared_identifier(
             bad,
             &format!("{kind_name} predicate"),
-            origin(&label),
+            origin(),
             span,
         ));
     }
     if pc.typed.is_none() {
         return Err(Diagnostic {
             severity: Severity::Error,
-            origin: origin(&label),
+            origin: origin(),
             message: format!("{kind_name} predicate is ill-typed"),
             rule_id: Some(crate::RuleId::TypeError),
             span: raw.span,
         });
     }
-    Ok((label, pc))
+    Ok(pc)
 }
 
 #[cfg(test)]

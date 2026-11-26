@@ -242,15 +242,6 @@ pub fn check_machine(
     let mut invariant_decls: Vec<InvariantDecl> = Vec::with_capacity(machine.invariants.len());
     let mut emit_kept = crate::duplicates::FirstKept::new(&dup_inv_labels);
     for (i, inv) in machine.invariants.iter().enumerate() {
-        if inv.label.is_none() {
-            diags.push(crate::checked_predicate::missing_label(
-                "invariant",
-                i + 1,
-                machine.name.clone(),
-            ));
-            accurate = false;
-            continue;
-        }
         // 2nd+ use of a duplicated invariant label: Rodin keeps the first
         // occurrence, drops the rest, and marks the file inaccurate (the
         // EB022 error is already reported).
@@ -654,7 +645,8 @@ fn build_sees_decls(
 
 /// `unknown` holds the variables the invariant reads before the
 /// invariants that type them (EB020): Rodin drops it, so it fails like
-/// any other error.
+/// any other error. An invariant with no label fails first (EB032),
+/// unchecked, as in Rodin.
 fn build_invariant_decl(
     ids: &RodinIds,
     file_root: &HandleUri,
@@ -664,15 +656,22 @@ fn build_invariant_decl(
     env: &TypeEnv,
     machine_name: &str,
 ) -> std::result::Result<InvariantDecl, Diagnostic> {
-    let origin = |lbl: &str| format!("{machine_name}.{lbl}");
+    let Some(label) = inv.label.as_deref() else {
+        return Err(crate::checked_predicate::missing_label(
+            "invariant",
+            source_index + 1,
+            machine_name.to_string(),
+        ));
+    };
+    let origin = || format!("{machine_name}.{label}");
     if let Some(names) = unknown {
-        return Err(unknown_type(inv, "inv", "invariant", names, origin));
+        return Err(unknown_type(inv, "invariant", names, origin));
     }
-    let (label, pc) = check_labeled_predicate(inv, env, "inv", "invariant", origin)?;
+    let pc = check_labeled_predicate(inv, env, "invariant", origin)?;
     let source =
-        crate::sc::file_child_source(ids, file_root, Kind::Invariant, in_tag::INVARIANT, &label);
+        crate::sc::file_child_source(ids, file_root, Kind::Invariant, in_tag::INVARIANT, label);
     Ok(InvariantDecl {
-        label,
+        label: label.to_string(),
         source_index,
         typed: pc.typed.expect("checked by check_labeled_predicate"),
         predicate: pc.predicate,

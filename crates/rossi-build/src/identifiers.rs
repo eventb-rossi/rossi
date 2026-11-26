@@ -91,18 +91,12 @@ pub fn component_undeclarable_prime_diagnostics(component: &Component) -> Vec<Di
         Component::Context(ctx) => {
             // THEOREMS lower into `axioms`, so both are covered here.
             for axiom in &ctx.axioms {
-                push_predicate(&mut diags, axiom, "axm", "axiom predicate", &ctx.name);
+                push_predicate(&mut diags, axiom, "axiom predicate", &ctx.name);
             }
         }
         Component::Machine(machine) => {
             for invariant in &machine.invariants {
-                push_predicate(
-                    &mut diags,
-                    invariant,
-                    "inv",
-                    "invariant predicate",
-                    &machine.name,
-                );
+                push_predicate(&mut diags, invariant, "invariant predicate", &machine.name);
             }
             if let Some(init) = &machine.initialisation {
                 let prefix = format!("{}.{}", machine.name, crate::sc::initialisation_label());
@@ -113,7 +107,7 @@ pub fn component_undeclarable_prime_diagnostics(component: &Component) -> Vec<Di
             for event in &machine.events {
                 let prefix = format!("{}.{}", machine.name, event.name);
                 for guard in &event.guards {
-                    push_predicate(&mut diags, guard, "grd", "guard predicate", &prefix);
+                    push_predicate(&mut diags, guard, "guard predicate", &prefix);
                 }
                 for action in &event.actions {
                     push_action(&mut diags, action, &prefix);
@@ -125,19 +119,20 @@ pub fn component_undeclarable_prime_diagnostics(component: &Component) -> Vec<Di
 }
 
 /// Report the first free primed read of `raw`, if any, at
-/// `{origin_prefix}.{label}` — the origin shape [`crate::duplicates`] uses —
-/// falling back to `default_label` when the source wrote none, as the SC does.
+/// `{origin_prefix}.{label}` — the origin shape [`crate::duplicates`] uses.
+/// An element with no label is skipped: the SC drops it unchecked (EB032).
 fn push_predicate(
     diags: &mut Vec<Diagnostic>,
     raw: &LabeledPredicate,
-    default_label: &str,
     place: &str,
     origin_prefix: &str,
 ) {
+    let Some(label) = raw.label.as_deref() else {
+        return;
+    };
     let Some((bad, span)) = first_free_primed_in_predicate(&raw.predicate) else {
         return;
     };
-    let label = raw.label.as_deref().unwrap_or(default_label);
     diags.push(undeclared_identifier(
         &bad,
         place,
@@ -149,10 +144,12 @@ fn push_predicate(
 /// The action counterpart, anchored on the primed read the way
 /// `sc::machine::events` anchors it, so the two paths underline the same text.
 fn push_action(diags: &mut Vec<Diagnostic>, raw: &LabeledAction, origin_prefix: &str) {
+    let Some(label) = raw.label.as_deref() else {
+        return;
+    };
     let Some((bad, span)) = first_free_primed_in_action_rhs(&raw.action) else {
         return;
     };
-    let label = raw.label.as_deref().unwrap_or("act");
     diags.push(undeclared_identifier(
         &bad,
         "action",
