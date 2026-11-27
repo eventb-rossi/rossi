@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1](https://github.com/eventb-rossi/rossi/compare/v0.3.0...v0.3.1) - 2026-11-27
+
+### Changed
+- *(build)* Drop the default labels no unlabeled element reaches
+
+### Fixed
+- *(build)* Warn for each variable the checker initialises
+- *(pretty)* Space the values of a parallel assignment as Rodin does
+- *(build)* Drop the elements a Rodin file stores without a label
+- *(examples)* Update both balances of a transfer in one action
+- *(build)* Keep the labels of dropped actions taken for the repair
+- *(build)* Reject two actions that assign one variable
+
 ## [0.3.0](https://github.com/eventb-rossi/rossi/compare/v0.2.3...v0.3.0) - 2026-11-15
 
 ### Added
